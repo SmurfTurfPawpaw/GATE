@@ -1,0 +1,29 @@
+{
+  "apiVersion": "gate.dev/profile/v1",
+  "kind": "SecurityToolProfile",
+  "id": "blue-team",
+  "catalog": "../../catalog/security-tools.json",
+  "description": "Network detection, endpoint visibility, incident response, and evidence analysis.",
+  "maxRiskClass": "A3",
+  "toolIds": [
+    "wireshark",
+    "tshark",
+    "tcpdump",
+    "zeek",
+    "suricata",
+    "arkime",
+    "yara",
+    "capa",
+    "sleuthkit",
+    "autopsy",
+    "volatility3",
+    "plaso",
+    "timesketch",
+    "velociraptor",
+    "osquery",
+    "chainsaw",
+    "hayabusa",
+    "exiftool",
+    "bulk-extractor"
+  ]
+}

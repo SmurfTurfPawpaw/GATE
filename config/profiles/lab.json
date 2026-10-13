@@ -1,0 +1,21 @@
+{
+  "apiVersion": "gate.dev/profile/v1",
+  "kind": "SecurityToolProfile",
+  "id": "lab",
+  "catalog": "../../catalog/security-tools.json",
+  "description": "High-impact exploitation and adversary-simulation tools for an approved engagement or controlled lab.",
+  "maxRiskClass": "A3",
+  "toolIds": [
+    "kali-toolbox",
+    "metasploit-framework",
+    "sliver",
+    "responder",
+    "bettercap",
+    "searchsploit",
+    "pacu",
+    "aircrack-ng",
+    "hcxdumptool",
+    "afl-plus-plus",
+    "honggfuzz"
+  ]
+}

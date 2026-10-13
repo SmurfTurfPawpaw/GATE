@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/engagement-policy.schema.json",
+  "title": "GATE engagement policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "apiVersion", "kind", "metadata", "actionClasses", "activeRequirements", "receiptInvalidators", "mandatoryCoverage", "claimStates", "completion", "defaultStopConditions"],
+  "properties": {
+    "$schema": { "type": "string", "minLength": 1 },
+    "apiVersion": { "const": "gate.dev/policy/v1" },
+    "kind": { "const": "EngagementPolicy" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": { "name": { "$ref": "#/$defs/token" } }
+    },
+    "actionClasses": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "targetContact", "receiptRequired", "examples"],
+        "properties": {
+          "id": { "enum": ["local-analysis", "research", "probe", "mutate", "high-impact"] },
+          "targetContact": { "type": "boolean" },
+          "receiptRequired": { "type": "boolean" },
+          "examples": { "$ref": "#/$defs/tokenList" }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "targetContact": { "const": true } }, "required": ["targetContact"] },
+            "then": { "properties": { "receiptRequired": { "const": true } } }
+          }
+        ]
+      },
+      "allOf": [
+        { "contains": { "properties": { "id": { "const": "local-analysis" } }, "required": ["id"] } },
+        { "contains": { "properties": { "id": { "const": "research" } }, "required": ["id"] } },
+        { "contains": { "properties": { "id": { "const": "probe" } }, "required": ["id"] } },
+        { "contains": { "properties": { "id": { "const": "mutate" } }, "required": ["id"] } },
+        { "contains": { "properties": { "id": { "const": "high-impact" } }, "required": ["id"] } }
+      ]
+    },
+    "activeRequirements": { "$ref": "#/$defs/tokenList" },
+    "receiptInvalidators": { "$ref": "#/$defs/tokenList" },
+    "mandatoryCoverage": { "$ref": "#/$defs/tokenList" },
+    "claimStates": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": { "enum": ["observed", "inferred", "unverified"] },
+      "allOf": [
+        { "contains": { "const": "observed" } },
+        { "contains": { "const": "inferred" } },
+        { "contains": { "const": "unverified" } }
+      ]
+    },
+    "completion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["coverageMapRequired", "explicitLimitationsRequired", "independentFindingValidationRequired", "emptyScannerOutputIsSufficient", "uncoveredSurfaceIsSufficient"],
+      "properties": {
+        "coverageMapRequired": { "const": true },
+        "explicitLimitationsRequired": { "const": true },
+        "independentFindingValidationRequired": { "const": true },
+        "emptyScannerOutputIsSufficient": { "const": false },
+        "uncoveredSurfaceIsSufficient": { "const": false }
+      }
+    },
+    "defaultStopConditions": { "$ref": "#/$defs/tokenList" }
+  },
+  "$defs": {
+    "token": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,127}$" },
+    "tokenList": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/token" }
+    }
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "$schema": "../schemas/update-policy.schema.json",
+  "apiVersion": "gate.dev/policy/v1",
+  "kind": "UpdatePolicy",
+  "metadata": {
+    "name": "pinned-reviewed-updates"
+  },
+  "upstreams": {
+    "requireFullGitCommit": true,
+    "allowBranches": false,
+    "allowTagsWithoutResolvedCommit": false,
+    "requireIntegrityWhenArtifactAvailable": true,
+    "updateMode": "reviewed-pr",
+    "validationOwner": "no-mistakes"
+  },
+  "skills": {
+    "scope": "project",
+    "globalInstallAllowed": false,
+    "bulkInstallAllowed": false,
+    "unattendedUpdateAllowed": false,
+    "popularityIsTrustSignal": false,
+    "requireReviewedContentHash": true
+  },
+  "tools": {
+    "persistentInstallAllowedAfterAdmission": true,
+    "unattendedUpdateAllowed": false,
+    "admissionRequires": [
+      "official-source",
+      "license-record",
+      "exact-version-or-commit",
+      "integrity-record-when-available",
+      "platform-compatibility",
+      "effect-classification",
+      "smoke-test",
+      "telemetry-setting",
+      "learning-record",
+      "no-mistakes-success"
+    ]
+  },
+  "telemetry": {
+    "default": "disabled",
+    "exceptionsRequire": ["documented-purpose", "explicit-operator-opt-in"]
+  }
+}

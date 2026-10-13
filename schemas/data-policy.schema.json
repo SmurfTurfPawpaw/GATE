@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/data-policy.schema.json",
+  "title": "GATE data policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "apiVersion", "kind", "metadata", "defaults", "classifications", "alwaysSensitive", "alwaysSecret", "secretReferences", "evidence"],
+  "properties": {
+    "$schema": { "type": "string", "minLength": 1 },
+    "apiVersion": { "const": "gate.dev/policy/v1" },
+    "kind": { "const": "DataPolicy" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": { "name": { "$ref": "#/$defs/token" } }
+    },
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["classification", "telemetry", "lavishSharing", "rawEvidenceLocation", "literalSecretsAllowed"],
+      "properties": {
+        "classification": { "$ref": "#/$defs/classification" },
+        "telemetry": { "const": "disabled" },
+        "lavishSharing": { "const": "local-only" },
+        "rawEvidenceLocation": { "const": "gate-home" },
+        "literalSecretsAllowed": { "const": false }
+      }
+    },
+    "classifications": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "cloudModel", "publicRepository", "externalSharing"],
+        "properties": {
+          "id": { "$ref": "#/$defs/classification" },
+          "cloudModel": { "$ref": "#/$defs/dataDecision" },
+          "publicRepository": { "$ref": "#/$defs/dataDecision" },
+          "externalSharing": { "$ref": "#/$defs/dataDecision" }
+        }
+      },
+      "allOf": [
+        { "contains": { "properties": { "id": { "const": "public" } }, "required": ["id"] } },
+        { "contains": { "properties": { "id": { "const": "internal" } }, "required": ["id"] } },
+        { "contains": { "properties": { "id": { "const": "sensitive" } }, "required": ["id"] } },
+        { "contains": { "properties": { "id": { "const": "secret" } }, "required": ["id"] } }
+      ]
+    },
+    "alwaysSensitive": { "$ref": "#/$defs/tokenList" },
+    "alwaysSecret": { "$ref": "#/$defs/tokenList" },
+    "secretReferences": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowedSchemes", "pattern", "resolveOnlyAtExecution", "redactFromEvents"],
+      "properties": {
+        "allowedSchemes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["env", "keychain", "file"] }
+        },
+        "pattern": { "type": "string", "minLength": 1 },
+        "resolveOnlyAtExecution": { "const": true },
+        "redactFromEvents": { "const": true }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rawData", "derivedSummaries", "hashRawArtifacts", "recordSourceAndTimestamp", "recordToolVersionAndCommand", "publicEvidenceRequiresExplicitRelease"],
+      "properties": {
+        "rawData": { "const": "private-by-default" },
+        "derivedSummaries": { "const": "sanitize-before-publication" },
+        "hashRawArtifacts": { "const": true },
+        "recordSourceAndTimestamp": { "const": true },
+        "recordToolVersionAndCommand": { "const": true },
+        "publicEvidenceRequiresExplicitRelease": { "const": true }
+      }
+    }
+  },
+  "$defs": {
+    "token": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,127}$" },
+    "tokenList": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/token" }
+    },
+    "classification": { "enum": ["public", "internal", "sensitive", "secret"] },
+    "dataDecision": { "enum": ["allow", "allow-after-validation", "allow-configured-provider", "require-explicit-release", "deny"] }
+  }
+}

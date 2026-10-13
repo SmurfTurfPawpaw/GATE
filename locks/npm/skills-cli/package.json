@@ -1,0 +1,8 @@
+{
+  "name": "gate-upstream-skills-cli",
+  "private": true,
+  "version": "0.0.0",
+  "dependencies": {
+    "skills": "1.7.2"
+  }
+}

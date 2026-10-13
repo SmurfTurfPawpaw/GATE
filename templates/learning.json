@@ -1,0 +1,13 @@
+{
+  "apiVersion": "gate.learning/v1",
+  "id": "lrn_example01",
+  "at": "2026-10-13T00:00:00Z",
+  "scope": "repository",
+  "cause": "Replace with the observed correction, failure, or better-tool evidence.",
+  "change": "Replace with the specific behavior or configuration that will change.",
+  "evidence": ["event://evt_example01"],
+  "status": "proposed",
+  "sensitivity": "public",
+  "supersedes": null,
+  "configurationRefs": []
+}

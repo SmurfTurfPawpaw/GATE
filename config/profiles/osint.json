@@ -1,0 +1,20 @@
+{
+  "apiVersion": "gate.dev/profile/v1",
+  "kind": "SecurityToolProfile",
+  "id": "osint",
+  "catalog": "../../catalog/security-tools.json",
+  "description": "Public-source and external asset discovery with source terms and personal-data controls.",
+  "maxRiskClass": "A1",
+  "toolIds": [
+    "amass",
+    "subfinder",
+    "dnsx",
+    "theharvester",
+    "spiderfoot",
+    "sherlock",
+    "maigret",
+    "gowitness",
+    "recon-ng",
+    "phoneinfoga"
+  ]
+}

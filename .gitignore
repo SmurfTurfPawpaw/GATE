@@ -1,0 +1,28 @@
+# GATE private/runtime state
+.gate/
+.gate-home/
+.env
+.env.*
+!.env.example
+
+# Dependencies and generated output
+node_modules/
+coverage/
+dist/
+*.log
+
+# Tool and editor state
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Security evidence must remain outside Git
+evidence/
+captures/
+artifacts/private/
+*.pcap
+*.pcapng
+*.har
+*.saz
+*.keylog

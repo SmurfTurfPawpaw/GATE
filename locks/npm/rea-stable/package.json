@@ -1,0 +1,8 @@
+{
+  "name": "gate-upstream-rea-stable",
+  "private": true,
+  "version": "0.0.0",
+  "dependencies": {
+    "rea-agents": "6.4.0"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "apiVersion": "gate.dev/profile/v1",
+  "kind": "SecurityToolProfile",
+  "id": "reverse-engineering",
+  "catalog": "../../catalog/security-tools.json",
+  "description": "Static and dynamic binary, firmware, and exploit-development analysis.",
+  "maxRiskClass": "A3",
+  "toolIds": [
+    "rea",
+    "ghidra",
+    "radare2",
+    "rizin",
+    "cutter",
+    "gdb",
+    "lldb",
+    "pwndbg",
+    "pwntools",
+    "angr",
+    "manticore",
+    "qemu",
+    "binwalk",
+    "unblob",
+    "yara",
+    "capa"
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/update-policy.schema.json",
+  "title": "GATE update policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "apiVersion", "kind", "metadata", "upstreams", "skills", "tools", "telemetry"],
+  "properties": {
+    "$schema": { "type": "string", "minLength": 1 },
+    "apiVersion": { "const": "gate.dev/policy/v1" },
+    "kind": { "const": "UpdatePolicy" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": { "name": { "$ref": "#/$defs/token" } }
+    },
+    "upstreams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requireFullGitCommit", "allowBranches", "allowTagsWithoutResolvedCommit", "requireIntegrityWhenArtifactAvailable", "updateMode", "validationOwner"],
+      "properties": {
+        "requireFullGitCommit": { "const": true },
+        "allowBranches": { "const": false },
+        "allowTagsWithoutResolvedCommit": { "const": false },
+        "requireIntegrityWhenArtifactAvailable": { "const": true },
+        "updateMode": { "const": "reviewed-pr" },
+        "validationOwner": { "const": "no-mistakes" }
+      }
+    },
+    "skills": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "globalInstallAllowed", "bulkInstallAllowed", "unattendedUpdateAllowed", "popularityIsTrustSignal", "requireReviewedContentHash"],
+      "properties": {
+        "scope": { "const": "project" },
+        "globalInstallAllowed": { "const": false },
+        "bulkInstallAllowed": { "const": false },
+        "unattendedUpdateAllowed": { "const": false },
+        "popularityIsTrustSignal": { "const": false },
+        "requireReviewedContentHash": { "const": true }
+      }
+    },
+    "tools": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["persistentInstallAllowedAfterAdmission", "unattendedUpdateAllowed", "admissionRequires"],
+      "properties": {
+        "persistentInstallAllowedAfterAdmission": { "const": true },
+        "unattendedUpdateAllowed": { "const": false },
+        "admissionRequires": { "$ref": "#/$defs/tokenList" }
+      }
+    },
+    "telemetry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["default", "exceptionsRequire"],
+      "properties": {
+        "default": { "const": "disabled" },
+        "exceptionsRequire": { "$ref": "#/$defs/tokenList" }
+      }
+    }
+  },
+  "$defs": {
+    "token": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,127}$" },
+    "tokenList": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/token" }
+    }
+  }
+}

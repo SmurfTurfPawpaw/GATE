@@ -1,0 +1,23 @@
+{
+  "apiVersion": "gate.dev/profile/v1",
+  "kind": "SecurityToolProfile",
+  "id": "source-security",
+  "catalog": "../../catalog/security-tools.json",
+  "description": "Static analysis, secret detection, dependency review, and bounded fuzzing.",
+  "maxRiskClass": "A2",
+  "toolIds": [
+    "semgrep",
+    "bandit",
+    "gosec",
+    "gitleaks",
+    "trufflehog",
+    "osv-scanner",
+    "trivy",
+    "syft",
+    "grype",
+    "checkov",
+    "afl-plus-plus",
+    "honggfuzz",
+    "winafl"
+  ]
+}

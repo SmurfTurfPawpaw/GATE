@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/upstream-lock.schema.json",
+  "title": "GATE upstream lock",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "generatedAt", "updatePolicy", "upstreams"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "updatePolicy": { "const": "reviewed-pull-request" },
+    "upstreams": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": { "$ref": "#/$defs/upstream" }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$" },
+    "repository": {
+      "type": "string",
+      "pattern": "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\\.git$"
+    },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "artifactName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]*$"
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "sha256", "executableSha256"],
+      "properties": {
+        "name": { "$ref": "#/$defs/artifactName" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "executableSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "releaseArtifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "darwin-x64": { "$ref": "#/$defs/artifact" },
+        "darwin-arm64": { "$ref": "#/$defs/artifact" },
+        "linux-x64": { "$ref": "#/$defs/artifact" },
+        "linux-arm64": { "$ref": "#/$defs/artifact" },
+        "win32-x64": { "$ref": "#/$defs/artifact" },
+        "win32-arm64": { "$ref": "#/$defs/artifact" }
+      }
+    },
+    "install": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["lane"],
+          "properties": { "lane": { "const": "distro-clone" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["lane", "reason"],
+          "properties": {
+            "lane": { "const": "source" },
+            "reason": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "^[^\\r\\n]+$" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["lane", "skill"],
+          "properties": {
+            "lane": { "const": "skill" },
+            "skill": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["lane", "package", "integrity", "lockfile", "lockSha256"],
+          "properties": {
+            "lane": { "const": "npm" },
+            "package": {
+              "type": "string",
+              "pattern": "^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$"
+            },
+            "integrity": { "type": "string", "pattern": "^sha512-[A-Za-z0-9+/]+={0,2}$" },
+            "lockfile": { "type": "string", "pattern": "^locks/npm/[a-z][a-z0-9-]{1,62}/package-lock\\.json$" },
+            "lockSha256": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["lane", "tag", "binary", "artifacts"],
+          "properties": {
+            "lane": { "const": "github-release" },
+            "tag": { "type": "string", "minLength": 1, "maxLength": 100, "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]*$" },
+            "binary": { "type": "string", "minLength": 1, "maxLength": 100, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+            "artifacts": { "$ref": "#/$defs/releaseArtifacts" }
+          }
+        }
+      ]
+    },
+    "upstream": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "repository", "commit", "version", "install"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "repository": { "$ref": "#/$defs/repository" },
+        "commit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+        "version": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "minLength": 1, "maxLength": 100, "pattern": "^[A-Za-z0-9][A-Za-z0-9.+-]*$" }
+          ]
+        },
+        "install": { "$ref": "#/$defs/install" }
+      }
+    }
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "name": "gate-agent-workflow",
+  "version": "0.1.0",
+  "description": "A personal, evidence-first control plane for agentic engineering and authorized security work.",
+  "type": "module",
+  "bin": {
+    "gate": "./bin/gate.mjs"
+  },
+  "scripts": {
+    "check": "node ./bin/gate.mjs validate",
+    "dashboard": "node ./bin/gate.mjs up",
+    "doctor": "node ./bin/gate.mjs doctor --full",
+    "test": "node --test",
+    "validate": "npm run check && npm test"
+  },
+  "engines": {
+    "node": ">=22.20.0"
+  },
+  "packageManager": "npm@11.9.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SmurfTurfPawpaw/GATE.git"
+  },
+  "homepage": "https://github.com/SmurfTurfPawpaw/GATE#readme",
+  "bugs": {
+    "url": "https://github.com/SmurfTurfPawpaw/GATE/issues"
+  },
+  "keywords": [
+    "agents",
+    "codex",
+    "cybersecurity",
+    "orchestration",
+    "pentesting",
+    "workflow"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1"
+  }
+}

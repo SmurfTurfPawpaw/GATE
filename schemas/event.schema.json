@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/event.schema.json",
+  "title": "GATE activity event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "id", "at", "runId", "taskId", "component", "agent", "kind", "status", "summary", "effect", "evidenceRefs", "usageRef"],
+  "properties": {
+    "apiVersion": { "const": "gate.event/v1" },
+    "id": { "type": "string", "pattern": "^evt_[A-Za-z0-9][A-Za-z0-9_-]{5,127}$" },
+    "at": { "type": "string", "format": "date-time" },
+    "runId": { "$ref": "#/$defs/id" },
+    "taskId": { "oneOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+    "component": { "$ref": "#/$defs/name" },
+    "agent": { "oneOf": [{ "$ref": "#/$defs/name" }, { "type": "null" }] },
+    "kind": { "type": "string", "pattern": "^[a-z][a-z0-9-]*(?:\\.[a-z][a-z0-9-]*)+$" },
+    "status": { "enum": ["queued", "running", "waiting", "blocked", "succeeded", "failed", "cancelled", "unknown"] },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "^[^\\r\\n]+$" },
+    "effect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["class", "targetRef", "engagementId", "planDigest"],
+      "properties": {
+        "class": { "enum": ["none", "local-read", "host-write", "forge-write", "external-publish", "network-observe", "network-probe", "target-mutate", "high-impact"] },
+        "targetRef": { "type": ["string", "null"], "minLength": 1, "maxLength": 240 },
+        "engagementId": { "oneOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+        "planDigest": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "class": { "enum": ["network-probe", "target-mutate", "high-impact"] } }, "required": ["class"] },
+          "then": {
+            "properties": {
+              "targetRef": { "type": "string" },
+              "engagementId": { "$ref": "#/$defs/id" },
+              "planDigest": { "$ref": "#/$defs/sha256" }
+            }
+          }
+        }
+      ]
+    },
+    "evidenceRefs": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^(private|event|evidence|file)://[^\\s]+$" }
+    },
+    "usageRef": {
+      "type": ["string", "null"],
+      "pattern": "^usage://[A-Za-z0-9_.-]+$"
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{1,127}$" },
+    "name": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,159}$" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

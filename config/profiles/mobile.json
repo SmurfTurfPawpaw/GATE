@@ -1,0 +1,21 @@
+{
+  "apiVersion": "gate.dev/profile/v1",
+  "kind": "SecurityToolProfile",
+  "id": "mobile",
+  "catalog": "../../catalog/security-tools.json",
+  "description": "Android and iOS static analysis, device inspection, instrumentation, and dynamic testing.",
+  "maxRiskClass": "A2",
+  "toolIds": [
+    "rea",
+    "jadx",
+    "apktool",
+    "adb",
+    "scrcpy",
+    "frida",
+    "objection",
+    "mobsf",
+    "libimobiledevice",
+    "android-emulator",
+    "mitmproxy"
+  ]
+}

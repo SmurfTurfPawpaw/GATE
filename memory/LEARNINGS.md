@@ -1,0 +1,41 @@
+# GATE learnings
+
+This reviewed public ledger contains sanitized repository-wide lessons. The machine-readable append log is `memory/learnings.jsonl`; promotion updates this ledger with the same cause and change. Target identifiers, credentials, private paths, captures, client material, and unpublished findings belong in the private learning record under `GATE_HOME`.
+
+Format:
+
+```text
+YYYY-MM-DD | Cause: what happened | Change: the durable behavior or configuration change | Evidence: public reference | Status: proposed|active|superseded|reverted
+```
+
+## Active
+
+- 2026-10-13 | Cause: The operator made continuous learning the primary requirement for GATE. | Change: Every correction, failure, workaround, tool gap, and validated improvement now creates a cause-and-change record tied to evidence. | Evidence: evidence://project-intake | Status: active
+- 2026-10-13 | Cause: The upstream projects move quickly and their published releases do not always contain current capabilities. | Change: GATE records exact commits and artifact integrity, then accepts updates only through a tested No Mistakes PR. | Evidence: evidence://source-review | Status: active
+- 2026-10-13 | Cause: Tool output and clean scanner results can be mistaken for complete evidence. | Change: Findings now label observation, inference, and unknowns, and completion requires coverage, limitations, and independent validation. | Evidence: evidence://source-review | Status: active
+- 2026-10-13 | Cause: The operator wants constant token visibility. | Change: Every harness adapter must record exact, estimated, or unavailable usage without treating missing values as zero. | Evidence: evidence://project-intake | Status: active
+- 2026-10-13 | Cause: The cloud runner cannot write the default user-level npm cache or GATE state directories. | Change: Cloud setup now uses workspace-owned GATE_HOME and npm cache paths while laptop installs keep native user defaults. | Evidence: event://evt_20261013201059_6c31e84c | Status: active
+- 2026-10-13 | Cause: An operator receipt could satisfy the schema while client or contract authorization evidence was absent. | Change: Client and contract engagements now require a private authorization file whose digest is bound into the receipt and checked during every preflight. | Evidence: event://evt_20261013202239_180bfc6b | Status: active
+- 2026-10-13 | Cause: Dependency audit found the pinned schema validator behind a fixed ReDoS advisory and classified runtime imports as development-only. | Change: Pin Ajv 8.20.0, keep dynamic data references disabled, and declare schema validators as runtime dependencies. | Evidence: event://evt_20261013202652_858c8094 | Status: active
+- 2026-10-13 | Cause: Final consistency review found target-state commands and telemetry described as working v0.1 behavior. | Change: Separate current behavior from roadmap contracts and expose foreground, bounded telemetry and executor limitations in configuration and docs. | Evidence: event://evt_20261013202835_b55a95e6 | Status: active
+- 2026-10-13 | Cause: Security review found that declared metadata and unsigned local receipts could not bind arbitrary command behavior. | Change: Disable generic active, raw, and publication mutation paths until reviewed scope-aware adapters and verified external attestations bind the exact operation. | Evidence: evidence://security-review | Status: active
+- 2026-10-13 | Cause: Writable install receipts and Git index or ignore state could make modified upstream bytes appear admitted. | Change: Make receipts evidence-only, reconstruct npm trees from reviewed full locks, anchor release executables in the reviewed lock, reject unsafe archives, and directly verify source bytes and extra files. | Evidence: evidence://supply-chain-review | Status: active
+- 2026-10-13 | Cause: Unbounded session scans and weak private projections could leak sensitive metadata or overstate observer completeness. | Change: Bound token-tail scans, label cutoffs as estimated, use ephemeral keyed engagement pseudonyms, redact authorization and cookie data, and require verified integrity before reporting an upstream ready. | Evidence: evidence://observability-review | Status: active
+- 2026-10-13 | Cause: Managed Git verification honored repository-local fsmonitor configuration, so inspecting an untrusted checkout could execute checkout-controlled code. | Change: Force fsmonitor and hooks off, ignore replacements and optional locks, isolate Git configuration, and canary-test verification as non-executing. | Evidence: evidence://security-review | Status: active
+- 2026-10-13 | Cause: Pre-existing permissive, linked, overlapping, or raced runtime paths could redirect, expose, or accidentally stage private GATE state. | Change: Keep GATE_HOME physically separate, verify contained current-owner no-follow identities, enforce 0700 and 0600, and bind private reads to bounded stable descriptors. | Evidence: evidence://security-review | Status: active
+- 2026-10-13 | Cause: A dashboard path could be exchanged for an out-of-root symlink between validation and read, letting the loopback observer expose host files. | Change: Load each allowlisted asset once through a bounded no-follow descriptor before listen and serve only immutable in-memory bytes. | Evidence: evidence://security-review | Status: active
+- 2026-10-13 | Cause: Raw low-entropy run, task, and member identifiers could reveal client context through the unauthenticated loopback observer. | Change: Project every private identifier through a per-process keyed pseudonym while retaining only public component and role labels. | Evidence: evidence://privacy-review | Status: active
+- 2026-10-13 | Cause: PATH-based catalog discovery could execute an attacker-controlled locator helper and expose inherited environment data. | Change: Resolve catalog executables with filesystem-only PATH and PATHEXT checks and canary-test that neither locator helpers nor candidates run. | Evidence: evidence://security-review | Status: active
+- 2026-10-13 | Cause: Inherited archive environment variables and PATH lookup could make release verification execute attacker-controlled tar actions. | Change: Use only non-writable canonical system tar paths under a minimal archive environment and canary-test TAR_OPTIONS and PATH shadowing. | Evidence: evidence://supply-chain-review | Status: active
+- 2026-10-13 | Cause: URL scope matching ignored query strings, so an approved tenant query could admit a different tenant. | Change: Require exact approved query semantics, reject URL fragments, and regression-test both inclusion and exclusion boundaries. | Evidence: evidence://authorization-review | Status: active
+- 2026-10-13 | Cause: Caller-supplied evidence references could let one engagement reuse another engagement's written authorization. | Change: Remove evidence injection at creation and require the exact engagement-specific attachment path during approval and every preflight. | Evidence: evidence://authorization-review | Status: active
+
+## Proposed
+
+Add proposed lessons here only after removing sensitive context. Promotion must include the behavior, policy, configuration, test, or documentation change that makes the lesson real.
+- 2026-10-13 | Cause: Session-file token scanning cannot provide complete live Codex fleet telemetry without touching prompt-bearing JSONL files. | Change: Add a metadata-only Codex app-server adapter for turn, agent, tool, token, context, and quota events before claiming complete live observability. | Evidence: event://evt_20261013202226_4558eb34 | Status: proposed
+
+## Superseded or reverted
+
+Move old entries here with the new evidence and replacement learning. Do not erase history.
+- 2026-10-13 | Cause: The operator wants deep active testing while requiring a report before engagement. | Change: Active target contact requires an operator receipt bound to a reviewed plan digest; this initial model did not yet bind downstream tool arguments or enforce runtime limits. | Evidence: evidence://project-intake | Status: superseded

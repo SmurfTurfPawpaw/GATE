@@ -1,0 +1,24 @@
+{
+  "apiVersion": "gate.dev/profile/v1",
+  "kind": "SecurityToolProfile",
+  "id": "network",
+  "catalog": "../../catalog/security-tools.json",
+  "description": "Discovery, packet capture, traffic analysis, IDS, and vulnerability scanning.",
+  "maxRiskClass": "A3",
+  "toolIds": [
+    "nmap",
+    "naabu",
+    "masscan",
+    "zmap",
+    "rustscan",
+    "wireshark",
+    "tshark",
+    "tcpdump",
+    "zeek",
+    "suricata",
+    "arkime",
+    "scapy",
+    "bettercap",
+    "greenbone-openvas"
+  ]
+}

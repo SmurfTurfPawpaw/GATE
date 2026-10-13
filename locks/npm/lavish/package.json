@@ -1,0 +1,8 @@
+{
+  "name": "gate-upstream-lavish",
+  "private": true,
+  "version": "0.0.0",
+  "dependencies": {
+    "lavish-axi": "0.1.87"
+  }
+}

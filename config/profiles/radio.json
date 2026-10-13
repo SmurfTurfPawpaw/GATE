@@ -1,0 +1,22 @@
+{
+  "apiVersion": "gate.dev/profile/v1",
+  "kind": "SecurityToolProfile",
+  "id": "radio",
+  "catalog": "../../catalog/security-tools.json",
+  "description": "Hardware-dependent Wi-Fi, Bluetooth, Zigbee, RFID, and SDR inspection.",
+  "maxRiskClass": "A3",
+  "toolIds": [
+    "aircrack-ng",
+    "kismet",
+    "hcxdumptool",
+    "hcxtools",
+    "bluez-tools",
+    "btlejack",
+    "killerbee",
+    "proxmark3",
+    "ubertooth",
+    "hackrf-tools",
+    "gnuradio",
+    "rtl-433"
+  ]
+}

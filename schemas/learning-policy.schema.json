@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/learning-policy.schema.json",
+  "title": "GATE learning policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "apiVersion", "kind", "metadata", "triggers", "record", "scopes", "promotion", "protectedBoundaries", "untrustedInput"],
+  "properties": {
+    "$schema": { "type": "string", "minLength": 1 },
+    "apiVersion": { "const": "gate.dev/policy/v1" },
+    "kind": { "const": "LearningPolicy" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": { "name": { "$ref": "#/$defs/token" } }
+    },
+    "triggers": { "$ref": "#/$defs/tokenList" },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requiredFields", "onePhysicalLine", "causeAndChangeRequired", "secretsAllowed", "targetIdentifiersInPublicLog"],
+      "properties": {
+        "requiredFields": { "$ref": "#/$defs/tokenList" },
+        "onePhysicalLine": { "const": true },
+        "causeAndChangeRequired": { "const": true },
+        "secretsAllowed": { "const": false },
+        "targetIdentifiersInPublicLog": { "const": false }
+      }
+    },
+    "scopes": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "automaticCapture", "promotionRequired", "destination"],
+        "properties": {
+          "id": { "enum": ["session", "project", "repository"] },
+          "automaticCapture": { "const": true },
+          "promotionRequired": { "type": "boolean" },
+          "destination": { "enum": ["private", "project", "public-sanitized"] }
+        }
+      },
+      "allOf": [
+        { "contains": { "properties": { "id": { "const": "session" } }, "required": ["id"] } },
+        { "contains": { "properties": { "id": { "const": "project" } }, "required": ["id"] } },
+        { "contains": { "properties": { "id": { "const": "repository" } }, "required": ["id"] } }
+      ]
+    },
+    "promotion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["owner", "requires", "allowedStatuses"],
+      "properties": {
+        "owner": { "const": "no-mistakes" },
+        "requires": { "$ref": "#/$defs/tokenList" },
+        "allowedStatuses": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": { "enum": ["proposed", "active", "superseded", "reverted"] }
+        }
+      }
+    },
+    "protectedBoundaries": { "$ref": "#/$defs/tokenList" },
+    "untrustedInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mayPropose", "mayDirectlyWritePersistentMemory", "mayChangePolicy"],
+      "properties": {
+        "mayPropose": { "const": true },
+        "mayDirectlyWritePersistentMemory": { "const": false },
+        "mayChangePolicy": { "const": false }
+      }
+    }
+  },
+  "$defs": {
+    "token": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,127}$" },
+    "tokenList": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/token" }
+    }
+  }
+}

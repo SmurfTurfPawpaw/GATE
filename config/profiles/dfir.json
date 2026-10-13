@@ -1,0 +1,23 @@
+{
+  "apiVersion": "gate.dev/profile/v1",
+  "kind": "SecurityToolProfile",
+  "id": "dfir",
+  "catalog": "../../catalog/security-tools.json",
+  "description": "Read-mostly disk, memory, timeline, host, and event-log forensics.",
+  "maxRiskClass": "A3",
+  "toolIds": [
+    "sleuthkit",
+    "autopsy",
+    "volatility3",
+    "plaso",
+    "timesketch",
+    "velociraptor",
+    "osquery",
+    "chainsaw",
+    "hayabusa",
+    "exiftool",
+    "bulk-extractor",
+    "yara",
+    "capa"
+  ]
+}

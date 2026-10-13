@@ -1,0 +1,42 @@
+{
+  "$schema": "../schemas/project.schema.json",
+  "apiVersion": "gate.dev/project/v1",
+  "kind": "Project",
+  "metadata": {
+    "id": "replace-project",
+    "displayName": "Replace Project"
+  },
+  "repository": {
+    "provider": "github",
+    "url": "https://github.com/replace-owner/replace-project",
+    "defaultBranch": "main"
+  },
+  "execution": {
+    "profile": "default",
+    "environment": "host",
+    "workspaceProvider": "treehouse",
+    "primaryHarness": "codex-cli"
+  },
+  "delivery": {
+    "mode": "no-mistakes",
+    "autoMerge": "green-exact-head",
+    "validation": "no-mistakes",
+    "deployment": {
+      "enabled": false,
+      "adapter": null,
+      "destinationRef": null
+    }
+  },
+  "security": {
+    "profile": "pentest",
+    "activeTestingEnabled": true,
+    "requireEngagementReceipt": true,
+    "evidenceLabels": ["observed", "inferred", "unverified"]
+  },
+  "learning": {
+    "enabled": true,
+    "captureCorrections": true,
+    "captureFailures": true,
+    "promotionGate": "no-mistakes"
+  }
+}

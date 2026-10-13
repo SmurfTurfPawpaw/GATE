@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/autonomy-policy.schema.json",
+  "title": "GATE autonomy policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "apiVersion", "kind", "metadata", "rules"],
+  "properties": {
+    "$schema": { "type": "string", "minLength": 1 },
+    "apiVersion": { "const": "gate.dev/policy/v1" },
+    "kind": { "const": "AutonomyPolicy" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "evaluation"],
+      "properties": {
+        "name": { "$ref": "#/$defs/token" },
+        "evaluation": { "const": "deny-overrides" }
+      }
+    },
+    "rules": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/rule" }
+    }
+  },
+  "$defs": {
+    "token": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9.-]{1,127}$"
+    },
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "actions", "decision", "owner", "requirements"],
+      "properties": {
+        "id": { "$ref": "#/$defs/token" },
+        "actions": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/token" }
+        },
+        "decision": { "enum": ["allow", "delegate", "require-receipt", "deny"] },
+        "owner": { "$ref": "#/$defs/token" },
+        "requirements": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/token" }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "decision": { "const": "require-receipt" } }, "required": ["decision"] },
+          "then": { "properties": { "requirements": { "contains": { "const": "operator-plan-receipt" } } } }
+        }
+      ]
+    }
+  }
+}

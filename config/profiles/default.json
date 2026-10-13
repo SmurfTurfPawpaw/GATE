@@ -1,0 +1,23 @@
+{
+  "apiVersion": "gate.dev/profile/v1",
+  "kind": "SecurityToolProfile",
+  "id": "default",
+  "catalog": "../../catalog/security-tools.json",
+  "description": "Low-risk local engineering and offline security analysis.",
+  "maxRiskClass": "P1",
+  "toolIds": [
+    "tshark",
+    "yara",
+    "capa",
+    "jadx",
+    "apktool",
+    "gitleaks",
+    "osv-scanner",
+    "trivy",
+    "syft",
+    "grype",
+    "semgrep",
+    "bandit",
+    "gosec"
+  ]
+}

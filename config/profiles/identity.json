@@ -1,0 +1,20 @@
+{
+  "apiVersion": "gate.dev/profile/v1",
+  "kind": "SecurityToolProfile",
+  "id": "identity",
+  "catalog": "../../catalog/security-tools.json",
+  "description": "Directory, authentication, password audit, and post-exploitation tooling.",
+  "maxRiskClass": "A3",
+  "toolIds": [
+    "impacket",
+    "netexec",
+    "responder",
+    "bloodhound-ce",
+    "metasploit-framework",
+    "sliver",
+    "thc-hydra",
+    "hashcat",
+    "john-the-ripper",
+    "searchsploit"
+  ]
+}

@@ -1,0 +1,81 @@
+{
+  "$schema": "../schemas/autonomy-policy.schema.json",
+  "apiVersion": "gate.dev/policy/v1",
+  "kind": "AutonomyPolicy",
+  "metadata": {
+    "name": "default-autonomy",
+    "evaluation": "deny-overrides"
+  },
+  "rules": [
+    {
+      "id": "repository-work",
+      "actions": ["repo.read", "repo.edit", "repo.test", "repo.commit"],
+      "decision": "allow",
+      "owner": "gate",
+      "requirements": ["treehouse-lease"]
+    },
+    {
+      "id": "bounded-agent-loop",
+      "actions": ["agent.loop.start"],
+      "decision": "allow",
+      "owner": "gnhf",
+      "requirements": ["exclusive-treehouse-lease", "iteration-cap", "time-cap", "token-cap", "external-validation"]
+    },
+    {
+      "id": "temporary-tool-evaluation",
+      "actions": ["tool.evaluate"],
+      "decision": "allow",
+      "owner": "gate-tool-admission",
+      "requirements": ["isolated-install-root", "official-source", "effect-classification", "telemetry-disabled"]
+    },
+    {
+      "id": "persistent-tool-install",
+      "actions": ["tool.install", "skill.install"],
+      "decision": "delegate",
+      "owner": "gate-tool-admission",
+      "requirements": ["catalog-entry", "exact-lock", "license-record", "integrity-record", "smoke-test", "no-mistakes-success"]
+    },
+    {
+      "id": "publication-preparation",
+      "actions": ["git.push", "github.pr.open", "github.ci.monitor"],
+      "decision": "delegate",
+      "owner": "no-mistakes",
+      "requirements": ["explicit-intent", "immutable-head"]
+    },
+    {
+      "id": "publication-completion",
+      "actions": ["github.merge", "deploy", "publish"],
+      "decision": "delegate",
+      "owner": "gate-publication",
+      "requirements": ["verified-no-mistakes-attestation", "trusted-publication-adapter", "protected-checks-pass", "exact-head-match", "configured-destination"]
+    },
+    {
+      "id": "cyber-research",
+      "actions": ["cyber.hypothesize", "cyber.plan", "cyber.local-static-analysis", "cyber.saved-evidence-analysis"],
+      "decision": "allow",
+      "owner": "gate-engagement",
+      "requirements": ["evidence-labels", "bounded-objective"]
+    },
+    {
+      "id": "cyber-active",
+      "actions": ["cyber.target-contact", "cyber.scan", "cyber.intercept", "cyber.authenticate", "cyber.exploit"],
+      "decision": "require-receipt",
+      "owner": "gate-engagement",
+      "requirements": ["valid-engagement", "no-mistakes-plan-review", "operator-plan-receipt", "matching-plan-digest", "scope-check", "reviewed-scope-aware-adapter", "audit-log"]
+    },
+    {
+      "id": "cyber-high-impact",
+      "actions": ["cyber.persist", "cyber.destructive", "cyber.denial-of-service", "cyber.data-removal"],
+      "decision": "require-receipt",
+      "owner": "gate-engagement",
+      "requirements": ["valid-engagement", "explicitly-listed-action", "no-mistakes-plan-review", "operator-plan-receipt", "matching-plan-digest", "scope-check", "reviewed-scope-aware-adapter", "rollback-plan", "stop-conditions", "audit-log"]
+    },
+    {
+      "id": "scope-expansion",
+      "actions": ["cyber.expand-scope", "cyber.add-target"],
+      "decision": "deny",
+      "owner": "gate-engagement",
+      "requirements": ["new-plan-and-receipt-required"]
+    }
+  ]
+}

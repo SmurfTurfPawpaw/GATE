@@ -1,0 +1,2994 @@
+{
+  "$schema": "../schemas/tool-catalog.schema.json",
+  "apiVersion": "gate.dev/catalog/v1",
+  "kind": "SecurityToolCatalog",
+  "policy": {
+    "availabilityMeans": "discoverable-and-reproducibly-installable",
+    "defaultInstallMode": "on-demand",
+    "pinRequired": true,
+    "checksumRequiredWhenPublished": true,
+    "telemetryDefault": "off",
+    "untrustedOutput": true
+  },
+  "tools": [
+    {
+      "id": "adb",
+      "name": "Android Debug Bridge",
+      "category": "mobile",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "Apache-2.0",
+      "openSource": true,
+      "upstream": "https://android.googlesource.com/platform/packages/modules/adb",
+      "command": "adb",
+      "installLanes": [
+        "native-os"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "device",
+        "user"
+      ],
+      "notes": "Read-only collection can be P1; install, shell, backup, restore, and file writes use A2."
+    },
+    {
+      "id": "afl-plus-plus",
+      "name": "AFL++",
+      "category": "source-security",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "AGPL-3.0",
+      "openSource": true,
+      "upstream": "https://github.com/AFLplusplus/AFLplusplus",
+      "command": "afl-fuzz",
+      "installLanes": [
+        "oci",
+        "source-build"
+      ],
+      "supportedHosts": [
+        "linux",
+        "wsl2"
+      ],
+      "privileges": [
+        "user",
+        "kernel"
+      ],
+      "notes": "Run local targets in disposable corpus/output directories with CPU, memory, time, and crash quotas."
+    },
+    {
+      "id": "aircrack-ng",
+      "name": "Aircrack-ng",
+      "category": "wireless-radio",
+      "riskClass": "A3",
+      "approval": "operator-receipt",
+      "license": "GPL-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/aircrack-ng/aircrack-ng",
+      "command": "aircrack-ng",
+      "installLanes": [
+        "native-os"
+      ],
+      "supportedHosts": [
+        "linux"
+      ],
+      "privileges": [
+        "admin",
+        "raw-network",
+        "device"
+      ],
+      "notes": "Offline PCAP cracking is P0 and monitor capture is P1; injection and deauthentication require the A3 receipt."
+    },
+    {
+      "id": "amass",
+      "name": "OWASP Amass",
+      "category": "osint",
+      "riskClass": "A1",
+      "approval": "engagement",
+      "license": "Apache-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/owasp-amass/amass",
+      "command": "amass",
+      "installLanes": [
+        "pinned-release"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Passive data sources are P1; active DNS enumeration uses engagement scope and provider rate limits."
+    },
+    {
+      "id": "android-emulator",
+      "name": "Android Emulator",
+      "category": "mobile",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "Mixed Android Open Source Project and SDK terms",
+      "openSource": false,
+      "upstream": "https://github.com/google/android-emulator-container-scripts",
+      "command": "emulator",
+      "installLanes": [
+        "native-os",
+        "oci"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "kernel",
+        "service"
+      ],
+      "notes": "Use a dedicated test image with deterministic snapshots and reset; do not load personal device data."
+    },
+    {
+      "id": "angr",
+      "name": "angr",
+      "category": "reverse-engineering",
+      "riskClass": "P0",
+      "approval": "automatic",
+      "license": "BSD-2-Clause",
+      "openSource": true,
+      "upstream": "https://github.com/angr/angr",
+      "command": "angr",
+      "installLanes": [
+        "isolated-python"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Bound solver time, memory, input size, and path count."
+    },
+    {
+      "id": "apktool",
+      "name": "Apktool",
+      "category": "mobile",
+      "riskClass": "P0",
+      "approval": "automatic",
+      "license": "Apache-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/iBotPeaches/Apktool",
+      "command": "apktool",
+      "installLanes": [
+        "java-archive"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Decode copied artifacts and preserve the original package hash."
+    },
+    {
+      "id": "arkime",
+      "name": "Arkime",
+      "category": "network",
+      "riskClass": "P1",
+      "approval": "declared-source",
+      "license": "Apache-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/arkime/arkime",
+      "command": "arkime",
+      "installLanes": [
+        "oci"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "capture",
+        "service"
+      ],
+      "notes": "Run as an on-demand local case service with explicit capture retention and disk quotas."
+    },
+    {
+      "id": "autopsy",
+      "name": "Autopsy",
+      "category": "dfir",
+      "riskClass": "P0",
+      "approval": "automatic",
+      "license": "Apache-2.0 with third-party components",
+      "openSource": true,
+      "upstream": "https://github.com/sleuthkit/autopsy",
+      "command": "autopsy",
+      "installLanes": [
+        "java-archive",
+        "native-os"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Keep case databases private and source images read-only."
+    },
+    {
+      "id": "bandit",
+      "name": "Bandit",
+      "category": "source-security",
+      "riskClass": "P0",
+      "approval": "automatic",
+      "license": "Apache-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/PyCQA/bandit",
+      "command": "bandit",
+      "installLanes": [
+        "isolated-python"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Static Python analysis with a pinned configuration and baseline."
+    },
+    {
+      "id": "bettercap",
+      "name": "Bettercap",
+      "category": "network",
+      "riskClass": "A3",
+      "approval": "operator-receipt",
+      "license": "GPL-3.0",
+      "openSource": true,
+      "upstream": "https://github.com/bettercap/bettercap",
+      "command": "bettercap",
+      "installLanes": [
+        "pinned-release",
+        "native-os"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "wsl2"
+      ],
+      "privileges": [
+        "admin",
+        "raw-network"
+      ],
+      "notes": "Passive sniffing is P1; spoofing, MITM, credential interception, and injection require the A3 receipt."
+    },
+    {
+      "id": "binwalk",
+      "name": "Binwalk",
+      "category": "reverse-engineering",
+      "riskClass": "P0",
+      "approval": "automatic",
+      "license": "MIT",
+      "openSource": true,
+      "upstream": "https://github.com/ReFirmLabs/binwalk",
+      "command": "binwalk",
+      "installLanes": [
+        "isolated-python",
+        "pinned-release"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Extract into quota-limited disposable directories and treat every extracted file as hostile."
+    },
+    {
+      "id": "bloodhound-ce",
+      "name": "BloodHound Community Edition",
+      "category": "identity",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "Apache-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/SpecterOps/BloodHound",
+      "command": "bloodhound",
+      "installLanes": [
+        "oci"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "service",
+        "user"
+      ],
+      "notes": "Graph analysis is P0 after collection; directory collection and authenticated enumeration use the A2 gate."
+    },
+    {
+      "id": "bluez-tools",
+      "name": "BlueZ",
+      "category": "wireless-radio",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "GPL-2.0 / LGPL components",
+      "openSource": true,
+      "upstream": "https://github.com/bluez/bluez",
+      "command": "bluetoothctl",
+      "installLanes": [
+        "native-os"
+      ],
+      "supportedHosts": [
+        "linux"
+      ],
+      "privileges": [
+        "admin",
+        "device"
+      ],
+      "notes": "Passive discovery is P1; connecting, pairing, service interaction, and writes use A2."
+    },
+    {
+      "id": "btlejack",
+      "name": "BtleJack",
+      "category": "wireless-radio",
+      "riskClass": "A3",
+      "approval": "operator-receipt",
+      "license": "MIT",
+      "openSource": true,
+      "upstream": "https://github.com/virtualabs/btlejack",
+      "command": "btlejack",
+      "installLanes": [
+        "isolated-python",
+        "hardware"
+      ],
+      "supportedHosts": [
+        "linux"
+      ],
+      "privileges": [
+        "device",
+        "raw-network"
+      ],
+      "notes": "Sniffing can be P1; hijacking and jamming require the A3 receipt and compatible hardware."
+    },
+    {
+      "id": "bulk-extractor",
+      "name": "bulk_extractor",
+      "category": "dfir",
+      "riskClass": "P0",
+      "approval": "automatic",
+      "license": "GPL-3.0-or-later with government and third-party components",
+      "openSource": true,
+      "upstream": "https://github.com/simsong/bulk_extractor",
+      "command": "bulk_extractor",
+      "installLanes": [
+        "native-os",
+        "source-build"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Use read-only evidence images and quotas for output, recursion, and workers."
+    },
+    {
+      "id": "burp-suite",
+      "name": "Burp Suite",
+      "category": "web-api",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "Proprietary",
+      "openSource": false,
+      "upstream": "https://portswigger.net/burp",
+      "command": "burpsuite",
+      "installLanes": [
+        "external-user-install"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user",
+        "certificate-store"
+      ],
+      "notes": "Optional adapter only. GATE never downloads, redistributes, or accepts the Burp license; the operator supplies Community or Professional."
+    },
+    {
+      "id": "capa",
+      "name": "capa",
+      "category": "reverse-engineering",
+      "riskClass": "P0",
+      "approval": "automatic",
+      "license": "Apache-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/mandiant/capa",
+      "command": "capa",
+      "installLanes": [
+        "pinned-release"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Pin the rule repository revision with every result."
+    },
+    {
+      "id": "cartography",
+      "name": "Cartography",
+      "category": "cloud",
+      "riskClass": "P1",
+      "approval": "declared-source",
+      "license": "Apache-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/lyft/cartography",
+      "command": "cartography",
+      "installLanes": [
+        "oci",
+        "isolated-python"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "cloud-read",
+        "service"
+      ],
+      "notes": "Use read-only APIs and a local graph database; protect graph exports as private evidence."
+    },
+    {
+      "id": "chainsaw",
+      "name": "Chainsaw",
+      "category": "dfir",
+      "riskClass": "P0",
+      "approval": "automatic",
+      "license": "GPL-3.0",
+      "openSource": true,
+      "upstream": "https://github.com/WithSecureLabs/chainsaw",
+      "command": "chainsaw",
+      "installLanes": [
+        "pinned-release"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Pin Sigma and mapping revisions with each offline event-log result."
+    },
+    {
+      "id": "checkov",
+      "name": "Checkov",
+      "category": "source-security",
+      "riskClass": "P0",
+      "approval": "automatic",
+      "license": "Apache-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/bridgecrewio/checkov",
+      "command": "checkov",
+      "installLanes": [
+        "isolated-python",
+        "oci"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Static IaC analysis; remote modules and external checks must be pinned."
+    },
+    {
+      "id": "cloudfox",
+      "name": "CloudFox",
+      "category": "cloud",
+      "riskClass": "P1",
+      "approval": "declared-source",
+      "license": "MIT",
+      "openSource": true,
+      "upstream": "https://github.com/BishopFox/cloudfox",
+      "command": "cloudfox",
+      "installLanes": [
+        "pinned-release"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "cloud-read"
+      ],
+      "notes": "Enumeration only with a named account, role, regions, and local private output directory."
+    },
+    {
+      "id": "commix",
+      "name": "Commix",
+      "category": "web-api",
+      "riskClass": "A3",
+      "approval": "operator-receipt",
+      "license": "GPL-3.0-or-later",
+      "openSource": true,
+      "upstream": "https://github.com/commixproject/commix",
+      "command": "commix",
+      "installLanes": [
+        "isolated-python"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Command-injection detection is A2; command execution and post-exploitation require the A3 receipt."
+    },
+    {
+      "id": "cutter",
+      "name": "Cutter",
+      "category": "reverse-engineering",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "GPL-3.0",
+      "openSource": true,
+      "upstream": "https://github.com/rizinorg/cutter",
+      "command": "cutter",
+      "installLanes": [
+        "pinned-release",
+        "native-os"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user",
+        "debug"
+      ],
+      "notes": "GUI front end for Rizin; dynamic debugging remains A2."
+    },
+    {
+      "id": "dalfox",
+      "name": "Dalfox",
+      "category": "web-api",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "MIT",
+      "openSource": true,
+      "upstream": "https://github.com/hahwul/dalfox",
+      "command": "dalfox",
+      "installLanes": [
+        "pinned-release"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Browser-backed XSS verification may execute target-controlled content and stays inside the A2 gate."
+    },
+    {
+      "id": "dnsx",
+      "name": "DNSx",
+      "category": "osint",
+      "riskClass": "A1",
+      "approval": "engagement",
+      "license": "MIT",
+      "openSource": true,
+      "upstream": "https://github.com/projectdiscovery/dnsx",
+      "command": "dnsx",
+      "installLanes": [
+        "pinned-release"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Restrict names and resolvers to an engagement and cap query rate."
+    },
+    {
+      "id": "exiftool",
+      "name": "ExifTool",
+      "category": "dfir",
+      "riskClass": "P0",
+      "approval": "automatic",
+      "license": "Artistic-1.0-Perl OR GPL-1.0-or-later",
+      "openSource": true,
+      "upstream": "https://github.com/exiftool/exiftool",
+      "command": "exiftool",
+      "installLanes": [
+        "native-os"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Operate on copied artifacts; metadata writes are disabled in the analysis adapter."
+    },
+    {
+      "id": "falco",
+      "name": "Falco",
+      "category": "container-kubernetes",
+      "riskClass": "P1",
+      "approval": "declared-source",
+      "license": "Apache-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/falcosecurity/falco",
+      "command": "falco",
+      "installLanes": [
+        "native-os",
+        "oci"
+      ],
+      "supportedHosts": [
+        "linux"
+      ],
+      "privileges": [
+        "kernel",
+        "service"
+      ],
+      "notes": "Detection only by default; response hooks and automatic containment are disabled."
+    },
+    {
+      "id": "feroxbuster",
+      "name": "Feroxbuster",
+      "category": "web-api",
+      "riskClass": "A1",
+      "approval": "engagement",
+      "license": "MIT",
+      "openSource": true,
+      "upstream": "https://github.com/epi052/feroxbuster",
+      "command": "feroxbuster",
+      "installLanes": [
+        "pinned-release"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Keep recursion same-origin and cap depth, concurrency, and total requests."
+    },
+    {
+      "id": "ffuf",
+      "name": "ffuf",
+      "category": "web-api",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "MIT",
+      "openSource": true,
+      "upstream": "https://github.com/ffuf/ffuf",
+      "command": "ffuf",
+      "installLanes": [
+        "pinned-release"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Path discovery can run as A1; body fuzzing, authenticated brute force, and high request rates use A2."
+    },
+    {
+      "id": "frida",
+      "name": "Frida",
+      "category": "mobile",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "wxWindows-Library-3.1",
+      "openSource": true,
+      "upstream": "https://github.com/frida/frida",
+      "command": "frida",
+      "installLanes": [
+        "isolated-python",
+        "pinned-release"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "device",
+        "debug"
+      ],
+      "notes": "Observation hooks can be P1; method replacement, bypasses, and state changes use A2. Match client and server versions exactly."
+    },
+    {
+      "id": "gdb",
+      "name": "GNU Debugger",
+      "category": "reverse-engineering",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "GPL-3.0-or-later",
+      "openSource": true,
+      "upstream": "https://sourceware.org/git/binutils-gdb.git",
+      "command": "gdb",
+      "installLanes": [
+        "native-os"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "wsl2"
+      ],
+      "privileges": [
+        "debug"
+      ],
+      "notes": "Core-file analysis is P0; process attachment, calls, and memory writes use A2."
+    },
+    {
+      "id": "ghidra",
+      "name": "Ghidra",
+      "category": "reverse-engineering",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "Apache-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/NationalSecurityAgency/ghidra",
+      "command": "ghidraRun",
+      "installLanes": [
+        "java-archive"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user",
+        "debug"
+      ],
+      "notes": "Static analysis is P0; debugger attach, live memory access, and process control use the A2 gate."
+    },
+    {
+      "id": "gitleaks",
+      "name": "Gitleaks",
+      "category": "source-security",
+      "riskClass": "P0",
+      "approval": "automatic",
+      "license": "MIT",
+      "openSource": true,
+      "upstream": "https://github.com/gitleaks/gitleaks",
+      "command": "gitleaks",
+      "installLanes": [
+        "pinned-release"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Never render detected secret values into model context or normal terminal logs."
+    },
+    {
+      "id": "gnuradio",
+      "name": "GNU Radio",
+      "category": "wireless-radio",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "GPL-3.0",
+      "openSource": true,
+      "upstream": "https://github.com/gnuradio/gnuradio",
+      "command": "gnuradio-companion",
+      "installLanes": [
+        "native-os",
+        "hardware"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "device"
+      ],
+      "notes": "Offline flowgraphs are P0 and receive is P1; any transmitter block uses A2."
+    },
+    {
+      "id": "gosec",
+      "name": "Gosec",
+      "category": "source-security",
+      "riskClass": "P0",
+      "approval": "automatic",
+      "license": "Apache-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/securego/gosec",
+      "command": "gosec",
+      "installLanes": [
+        "pinned-release"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Static Go analysis with a pinned configuration and rule set."
+    },
+    {
+      "id": "gowitness",
+      "name": "gowitness",
+      "category": "osint",
+      "riskClass": "A1",
+      "approval": "engagement",
+      "license": "GPL-3.0",
+      "openSource": true,
+      "upstream": "https://github.com/sensepost/gowitness",
+      "command": "gowitness",
+      "installLanes": [
+        "pinned-release"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Visit only approved URLs; isolate the browser and treat page content and downloads as hostile."
+    },
+    {
+      "id": "greenbone-openvas",
+      "name": "Greenbone OpenVAS Scanner",
+      "category": "network",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "GPL-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/greenbone/openvas-scanner",
+      "command": "openvas",
+      "installLanes": [
+        "oci"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "service"
+      ],
+      "notes": "Keep safe and intrusive checks in separate policies; use the official community container stack pinned by digest."
+    },
+    {
+      "id": "grype",
+      "name": "Grype",
+      "category": "container-kubernetes",
+      "riskClass": "P1",
+      "approval": "declared-source",
+      "license": "Apache-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/anchore/grype",
+      "command": "grype",
+      "installLanes": [
+        "pinned-release",
+        "oci"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user",
+        "cloud-read"
+      ],
+      "notes": "Record vulnerability database and source artifact digests with every result."
+    },
+    {
+      "id": "hackrf-tools",
+      "name": "HackRF Tools",
+      "category": "wireless-radio",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "GPL-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/greatscottgadgets/hackrf",
+      "command": "hackrf_transfer",
+      "installLanes": [
+        "native-os",
+        "hardware"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "device"
+      ],
+      "notes": "Receive is P1; transmission uses A2 and must remain within approved frequencies and power."
+    },
+    {
+      "id": "hashcat",
+      "name": "Hashcat",
+      "category": "identity",
+      "riskClass": "P0",
+      "approval": "automatic",
+      "license": "MIT",
+      "openSource": true,
+      "upstream": "https://github.com/hashcat/hashcat",
+      "command": "hashcat",
+      "installLanes": [
+        "native-os",
+        "pinned-release"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user",
+        "gpu"
+      ],
+      "notes": "Offline hashes only; recovered credentials remain in private evidence and never enter prompts or logs."
+    },
+    {
+      "id": "hayabusa",
+      "name": "Hayabusa",
+      "category": "dfir",
+      "riskClass": "P0",
+      "approval": "automatic",
+      "license": "AGPL-3.0",
+      "openSource": true,
+      "upstream": "https://github.com/Yamato-Security/hayabusa",
+      "command": "hayabusa",
+      "installLanes": [
+        "pinned-release"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Pin rule revision and keep event-log evidence private."
+    },
+    {
+      "id": "hcxdumptool",
+      "name": "hcxdumptool",
+      "category": "wireless-radio",
+      "riskClass": "A3",
+      "approval": "operator-receipt",
+      "license": "MIT",
+      "openSource": true,
+      "upstream": "https://github.com/ZerBea/hcxdumptool",
+      "command": "hcxdumptool",
+      "installLanes": [
+        "native-os",
+        "source-build"
+      ],
+      "supportedHosts": [
+        "linux"
+      ],
+      "privileges": [
+        "admin",
+        "raw-network",
+        "device"
+      ],
+      "notes": "Active frame transmission and client interaction require the A3 receipt; passive capture must be explicitly configured."
+    },
+    {
+      "id": "hcxtools",
+      "name": "hcxtools",
+      "category": "wireless-radio",
+      "riskClass": "P0",
+      "approval": "automatic",
+      "license": "MIT",
+      "openSource": true,
+      "upstream": "https://github.com/ZerBea/hcxtools",
+      "command": "hcxpcapngtool",
+      "installLanes": [
+        "native-os",
+        "source-build"
+      ],
+      "supportedHosts": [
+        "linux",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Offline conversion and analysis of authorized capture files."
+    },
+    {
+      "id": "honggfuzz",
+      "name": "Honggfuzz",
+      "category": "source-security",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "Apache-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/google/honggfuzz",
+      "command": "honggfuzz",
+      "installLanes": [
+        "source-build",
+        "oci"
+      ],
+      "supportedHosts": [
+        "linux",
+        "wsl2"
+      ],
+      "privileges": [
+        "user",
+        "kernel"
+      ],
+      "notes": "Remote or stateful target fuzzing is prohibited unless the A2 plan names the endpoint and recovery behavior."
+    },
+    {
+      "id": "httpx",
+      "name": "httpx",
+      "category": "web-api",
+      "riskClass": "A1",
+      "approval": "engagement",
+      "license": "MIT",
+      "openSource": true,
+      "upstream": "https://github.com/projectdiscovery/httpx",
+      "command": "httpx",
+      "installLanes": [
+        "pinned-release"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Run only for engagement hosts with bounded concurrency, redirects, and request rate."
+    },
+    {
+      "id": "impacket",
+      "name": "Impacket",
+      "category": "identity",
+      "riskClass": "A3",
+      "approval": "operator-receipt",
+      "license": "Modified Apache Software License 1.1",
+      "openSource": true,
+      "upstream": "https://github.com/fortra/impacket",
+      "command": "impacket",
+      "installLanes": [
+        "isolated-python"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Parsers are P0 and enumeration can be A1; remote execution, relay, and secret dumping require the A3 receipt."
+    },
+    {
+      "id": "jadx",
+      "name": "JADX",
+      "category": "mobile",
+      "riskClass": "P0",
+      "approval": "automatic",
+      "license": "Apache-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/skylot/jadx",
+      "command": "jadx",
+      "installLanes": [
+        "java-archive"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Static decompilation only; preserve the original APK hash."
+    },
+    {
+      "id": "john-the-ripper",
+      "name": "John the Ripper",
+      "category": "identity",
+      "riskClass": "P0",
+      "approval": "automatic",
+      "license": "GPL-2.0-or-later WITH OpenSSL-exception",
+      "openSource": true,
+      "upstream": "https://github.com/openwall/john",
+      "command": "john",
+      "installLanes": [
+        "native-os",
+        "source-build"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user",
+        "gpu"
+      ],
+      "notes": "Offline hashes only; protect pot files and recovered credentials as private evidence."
+    },
+    {
+      "id": "kali-toolbox",
+      "name": "Kali Linux compatibility toolbox",
+      "category": "compatibility",
+      "riskClass": "A3",
+      "approval": "operator-receipt",
+      "license": "Mixed distribution; inspect per-package SBOM",
+      "openSource": false,
+      "upstream": "https://gitlab.com/kalilinux/build-scripts/kali-docker",
+      "command": "kali",
+      "installLanes": [
+        "oci"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user",
+        "admin",
+        "raw-network"
+      ],
+      "notes": "Optional digest-pinned compatibility image, not the source of truth. Dedicated tool entries remain authoritative and privileged containers are not a security boundary."
+    },
+    {
+      "id": "katana",
+      "name": "Katana",
+      "category": "web-api",
+      "riskClass": "A1",
+      "approval": "engagement",
+      "license": "MIT",
+      "openSource": true,
+      "upstream": "https://github.com/projectdiscovery/katana",
+      "command": "katana",
+      "installLanes": [
+        "pinned-release"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Enforce origin scope, crawl depth, browser behavior, and a request budget."
+    },
+    {
+      "id": "killerbee",
+      "name": "KillerBee",
+      "category": "wireless-radio",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "BSD-3-Clause",
+      "openSource": true,
+      "upstream": "https://github.com/riverloopsec/killerbee",
+      "command": "zbstumbler",
+      "installLanes": [
+        "isolated-python",
+        "hardware"
+      ],
+      "supportedHosts": [
+        "linux"
+      ],
+      "privileges": [
+        "device",
+        "raw-network"
+      ],
+      "notes": "Zigbee sniffing is P1; replay, injection, and active interaction use A2."
+    },
+    {
+      "id": "kismet",
+      "name": "Kismet",
+      "category": "wireless-radio",
+      "riskClass": "P1",
+      "approval": "declared-source",
+      "license": "GPL-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/kismetwireless/kismet",
+      "command": "kismet",
+      "installLanes": [
+        "native-os"
+      ],
+      "supportedHosts": [
+        "linux"
+      ],
+      "privileges": [
+        "admin",
+        "device",
+        "service"
+      ],
+      "notes": "Normal profile is passive monitoring with explicit interface, channel, duration, and retention limits."
+    },
+    {
+      "id": "kube-bench",
+      "name": "kube-bench",
+      "category": "container-kubernetes",
+      "riskClass": "P1",
+      "approval": "declared-source",
+      "license": "Apache-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/aquasecurity/kube-bench",
+      "command": "kube-bench",
+      "installLanes": [
+        "pinned-release",
+        "oci"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "cloud-read",
+        "admin"
+      ],
+      "notes": "Use audit-only access and name the benchmark revision and cluster."
+    },
+    {
+      "id": "kube-hunter",
+      "name": "kube-hunter",
+      "category": "container-kubernetes",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "Apache-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/aquasecurity/kube-hunter",
+      "command": "kube-hunter",
+      "installLanes": [
+        "isolated-python",
+        "oci"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user",
+        "cloud-read"
+      ],
+      "notes": "Passive discovery may be A1; active hunters and exploit validation use the A2 gate."
+    },
+    {
+      "id": "kubeaudit",
+      "name": "kubeaudit",
+      "category": "container-kubernetes",
+      "riskClass": "P1",
+      "approval": "declared-source",
+      "license": "MIT",
+      "openSource": true,
+      "upstream": "https://github.com/Shopify/kubeaudit",
+      "command": "kubeaudit",
+      "installLanes": [
+        "pinned-release",
+        "oci"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "cloud-read"
+      ],
+      "notes": "Manifest analysis is P0; live cluster audit uses a read-only service account."
+    },
+    {
+      "id": "kubescape",
+      "name": "Kubescape",
+      "category": "container-kubernetes",
+      "riskClass": "P1",
+      "approval": "declared-source",
+      "license": "Apache-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/kubescape/kubescape",
+      "command": "kubescape",
+      "installLanes": [
+        "pinned-release",
+        "oci"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "cloud-read"
+      ],
+      "notes": "Manifest analysis is P0; live posture analysis uses a read-only service account."
+    },
+    {
+      "id": "libimobiledevice",
+      "name": "libimobiledevice",
+      "category": "mobile",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "LGPL-2.1",
+      "openSource": true,
+      "upstream": "https://github.com/libimobiledevice/libimobiledevice",
+      "command": "ideviceinfo",
+      "installLanes": [
+        "native-os"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "device",
+        "user"
+      ],
+      "notes": "Device information and collection can be P1; install, restore, and write operations use A2."
+    },
+    {
+      "id": "lldb",
+      "name": "LLDB",
+      "category": "reverse-engineering",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "Apache-2.0 WITH LLVM-exception",
+      "openSource": true,
+      "upstream": "https://github.com/llvm/llvm-project",
+      "command": "lldb",
+      "installLanes": [
+        "native-os"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "debug"
+      ],
+      "notes": "Core-file analysis is P0; process attachment and mutation use A2."
+    },
+    {
+      "id": "maigret",
+      "name": "Maigret",
+      "category": "osint",
+      "riskClass": "P1",
+      "approval": "declared-source",
+      "license": "MIT",
+      "openSource": true,
+      "upstream": "https://github.com/soxoj/maigret",
+      "command": "maigret",
+      "installLanes": [
+        "isolated-python"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Apply site rate limits and keep identity correlation evidence private."
+    },
+    {
+      "id": "manticore",
+      "name": "Manticore",
+      "category": "reverse-engineering",
+      "riskClass": "P0",
+      "approval": "automatic",
+      "license": "AGPL-3.0",
+      "openSource": true,
+      "upstream": "https://github.com/trailofbits/manticore",
+      "command": "manticore",
+      "installLanes": [
+        "isolated-python"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Use offline with solver, time, and state-count bounds."
+    },
+    {
+      "id": "masscan",
+      "name": "Masscan",
+      "category": "network",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "AGPL-3.0",
+      "openSource": true,
+      "upstream": "https://github.com/robertdavidgraham/masscan",
+      "command": "masscan",
+      "installLanes": [
+        "native-os",
+        "source-build"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "wsl2"
+      ],
+      "privileges": [
+        "raw-network"
+      ],
+      "notes": "Require an explicit CIDR and conservative packet rate; never infer internet-scale scope."
+    },
+    {
+      "id": "metasploit-framework",
+      "name": "Metasploit Framework",
+      "category": "exploitation",
+      "riskClass": "A3",
+      "approval": "operator-receipt",
+      "license": "BSD-3-Clause with third-party components",
+      "openSource": true,
+      "upstream": "https://github.com/rapid7/metasploit-framework",
+      "command": "msfconsole",
+      "installLanes": [
+        "oci",
+        "native-os"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "wsl2"
+      ],
+      "privileges": [
+        "user",
+        "service"
+      ],
+      "notes": "Classify auxiliary modules separately. Exploit execution, payloads, and sessions always require the A3 receipt."
+    },
+    {
+      "id": "mitmproxy",
+      "name": "mitmproxy",
+      "category": "web-api",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "MIT",
+      "openSource": true,
+      "upstream": "https://github.com/mitmproxy/mitmproxy",
+      "command": "mitmproxy",
+      "installLanes": [
+        "isolated-python"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user",
+        "certificate-store"
+      ],
+      "notes": "Capture-only use is P1. Request modification, upstream interception, and certificate changes use the A2 gate."
+    },
+    {
+      "id": "mobsf",
+      "name": "Mobile Security Framework MobSF",
+      "category": "mobile",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "GPL-3.0",
+      "openSource": true,
+      "upstream": "https://github.com/MobSF/Mobile-Security-Framework-MobSF",
+      "command": "mobsf",
+      "installLanes": [
+        "oci"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "service",
+        "device"
+      ],
+      "notes": "Static analysis is P0; dynamic analysis, emulator control, and traffic interception use A2."
+    },
+    {
+      "id": "naabu",
+      "name": "Naabu",
+      "category": "network",
+      "riskClass": "A1",
+      "approval": "engagement",
+      "license": "MIT",
+      "openSource": true,
+      "upstream": "https://github.com/projectdiscovery/naabu",
+      "command": "naabu",
+      "installLanes": [
+        "pinned-release"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user",
+        "raw-network"
+      ],
+      "notes": "Enforce approved CIDRs, ports, host count, and packet rate. Raw SYN mode needs a capability broker."
+    },
+    {
+      "id": "netexec",
+      "name": "NetExec",
+      "category": "identity",
+      "riskClass": "A3",
+      "approval": "operator-receipt",
+      "license": "BSD-2-Clause",
+      "openSource": true,
+      "upstream": "https://github.com/Pennyw0rth/NetExec",
+      "command": "nxc",
+      "installLanes": [
+        "isolated-python"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Register modules separately: enumeration A1, credential spraying A2, and execution or dumping A3."
+    },
+    {
+      "id": "nikto",
+      "name": "Nikto",
+      "category": "web-api",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "GPL-3.0 (code); restricted database redistribution terms",
+      "openSource": true,
+      "upstream": "https://github.com/sullo/nikto",
+      "command": "nikto",
+      "installLanes": [
+        "pinned-release",
+        "native-os"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Do not vendor or separately redistribute the Nikto databases; apply host and request budgets."
+    },
+    {
+      "id": "nmap",
+      "name": "Nmap",
+      "category": "network",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "NPSL-0.95",
+      "openSource": false,
+      "upstream": "https://github.com/nmap/nmap",
+      "command": "nmap",
+      "installLanes": [
+        "native-os"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user",
+        "raw-network"
+      ],
+      "notes": "NPSL is source-available and non-standard. Connect scans can be A1; raw scans and intrusive, exploit, or broadcast NSE scripts stay A2."
+    },
+    {
+      "id": "nuclei",
+      "name": "Nuclei",
+      "category": "web-api",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "MIT",
+      "openSource": true,
+      "upstream": "https://github.com/projectdiscovery/nuclei",
+      "command": "nuclei",
+      "installLanes": [
+        "pinned-release"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Pin the template repository commit and admit signed templates by protocol and effect; code, headless, fuzz, and intrusive templates remain A2."
+    },
+    {
+      "id": "objection",
+      "name": "Objection",
+      "category": "mobile",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "GPL-3.0",
+      "openSource": true,
+      "upstream": "https://github.com/sensepost/objection",
+      "command": "objection",
+      "installLanes": [
+        "isolated-python"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "device",
+        "debug"
+      ],
+      "notes": "Runtime modifications and bypasses require the A2 gate and an authorized app/device."
+    },
+    {
+      "id": "osquery",
+      "name": "osquery",
+      "category": "dfir",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "Apache-2.0 OR GPL-2.0-only",
+      "openSource": true,
+      "upstream": "https://github.com/osquery/osquery",
+      "command": "osqueryi",
+      "installLanes": [
+        "native-os",
+        "pinned-release"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user",
+        "admin"
+      ],
+      "notes": "Use a read-only SQL allowlist for P1. Extensions, event actions, and host changes use A2."
+    },
+    {
+      "id": "osv-scanner",
+      "name": "OSV-Scanner",
+      "category": "source-security",
+      "riskClass": "P1",
+      "approval": "declared-source",
+      "license": "Apache-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/google/osv-scanner",
+      "command": "osv-scanner",
+      "installLanes": [
+        "pinned-release"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Local lockfile analysis is P0; record online database revision and query time."
+    },
+    {
+      "id": "owasp-zap",
+      "name": "OWASP ZAP",
+      "category": "web-api",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "Apache-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/zaproxy/zaproxy",
+      "command": "zap.sh",
+      "installLanes": [
+        "oci",
+        "native-os"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Passive or baseline operation is lower risk; active scan and authenticated scripting use the A2 gate."
+    },
+    {
+      "id": "pacu",
+      "name": "Pacu",
+      "category": "cloud",
+      "riskClass": "A3",
+      "approval": "operator-receipt",
+      "license": "BSD-3-Clause",
+      "openSource": true,
+      "upstream": "https://github.com/RhinoSecurityLabs/pacu",
+      "command": "pacu",
+      "installLanes": [
+        "isolated-python"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "wsl2"
+      ],
+      "privileges": [
+        "cloud-read",
+        "cloud-write"
+      ],
+      "notes": "Use a dedicated offensive account. Any state-changing module or credential abuse requires the A3 receipt."
+    },
+    {
+      "id": "phoneinfoga",
+      "name": "PhoneInfoga",
+      "category": "osint",
+      "riskClass": "P1",
+      "approval": "declared-source",
+      "license": "GPL-3.0",
+      "openSource": true,
+      "upstream": "https://github.com/sundowndev/phoneinfoga",
+      "command": "phoneinfoga",
+      "installLanes": [
+        "pinned-release"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Use only for a documented case purpose and protect collected personal information."
+    },
+    {
+      "id": "plaso",
+      "name": "Plaso",
+      "category": "dfir",
+      "riskClass": "P0",
+      "approval": "automatic",
+      "license": "Apache-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/log2timeline/plaso",
+      "command": "log2timeline.py",
+      "installLanes": [
+        "isolated-python",
+        "oci"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Bound parser set, image size, worker count, and output storage."
+    },
+    {
+      "id": "playwright",
+      "name": "Playwright",
+      "category": "web-api",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "Apache-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/microsoft/playwright",
+      "command": "playwright",
+      "installLanes": [
+        "isolated-node"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Read-only navigation can be P1. Form submission, upload, purchase, or account changes stay A2."
+    },
+    {
+      "id": "prowler",
+      "name": "Prowler",
+      "category": "cloud",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "Apache-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/prowler-cloud/prowler",
+      "command": "prowler",
+      "installLanes": [
+        "oci",
+        "isolated-python"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "cloud-read",
+        "cloud-write"
+      ],
+      "notes": "Use a read-only audit role by default. Remediation and fix modes use the A2 gate."
+    },
+    {
+      "id": "proxmark3",
+      "name": "Proxmark3",
+      "category": "wireless-radio",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "GPL-3.0",
+      "openSource": true,
+      "upstream": "https://github.com/RfidResearchGroup/proxmark3",
+      "command": "proxmark3",
+      "installLanes": [
+        "pinned-release",
+        "hardware"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "device"
+      ],
+      "notes": "Offline decode is P0 and reads can be P1; emulation, writes, and credential operations use A2."
+    },
+    {
+      "id": "pwndbg",
+      "name": "Pwndbg",
+      "category": "reverse-engineering",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "MIT",
+      "openSource": true,
+      "upstream": "https://github.com/pwndbg/pwndbg",
+      "command": "pwndbg",
+      "installLanes": [
+        "pinned-release"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "wsl2"
+      ],
+      "privileges": [
+        "debug"
+      ],
+      "notes": "Pin the Pwndbg release with its supported GDB version; live target work remains A2."
+    },
+    {
+      "id": "pwntools",
+      "name": "pwntools",
+      "category": "reverse-engineering",
+      "riskClass": "A3",
+      "approval": "operator-receipt",
+      "license": "Mostly MIT; bundled portions GPL/BSD",
+      "openSource": true,
+      "upstream": "https://github.com/Gallopsled/pwntools",
+      "command": "pwn",
+      "installLanes": [
+        "isolated-python"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Parsing and payload construction are P0; remote exploit interaction and shell handling require the A3 receipt."
+    },
+    {
+      "id": "qemu",
+      "name": "QEMU",
+      "category": "reverse-engineering",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "GPL-2.0 with separately licensed firmware",
+      "openSource": true,
+      "upstream": "https://github.com/qemu/qemu",
+      "command": "qemu-system-x86_64",
+      "installLanes": [
+        "native-os",
+        "oci"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user",
+        "kernel"
+      ],
+      "notes": "Offline emulation is P0; bridged networking, KVM, USB, and host-device passthrough use A2."
+    },
+    {
+      "id": "radare2",
+      "name": "radare2",
+      "category": "reverse-engineering",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "LGPL-3.0 with differently licensed plugins",
+      "openSource": true,
+      "upstream": "https://github.com/radareorg/radare2",
+      "command": "r2",
+      "installLanes": [
+        "pinned-release",
+        "source-build"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user",
+        "debug"
+      ],
+      "notes": "Static analysis is P0; live process writes and debugging use A2. Record the runtime license SBOM."
+    },
+    {
+      "id": "rea",
+      "name": "Reverse Engineer Anything",
+      "category": "reverse-engineering",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "MIT",
+      "openSource": true,
+      "upstream": "https://github.com/morluto/rea",
+      "command": "rea",
+      "installLanes": [
+        "isolated-node"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user",
+        "debug",
+        "device"
+      ],
+      "notes": "Pin a tested source commit until current Wireshark, Frida, and other providers reach a stable release; retain REA provenance and effect records."
+    },
+    {
+      "id": "recon-ng",
+      "name": "Recon-ng",
+      "category": "osint",
+      "riskClass": "A1",
+      "approval": "engagement",
+      "license": "GPL-3.0",
+      "openSource": true,
+      "upstream": "https://github.com/lanmaster53/recon-ng",
+      "command": "recon-ng",
+      "installLanes": [
+        "isolated-python"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Admit modules individually according to source terms, effects, secrets, and rate limits."
+    },
+    {
+      "id": "responder",
+      "name": "Responder",
+      "category": "identity",
+      "riskClass": "A3",
+      "approval": "operator-receipt",
+      "license": "GPL-3.0",
+      "openSource": true,
+      "upstream": "https://github.com/lgandx/Responder",
+      "command": "responder",
+      "installLanes": [
+        "pinned-release",
+        "native-os"
+      ],
+      "supportedHosts": [
+        "linux"
+      ],
+      "privileges": [
+        "admin",
+        "raw-network"
+      ],
+      "notes": "Poisoning is disabled unless the exact interface, subnet, duration, and captured-data handling are approved."
+    },
+    {
+      "id": "rizin",
+      "name": "Rizin",
+      "category": "reverse-engineering",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "LGPL-3.0",
+      "openSource": true,
+      "upstream": "https://github.com/rizinorg/rizin",
+      "command": "rizin",
+      "installLanes": [
+        "pinned-release",
+        "native-os"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user",
+        "debug"
+      ],
+      "notes": "Static analysis is P0; live process changes use A2."
+    },
+    {
+      "id": "rtl-433",
+      "name": "rtl_433",
+      "category": "wireless-radio",
+      "riskClass": "P1",
+      "approval": "declared-source",
+      "license": "GPL-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/merbanan/rtl_433",
+      "command": "rtl_433",
+      "installLanes": [
+        "native-os",
+        "hardware"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "device"
+      ],
+      "notes": "Receive-only decoding; protect identifiers and household telemetry as private evidence."
+    },
+    {
+      "id": "rustscan",
+      "name": "RustScan",
+      "category": "network",
+      "riskClass": "A1",
+      "approval": "engagement",
+      "license": "GPL-3.0",
+      "openSource": true,
+      "upstream": "https://github.com/bee-san/RustScan",
+      "command": "rustscan",
+      "installLanes": [
+        "pinned-release"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Use only as a bounded discovery front end for an admitted Nmap command."
+    },
+    {
+      "id": "scapy",
+      "name": "Scapy",
+      "category": "network",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "GPL-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/secdev/scapy",
+      "command": "scapy",
+      "installLanes": [
+        "isolated-python"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user",
+        "raw-network"
+      ],
+      "notes": "Packet decoding is P0. Sending, spoofing, replay, and protocol fuzzing use the A2 gate."
+    },
+    {
+      "id": "schemathesis",
+      "name": "Schemathesis",
+      "category": "web-api",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "MIT",
+      "openSource": true,
+      "upstream": "https://github.com/schemathesis/schemathesis",
+      "command": "schemathesis",
+      "installLanes": [
+        "isolated-python"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Generated API calls can mutate server state; allowlist operations and test identities."
+    },
+    {
+      "id": "scoutsuite",
+      "name": "ScoutSuite",
+      "category": "cloud",
+      "riskClass": "P1",
+      "approval": "declared-source",
+      "license": "GPL-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/nccgroup/ScoutSuite",
+      "command": "scout",
+      "installLanes": [
+        "isolated-python"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "cloud-read"
+      ],
+      "notes": "Use dedicated read-only cloud credentials and an API request budget."
+    },
+    {
+      "id": "scrcpy",
+      "name": "scrcpy",
+      "category": "mobile",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "Apache-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/Genymobile/scrcpy",
+      "command": "scrcpy",
+      "installLanes": [
+        "native-os",
+        "pinned-release"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "device",
+        "user"
+      ],
+      "notes": "Viewing is P1; input injection and device control use A2."
+    },
+    {
+      "id": "searchsploit",
+      "name": "SearchSploit / ExploitDB",
+      "category": "exploitation",
+      "riskClass": "A3",
+      "approval": "operator-receipt",
+      "license": "GPL-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/offensive-security/exploitdb",
+      "command": "searchsploit",
+      "installLanes": [
+        "pinned-release",
+        "native-os"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Searching is P0; compiling or executing a proof of concept requires the A3 receipt."
+    },
+    {
+      "id": "semgrep",
+      "name": "Semgrep Community Edition",
+      "category": "source-security",
+      "riskClass": "P0",
+      "approval": "automatic",
+      "license": "LGPL-2.1",
+      "openSource": true,
+      "upstream": "https://github.com/semgrep/semgrep",
+      "command": "semgrep",
+      "installLanes": [
+        "isolated-python",
+        "pinned-release"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Use local pinned rules unless registry access and source disclosure are explicitly allowed."
+    },
+    {
+      "id": "sherlock",
+      "name": "Sherlock",
+      "category": "osint",
+      "riskClass": "P1",
+      "approval": "declared-source",
+      "license": "MIT",
+      "openSource": true,
+      "upstream": "https://github.com/sherlock-project/sherlock",
+      "command": "sherlock",
+      "installLanes": [
+        "isolated-python"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Apply site rate limits and a documented personal-data purpose and retention period."
+    },
+    {
+      "id": "sleuthkit",
+      "name": "The Sleuth Kit",
+      "category": "dfir",
+      "riskClass": "P0",
+      "approval": "automatic",
+      "license": "CPL-1.0 / IPL-1.0 components",
+      "openSource": true,
+      "upstream": "https://github.com/sleuthkit/sleuthkit",
+      "command": "tsk_recover",
+      "installLanes": [
+        "native-os",
+        "source-build"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Analyze verified read-only image copies and record source hashes."
+    },
+    {
+      "id": "sliver",
+      "name": "Sliver",
+      "category": "exploitation",
+      "riskClass": "A3",
+      "approval": "operator-receipt",
+      "license": "GPL-3.0",
+      "openSource": true,
+      "upstream": "https://github.com/BishopFox/sliver",
+      "command": "sliver",
+      "installLanes": [
+        "pinned-release"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user",
+        "service"
+      ],
+      "notes": "Engagement or lab only; pin listener addresses and record payload creation, use, revocation, and teardown."
+    },
+    {
+      "id": "spiderfoot",
+      "name": "SpiderFoot",
+      "category": "osint",
+      "riskClass": "A1",
+      "approval": "engagement",
+      "license": "MIT",
+      "openSource": true,
+      "upstream": "https://github.com/smicallef/spiderfoot",
+      "command": "sf.py",
+      "installLanes": [
+        "oci",
+        "isolated-python"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "service",
+        "user"
+      ],
+      "notes": "Classify modules as passive or active and retain personal data only for the stated case purpose."
+    },
+    {
+      "id": "sqlmap",
+      "name": "sqlmap",
+      "category": "web-api",
+      "riskClass": "A3",
+      "approval": "operator-receipt",
+      "license": "GPL-2.0-or-later WITH project-clarifications",
+      "openSource": true,
+      "upstream": "https://github.com/sqlmapproject/sqlmap",
+      "command": "sqlmap",
+      "installLanes": [
+        "isolated-python"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Detection is A2. Extraction, filesystem access, OS command execution, and tamper scripts require the A3 receipt."
+    },
+    {
+      "id": "subfinder",
+      "name": "Subfinder",
+      "category": "osint",
+      "riskClass": "P1",
+      "approval": "declared-source",
+      "license": "MIT",
+      "openSource": true,
+      "upstream": "https://github.com/projectdiscovery/subfinder",
+      "command": "subfinder",
+      "installLanes": [
+        "pinned-release"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Protect provider API keys and record which external sources were queried."
+    },
+    {
+      "id": "suricata",
+      "name": "Suricata",
+      "category": "network",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "GPL-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/OISF/suricata",
+      "command": "suricata",
+      "installLanes": [
+        "native-os",
+        "oci"
+      ],
+      "supportedHosts": [
+        "linux",
+        "wsl2"
+      ],
+      "privileges": [
+        "capture",
+        "kernel",
+        "service"
+      ],
+      "notes": "Offline IDS is P0 and live IDS is P1. Inline IPS, blocking, and NFQUEUE actions stay A2."
+    },
+    {
+      "id": "syft",
+      "name": "Syft",
+      "category": "container-kubernetes",
+      "riskClass": "P1",
+      "approval": "declared-source",
+      "license": "Apache-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/anchore/syft",
+      "command": "syft",
+      "installLanes": [
+        "pinned-release",
+        "oci"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user",
+        "cloud-read"
+      ],
+      "notes": "Local SBOM generation is P0; authenticated registry reads are P1."
+    },
+    {
+      "id": "tcpdump",
+      "name": "tcpdump",
+      "category": "network",
+      "riskClass": "P1",
+      "approval": "declared-source",
+      "license": "BSD-3-Clause",
+      "openSource": true,
+      "upstream": "https://github.com/the-tcpdump-group/tcpdump",
+      "command": "tcpdump",
+      "installLanes": [
+        "native-os"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "wsl2"
+      ],
+      "privileges": [
+        "capture"
+      ],
+      "notes": "Require an interface and filter, and cap duration and output size."
+    },
+    {
+      "id": "testssl-sh",
+      "name": "testssl.sh",
+      "category": "web-api",
+      "riskClass": "A1",
+      "approval": "engagement",
+      "license": "GPL-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/testssl/testssl.sh",
+      "command": "testssl.sh",
+      "installLanes": [
+        "pinned-release"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Restrict operation to engagement TLS endpoints and cap connections."
+    },
+    {
+      "id": "thc-hydra",
+      "name": "THC Hydra",
+      "category": "identity",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "AGPL-3.0",
+      "openSource": true,
+      "upstream": "https://github.com/vanhauser-thc/thc-hydra",
+      "command": "hydra",
+      "installLanes": [
+        "native-os",
+        "source-build"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Credential audits require an account list, lockout policy, attempt cap, and stop-on-success behavior."
+    },
+    {
+      "id": "theharvester",
+      "name": "theHarvester",
+      "category": "osint",
+      "riskClass": "A1",
+      "approval": "engagement",
+      "license": "GPL-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/laramies/theHarvester",
+      "command": "theHarvester",
+      "installLanes": [
+        "isolated-python"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Record source terms and API use; active DNS checks use the engagement gate."
+    },
+    {
+      "id": "timesketch",
+      "name": "Timesketch",
+      "category": "dfir",
+      "riskClass": "P0",
+      "approval": "automatic",
+      "license": "Apache-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/google/timesketch",
+      "command": "timesketch",
+      "installLanes": [
+        "oci"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "service"
+      ],
+      "notes": "Run as a local case service; imports and notebooks may contain sensitive evidence."
+    },
+    {
+      "id": "trivy",
+      "name": "Trivy",
+      "category": "container-kubernetes",
+      "riskClass": "P1",
+      "approval": "declared-source",
+      "license": "Apache-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/aquasecurity/trivy",
+      "command": "trivy",
+      "installLanes": [
+        "pinned-release",
+        "oci"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user",
+        "cloud-read"
+      ],
+      "notes": "Local files and images are P0; registries, clusters, and cloud APIs are P1. Record database revision."
+    },
+    {
+      "id": "trufflehog",
+      "name": "TruffleHog",
+      "category": "source-security",
+      "riskClass": "P1",
+      "approval": "declared-source",
+      "license": "AGPL-3.0",
+      "openSource": true,
+      "upstream": "https://github.com/trufflesecurity/trufflehog",
+      "command": "trufflehog",
+      "installLanes": [
+        "pinned-release",
+        "oci"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user",
+        "cloud-read"
+      ],
+      "notes": "Local scanning is P0; remote repositories and verification APIs are P1. Seal discovered values."
+    },
+    {
+      "id": "tshark",
+      "name": "TShark",
+      "category": "network",
+      "riskClass": "P1",
+      "approval": "declared-source",
+      "license": "GPL-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/wireshark/wireshark",
+      "command": "tshark",
+      "installLanes": [
+        "native-os",
+        "oci"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "capture",
+        "user"
+      ],
+      "notes": "Offline PCAP analysis is P0; live interfaces require a declared source and capture broker."
+    },
+    {
+      "id": "ubertooth",
+      "name": "Ubertooth",
+      "category": "wireless-radio",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "GPL-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/greatscottgadgets/ubertooth",
+      "command": "ubertooth-rx",
+      "installLanes": [
+        "native-os",
+        "hardware"
+      ],
+      "supportedHosts": [
+        "linux"
+      ],
+      "privileges": [
+        "device"
+      ],
+      "notes": "Receive-only capture is P1; active radio functions use A2."
+    },
+    {
+      "id": "unblob",
+      "name": "Unblob",
+      "category": "reverse-engineering",
+      "riskClass": "P0",
+      "approval": "automatic",
+      "license": "MIT",
+      "openSource": true,
+      "upstream": "https://github.com/onekey-sec/unblob",
+      "command": "unblob",
+      "installLanes": [
+        "isolated-python"
+      ],
+      "supportedHosts": [
+        "linux",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Use a disposable extraction directory with file count, size, recursion, and decompression limits."
+    },
+    {
+      "id": "velociraptor",
+      "name": "Velociraptor",
+      "category": "dfir",
+      "riskClass": "A3",
+      "approval": "operator-receipt",
+      "license": "AGPL-3.0",
+      "openSource": true,
+      "upstream": "https://github.com/Velocidex/velociraptor",
+      "command": "velociraptor",
+      "installLanes": [
+        "pinned-release"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "admin",
+        "service"
+      ],
+      "notes": "Read-only hunts are P1, collection is A2, and endpoint execution or remediation requires the A3 receipt."
+    },
+    {
+      "id": "volatility3",
+      "name": "Volatility 3",
+      "category": "dfir",
+      "riskClass": "P0",
+      "approval": "automatic",
+      "license": "VSL-1.0",
+      "openSource": false,
+      "upstream": "https://github.com/volatilityfoundation/volatility3",
+      "command": "vol",
+      "installLanes": [
+        "isolated-python"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "VSL is a non-standard source-available license. Pin symbols and preserve the memory image hash."
+    },
+    {
+      "id": "wapiti",
+      "name": "Wapiti",
+      "category": "web-api",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "GPL-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/wapiti-scanner/wapiti",
+      "command": "wapiti",
+      "installLanes": [
+        "isolated-python"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Enable only admitted non-destructive modules unless the engagement explicitly permits their effects."
+    },
+    {
+      "id": "winafl",
+      "name": "WinAFL",
+      "category": "source-security",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "Apache-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/googleprojectzero/winafl",
+      "command": "afl-fuzz.exe",
+      "installLanes": [
+        "source-build"
+      ],
+      "supportedHosts": [
+        "windows"
+      ],
+      "privileges": [
+        "debug",
+        "user"
+      ],
+      "notes": "Use copied Windows targets and disposable corpus/output directories with resource limits."
+    },
+    {
+      "id": "wireshark",
+      "name": "Wireshark",
+      "category": "network",
+      "riskClass": "P1",
+      "approval": "declared-source",
+      "license": "GPL-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/wireshark/wireshark",
+      "command": "wireshark",
+      "installLanes": [
+        "native-os"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "capture",
+        "user"
+      ],
+      "notes": "Live capture is P1 through a narrow capture broker. Prefer offline copies and disable name resolution for repeatable analysis."
+    },
+    {
+      "id": "yara",
+      "name": "YARA",
+      "category": "reverse-engineering",
+      "riskClass": "P0",
+      "approval": "automatic",
+      "license": "BSD-3-Clause",
+      "openSource": true,
+      "upstream": "https://github.com/VirusTotal/yara",
+      "command": "yara",
+      "installLanes": [
+        "native-os",
+        "pinned-release"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Pin rules by commit and preserve the matched byte evidence without exposing sensitive samples."
+    },
+    {
+      "id": "zeek",
+      "name": "Zeek",
+      "category": "network",
+      "riskClass": "P1",
+      "approval": "declared-source",
+      "license": "BSD-3-Clause",
+      "openSource": true,
+      "upstream": "https://github.com/zeek/zeek",
+      "command": "zeek",
+      "installLanes": [
+        "native-os",
+        "oci"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "wsl2"
+      ],
+      "privileges": [
+        "capture",
+        "service"
+      ],
+      "notes": "Offline PCAP analysis is P0; live monitoring is P1 and must preserve source timestamps."
+    },
+    {
+      "id": "zmap",
+      "name": "ZMap",
+      "category": "network",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "Apache-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/zmap/zmap",
+      "command": "zmap",
+      "installLanes": [
+        "native-os",
+        "source-build"
+      ],
+      "supportedHosts": [
+        "linux"
+      ],
+      "privileges": [
+        "raw-network"
+      ],
+      "notes": "Internet-scale operation is disabled unless the engagement names the range and rate explicitly."
+    }
+  ]
+}

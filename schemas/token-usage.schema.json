@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/token-usage.schema.json",
+  "title": "GATE token usage record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "id", "at", "runId", "taskId", "agent", "provider", "model", "availability", "measure", "inputTokens", "cachedInputTokens", "outputTokens", "reasoningTokens", "totalTokens", "source"],
+  "properties": {
+    "apiVersion": { "const": "gate.usage/v1" },
+    "id": { "type": "string", "pattern": "^use_[A-Za-z0-9][A-Za-z0-9_-]{5,127}$" },
+    "at": { "type": "string", "format": "date-time" },
+    "runId": { "$ref": "#/$defs/id" },
+    "taskId": { "oneOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
+    "agent": { "$ref": "#/$defs/name" },
+    "provider": { "$ref": "#/$defs/name" },
+    "model": { "type": ["string", "null"], "minLength": 1, "maxLength": 160 },
+    "availability": { "enum": ["exact", "estimated", "unavailable"] },
+    "measure": { "enum": ["delta", "cumulative", "unavailable"] },
+    "inputTokens": { "$ref": "#/$defs/count" },
+    "cachedInputTokens": { "$ref": "#/$defs/count" },
+    "outputTokens": { "$ref": "#/$defs/count" },
+    "reasoningTokens": { "$ref": "#/$defs/count" },
+    "totalTokens": { "$ref": "#/$defs/count" },
+    "source": { "type": "string", "minLength": 1, "maxLength": 160 }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "availability": { "const": "unavailable" } }, "required": ["availability"] },
+      "then": {
+        "properties": {
+          "measure": { "const": "unavailable" },
+          "inputTokens": { "type": "null" },
+          "cachedInputTokens": { "type": "null" },
+          "outputTokens": { "type": "null" },
+          "reasoningTokens": { "type": "null" },
+          "totalTokens": { "type": "null" }
+        }
+      },
+      "else": {
+        "properties": { "measure": { "enum": ["delta", "cumulative"] } },
+        "anyOf": [
+          { "properties": { "inputTokens": { "type": "integer" } } },
+          { "properties": { "outputTokens": { "type": "integer" } } },
+          { "properties": { "totalTokens": { "type": "integer" } } }
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{1,127}$" },
+    "name": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,159}$" },
+    "count": { "type": ["integer", "null"], "minimum": 0 }
+  }
+}

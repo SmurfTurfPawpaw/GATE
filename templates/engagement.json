@@ -1,0 +1,79 @@
+{
+  "$schema": "../schemas/engagement.schema.json",
+  "apiVersion": "gate.dev/engagement/v1",
+  "kind": "Engagement",
+  "metadata": {
+    "id": "replace-engagement",
+    "title": "Replace engagement title",
+    "owner": "local-operator",
+    "status": "draft"
+  },
+  "authorization": {
+    "basis": "owner",
+    "evidenceRef": null,
+    "validFrom": null,
+    "validUntil": null
+  },
+  "scope": {
+    "include": [
+      { "type": "application", "value": "replace-with-authorized-target" }
+    ],
+    "exclude": [],
+    "permittedActions": ["observe", "scan", "intercept", "authenticate", "fuzz", "exploit-safe"],
+    "environment": "host"
+  },
+  "plan": {
+    "reportRef": "private://plans/replace-engagement.md",
+    "sha256": null,
+    "depth": "exhaustive",
+    "hypotheses": [],
+    "coverage": {
+      "assetDiscovery": { "status": "planned", "evidenceRefs": [], "limitation": null },
+      "architecture": { "status": "planned", "evidenceRefs": [], "limitation": null },
+      "authentication": { "status": "planned", "evidenceRefs": [], "limitation": null },
+      "authorization": { "status": "planned", "evidenceRefs": [], "limitation": null },
+      "sessions": { "status": "planned", "evidenceRefs": [], "limitation": null },
+      "inputs": { "status": "planned", "evidenceRefs": [], "limitation": null },
+      "businessLogic": { "status": "planned", "evidenceRefs": [], "limitation": null },
+      "clientBehavior": { "status": "planned", "evidenceRefs": [], "limitation": null },
+      "dataExposure": { "status": "planned", "evidenceRefs": [], "limitation": null },
+      "infrastructure": { "status": "planned", "evidenceRefs": [], "limitation": null },
+      "supplyChain": { "status": "planned", "evidenceRefs": [], "limitation": null },
+      "postExploitationImpact": { "status": "planned", "evidenceRefs": [], "limitation": null }
+    },
+    "completion": {
+      "requireCoverageMap": true,
+      "minimumIndependentValidations": 2,
+      "noNewFindingPasses": 2,
+      "limitationsRequired": true
+    }
+  },
+  "review": {
+    "noMistakes": { "status": "pending", "runId": null, "headSha": null },
+    "operatorReceipt": { "status": "pending", "approvedPlanSha256": null, "approvedAt": null }
+  },
+  "limits": {
+    "maxMinutes": 240,
+    "maxRequests": 20000,
+    "maxParallel": 8,
+    "maxRatePerSecond": 20,
+    "maxTokens": 1000000
+  },
+  "dataHandling": {
+    "classification": "sensitive",
+    "allowedDestinations": ["gate-home"],
+    "retentionDays": 90,
+    "secretRefs": []
+  },
+  "stopOn": [
+    "scope-mismatch",
+    "plan-digest-change",
+    "authorization-expiry",
+    "unexpected-data-loss",
+    "target-instability",
+    "third-party-system-discovered",
+    "rate-limit-exceeded",
+    "evidence-integrity-failure",
+    "operator-stop"
+  ]
+}

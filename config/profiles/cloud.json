@@ -1,0 +1,24 @@
+{
+  "apiVersion": "gate.dev/profile/v1",
+  "kind": "SecurityToolProfile",
+  "id": "cloud",
+  "catalog": "../../catalog/security-tools.json",
+  "description": "Cloud, container, Kubernetes, IaC, SBOM, and runtime posture analysis.",
+  "maxRiskClass": "A3",
+  "toolIds": [
+    "prowler",
+    "scoutsuite",
+    "cloudfox",
+    "cartography",
+    "pacu",
+    "trivy",
+    "syft",
+    "grype",
+    "checkov",
+    "kube-bench",
+    "kubeaudit",
+    "kubescape",
+    "kube-hunter",
+    "falco"
+  ]
+}

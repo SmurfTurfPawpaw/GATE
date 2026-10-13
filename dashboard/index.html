@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; connect-src 'self'; font-src 'self'; img-src 'self' data:; object-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'"
+    >
+    <title>GATE Observer</title>
+    <link rel="icon" href="/dashboard/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/dashboard/styles.css">
+    <script type="module" src="/dashboard/app.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#workspace">Skip to live operations</a>
+
+    <header class="topbar">
+      <div class="brand" aria-label="GATE Observer">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span>
+          <strong>GATE</strong>
+          <small>observer</small>
+        </span>
+      </div>
+
+      <div class="system-state" aria-live="polite">
+        <span class="pulse unknown" id="connection-indicator" aria-hidden="true"></span>
+        <span id="connection-label">Connecting</span>
+        <span class="divider" aria-hidden="true"></span>
+        <time id="clock">--:--:--</time>
+      </div>
+
+      <nav class="top-actions" aria-label="Observer controls">
+        <button class="icon-button" id="pause-button" type="button" aria-pressed="false" title="Pause live updates (P)">
+          <span class="button-icon" aria-hidden="true">Ⅱ</span>
+          <span class="button-label">Pause</span>
+        </button>
+        <button class="icon-button" id="refresh-button" type="button" title="Refresh now (R)">
+          <span class="button-icon" aria-hidden="true">↻</span>
+          <span class="button-label">Refresh</span>
+        </button>
+        <button class="icon-button" id="shortcuts-button" type="button" title="Keyboard shortcuts (?)">
+          <span class="button-icon" aria-hidden="true">⌘</span>
+          <span class="button-label">Keys</span>
+        </button>
+      </nav>
+    </header>
+
+    <section class="metrics" aria-label="Live summary">
+      <article class="metric-card accent-cyan">
+        <span class="metric-label">Running</span>
+        <strong class="metric-value" id="metric-running">—</strong>
+        <span class="metric-detail" id="metric-running-detail">Waiting for status</span>
+      </article>
+      <article class="metric-card accent-amber">
+        <span class="metric-label">Waiting</span>
+        <strong class="metric-value" id="metric-waiting">—</strong>
+        <span class="metric-detail">Approval or operator input</span>
+      </article>
+      <article class="metric-card accent-red">
+        <span class="metric-label">Needs attention</span>
+        <strong class="metric-value" id="metric-attention">—</strong>
+        <span class="metric-detail">Blocked or failed</span>
+      </article>
+      <article class="metric-card accent-violet">
+        <span class="metric-label">Tokens observed</span>
+        <strong class="metric-value" id="metric-tokens">Unavailable</strong>
+        <span class="metric-detail" id="metric-tokens-detail">No provider data</span>
+      </article>
+      <article class="metric-card accent-blue">
+        <span class="metric-label">Context</span>
+        <strong class="metric-value" id="metric-context">Unavailable</strong>
+        <span class="metric-detail" id="metric-context-detail">No active window</span>
+      </article>
+      <article class="metric-card accent-green">
+        <span class="metric-label">Telemetry</span>
+        <strong class="metric-value" id="metric-freshness">Unknown</strong>
+        <span class="metric-detail" id="metric-freshness-detail">No observation yet</span>
+      </article>
+    </section>
+
+    <main class="workspace" id="workspace">
+      <section class="panel fleet-panel" id="fleet-panel" tabindex="-1" aria-labelledby="fleet-title">
+        <header class="panel-header">
+          <div>
+            <p class="eyebrow">Live fleet</p>
+            <h1 id="fleet-title">Agents &amp; tasks</h1>
+          </div>
+          <div class="segmented" role="group" aria-label="Filter agents by state">
+            <button type="button" class="segment selected" data-agent-filter="all" aria-pressed="true">All</button>
+            <button type="button" class="segment" data-agent-filter="active" aria-pressed="false">Active</button>
+            <button type="button" class="segment" data-agent-filter="attention" aria-pressed="false">Attention</button>
+          </div>
+        </header>
+        <div class="agent-list" id="agent-list">
+          <div class="empty-state">
+            <span class="empty-glyph" aria-hidden="true">◇</span>
+            <strong>Waiting for fleet state</strong>
+            <span>Task metadata will appear when an agent starts.</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel timeline-panel" id="timeline-panel" tabindex="-1" aria-labelledby="timeline-title">
+        <header class="panel-header">
+          <div>
+            <p class="eyebrow">Metadata only</p>
+            <h2 id="timeline-title">Activity timeline</h2>
+          </div>
+          <label class="search-field">
+            <span class="visually-hidden">Filter activity</span>
+            <span aria-hidden="true">⌕</span>
+            <input id="event-search" type="search" inputmode="search" autocomplete="off" placeholder="Filter safe metadata" maxlength="80">
+            <kbd>/</kbd>
+          </label>
+        </header>
+        <div class="privacy-note">
+          <span aria-hidden="true">◉</span>
+          Prompt text, arguments, results, output, targets, and paths are excluded.
+        </div>
+        <ol class="timeline" id="event-list">
+          <li class="empty-state">
+            <span class="empty-glyph" aria-hidden="true">⌁</span>
+            <strong>No activity received</strong>
+            <span>The observer will reconcile automatically.</span>
+          </li>
+        </ol>
+      </section>
+
+      <aside class="side-stack" aria-label="Budgets and learning">
+        <section class="panel telemetry-panel" id="telemetry-panel" tabindex="-1" aria-labelledby="telemetry-title">
+          <header class="panel-header compact">
+            <div>
+              <p class="eyebrow">Usage &amp; limits</p>
+              <h2 id="telemetry-title">Resource posture</h2>
+            </div>
+            <span class="source-badge" id="usage-availability">Unavailable</span>
+          </header>
+
+          <div class="meter-block">
+            <div class="meter-heading">
+              <span>Context window</span>
+              <strong id="context-label">Unavailable</strong>
+            </div>
+            <div class="meter-track" role="progressbar" id="context-meter" aria-label="Context window use" aria-valuemin="0" aria-valuemax="100" aria-valuetext="Unavailable">
+              <span class="meter-fill cyan" id="context-fill"></span>
+            </div>
+          </div>
+
+          <div class="meter-block">
+            <div class="meter-heading">
+              <span>Task budget</span>
+              <strong id="budget-label">Unavailable</strong>
+            </div>
+            <div class="meter-track" role="progressbar" id="budget-meter" aria-label="Task token budget" aria-valuemin="0" aria-valuemax="100" aria-valuetext="Unavailable">
+              <span class="meter-fill violet" id="budget-fill"></span>
+            </div>
+          </div>
+
+          <dl class="token-grid">
+            <div><dt>Input</dt><dd id="token-input">—</dd></div>
+            <div><dt>Cached</dt><dd id="token-cached">—</dd></div>
+            <div><dt>Output</dt><dd id="token-output">—</dd></div>
+            <div><dt>Reasoning</dt><dd id="token-reasoning">—</dd></div>
+          </dl>
+
+          <div class="telemetry-foot">
+            <span id="usage-source">Source unavailable</span>
+            <span id="usage-updated">Never observed</span>
+          </div>
+        </section>
+
+        <section class="panel learning-panel" id="learning-panel" tabindex="-1" aria-labelledby="learning-title">
+          <header class="panel-header compact">
+            <div>
+              <p class="eyebrow">Cause → change</p>
+              <h2 id="learning-title">Learning log</h2>
+            </div>
+            <span class="count-badge" id="learning-count">—</span>
+          </header>
+          <ol class="learning-list" id="learning-list">
+            <li class="empty-state small">
+              <span class="empty-glyph" aria-hidden="true">△</span>
+              <strong>No learning records</strong>
+              <span>Applied changes will appear with evidence state.</span>
+            </li>
+          </ol>
+        </section>
+      </aside>
+    </main>
+
+    <footer class="footer">
+      <span><i class="footer-dot" aria-hidden="true"></i> Read-only local observer</span>
+      <span id="poll-detail">Refresh every 2 seconds</span>
+      <span>GATE observer contract v1</span>
+    </footer>
+
+    <dialog id="shortcuts-dialog" aria-labelledby="shortcuts-title">
+      <form method="dialog">
+        <header class="dialog-header">
+          <div>
+            <p class="eyebrow">Keyboard first</p>
+            <h2 id="shortcuts-title">Observer shortcuts</h2>
+          </div>
+          <button class="close-button" value="close" aria-label="Close keyboard shortcuts">×</button>
+        </header>
+        <dl class="shortcut-list">
+          <div><dt><kbd>1</kbd></dt><dd>Focus agents and tasks</dd></div>
+          <div><dt><kbd>2</kbd></dt><dd>Focus activity timeline</dd></div>
+          <div><dt><kbd>3</kbd></dt><dd>Focus resource posture</dd></div>
+          <div><dt><kbd>4</kbd></dt><dd>Focus learning log</dd></div>
+          <div><dt><kbd>/</kbd></dt><dd>Filter safe activity metadata</dd></div>
+          <div><dt><kbd>R</kbd></dt><dd>Refresh all endpoints</dd></div>
+          <div><dt><kbd>P</kbd></dt><dd>Pause or resume live updates</dd></div>
+          <div><dt><kbd>?</kbd></dt><dd>Show this guide</dd></div>
+        </dl>
+      </form>
+    </dialog>
+
+    <div class="sr-status visually-hidden" id="screen-reader-status" role="status" aria-live="polite"></div>
+  </body>
+</html>

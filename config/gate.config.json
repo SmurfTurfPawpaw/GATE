@@ -1,0 +1,87 @@
+{
+  "$schema": "../schemas/gate-config.schema.json",
+  "apiVersion": "gate.dev/v1alpha1",
+  "kind": "Gateway",
+  "metadata": {
+    "name": "gate",
+    "displayName": "Gateway for Agentic Tooling & Engineering"
+  },
+  "operator": {
+    "mode": "single",
+    "id": "local-operator"
+  },
+  "paths": {
+    "homeEnvironmentVariable": "GATE_HOME",
+    "homeDefaultRelativeToUserHome": ".local/share/gate",
+    "localConfigRelativeToUserHome": ".config/gate/config.json",
+    "publicLearningLog": "memory/learnings.jsonl",
+    "privateLearningLogRelativeToGateHome": "memory/private/learnings.jsonl",
+    "eventLogRelativeToGateHome": "events.jsonl",
+    "tokenLogRelativeToGateHome": "tokens.jsonl",
+    "engagementsRelativeToGateHome": "engagements",
+    "evidenceRelativeToGateHome": "evidence"
+  },
+  "orchestration": {
+    "supervisor": "firstmate",
+    "workspaceProvider": "treehouse",
+    "boundedLoopProvider": "gnhf",
+    "validationProvider": "no-mistakes",
+    "planningProvider": "lavish",
+    "evidenceProvider": "rea",
+    "interfaceContract": "axi",
+    "skillProvider": "vercel-skills",
+    "primaryHarness": "codex-cli",
+    "sessionBackend": "tmux"
+  },
+  "execution": {
+    "defaultEnvironment": "host",
+    "requireWorkspaceLease": true,
+    "boundedLoops": {
+      "enabled": true,
+      "optIn": true,
+      "maxIterations": 12,
+      "maxMinutes": 90,
+      "maxTokens": 500000,
+      "maxConsecutiveFailures": 3
+    },
+    "publication": {
+      "owner": "gate-publication",
+      "requires": [
+        "no-mistakes-success",
+        "protected-checks-pass",
+        "exact-head-match"
+      ]
+    }
+  },
+  "observability": {
+    "desiredAvailability": "always-on",
+    "serviceMode": "foreground",
+    "bindAddress": "127.0.0.1",
+    "refreshSeconds": 2,
+    "views": [
+      "runs",
+      "agents",
+      "tokens",
+      "learnings"
+    ],
+    "tokenUsage": {
+      "required": true,
+      "missingValue": "unavailable",
+      "allowEstimates": true,
+      "neverExposePromptBodies": true
+    }
+  },
+  "learning": {
+    "capture": "always",
+    "promotionGate": "no-mistakes",
+    "publicLog": "memory/learnings.jsonl",
+    "privateLogRelativeToGateHome": "memory/private/learnings.jsonl"
+  },
+  "policies": {
+    "autonomy": "policies/autonomy.json",
+    "data": "policies/data-handling.json",
+    "engagements": "policies/engagements.json",
+    "learning": "policies/learning.json",
+    "updates": "policies/updates.json"
+  }
+}

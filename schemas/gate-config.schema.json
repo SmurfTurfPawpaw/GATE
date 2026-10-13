@@ -1,0 +1,203 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/gate-config.schema.json",
+  "title": "GATE configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "apiVersion",
+    "kind",
+    "metadata",
+    "operator",
+    "paths",
+    "orchestration",
+    "execution",
+    "observability",
+    "learning",
+    "policies"
+  ],
+  "properties": {
+    "$schema": { "type": "string", "minLength": 1 },
+    "apiVersion": { "const": "gate.dev/v1alpha1" },
+    "kind": { "const": "Gateway" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "displayName"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 120 }
+      }
+    },
+    "operator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "id"],
+      "properties": {
+        "mode": { "const": "single" },
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$" }
+      }
+    },
+    "paths": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "homeEnvironmentVariable",
+        "homeDefaultRelativeToUserHome",
+        "localConfigRelativeToUserHome",
+        "publicLearningLog",
+        "privateLearningLogRelativeToGateHome",
+        "eventLogRelativeToGateHome",
+        "tokenLogRelativeToGateHome",
+        "engagementsRelativeToGateHome",
+        "evidenceRelativeToGateHome"
+      ],
+      "properties": {
+        "homeEnvironmentVariable": { "const": "GATE_HOME" },
+        "homeDefaultRelativeToUserHome": { "$ref": "#/$defs/relativePath" },
+        "localConfigRelativeToUserHome": { "$ref": "#/$defs/relativePath" },
+        "publicLearningLog": { "$ref": "#/$defs/relativePath" },
+        "privateLearningLogRelativeToGateHome": { "$ref": "#/$defs/relativePath" },
+        "eventLogRelativeToGateHome": { "$ref": "#/$defs/relativePath" },
+        "tokenLogRelativeToGateHome": { "$ref": "#/$defs/relativePath" },
+        "engagementsRelativeToGateHome": { "$ref": "#/$defs/relativePath" },
+        "evidenceRelativeToGateHome": { "$ref": "#/$defs/relativePath" }
+      }
+    },
+    "orchestration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "supervisor",
+        "workspaceProvider",
+        "boundedLoopProvider",
+        "validationProvider",
+        "planningProvider",
+        "evidenceProvider",
+        "interfaceContract",
+        "skillProvider",
+        "primaryHarness",
+        "sessionBackend"
+      ],
+      "properties": {
+        "supervisor": { "const": "firstmate" },
+        "workspaceProvider": { "const": "treehouse" },
+        "boundedLoopProvider": { "const": "gnhf" },
+        "validationProvider": { "const": "no-mistakes" },
+        "planningProvider": { "const": "lavish" },
+        "evidenceProvider": { "const": "rea" },
+        "interfaceContract": { "const": "axi" },
+        "skillProvider": { "const": "vercel-skills" },
+        "primaryHarness": { "const": "codex-cli" },
+        "sessionBackend": { "enum": ["tmux", "zellij"] }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["defaultEnvironment", "requireWorkspaceLease", "boundedLoops", "publication"],
+      "properties": {
+        "defaultEnvironment": { "enum": ["host", "rootless-container", "container", "vm", "remote-lab"] },
+        "requireWorkspaceLease": { "const": true },
+        "boundedLoops": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "optIn", "maxIterations", "maxMinutes", "maxTokens", "maxConsecutiveFailures"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "optIn": { "const": true },
+            "maxIterations": { "type": "integer", "minimum": 1, "maximum": 100 },
+            "maxMinutes": { "type": "integer", "minimum": 1, "maximum": 1440 },
+            "maxTokens": { "type": "integer", "minimum": 1000, "maximum": 100000000 },
+            "maxConsecutiveFailures": { "type": "integer", "minimum": 1, "maximum": 10 }
+          }
+        },
+        "publication": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["owner", "requires"],
+          "properties": {
+            "owner": { "const": "gate-publication" },
+            "requires": {
+              "type": "array",
+              "minItems": 3,
+              "uniqueItems": true,
+              "items": { "enum": ["no-mistakes-success", "protected-checks-pass", "exact-head-match"] },
+              "allOf": [
+                { "contains": { "const": "no-mistakes-success" } },
+                { "contains": { "const": "protected-checks-pass" } },
+                { "contains": { "const": "exact-head-match" } }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "observability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["desiredAvailability", "serviceMode", "bindAddress", "refreshSeconds", "views", "tokenUsage"],
+      "properties": {
+        "desiredAvailability": { "const": "always-on" },
+        "serviceMode": { "enum": ["foreground", "managed-service"] },
+        "bindAddress": { "const": "127.0.0.1" },
+        "refreshSeconds": { "type": "integer", "minimum": 1, "maximum": 60 },
+        "views": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["runs", "agents", "workspaces", "gates", "tokens", "learnings", "tools", "evidence"] }
+        },
+        "tokenUsage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["required", "missingValue", "allowEstimates", "neverExposePromptBodies"],
+          "properties": {
+            "required": { "const": true },
+            "missingValue": { "const": "unavailable" },
+            "allowEstimates": { "type": "boolean" },
+            "neverExposePromptBodies": { "const": true }
+          }
+        }
+      }
+    },
+    "learning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capture", "promotionGate", "publicLog", "privateLogRelativeToGateHome"],
+      "properties": {
+        "capture": { "const": "always" },
+        "promotionGate": { "const": "no-mistakes" },
+        "publicLog": { "$ref": "#/$defs/relativePath" },
+        "privateLogRelativeToGateHome": { "$ref": "#/$defs/relativePath" }
+      }
+    },
+    "policies": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["autonomy", "data", "engagements", "learning", "updates"],
+      "properties": {
+        "autonomy": { "$ref": "#/$defs/jsonPath" },
+        "data": { "$ref": "#/$defs/jsonPath" },
+        "engagements": { "$ref": "#/$defs/jsonPath" },
+        "learning": { "$ref": "#/$defs/jsonPath" },
+        "updates": { "$ref": "#/$defs/jsonPath" }
+      }
+    }
+  },
+  "$defs": {
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\u0000]+$"
+    },
+    "jsonPath": {
+      "allOf": [
+        { "$ref": "#/$defs/relativePath" },
+        { "pattern": "\\.json$" }
+      ]
+    }
+  }
+}

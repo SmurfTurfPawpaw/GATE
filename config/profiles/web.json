@@ -1,0 +1,26 @@
+{
+  "apiVersion": "gate.dev/profile/v1",
+  "kind": "SecurityToolProfile",
+  "id": "web",
+  "catalog": "../../catalog/security-tools.json",
+  "description": "Web, browser, and API testing with passive and active modes separated by policy.",
+  "maxRiskClass": "A3",
+  "toolIds": [
+    "owasp-zap",
+    "mitmproxy",
+    "nuclei",
+    "httpx",
+    "katana",
+    "ffuf",
+    "feroxbuster",
+    "sqlmap",
+    "wapiti",
+    "nikto",
+    "dalfox",
+    "commix",
+    "testssl-sh",
+    "schemathesis",
+    "playwright",
+    "burp-suite"
+  ]
+}

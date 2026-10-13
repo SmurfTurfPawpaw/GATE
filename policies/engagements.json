@@ -1,0 +1,95 @@
+{
+  "$schema": "../schemas/engagement-policy.schema.json",
+  "apiVersion": "gate.dev/policy/v1",
+  "kind": "EngagementPolicy",
+  "metadata": {
+    "name": "evidence-led-active-security"
+  },
+  "actionClasses": [
+    {
+      "id": "local-analysis",
+      "targetContact": false,
+      "receiptRequired": false,
+      "examples": ["local-static-analysis", "saved-capture-analysis", "binary-analysis"]
+    },
+    {
+      "id": "research",
+      "targetContact": false,
+      "receiptRequired": false,
+      "examples": ["public-source-research", "plan", "hypothesis"]
+    },
+    {
+      "id": "probe",
+      "targetContact": true,
+      "receiptRequired": true,
+      "examples": ["live-observe", "scan", "service-enumeration", "web-crawl", "fuzz"]
+    },
+    {
+      "id": "mutate",
+      "targetContact": true,
+      "receiptRequired": true,
+      "examples": ["authenticate", "intercept", "exploit-safe", "state-change"]
+    },
+    {
+      "id": "high-impact",
+      "targetContact": true,
+      "receiptRequired": true,
+      "examples": ["persistence", "denial-of-service", "destructive-test", "data-removal"]
+    }
+  ],
+  "activeRequirements": [
+    "authorization-evidence",
+    "explicit-target-selectors",
+    "scope-exclusions",
+    "permitted-action-list",
+    "bounded-plan",
+    "no-mistakes-plan-review",
+    "operator-plan-receipt",
+    "matching-plan-digest",
+    "reviewed-scope-aware-adapter",
+    "rate-and-concurrency-limits",
+    "stop-conditions",
+    "private-audit-log"
+  ],
+  "receiptInvalidators": [
+    "plan-digest-change",
+    "target-added",
+    "action-class-added",
+    "authorization-expired",
+    "limit-increased",
+    "exclusion-removed",
+    "data-destination-added"
+  ],
+  "mandatoryCoverage": [
+    "asset-discovery",
+    "architecture",
+    "authentication",
+    "authorization",
+    "sessions",
+    "inputs",
+    "business-logic",
+    "client-behavior",
+    "data-exposure",
+    "infrastructure",
+    "supply-chain",
+    "post-exploitation-impact"
+  ],
+  "claimStates": ["observed", "inferred", "unverified"],
+  "completion": {
+    "coverageMapRequired": true,
+    "explicitLimitationsRequired": true,
+    "independentFindingValidationRequired": true,
+    "emptyScannerOutputIsSufficient": false,
+    "uncoveredSurfaceIsSufficient": false
+  },
+  "defaultStopConditions": [
+    "scope-mismatch",
+    "plan-digest-change",
+    "authorization-expiry",
+    "unexpected-data-loss",
+    "target-instability",
+    "third-party-system-discovered",
+    "rate-limit-exceeded",
+    "evidence-integrity-failure"
+  ]
+}

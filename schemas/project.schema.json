@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/project.schema.json",
+  "title": "GATE managed project",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "apiVersion", "kind", "metadata", "repository", "execution", "delivery", "security", "learning"],
+  "properties": {
+    "$schema": { "type": "string", "minLength": 1 },
+    "apiVersion": { "const": "gate.dev/project/v1" },
+    "kind": { "const": "Project" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "displayName"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 120 }
+      }
+    },
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "url", "defaultBranch"],
+      "properties": {
+        "provider": { "enum": ["github", "gitlab", "forgejo", "gitea", "local"] },
+        "url": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "defaultBranch": { "type": "string", "pattern": "^(?!-)(?!.*\\.\\.)(?!.*[~^:?*\\[\\]\\\\])[A-Za-z0-9._/-]{1,240}$" }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "environment", "workspaceProvider", "primaryHarness"],
+      "properties": {
+        "profile": { "$ref": "#/$defs/id" },
+        "environment": { "enum": ["host", "rootless-container", "container", "vm", "remote-lab"] },
+        "workspaceProvider": { "const": "treehouse" },
+        "primaryHarness": { "const": "codex-cli" }
+      }
+    },
+    "delivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "autoMerge", "validation", "deployment"],
+      "properties": {
+        "mode": { "enum": ["no-mistakes", "direct-pr", "local-only"] },
+        "autoMerge": { "enum": ["manual", "green-exact-head"] },
+        "validation": { "const": "no-mistakes" },
+        "deployment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "adapter", "destinationRef"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "adapter": { "type": ["string", "null"], "pattern": "^[a-z][a-z0-9-]{1,62}$" },
+            "destinationRef": { "type": ["string", "null"], "pattern": "^private://destinations/[^\\s]+$" }
+          },
+          "allOf": [
+            {
+              "if": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] },
+              "then": { "properties": { "adapter": { "type": "string" }, "destinationRef": { "type": "string" } } }
+            }
+          ]
+        }
+      }
+    },
+    "security": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "activeTestingEnabled", "requireEngagementReceipt", "evidenceLabels"],
+      "properties": {
+        "profile": { "$ref": "#/$defs/id" },
+        "activeTestingEnabled": { "type": "boolean" },
+        "requireEngagementReceipt": { "const": true },
+        "evidenceLabels": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": { "enum": ["observed", "inferred", "unverified"] },
+          "allOf": [
+            { "contains": { "const": "observed" } },
+            { "contains": { "const": "inferred" } },
+            { "contains": { "const": "unverified" } }
+          ]
+        }
+      }
+    },
+    "learning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "captureCorrections", "captureFailures", "promotionGate"],
+      "properties": {
+        "enabled": { "const": true },
+        "captureCorrections": { "const": true },
+        "captureFailures": { "const": true },
+        "promotionGate": { "const": "no-mistakes" }
+      }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$" }
+  }
+}

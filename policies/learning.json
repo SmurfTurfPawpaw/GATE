@@ -1,0 +1,64 @@
+{
+  "$schema": "../schemas/learning-policy.schema.json",
+  "apiVersion": "gate.dev/policy/v1",
+  "kind": "LearningPolicy",
+  "metadata": {
+    "name": "continuous-evidence-backed-learning"
+  },
+  "triggers": [
+    "operator-correction",
+    "failed-action",
+    "retry-or-workaround",
+    "tool-gap",
+    "better-tool-discovered",
+    "policy-violation",
+    "benchmark-regression",
+    "evidence-contradiction",
+    "unexpected-environment-constraint"
+  ],
+  "record": {
+    "requiredFields": ["at", "scope", "cause", "change", "evidence", "status", "sensitivity"],
+    "onePhysicalLine": true,
+    "causeAndChangeRequired": true,
+    "secretsAllowed": false,
+    "targetIdentifiersInPublicLog": false
+  },
+  "scopes": [
+    {
+      "id": "session",
+      "automaticCapture": true,
+      "promotionRequired": false,
+      "destination": "private"
+    },
+    {
+      "id": "project",
+      "automaticCapture": true,
+      "promotionRequired": true,
+      "destination": "project"
+    },
+    {
+      "id": "repository",
+      "automaticCapture": true,
+      "promotionRequired": true,
+      "destination": "public-sanitized"
+    }
+  ],
+  "promotion": {
+    "owner": "no-mistakes",
+    "requires": ["supporting-evidence", "deduplication", "redaction", "behavior-change", "validation"],
+    "allowedStatuses": ["proposed", "active", "superseded", "reverted"]
+  },
+  "protectedBoundaries": [
+    "target-scope",
+    "authorization",
+    "secret-release",
+    "data-destination",
+    "publication-permission",
+    "destructive-action-permission"
+  ],
+  "untrustedInput": {
+    "mayPropose": true,
+    "mayDirectlyWritePersistentMemory": false,
+    "mayChangePolicy": false
+  }
+}

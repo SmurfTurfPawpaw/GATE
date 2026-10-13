@@ -1,0 +1,275 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/engagement.schema.json",
+  "title": "GATE security engagement",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "apiVersion", "kind", "metadata", "authorization", "scope", "plan", "review", "limits", "dataHandling", "stopOn"],
+  "properties": {
+    "$schema": { "type": "string", "minLength": 1 },
+    "apiVersion": { "const": "gate.dev/engagement/v1" },
+    "kind": { "const": "Engagement" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "owner", "status"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "owner": { "$ref": "#/$defs/id" },
+        "status": { "enum": ["draft", "proposed", "approved", "active", "paused", "closed", "expired", "revoked"] }
+      }
+    },
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["basis", "evidenceRef", "validFrom", "validUntil"],
+      "properties": {
+        "basis": { "enum": ["owner", "client-written-authorization", "contract", "dedicated-lab"] },
+        "evidenceRef": { "type": ["string", "null"], "pattern": "^private://authorizations/[^\\s]+$" },
+        "validFrom": { "type": ["string", "null"], "format": "date-time" },
+        "validUntil": { "type": ["string", "null"], "format": "date-time" }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["include", "exclude", "permittedActions", "environment"],
+      "properties": {
+        "include": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/selector" }
+        },
+        "exclude": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/selector" }
+        },
+        "permittedActions": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/action" }
+        },
+        "environment": { "enum": ["host", "rootless-container", "container", "vm", "remote-lab"] }
+      }
+    },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reportRef", "sha256", "depth", "hypotheses", "coverage", "completion"],
+      "properties": {
+        "reportRef": { "type": "string", "pattern": "^private://plans/[^\\s]+$" },
+        "sha256": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "depth": { "enum": ["targeted", "thorough", "exhaustive"] },
+        "hypotheses": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "^[^\\r\\n]+$" }
+        },
+        "coverage": { "$ref": "#/$defs/coverage" },
+        "completion": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["requireCoverageMap", "minimumIndependentValidations", "noNewFindingPasses", "limitationsRequired"],
+          "properties": {
+            "requireCoverageMap": { "const": true },
+            "minimumIndependentValidations": { "type": "integer", "minimum": 1, "maximum": 5 },
+            "noNewFindingPasses": { "type": "integer", "minimum": 1, "maximum": 5 },
+            "limitationsRequired": { "const": true }
+          }
+        }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["noMistakes", "operatorReceipt"],
+      "properties": {
+        "noMistakes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "runId", "headSha"],
+          "properties": {
+            "status": { "enum": ["pending", "passed", "failed"] },
+            "runId": { "type": ["string", "null"], "minLength": 1, "maxLength": 160 },
+            "headSha": { "oneOf": [{ "$ref": "#/$defs/gitSha" }, { "type": "null" }] }
+          }
+        },
+        "operatorReceipt": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "approvedPlanSha256", "approvedAt"],
+          "properties": {
+            "status": { "enum": ["pending", "approved", "revoked"] },
+            "approvedPlanSha256": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+            "approvedAt": { "type": ["string", "null"], "format": "date-time" }
+          }
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxMinutes", "maxRequests", "maxParallel", "maxRatePerSecond", "maxTokens"],
+      "properties": {
+        "maxMinutes": { "type": "integer", "minimum": 1, "maximum": 10080 },
+        "maxRequests": { "type": "integer", "minimum": 1, "maximum": 10000000 },
+        "maxParallel": { "type": "integer", "minimum": 1, "maximum": 256 },
+        "maxRatePerSecond": { "type": "number", "exclusiveMinimum": 0, "maximum": 100000 },
+        "maxTokens": { "type": "integer", "minimum": 1000, "maximum": 100000000 }
+      }
+    },
+    "dataHandling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["classification", "allowedDestinations", "retentionDays", "secretRefs"],
+      "properties": {
+        "classification": { "enum": ["internal", "sensitive"] },
+        "allowedDestinations": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["gate-home", "configured-cloud-model", "client-destination"] }
+        },
+        "retentionDays": { "type": "integer", "minimum": 0, "maximum": 3650 },
+        "secretRefs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^(env|keychain|file)://[^\\s]+$" }
+        }
+      }
+    },
+    "stopOn": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "scope-mismatch",
+          "plan-digest-change",
+          "authorization-expiry",
+          "unexpected-data-loss",
+          "target-instability",
+          "third-party-system-discovered",
+          "rate-limit-exceeded",
+          "evidence-integrity-failure",
+          "operator-stop"
+        ]
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "metadata": {
+            "properties": { "status": { "enum": ["approved", "active", "paused", "closed"] } },
+            "required": ["status"]
+          }
+        },
+        "required": ["metadata"]
+      },
+      "then": {
+        "properties": {
+          "authorization": {
+            "properties": {
+              "evidenceRef": { "type": "string" },
+              "validFrom": { "type": "string" },
+              "validUntil": { "type": "string" }
+            }
+          },
+          "plan": { "properties": { "sha256": { "$ref": "#/$defs/sha256" } } },
+          "review": {
+            "properties": {
+              "noMistakes": {
+                "properties": {
+                  "status": { "const": "passed" },
+                  "runId": { "type": "string" },
+                  "headSha": { "$ref": "#/$defs/gitSha" }
+                }
+              },
+              "operatorReceipt": {
+                "properties": {
+                  "status": { "const": "approved" },
+                  "approvedPlanSha256": { "$ref": "#/$defs/sha256" },
+                  "approvedAt": { "type": "string" }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "gitSha": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+    "selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "value"],
+      "properties": {
+        "type": { "enum": ["domain", "ip", "cidr", "url", "application", "account", "repository", "device", "path"] },
+        "value": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "^[^\\r\\n]+$" }
+      }
+    },
+    "action": {
+      "enum": [
+        "observe",
+        "scan",
+        "intercept",
+        "authenticate",
+        "fuzz",
+        "exploit-safe",
+        "exploit-stateful",
+        "persist",
+        "denial-of-service",
+        "destructive-test",
+        "data-access",
+        "data-removal",
+        "exfiltration-simulation"
+      ]
+    },
+    "coverageEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "evidenceRefs", "limitation"],
+      "properties": {
+        "status": { "enum": ["planned", "covered", "limited", "not-applicable"] },
+        "evidenceRefs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^(private|evidence|event)://[^\\s]+$" }
+        },
+        "limitation": { "type": ["string", "null"], "minLength": 1, "maxLength": 1000 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "limited" } }, "required": ["status"] },
+          "then": { "properties": { "limitation": { "type": "string" } } }
+        }
+      ]
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assetDiscovery", "architecture", "authentication", "authorization", "sessions", "inputs", "businessLogic", "clientBehavior", "dataExposure", "infrastructure", "supplyChain", "postExploitationImpact"],
+      "properties": {
+        "assetDiscovery": { "$ref": "#/$defs/coverageEntry" },
+        "architecture": { "$ref": "#/$defs/coverageEntry" },
+        "authentication": { "$ref": "#/$defs/coverageEntry" },
+        "authorization": { "$ref": "#/$defs/coverageEntry" },
+        "sessions": { "$ref": "#/$defs/coverageEntry" },
+        "inputs": { "$ref": "#/$defs/coverageEntry" },
+        "businessLogic": { "$ref": "#/$defs/coverageEntry" },
+        "clientBehavior": { "$ref": "#/$defs/coverageEntry" },
+        "dataExposure": { "$ref": "#/$defs/coverageEntry" },
+        "infrastructure": { "$ref": "#/$defs/coverageEntry" },
+        "supplyChain": { "$ref": "#/$defs/coverageEntry" },
+        "postExploitationImpact": { "$ref": "#/$defs/coverageEntry" }
+      }
+    }
+  }
+}
