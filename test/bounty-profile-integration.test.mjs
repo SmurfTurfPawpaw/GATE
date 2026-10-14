@@ -966,19 +966,34 @@ test("imported source text is inert and target details do not cross events or ob
   }
 });
 
- test("questionnaire order accepts each source-backed policy through production answer application", (t) => {
+test("questionnaire order preserves final attestation after applicable module answers", (t) => {
   const { paths } = fixture(t);
   const id = "ordered-policy";
   createProgramProfile(id, {}, { paths, now: fixedAt });
-  const envelope = answerEnvelope(id, completeProfile(id));
+  const profile = completeProfile(id);
+  profile.questionnaire.applicableModules = ["web-api"];
+  profile.modules["web-api"] = {
+    ...sourceDecision("allowed"),
+    answers: {
+      entryPoints: [targetCanary],
+      authenticationFlows: ["researcher account login"],
+      automationRules: "Use the global rate limit."
+    }
+  };
+  const envelope = answerEnvelope(id, profile);
+  const cumulative = structuredClone(envelope);
+  cumulative.answers = {};
   for (const question of PROGRAM_PROFILE_QUESTIONS) {
-    if (question.id.startsWith("attestation-")) continue;
-    const single = structuredClone(envelope);
-    single.answers = { [question.id]: envelope.answers[question.id] };
-    applyProgramProfileAnswers(id, single, { paths, now: fixedAt });
+    if (question.module && question.module !== "web-api") continue;
+    cumulative.answers[question.id] = envelope.answers[question.id];
+    applyProgramProfileAnswers(id, cumulative, { paths, now: fixedAt });
   }
   const stored = readJson(path.join(paths.programs, id, "program-profile.json"));
-  assert.equal(stored.identity.objective, completeProfile(id).identity.objective);
+  assert.equal(stored.identity.objective, profile.identity.objective);
+  assert.deepEqual(stored.modules["web-api"], profile.modules["web-api"]);
+  assert.equal(stored.attestation.answersComplete, true);
+  assert.equal(stored.attestation.attestedRevision, stored.metadata.revision);
+  assert.equal(verifyProgramProfile(id, { paths, now: fixedAt }).ready, true);
   const invalid = structuredClone(envelope);
   invalid.answers = { "execution-phase-policies": [{}, {}] };
   assert.throws(() => applyProgramProfileAnswers(id, invalid, { paths, now: fixedAt }), /required property 'id'/u);

@@ -293,11 +293,12 @@ test("questionnaire exposes the exact 12-section, 9-module, 13-action, 13-stop, 
 
 test("questionnaire validation requires exact execution-policy questions and assistance choices", () => {
   const missing = structuredClone(PROGRAM_PROFILE_QUESTIONNAIRE);
-  const section = missing.sections.find((item) => item.id === "actions-techniques");
-  section.questions = section.questions.filter((question) => ![
-    "execution-requested-assistance-modes",
-    "execution-phase-policies"
-  ].includes(question.id));
+  for (const section of missing.sections) {
+    section.questions = section.questions.filter((question) => ![
+      "execution-requested-assistance-modes",
+      "execution-phase-policies"
+    ].includes(question.id));
+  }
   const missingResult = validateProgramProfileQuestionnaire(missing, { repo });
   assert.equal(missingResult.ok, false);
   assert.ok(missingResult.errors.some((error) =>

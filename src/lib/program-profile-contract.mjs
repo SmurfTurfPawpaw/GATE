@@ -306,8 +306,9 @@ export const PROGRAM_PROFILE_SECTIONS = deepFreeze(PROGRAM_PROFILE_QUESTIONNAIRE
 })));
 export const PROGRAM_PROFILE_MODULE_QUESTIONS = deepFreeze(moduleQuestions(PROGRAM_PROFILE_QUESTIONNAIRE));
 export const PROGRAM_PROFILE_QUESTIONS = deepFreeze([
-  ...baseQuestions(PROGRAM_PROFILE_QUESTIONNAIRE),
-  ...PROGRAM_PROFILE_MODULE_QUESTIONS
+  ...baseQuestions(PROGRAM_PROFILE_QUESTIONNAIRE).filter((question) => question.section !== "ambiguities-attestation"),
+  ...PROGRAM_PROFILE_MODULE_QUESTIONS,
+  ...baseQuestions(PROGRAM_PROFILE_QUESTIONNAIRE).filter((question) => question.section === "ambiguities-attestation")
 ]);
 
 function collectIds(items, label, errors) {
