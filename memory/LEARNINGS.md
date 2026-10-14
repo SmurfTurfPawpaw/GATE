@@ -63,6 +63,8 @@ Add proposed lessons here only after removing sensitive context. Promotion must 
 
 - 2026-10-14 | Cause: Snapshot validation occurred only during creation, allowing execution claims and purge despite malformed storage. | Change: Scan storage strictly at the shared retention boundary after recovery and report malformed storage as mutation-blocked. | Evidence: evidence://review-R1-retention-storage | Status: proposed
 
+- 2026-10-14 | Cause: The malformed-storage regression invoked Linux process identity unconditionally on unsupported hosts. | Change: Skip only that regression on non-Linux platforms and retain Linux/WSL2 assertions. | Evidence: evidence://review-R1-retention-test-platform | Status: proposed
+
 ## Superseded or reverted
 
 Move old entries here with the new evidence and replacement learning. Do not erase history.

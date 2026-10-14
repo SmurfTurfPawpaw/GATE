@@ -315,7 +315,7 @@ test("prelaunch validation closes descriptors on identity and directory errors",
   }
 });
 
-test("malformed snapshot storage blocks the shared mutation boundary and status", (t) => {
+test("malformed snapshot storage blocks the shared mutation boundary and status", { skip: process.platform !== "linux" }, (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-offline-storage-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const paths = runtimePaths({ home: root, repo });
