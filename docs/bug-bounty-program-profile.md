@@ -67,6 +67,8 @@ This partial example creates a draft. Supply the remaining required answers or r
 
 Applicable module questions precede final operator attestation. Substantive edits invalidate the prior attestation; review the revised answers and attest again before compiling a ready profile. A headless amendment can include a fresh attestation only by supplying all attestation answers with a changed attestation timestamp. Answer values must match their questionnaire types, including module answers; key presence alone does not complete a module.
 
+Required text answers must contain visible content; whitespace or invisible characters alone are incomplete in the wizard, on resume, and at readiness validation. Required module lists must be non-empty, with substantive content in every item. Non-module answers retain their field-specific empty-list and nullable allowances: `architecture.unknowns` may be `[]`, but every supplied entry must be a string containing visible content. These completeness checks do not restrict arbitrary literal technique parameters or payloads.
+
 The review step surfaces missing provenance, conflicting selectors, expired terms, unanswered conditional rules, insufficient limits, and other ambiguities. Resolve them at the source or leave them explicit. Verification reports `ready: true` only when the profile is internally consistent and complete enough for deterministic compilation; readiness is not a statement that every requested technique is permitted.
 
 `verify` exits with status 2 while review blockers remain. A structurally valid but blocked `compile` still writes the private review bundle and also exits with status 2; inspect its `blockers` and `nextSteps` instead of treating artifact creation as readiness.
@@ -116,7 +118,7 @@ The document must satisfy the closed [provider capability schema](../schemas/pro
 
 Provider metadata may declare `destination` as `local`, `cloud`, or `unknown`. Local routes require `gate-home`; cloud routes require `configured-cloud-model` in the profile destinations. Missing, unknown, or stale destination declarations require operator routing review. Capability prediction alone does not establish data-release compatibility.
 
-Preflight checks every action requested by a phase against every requested assistance mode, including actions whose execution remains conditional. Inspect `providerPrediction`, the `data-release` dimension, and `routing` separately from profile readiness: a compile result can be ready while provider compatibility or destination compatibility still blocks model routing. Compilation sends no packet to a provider.
+Preflight checks every raw action requested by a phase against every requested assistance mode, including actions whose execution is conditional or denied by a module ceiling. Inspect `providerPrediction`, the `data-release` dimension, and `routing` separately from profile readiness: a compile result can be ready while provider compatibility or destination compatibility still blocks model routing. Compilation sends no packet to a provider.
 
 Recompile after changing the profile or a cited source. The change produces a new profile digest and bundle. Older bundles remain bound to their prior profile revision and must not be reused as current context.
 
