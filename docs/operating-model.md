@@ -160,7 +160,7 @@ Review the complete manifest and use only the exact returned confirmation:
 ./bin/gate.mjs analysis status --json
 ```
 
-The retained-snapshot pool is owner-only and capped at 64 artifacts and 2 GiB of logical bytes. One retention lock serializes manifest snapshots, execution claims, and purges; malformed lock metadata or input entries fail closed. A durable creation intent covers snapshot creation through manifest publication. Recovery after a definitively dead creator removes a verified incomplete snapshot or retains one protected by a durably published manifest. Status accounts for retained capacity and pending, expired, active, terminal, purge-pending, purged, orphaned, missing, and invalid state. To retire one exact snapshot, use the digest-bound value returned with its manifest:
+The retained-snapshot pool is owner-only and capped at 64 artifacts and 2 GiB of logical bytes. Linux/WSL2 system `flock` on the existing analysis directory serializes retention-lock acquisition, stale recovery, publication, mutation, and release for manifest snapshots, execution claims, and purges; malformed lock metadata or input entries fail closed. A durable creation intent covers snapshot creation through manifest publication. Recovery after a definitively dead creator removes a verified incomplete snapshot or retains one protected by a durably published manifest. Status accounts for retained capacity and pending, expired, active, terminal, purge-pending, purged, orphaned, missing, and invalid state. To retire one exact snapshot, use the digest-bound value returned with its manifest:
 
 ```bash
 ./bin/gate.mjs analysis purge \

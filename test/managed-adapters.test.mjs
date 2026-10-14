@@ -222,12 +222,13 @@ function fixture(t) {
   return { root, contractRepo, paths, verifyManagedTool, runSmoke };
 }
 
-function approve(paths, root, { id, target, toolId }) {
+function approve(paths, root, { id, target, toolId, exclude = [] }) {
   const plan = path.join(root, `${id}-plan.md`);
   fs.writeFileSync(plan, `# Plan\nObserve the exact local fixture target for ${id}.\n`, { mode: 0o600 });
   createEngagement({
     id,
     targets: [target],
+    exclude,
     actions: ["observe"],
     tools: [toolId],
     environment: "host",
@@ -741,4 +742,29 @@ managedTest("empty managed output is indeterminate and manifest tampering fails 
     /manifest digest|deterministic argv binding changed|operation/u
   );
   assert.equal(requests, 0);
+});
+
+managedTest("typed adapter destinations respect exact-IP and CIDR exclusions before reservation", (t) => {
+  const { root, paths, verifyManagedTool } = fixture(t);
+  const cases = [
+    ["httpx", "httpx-url-observe", "https://approved.example/probe", "127.0.0.1", "127.0.0.1"],
+    ["httpx", "httpx-url-observe", "https://approved.example/probe", "127.0.0.0/8", "127.0.0.1"],
+    ["httpx", "httpx-url-observe", "https://approved.example/probe", "0:0:0:0:0:0:0:1", "::1"],
+    ["httpx", "httpx-url-observe", "https://approved.example/probe", "::1/128", "::1"],
+    ["dnsx", "dnsx-domain-observe", "approved.example", "127.0.0.1", "127.0.0.1:5353"],
+    ["dnsx", "dnsx-domain-observe", "approved.example", "127.0.0.0/8", "127.0.0.1:5353"],
+    ["dnsx", "dnsx-domain-observe", "approved.example", "::1", "[0:0:0:0:0:0:0:1]:5353"],
+    ["dnsx", "dnsx-domain-observe", "approved.example", "::1/128", "[::1]:5353"]
+  ];
+  for (const [index, [toolId, adapterId, target, excluded, destination]] of cases.entries()) {
+    const scope = approve(paths, root, { id: `excluded-${index}`, target, toolId, exclude: [excluded] });
+    const operation = toolId === "httpx"
+      ? { kind: "http-get", method: "GET", allowedIp: destination, timeoutSeconds: 5, maxResponseBytes: 4096 }
+      : { kind: "dns-query", recordType: "A", resolver: destination, timeoutSeconds: 5 };
+    const before = workflowStatus(scope.workflowId, { paths }).journal;
+    assert.throws(() => createManagedExecutionManifest(scope.id, managedInput(scope, adapterId, operation), {
+      paths, verifyManagedTool
+    }), /managed adapter destination is explicitly excluded/u);
+    assert.deepEqual(workflowStatus(scope.workflowId, { paths }).journal, before);
+  }
 });

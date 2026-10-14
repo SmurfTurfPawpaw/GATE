@@ -1,9 +1,10 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
 import { spawn } from "node:child_process";
 
-import { checkEngagement } from "./engagements.mjs";
+import { checkEngagement, targetMatches } from "./engagements.mjs";
 import { recordEvent } from "./events.mjs";
 import {
   assertManagedAdapterManifest,
@@ -433,8 +434,18 @@ function workflowReservationEnvelope(bounds) {
   };
 }
 
-function requireExecutionBinding(check, expected = null, toolId = null) {
+function requireExecutionBinding(check, expected = null, toolId = null, typedOperation = expected?.operation?.adapter?.operation) {
   if (!check?.allowed) throw new Error(`engagement preflight failed: ${(check?.reasons || ["unknown reason"]).join("; ")}`);
+  if (typedOperation) {
+    const destination = typedOperation.kind === "http-get"
+      ? typedOperation.allowedIp
+      : typedOperation.resolver.slice(0, typedOperation.resolver.lastIndexOf(":")).replace(/^\[|\]$/gu, "");
+    if (check.engagement.scope.exclude.some((selector) => {
+      const family = selector.type === "ip" && net.isIP(selector.value);
+      const excluded = family ? { type: "cidr", value: `${selector.value}/${family === 6 ? 128 : 32}` } : selector;
+      return targetMatches(excluded, destination);
+    })) throw new Error(`managed adapter destination is explicitly excluded: ${destination}`);
+  }
   const binding = check.executionBinding;
   if (!binding || typeof binding !== "object") throw new Error("engagement preflight did not produce an execution binding");
   if (toolId && (!Array.isArray(binding.permittedTools) || !binding.permittedTools.includes(toolId))) {
@@ -777,7 +788,7 @@ function createPreparedExecutionManifest(engagementId, normalized, options, mana
     action: normalized.action,
     ...normalized.declaredBounds
   }, { paths });
-  const binding = requireExecutionBinding(check, null, normalized.toolId);
+  const binding = requireExecutionBinding(check, null, normalized.toolId, managedContext?.binding.operation);
   if (normalized.target !== binding.target.value) {
     throw new Error(`execution target must use its canonical approved form exactly: ${binding.target.value}`);
   }
@@ -829,7 +840,7 @@ function createPreparedExecutionManifest(engagementId, normalized, options, mana
     action: normalized.action,
     ...normalized.declaredBounds
   }, { paths });
-  const currentBinding = requireExecutionBinding(currentCheck, null, normalized.toolId);
+  const currentBinding = requireExecutionBinding(currentCheck, null, normalized.toolId, managedContext?.binding.operation);
   if (canonicalDigest(binding) !== canonicalDigest(currentBinding)) {
     throw new Error("engagement execution binding changed while the executable was hashed");
   }

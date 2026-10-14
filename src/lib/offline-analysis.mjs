@@ -398,74 +398,88 @@ function withRetentionLock(paths, action, options = {}) {
   const timeoutMs = options.timeoutMs ?? RETENTION_LOCK_TIMEOUT_MS;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error("offline retention lock timeout must be positive");
   const deadline = Date.now() + timeoutMs;
-  let acquired = false;
-  let lockStat;
-  while (!acquired) {
-    const staging = retentionLockStagingFile(paths, owner);
-    let descriptor;
-    let stagingStat;
-    let linked = false;
-    try {
-      descriptor = openPrivateFileExclusive(staging, { label: "offline artifact retention-lock transaction" });
-      stagingStat = fs.fstatSync(descriptor);
-      fs.writeFileSync(descriptor, `${JSON.stringify(owner)}\n`, "utf8");
-      fs.fsyncSync(descriptor);
-      closeDescriptor(descriptor);
-      descriptor = undefined;
-      syncPrivateDirectory(paths.offlineAnalysisTransactions, { label: "offline analysis transaction directory" });
-      fs.linkSync(staging, file);
-      linked = true;
-      lockStat = fs.lstatSync(file);
-      if (lockStat.dev !== stagingStat.dev || lockStat.ino !== stagingStat.ino) {
-        throw new Error("offline artifact retention lock changed while it was published");
+  const serialization = openDirectory(paths.offlineAnalyses, "offline analysis root");
+  try {
+    if (process.platform !== "linux") throw new Error("offline retention serialization requires Linux/WSL2");
+    const locked = spawnSync("flock", ["--exclusive", "--timeout", String(timeoutMs / 1000), "3"], {
+      stdio: ["ignore", "pipe", "pipe", serialization],
+      env: { PATH: "/usr/bin:/bin", LANG: "C", LC_ALL: "C" },
+      shell: false,
+      timeout: timeoutMs + 1000,
+      maxBuffer: 16 * 1024
+    });
+    if (locked.error || locked.status !== 0) throw new Error("timed out waiting for offline retention serialization", { cause: locked.error });
+    let acquired = false;
+    let lockStat;
+    while (!acquired) {
+      const staging = retentionLockStagingFile(paths, owner);
+      let descriptor;
+      let stagingStat;
+      let linked = false;
+      try {
+        descriptor = openPrivateFileExclusive(staging, { label: "offline artifact retention-lock transaction" });
+        stagingStat = fs.fstatSync(descriptor);
+        fs.writeFileSync(descriptor, `${JSON.stringify(owner)}\n`, "utf8");
+        fs.fsyncSync(descriptor);
+        closeDescriptor(descriptor);
+        descriptor = undefined;
+        syncPrivateDirectory(paths.offlineAnalysisTransactions, { label: "offline analysis transaction directory" });
+        fs.linkSync(staging, file);
+        linked = true;
+        lockStat = fs.lstatSync(file);
+        if (lockStat.dev !== stagingStat.dev || lockStat.ino !== stagingStat.ino) {
+          throw new Error("offline artifact retention lock changed while it was published");
+        }
+        fs.unlinkSync(staging);
+        syncPrivateDirectory(paths.offlineAnalysisTransactions, { label: "offline analysis transaction directory" });
+        syncPrivateDirectory(paths.offlineAnalyses, { label: "offline analysis root" });
+        acquired = true;
+      } catch (error) {
+        closeDescriptor(descriptor);
+        if (linked) try {
+          const named = fs.lstatSync(file);
+          if (stagingStat && named.dev === stagingStat.dev && named.ino === stagingStat.ino) {
+            fs.unlinkSync(file);
+            syncPrivateDirectory(paths.offlineAnalyses, { label: "offline analysis root" });
+          }
+        } catch { /* Preserve the lock publication error. */ }
+        try {
+          const named = fs.lstatSync(staging);
+          if (stagingStat && named.dev === stagingStat.dev && named.ino === stagingStat.ino) {
+            fs.unlinkSync(staging);
+            syncPrivateDirectory(paths.offlineAnalysisTransactions, { label: "offline analysis transaction directory" });
+          }
+        } catch { /* Preserve the lock publication error. */ }
+        if (error.code !== "EEXIST") throw error;
+        try {
+          if (removeStaleRetentionLock(paths)) continue;
+        } catch (lockError) {
+          if (Date.now() >= deadline) {
+            throw new Error(`offline artifact retention lock could not be recovered safely: ${lockError.message}`, { cause: lockError });
+          }
+        }
+        if (Date.now() >= deadline) throw new Error("timed out waiting for the offline artifact retention lock");
+        Atomics.wait(retentionWaitBuffer, 0, 0, Math.min(20, Math.max(1, deadline - Date.now())));
       }
-      fs.unlinkSync(staging);
-      syncPrivateDirectory(paths.offlineAnalysisTransactions, { label: "offline analysis transaction directory" });
-      syncPrivateDirectory(paths.offlineAnalyses, { label: "offline analysis root" });
-      acquired = true;
-    } catch (error) {
-      closeDescriptor(descriptor);
-      if (linked) try {
-        const named = fs.lstatSync(file);
-        if (stagingStat && named.dev === stagingStat.dev && named.ino === stagingStat.ino) {
+    }
+    try {
+      recoverInterruptedRecordTransactions(paths);
+      recoverInterruptedManifestCreations(paths);
+      const retained = scanRetainedArtifacts(paths, { strict: true });
+      return action(retained);
+    } finally {
+      try {
+        const finalStat = fs.lstatSync(file);
+        if (lockStat && finalStat.dev === lockStat.dev && finalStat.ino === lockStat.ino) {
           fs.unlinkSync(file);
           syncPrivateDirectory(paths.offlineAnalyses, { label: "offline analysis root" });
         }
-      } catch { /* Preserve the lock publication error. */ }
-      try {
-        const named = fs.lstatSync(staging);
-        if (stagingStat && named.dev === stagingStat.dev && named.ino === stagingStat.ino) {
-          fs.unlinkSync(staging);
-          syncPrivateDirectory(paths.offlineAnalysisTransactions, { label: "offline analysis transaction directory" });
-        }
-      } catch { /* Preserve the lock publication error. */ }
-      if (error.code !== "EEXIST") throw error;
-      try {
-        if (removeStaleRetentionLock(paths)) continue;
-      } catch (lockError) {
-        if (Date.now() >= deadline) {
-          throw new Error(`offline artifact retention lock could not be recovered safely: ${lockError.message}`, { cause: lockError });
-        }
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
       }
-      if (Date.now() >= deadline) throw new Error("timed out waiting for the offline artifact retention lock");
-      Atomics.wait(retentionWaitBuffer, 0, 0, Math.min(20, Math.max(1, deadline - Date.now())));
     }
-  }
-  try {
-    recoverInterruptedRecordTransactions(paths);
-    recoverInterruptedManifestCreations(paths);
-    const retained = scanRetainedArtifacts(paths, { strict: true });
-    return action(retained);
   } finally {
-    try {
-      const finalStat = fs.lstatSync(file);
-      if (lockStat && finalStat.dev === lockStat.dev && finalStat.ino === lockStat.ino) {
-        fs.unlinkSync(file);
-        syncPrivateDirectory(paths.offlineAnalyses, { label: "offline analysis root" });
-      }
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
-    }
+    closeDescriptor(serialization);
   }
 }
 
