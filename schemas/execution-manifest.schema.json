@@ -1,0 +1,228 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/execution-manifest.schema.json",
+  "title": "GATE supervised execution manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "apiVersion",
+    "kind",
+    "metadata",
+    "engagement",
+    "operation",
+    "declaredBounds",
+    "runtime",
+    "enforcement",
+    "manifestSha256"
+  ],
+  "properties": {
+    "$schema": { "type": "string", "minLength": 1 },
+    "apiVersion": { "const": "gate.execution/v1" },
+    "kind": { "const": "ExecutionManifest" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "runId", "createdAt", "expiresAt"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^xmf_[a-f0-9]{32}$" },
+        "runId": { "type": "string", "pattern": "^xrun_[a-f0-9]{32}$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "expiresAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "engagement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "planSha256",
+        "envelopeSha256",
+        "receiptSha256",
+        "authorizationValidUntil",
+        "environment",
+        "allowedDestinations"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "planSha256": { "$ref": "#/$defs/sha256" },
+        "envelopeSha256": { "$ref": "#/$defs/sha256" },
+        "receiptSha256": { "$ref": "#/$defs/sha256" },
+        "authorizationValidUntil": { "type": "string", "format": "date-time" },
+        "environment": { "const": "host" },
+        "allowedDestinations": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "contains": { "const": "gate-home" },
+          "items": { "enum": ["gate-home", "configured-cloud-model", "client-destination"] }
+        }
+      }
+    },
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "targetArgument",
+        "targetSelector",
+        "targetArgIndex",
+        "action",
+        "tool",
+        "executable",
+        "argv0",
+        "argv"
+      ],
+      "properties": {
+        "targetArgument": { "type": "string", "minLength": 1, "maxLength": 1000, "pattern": "^[^\\u0000\\r\\n]+$" },
+        "targetSelector": { "$ref": "#/$defs/selector" },
+        "targetArgIndex": { "type": "integer", "minimum": 0, "maximum": 255 },
+        "action": { "$ref": "#/$defs/action" },
+        "tool": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "catalogCommand", "host", "riskClass", "readiness", "knownGoodProvenance"],
+          "properties": {
+            "id": { "$ref": "#/$defs/toolId" },
+            "catalogCommand": { "type": "string", "pattern": "^[A-Za-z0-9._+-]{1,80}$" },
+            "host": { "enum": ["linux", "wsl2"] },
+            "riskClass": { "enum": ["P0", "P1", "A1", "A2", "A3"] },
+            "readiness": { "const": "discovered" },
+            "knownGoodProvenance": { "const": false }
+          }
+        },
+        "executable": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["requestedPath", "resolvedPath", "sha256", "size", "device", "inode", "mtimeNs", "ctimeNs"],
+          "properties": {
+            "requestedPath": { "$ref": "#/$defs/path" },
+            "resolvedPath": { "$ref": "#/$defs/path" },
+            "sha256": { "$ref": "#/$defs/sha256" },
+            "size": { "type": "integer", "minimum": 1, "maximum": 4294967296 },
+            "device": { "type": "string", "pattern": "^-?[0-9]+$" },
+            "inode": { "type": "string", "pattern": "^-?[0-9]+$" },
+            "mtimeNs": { "type": "string", "pattern": "^-?[0-9]+$" },
+            "ctimeNs": { "type": "string", "pattern": "^-?[0-9]+$" }
+          }
+        },
+        "argv0": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[A-Za-z0-9._+-]+$" },
+        "argv": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": { "type": "string", "maxLength": 8192, "pattern": "^[^\\u0000]*$" }
+        }
+      }
+    },
+    "declaredBounds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxMinutes", "estimatedRequests", "maxParallel", "maxRatePerSecond", "maxTokens"],
+      "properties": {
+        "maxMinutes": { "type": "integer", "minimum": 1, "maximum": 10080 },
+        "estimatedRequests": { "type": "integer", "minimum": 1, "maximum": 10000000 },
+        "maxParallel": { "type": "integer", "minimum": 1, "maximum": 256 },
+        "maxRatePerSecond": { "type": "number", "exclusiveMinimum": 0, "maximum": 100000 },
+        "maxTokens": { "type": "integer", "minimum": 1000, "maximum": 100000000 }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "platform", "uid", "gid", "environment", "sandboxRef", "evidence", "maxEvidenceBytesPerStream"],
+      "properties": {
+        "mode": { "const": "supervised-generic" },
+        "platform": { "const": "linux" },
+        "uid": { "type": "integer", "minimum": 0 },
+        "gid": { "type": "integer", "minimum": 0 },
+        "environment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["HOME", "TMPDIR", "PATH", "LANG", "LC_ALL", "TERM", "NO_COLOR"],
+          "properties": {
+            "HOME": { "$ref": "#/$defs/path" },
+            "TMPDIR": { "$ref": "#/$defs/path" },
+            "PATH": { "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^[^\\u0000\\r\\n]+$" },
+            "LANG": { "const": "C.UTF-8" },
+            "LC_ALL": { "const": "C.UTF-8" },
+            "TERM": { "const": "dumb" },
+            "NO_COLOR": { "const": "1" }
+          }
+        },
+        "sandboxRef": { "type": "string", "pattern": "^private://executions/sandboxes/xrun_[a-f0-9]{32}$" },
+        "evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["stdoutRef", "stderrRef", "resultRef"],
+          "properties": {
+            "stdoutRef": { "$ref": "#/$defs/evidenceRef" },
+            "stderrRef": { "$ref": "#/$defs/evidenceRef" },
+            "resultRef": { "$ref": "#/$defs/evidenceRef" }
+          }
+        },
+        "maxEvidenceBytesPerStream": { "type": "integer", "minimum": 1048576, "maximum": 1073741824 }
+      }
+    },
+    "enforcement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enforced", "bestEffort", "unavailable"],
+      "properties": {
+        "enforced": { "$ref": "#/$defs/enforcedList" },
+        "bestEffort": { "$ref": "#/$defs/bestEffortList" },
+        "unavailable": { "$ref": "#/$defs/unavailableList" }
+      }
+    },
+    "manifestSha256": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$" },
+    "toolId": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "minLength": 2, "maxLength": 64 },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "path": { "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^/[^\\u0000\\r\\n]*$" },
+    "evidenceRef": { "type": "string", "pattern": "^private://evidence/execution-xrun_[a-f0-9]{32}-(?:stdout\\.bin|stderr\\.bin|result\\.json)$" },
+    "selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "value"],
+      "properties": {
+        "type": { "enum": ["domain", "ip", "cidr", "url", "application", "account", "repository", "device", "path"] },
+        "value": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "^[^\\r\\n]+$" }
+      }
+    },
+    "action": {
+      "enum": [
+        "observe", "scan", "intercept", "authenticate", "fuzz", "exploit-safe", "exploit-stateful",
+        "persist", "denial-of-service", "destructive-test", "data-access", "data-removal", "exfiltration-simulation"
+      ]
+    },
+    "enforcedList": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "engagement-binding", "target-argument-binding", "declared-action-label-binding", "tool-allowlist", "exact-argv",
+          "shell-disabled", "executable-descriptor-observed-sha256", "minimal-environment", "private-stdout-stderr",
+          "one-shot-claim", "declared-bounds-within-receipt"
+        ]
+      }
+    },
+    "bestEffortList": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "enum": ["authorization-revocation-polling", "wall-duration", "process-group-termination"] }
+    },
+    "unavailableList": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "egress-target-restriction", "request-count-measurement", "request-rate-measurement",
+          "tool-concurrency-measurement", "token-measurement", "daemon-escape-containment",
+          "filesystem-isolation", "credential-broker", "tool-artifact-inventory", "known-good-executable-provenance",
+          "argv-action-semantics-validation", "supervisor-crash-containment", "immutable-executable-snapshot"
+        ]
+      }
+    }
+  }
+}

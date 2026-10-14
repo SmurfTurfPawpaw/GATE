@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -12,6 +13,7 @@ import {
   createEngagement,
   getEngagement,
   recordTechnicalReview,
+  revokeEngagement,
   targetMatches
 } from "../src/lib/engagements.mjs";
 
@@ -59,6 +61,32 @@ test("target matching handles exact, wildcard, URL, IPv4, and IPv6 CIDR scopes",
   assert.equal(targetMatches("2001:db8::/48", "2001:db9::1"), false);
 });
 
+test("engagement creation requires and normalizes an explicit tool scope", (t) => {
+  const { paths } = fixture(t);
+  assert.throws(
+    () => createEngagement({ id: "missing-tools", targets: ["app.example.test"], actions: ["scan"] }, { paths }),
+    /at least one permitted tool is required/
+  );
+  assert.throws(
+    () => createEngagement(
+      { id: "invalid-tools", targets: ["app.example.test"], actions: ["scan"], tools: ["bad_tool"] },
+      { paths }
+    ),
+    /tool ids must use/
+  );
+
+  const engagement = createEngagement(
+    {
+      id: "tool-scope",
+      targets: ["app.example.test"],
+      actions: ["scan"],
+      tools: ["NMAP", "nmap", "ffuf"]
+    },
+    { paths }
+  );
+  assert.deepEqual(engagement.scope.permittedTools, ["nmap", "ffuf"]);
+});
+
 test("URL query constraints apply to engagement inclusions and exclusions", (t) => {
   const { root, paths } = fixture(t);
   const plan = path.join(root, "plan.md");
@@ -68,7 +96,8 @@ test("URL query constraints apply to engagement inclusions and exclusions", (t) 
     {
       id: "query-scope",
       targets: ["https://app.example.test/api?tenant=alpha"],
-      actions: ["scan"]
+      actions: ["scan"],
+      tools: ["nmap"]
     },
     { paths }
   );
@@ -101,7 +130,8 @@ test("URL query constraints apply to engagement inclusions and exclusions", (t) 
       id: "query-exclusion",
       targets: ["https://app.example.test/api"],
       exclude: ["https://app.example.test/api/admin?tenant=alpha"],
-      actions: ["scan"]
+      actions: ["scan"],
+      tools: ["nmap"]
     },
     { paths }
   );
@@ -134,14 +164,14 @@ test("engagement creation rejects URL selectors with fragments", (t) => {
   const { paths } = fixture(t);
   assert.throws(
     () => createEngagement(
-      { id: "fragment-scope", targets: ["https://app.example.test/api#admin"], actions: ["scan"] },
+      { id: "fragment-scope", targets: ["https://app.example.test/api#admin"], actions: ["scan"], tools: ["nmap"] },
       { paths }
     ),
     /must not contain fragments/
   );
   assert.throws(
     () => createEngagement(
-      { id: "empty-fragment-scope", targets: ["https://app.example.test/api#"], actions: ["scan"] },
+      { id: "empty-fragment-scope", targets: ["https://app.example.test/api#"], actions: ["scan"], tools: ["nmap"] },
       { paths }
     ),
     /must not contain fragments/
@@ -164,7 +194,8 @@ test("external authorization evidence cannot be injected or reused across engage
         basis: "client-written-authorization",
         evidenceRef: "private://authorizations/preexisting.evidence",
         targets: ["app.example.test"],
-        actions: ["scan"]
+        actions: ["scan"],
+        tools: ["nmap"]
       },
       { paths }
     ),
@@ -173,11 +204,11 @@ test("external authorization evidence cannot be injected or reused across engage
   assert.equal(fs.existsSync(path.join(paths.engagements, "preexisting.json")), false);
 
   createEngagement(
-    { id: "first-client", basis: "client-written-authorization", targets: ["first.example.test"], actions: ["scan"] },
+    { id: "first-client", basis: "client-written-authorization", targets: ["first.example.test"], actions: ["scan"], tools: ["nmap"] },
     { paths }
   );
   createEngagement(
-    { id: "second-client", basis: "client-written-authorization", targets: ["second.example.test"], actions: ["scan"] },
+    { id: "second-client", basis: "client-written-authorization", targets: ["second.example.test"], actions: ["scan"], tools: ["nmap"] },
     { paths }
   );
   attachAuthorization("first-client", authorization, { paths });
@@ -231,7 +262,7 @@ test("client authorization is copied privately, digest-bound, and independently 
   fs.writeFileSync(plan, "# Plan\nOne bounded request.\n");
   fs.writeFileSync(authorization, "Client authorization fixture.\n");
   createEngagement(
-    { id: "client-demo", basis: "client-written-authorization", targets: ["app.example.test"], actions: ["scan"] },
+    { id: "client-demo", basis: "client-written-authorization", targets: ["app.example.test"], actions: ["scan"], tools: ["nmap"] },
     { paths }
   );
   const planned = attachPlan("client-demo", plan, { paths });
@@ -256,13 +287,14 @@ test("client authorization is copied privately, digest-bound, and independently 
   const changed = checkEngagement("client-demo", { target: "app.example.test", action: "scan" }, { paths });
   assert.equal(changed.allowed, false);
   assert.ok(changed.reasons.includes("authorization evidence changed"));
+  assert.equal(Object.hasOwn(changed, "executionBinding"), false);
 });
 
 test("an exact reviewed plan is required and later changes invalidate approval", (t) => {
   const { root, paths } = fixture(t);
   const plan = path.join(root, "plan.md");
   fs.writeFileSync(plan, "# Plan\nBounded scan.\n");
-  createEngagement({ id: "demo", targets: ["*.example.test"], actions: ["scan"] }, { paths });
+  createEngagement({ id: "demo", targets: ["*.example.test"], actions: ["scan"], tools: ["nmap"] }, { paths });
   const planned = attachPlan("demo", plan, { paths });
   recordTechnicalReview(
     "demo",
@@ -277,27 +309,28 @@ test("an exact reviewed plan is required and later changes invalidate approval",
   const preflight = checkEngagement("demo", { target: "api.example.test", action: "scan" }, { paths });
   assert.equal(preflight.allowed, true);
   assert.equal(preflight.preflightOnly, true);
-  assert.equal(preflight.executionAvailable, false);
   assert.deepEqual(preflight.attestation, {
     operatorProvenance: "local-unverified",
     noMistakesReview: "local-unverified"
   });
+  const receiptFile = path.join(paths.authorizations, "demo.receipt.json");
+  const receiptBytes = fs.readFileSync(receiptFile);
+  const receipt = JSON.parse(receiptBytes.toString("utf8"));
+  assert.deepEqual(preflight.executionBinding, {
+    engagementId: "demo",
+    planSha256: planned.plan.sha256,
+    envelopeSha256: receipt.envelopeSha256,
+    receiptSha256: crypto.createHash("sha256").update(receiptBytes).digest("hex"),
+    authorizationValidUntil: preflight.engagement.authorization.validUntil,
+    target: { type: "domain", value: "api.example.test" },
+    action: "scan",
+    environment: "host",
+    allowedDestinations: ["gate-home"],
+    permittedTools: ["nmap"]
+  });
   assert.equal(checkEngagement("demo", { target: "outside.test", action: "scan" }, { paths }).allowed, false);
   const engagementFile = path.join(paths.engagements, "demo.json");
   const engagement = JSON.parse(fs.readFileSync(engagementFile, "utf8"));
-  engagement.metadata.status = "revoked";
-  engagement.review.operatorReceipt.status = "revoked";
-  fs.writeFileSync(engagementFile, `${JSON.stringify(engagement, null, 2)}\n`);
-  const revoked = checkEngagement("demo", { target: "api.example.test", action: "scan" }, { paths });
-  assert.equal(revoked.allowed, false);
-  assert.ok(revoked.reasons.includes("engagement is not approved"));
-  assert.ok(revoked.reasons.includes("operator receipt is not approved"));
-  engagement.metadata.status = "approved";
-  engagement.review.operatorReceipt.status = "approved";
-  fs.writeFileSync(engagementFile, `${JSON.stringify(engagement, null, 2)}\n`);
-
-  const receiptFile = path.join(paths.authorizations, "demo.receipt.json");
-  const receipt = JSON.parse(fs.readFileSync(receiptFile, "utf8"));
   receipt.confirmation = "APPROVE another-engagement";
   fs.writeFileSync(receiptFile, `${JSON.stringify(receipt, null, 2)}\n`);
   const forged = checkEngagement("demo", { target: "api.example.test", action: "scan" }, { paths });
@@ -312,11 +345,61 @@ test("an exact reviewed plan is required and later changes invalidate approval",
   assert.equal(expanded.allowed, false);
   assert.ok(expanded.reasons.includes("approved engagement envelope changed"));
   engagement.scope.include.pop();
+  engagement.scope.permittedTools.push("ffuf");
+  fs.writeFileSync(engagementFile, `${JSON.stringify(engagement, null, 2)}\n`);
+  const broadenedTools = checkEngagement("demo", { target: "api.example.test", action: "scan" }, { paths });
+  assert.equal(broadenedTools.allowed, false);
+  assert.ok(broadenedTools.reasons.includes("approved engagement envelope changed"));
+  assert.equal(Object.hasOwn(broadenedTools, "executionBinding"), false);
+  engagement.scope.permittedTools.pop();
   fs.writeFileSync(engagementFile, `${JSON.stringify(engagement, null, 2)}\n`);
   fs.appendFileSync(path.join(paths.plans, "demo.md"), "Changed.\n");
   const changed = checkEngagement("demo", { target: "api.example.test", action: "scan" }, { paths });
   assert.equal(changed.allowed, false);
   assert.ok(changed.reasons.includes("approved plan digest changed"));
+});
+
+test("engagement revocation requires exact confirmation and appends a durable event", (t) => {
+  const { root, paths } = fixture(t);
+  const plan = path.join(root, "plan.md");
+  fs.writeFileSync(plan, "# Plan\nBounded scan.\n");
+  createEngagement(
+    { id: "revoke-demo", targets: ["app.example.test"], actions: ["scan"], tools: ["nmap"] },
+    { paths }
+  );
+  const planned = attachPlan("revoke-demo", plan, { paths });
+  recordTechnicalReview(
+    "revoke-demo",
+    { run: "no-mistakes/revoke", headSha: "e".repeat(40), status: "passed" },
+    { paths }
+  );
+  approveEngagement(
+    "revoke-demo",
+    { sha256: planned.plan.sha256, confirm: "APPROVE revoke-demo" },
+    { paths }
+  );
+
+  const before = fs.readFileSync(path.join(paths.engagements, "revoke-demo.json"), "utf8");
+  assert.throws(
+    () => revokeEngagement("revoke-demo", { confirm: "REVOKE another" }, { paths }),
+    /must be exactly: REVOKE revoke-demo/
+  );
+  assert.equal(fs.readFileSync(path.join(paths.engagements, "revoke-demo.json"), "utf8"), before);
+
+  const revoked = revokeEngagement("revoke-demo", { confirm: "REVOKE revoke-demo" }, { paths });
+  assert.equal(revoked.metadata.status, "revoked");
+  assert.equal(revoked.review.operatorReceipt.status, "revoked");
+  const check = checkEngagement("revoke-demo", { target: "app.example.test", action: "scan" }, { paths });
+  assert.equal(check.allowed, false);
+  assert.ok(check.reasons.includes("engagement is not approved"));
+  assert.ok(check.reasons.includes("operator receipt is not approved"));
+  assert.equal(Object.hasOwn(check, "executionBinding"), false);
+
+  const events = fs.readFileSync(paths.events, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  const event = events.at(-1);
+  assert.equal(event.kind, "engagement.revoked");
+  assert.equal(event.effect.engagementId, "revoke-demo");
+  assert.equal(event.effect.planDigest, planned.plan.sha256);
 });
 
 test("declared execution cannot outlive the authorization window", (t) => {
@@ -328,6 +411,7 @@ test("declared execution cannot outlive the authorization window", (t) => {
       id: "short-window",
       targets: ["app.example.test"],
       actions: ["scan"],
+      tools: ["nmap"],
       validUntil: new Date(Date.now() + 30_000).toISOString(),
       maxMinutes: 1
     },
@@ -360,7 +444,7 @@ test("plan and authorization attachments reject symlink sources", (t) => {
   fs.writeFileSync(source, "private evidence\n");
   fs.symlinkSync(source, link);
   createEngagement(
-    { id: "regular-files", basis: "client-written-authorization", targets: ["app.example.test"], actions: ["scan"] },
+    { id: "regular-files", basis: "client-written-authorization", targets: ["app.example.test"], actions: ["scan"], tools: ["nmap"] },
     { paths }
   );
   assert.throws(() => attachPlan("regular-files", link, { paths }), /regular non-symlink file/);
@@ -376,7 +460,7 @@ test("plan attachment rejects a source replaced with a symlink between inspectio
   const outside = path.join(root, "outside.md");
   fs.writeFileSync(source, "reviewed plan\n");
   fs.writeFileSync(outside, "substituted bytes\n");
-  createEngagement({ id: "source-race", targets: ["app.example.test"], actions: ["scan"] }, { paths });
+  createEngagement({ id: "source-race", targets: ["app.example.test"], actions: ["scan"], tools: ["nmap"] }, { paths });
 
   const openSync = fs.openSync;
   let substituted = false;
@@ -398,7 +482,7 @@ test("engagement loads reject a symlinked private record", {
   skip: process.platform === "win32" && "creating symlinks can require elevated Windows privileges"
 }, (t) => {
   const { root, paths } = fixture(t);
-  createEngagement({ id: "linked-record", targets: ["app.example.test"], actions: ["scan"] }, { paths });
+  createEngagement({ id: "linked-record", targets: ["app.example.test"], actions: ["scan"], tools: ["nmap"] }, { paths });
   const record = path.join(paths.engagements, "linked-record.json");
   const outside = path.join(root, "outside-engagement.json");
   fs.renameSync(record, outside);

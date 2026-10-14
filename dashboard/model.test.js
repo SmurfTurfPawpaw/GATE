@@ -256,6 +256,97 @@ test("missing fleet counters remain unknown while explicit empty counters remain
   assert.equal(empty.failed, 0);
 });
 
+test("execution projection keeps capability truth and drops unreviewed or sensitive fields", () => {
+  const enforced = [
+    "engagement-binding", "target-argument-binding", "declared-action-label-binding", "tool-allowlist", "exact-argv",
+    "shell-disabled", "executable-descriptor-observed-sha256", "minimal-environment", "private-stdout-stderr",
+    "one-shot-claim", "declared-bounds-within-receipt"
+  ];
+  const bestEffort = ["authorization-revocation-polling", "wall-duration", "process-group-termination"];
+  const unavailable = [
+    "egress-target-restriction", "request-count-measurement", "request-rate-measurement",
+    "tool-concurrency-measurement", "token-measurement", "daemon-escape-containment", "filesystem-isolation",
+    "credential-broker", "tool-artifact-inventory", "known-good-executable-provenance",
+    "argv-action-semantics-validation", "supervisor-crash-containment", "immutable-executable-snapshot"
+  ];
+  const status = sanitizeStatusPayload({
+    execution: {
+      configured: true,
+      laneAvailable: true,
+      mode: "supervised-generic",
+      reason: "SENSITIVE_REASON_CANARY",
+      runningCount: 2,
+      counts: { running: 2, stopping: 1 },
+      enforced: [...enforced, "SENSITIVE_ENFORCEMENT_CANARY"],
+      bestEffort: [...bestEffort, "/private/capability"],
+      unavailable: [...unavailable, "target.invalid"],
+      recent: [{
+        runId: `run_${"1".repeat(16)}`,
+        manifestId: `manifest_${"2".repeat(16)}`,
+        engagementId: `engagement_${"3".repeat(16)}`,
+        status: "cancelled",
+        createdAt: "2026-10-13T12:00:00.000Z",
+        startedAt: "2026-10-13T12:00:01.000Z",
+        finishedAt: "2026-10-13T12:00:02.000Z",
+        terminationReason: "process-group-remained",
+        exitCode: null,
+        signal: null,
+        argv: ["--secret"],
+        target: "TARGET_CANARY",
+        output: "OUTPUT_CANARY"
+      }],
+      executablePath: "/private/tool",
+      evidence: "EVIDENCE_CANARY"
+    }
+  });
+
+  assert.equal(status.execution.configured, true);
+  assert.equal(status.execution.laneAvailable, true);
+  assert.equal(status.execution.mode, "supervised-generic");
+  assert.equal(status.execution.reason, null);
+  assert.equal(status.execution.runningCount, 2);
+  assert.equal(status.execution.stoppingCount, 1);
+  assert.deepEqual(status.execution.enforced, enforced);
+  assert.deepEqual(status.execution.bestEffort, bestEffort);
+  assert.deepEqual(status.execution.unavailable, unavailable);
+  assert.deepEqual(status.execution.recent, [{
+    runId: `run_${"1".repeat(16)}`,
+    manifestId: `manifest_${"2".repeat(16)}`,
+    engagementId: `engagement_${"3".repeat(16)}`,
+    status: "cancelled",
+    createdAt: "2026-10-13T12:00:00.000Z",
+    startedAt: "2026-10-13T12:00:01.000Z",
+    finishedAt: "2026-10-13T12:00:02.000Z",
+    terminationReason: "process-group-remained",
+    exitCode: null,
+    signal: null
+  }]);
+  const serialized = JSON.stringify(status);
+  for (const forbidden of [
+    "SENSITIVE", "TARGET_CANARY", "OUTPUT_CANARY", "EVIDENCE_CANARY", "/private/capability",
+    "/private/tool", "target.invalid", "--secret"
+  ]) assert.equal(serialized.includes(forbidden), false, `projection leaked ${forbidden}`);
+});
+
+test("execution lane availability cannot become true without explicit configuration", () => {
+  const missing = sanitizeStatusPayload({ execution: { laneAvailable: true, mode: "supervised-generic" } });
+  assert.equal(missing.execution.configured, null);
+  assert.equal(missing.execution.laneAvailable, false);
+
+  const unsupported = sanitizeStatusPayload({
+    execution: {
+      configured: true,
+      laneAvailable: false,
+      mode: "supervised-generic",
+      reason: "unsupported-platform",
+      runningCount: 0
+    }
+  });
+  assert.equal(unsupported.execution.laneAvailable, false);
+  assert.equal(unsupported.execution.reason, "unsupported-platform");
+  assert.equal(unsupported.execution.runningCount, 0);
+});
+
 test("event limit keeps the newest records regardless of source ordering", () => {
   const events = Array.from({ length: 110 }, (_, index) => ({
     id: `evt_record_${String(index).padStart(3, "0")}`,

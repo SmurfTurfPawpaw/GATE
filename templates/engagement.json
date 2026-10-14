@@ -20,6 +20,7 @@
     ],
     "exclude": [],
     "permittedActions": ["observe", "scan", "intercept", "authenticate", "fuzz", "exploit-safe"],
+    "permittedTools": ["nmap"],
     "environment": "host"
   },
   "plan": {

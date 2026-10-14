@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/execution-run.schema.json",
+  "title": "GATE supervised execution run",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema", "apiVersion", "kind", "runId", "manifestId", "manifestSha256", "engagementId",
+    "status", "createdAt", "startedAt", "finishedAt", "supervisor", "process", "terminationReason", "result", "evidence"
+  ],
+  "properties": {
+    "$schema": { "type": "string", "minLength": 1 },
+    "apiVersion": { "const": "gate.execution-run/v1" },
+    "kind": { "const": "ExecutionRun" },
+    "runId": { "type": "string", "pattern": "^xrun_[a-f0-9]{32}$" },
+    "manifestId": { "type": "string", "pattern": "^xmf_[a-f0-9]{32}$" },
+    "manifestSha256": { "$ref": "#/$defs/sha256" },
+    "engagementId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$" },
+    "status": { "enum": ["queued", "running", "stopping", "succeeded", "failed", "cancelled", "blocked", "unknown"] },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "startedAt": { "type": ["string", "null"], "format": "date-time" },
+    "finishedAt": { "type": ["string", "null"], "format": "date-time" },
+    "supervisor": { "$ref": "#/$defs/processIdentity" },
+    "process": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/processIdentity" }
+      ]
+    },
+    "terminationReason": {
+      "type": ["string", "null"],
+      "enum": [
+        null, "completed", "operator-stop", "engagement-invalidated", "authorization-expired",
+        "duration-limit", "evidence-limit", "evidence-write-failure", "spawn-failure", "supervisor-signal",
+        "process-group-remained", "supervision-lost"
+      ]
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exitCode", "signal", "durationMs"],
+      "properties": {
+        "exitCode": { "type": ["integer", "null"], "minimum": -2147483648, "maximum": 2147483647 },
+        "signal": { "type": ["string", "null"], "maxLength": 40 },
+        "durationMs": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stdout", "stderr", "resultRef", "resultAvailable", "sandboxRef"],
+      "properties": {
+        "stdout": { "$ref": "#/$defs/streamEvidence" },
+        "stderr": { "$ref": "#/$defs/streamEvidence" },
+        "resultRef": { "type": "string", "pattern": "^private://evidence/execution-xrun_[a-f0-9]{32}-result\\.json$" },
+        "resultAvailable": { "type": "boolean" },
+        "sandboxRef": { "type": "string", "pattern": "^private://executions/sandboxes/xrun_[a-f0-9]{32}$" }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "processIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pid", "pgid", "sessionId", "bootId", "startTimeTicks"],
+      "properties": {
+        "pid": { "type": "integer", "minimum": 1 },
+        "pgid": { "type": "integer", "minimum": 1 },
+        "sessionId": { "type": "integer", "minimum": 1 },
+        "bootId": { "type": "string", "pattern": "^[a-f0-9-]{36}$" },
+        "startTimeTicks": { "type": "string", "pattern": "^[0-9]+$" }
+      }
+    },
+    "streamEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "available", "sha256", "bytes"],
+      "properties": {
+        "ref": { "type": "string", "pattern": "^private://evidence/execution-xrun_[a-f0-9]{32}-(?:stdout|stderr)\\.bin$" },
+        "available": { "type": "boolean" },
+        "sha256": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "bytes": { "type": "integer", "minimum": 0, "maximum": 1073741824 }
+      }
+    }
+  }
+}

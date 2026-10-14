@@ -25,8 +25,10 @@ test("tool plans preserve admission and licensing metadata", () => {
   assert.ok(["candidate", "discovered"].includes(result.readiness));
   assert.equal(result.versionVerified, false);
   assert.equal(result.integrityVerified, false);
+  assert.equal(result.knownGoodProvenance, false);
   assert.equal(result.adapterReady, false);
-  assert.equal(result.executionAvailable, false);
+  assert.equal(result.executionAvailable, result.genericLaneEligible);
+  assert.equal(result.executionMode, result.genericLaneEligible ? "supervised-generic" : null);
 });
 
 test("tool discovery reads PATH directly without executing a locator or candidate", (t) => {
@@ -63,7 +65,11 @@ test("tool discovery reads PATH directly without executing a locator or candidat
   assert.equal(result.installed, true);
   assert.equal(result.executable, fakeCandidate);
   assert.equal(result.readiness, "discovered");
-  assert.equal(result.executionAvailable, false);
+  assert.equal(result.knownGoodProvenance, false);
+  assert.equal(result.adapterReady, false);
+  assert.equal(result.genericLaneEligible, true);
+  assert.equal(result.executionMode, "supervised-generic");
+  assert.equal(result.executionAvailable, true);
   assert.equal(fs.existsSync(helperCanary), false);
   assert.equal(fs.existsSync(candidateCanary), false);
 });

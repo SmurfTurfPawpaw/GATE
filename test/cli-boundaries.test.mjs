@@ -36,11 +36,19 @@ test("raw command surfaces fail closed before spawning passthrough commands", (t
     },
     {
       args: [
-        "engagement", "exec", "demo", "--target", "example.test", "--action", "scan",
-        "--requests", "1", "--parallel", "1", "--rate", "1", "--minutes", "1", "--tokens", "1000",
+        "engagement", "exec", "demo", "--manifest", "missing-manifest",
+        "--confirm", `EXECUTE missing-manifest ${"0".repeat(64)} UNMETERED`,
         "--", process.execPath, "-e", payload
       ],
-      message: /active execution is disabled/
+      message: /engagement exec does not accept command arguments/
+    },
+    {
+      args: [
+        "engagement", "manifest", "demo", "--target", "example.test", "--action", "scan",
+        "--tool", "nmap", "--requests", "1", "--parallel", "1", "--rate", "1",
+        "--minutes", "1", "--tokens", "1000", "--", "{{GATE_TARGET}}", "-e", payload
+      ],
+      message: /engagement does not exist/
     }
   ];
 

@@ -81,6 +81,46 @@
       </article>
     </section>
 
+    <section class="panel execution-overview" id="execution-panel" tabindex="-1" aria-labelledby="execution-title">
+      <header class="panel-header compact">
+        <div>
+          <p class="eyebrow">Supervised security operations</p>
+          <h2 id="execution-title">Active execution</h2>
+        </div>
+        <span class="source-badge" id="execution-lane">Unknown</span>
+      </header>
+      <div class="execution-body">
+        <dl class="execution-facts">
+          <div><dt>Mode</dt><dd id="execution-mode">Unknown</dd></div>
+          <div><dt>Running</dt><dd id="execution-running">—</dd></div>
+          <div><dt>Stopping</dt><dd id="execution-stopping">—</dd></div>
+          <div><dt>Configuration</dt><dd id="execution-configured">Unknown</dd></div>
+        </dl>
+        <section class="capability-group" aria-labelledby="execution-enforced-title">
+          <h3 id="execution-enforced-title">Enforced</h3>
+          <ul class="capability-list" id="execution-enforced"><li>Awaiting status</li></ul>
+        </section>
+        <section class="capability-group best-effort" aria-labelledby="execution-best-effort-title">
+          <h3 id="execution-best-effort-title">Best effort</h3>
+          <ul class="capability-list" id="execution-best-effort"><li>Awaiting status</li></ul>
+        </section>
+        <section class="capability-group unavailable" aria-labelledby="execution-unavailable-title">
+          <h3 id="execution-unavailable-title">Unavailable</h3>
+          <ul class="capability-list" id="execution-unavailable"><li>Awaiting status</li></ul>
+        </section>
+      </div>
+      <section class="execution-runs" aria-labelledby="execution-runs-title">
+        <header>
+          <h3 id="execution-runs-title">Recent supervised runs</h3>
+          <span>Opaque IDs and lifecycle metadata only</span>
+        </header>
+        <ol id="execution-runs">
+          <li class="execution-run-empty">No execution records observed</li>
+        </ol>
+      </section>
+      <p class="execution-note" id="execution-note">Every launch requires an approved, digest-bound one-shot manifest.</p>
+    </section>
+
     <main class="workspace" id="workspace">
       <section class="panel fleet-panel" id="fleet-panel" tabindex="-1" aria-labelledby="fleet-title">
         <header class="panel-header">
@@ -209,8 +249,9 @@
         <dl class="shortcut-list">
           <div><dt><kbd>1</kbd></dt><dd>Focus agents and tasks</dd></div>
           <div><dt><kbd>2</kbd></dt><dd>Focus activity timeline</dd></div>
-          <div><dt><kbd>3</kbd></dt><dd>Focus resource posture</dd></div>
-          <div><dt><kbd>4</kbd></dt><dd>Focus learning log</dd></div>
+          <div><dt><kbd>3</kbd></dt><dd>Focus active execution</dd></div>
+          <div><dt><kbd>4</kbd></dt><dd>Focus resource posture</dd></div>
+          <div><dt><kbd>5</kbd></dt><dd>Focus learning log</dd></div>
           <div><dt><kbd>/</kbd></dt><dd>Filter safe activity metadata</dd></div>
           <div><dt><kbd>R</kbd></dt><dd>Refresh all endpoints</dd></div>
           <div><dt><kbd>P</kbd></dt><dd>Pause or resume live updates</dd></div>

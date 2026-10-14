@@ -6,7 +6,7 @@ The setup has four layers:
 
 1. Windows provides Codex access to the laptop, native browsers, certificate stores, packet capture, USB devices, and Windows applications.
 2. WSL2 provides the Linux control plane, Git worktrees, Node tooling, and agent CLIs.
-3. GATE keeps private runtime state outside the public repository.
+3. GATE keeps private runtime state outside the tracked repository.
 4. Planned pinned OCI profiles will provide repeatable dependency-heavy tool environments. The repository does not ship Docker Compose tool profiles in v0.1.
 
 ## Supported baseline
@@ -163,7 +163,7 @@ codex -C "$HOME/src/GATE" --add-dir "$GATE_HOME" \
   --sandbox workspace-write --ask-for-approval on-request --search
 ```
 
-In v0.1, any process with write access to all of `GATE_HOME` can change local engagement records, unsigned approval receipts, and evidence. It can therefore forge local engagement consistency by rewriting both state and receipt. Managed-upstream bytes remain anchored to the reviewed repository locks rather than their writable installation receipts. Keep credential values outside this broad writable root in an OS secret store or narrowly permissioned file, and use symbolic references in GATE state.
+In v0.1, any process with write access to all of `GATE_HOME` can change local engagement records, unsigned approval receipts, execution manifests, claims, stop records, run metadata, and evidence. It can therefore forge or erase local authority and execution provenance by rewriting the trust domain. Exclusive files and hashes provide workflow consistency against ordinary races and reuse; they do not protect state from its same-user owner. Managed-upstream bytes remain anchored to the reviewed repository locks rather than their writable installation receipts. Keep credential values outside this broad writable root in an OS secret store or narrowly permissioned file, and use symbolic references in GATE state.
 
 Operations that need Npcap, a debugger, a certificate store, USB, or another host capability are operator-run native operations today. Record their versions, exact commands, and bounded evidence manually. Narrow native capability providers and their event bridges are a target design; v0.1 does not supply them.
 
@@ -239,6 +239,59 @@ If `workspace status` returns phase `operation-lock-present`, it inspected no ta
 
 Treehouse worktrees are change isolation, not a security boundary. Same-user code can mutate the clone's shared common `.git`, including hooks, configuration, objects, and refs. Use a standalone clone or OS sandbox for unknown or hostile code. The bridge does not start Firstmate, Codex, or GNHF; invoke No Mistakes; land the branch; merge, deploy, or publish; or clean retained roots.
 
+## Run a supervised security tool
+
+The generic execution lane requires Linux or WSL2 with `/proc` mounted, an installed catalog command discoverable on `PATH`, a receipt-bound `scope.environment: host`, and receipt-approved `gate-home` because raw evidence always lands there. It rejects container, rootless-container, VM, and remote-lab engagements because it does not create those environments. Add the exact tool ID, host environment, and data destination when creating the engagement:
+
+```bash
+./bin/gate.mjs engagement new local-assessment \
+  --targets 127.0.0.1 \
+  --actions observe,scan \
+  --tools nmap \
+  --environment host \
+  --allowed-destinations gate-home \
+  --basis owner
+```
+
+Complete the authorization, plan, No Mistakes record, and `APPROVE ID` receipt workflow in the [README](../README.md#active-security-workflow). Then check the exact target/action and create one manifest. `--tool` selects the catalog executable; everything after `--` is its proposed argument array and must contain exactly one whole argument equal to `{{GATE_TARGET}}`:
+
+```bash
+./bin/gate.mjs engagement check local-assessment \
+  --target 127.0.0.1 --action scan --json
+
+./bin/gate.mjs engagement manifest local-assessment \
+  --target 127.0.0.1 \
+  --action scan \
+  --tool nmap \
+  --minutes 10 \
+  --requests 250 \
+  --parallel 2 \
+  --rate 5 \
+  --tokens 1000 \
+  --json -- -sV "{{GATE_TARGET}}"
+```
+
+Read the returned `operation.argv0`, expanded `operation.argv`, target argument index, catalog risk class, executable path and observed SHA-256, expiry, declared bounds, and complete `enforcement` object. Inspect the owner-only manifest named by `manifestRef` for its receipt-bound `gate-home` destination, private sandbox, and stdout, stderr, and result references. `declared-action-label-binding` records only a receipt-bound label; `argv-action-semantics-validation` is unavailable. Review whether the exact arguments implement that action, because only a reviewed adapter validates tool-specific flag semantics. The operator must provide the returned exact confirmation string before launch:
+
+```bash
+./bin/gate.mjs engagement exec local-assessment \
+  --manifest MANIFEST_ID \
+  --confirm "EXECUTE MANIFEST_ID MANIFEST_SHA256 UNMETERED" \
+  --json
+```
+
+The manifest is one-shot and remains consumed after success, failure, interruption, or an ambiguous launch. In another terminal, request termination of one run or revoke the full engagement:
+
+```bash
+./bin/gate.mjs engagement stop local-assessment --run RUN_ID --json
+./bin/gate.mjs engagement revoke local-assessment \
+  --confirm "REVOKE local-assessment" --json
+```
+
+Stop and revocation are durable requests, but only the live original `gate engagement exec` supervisor polls and acts on them. Wall-duration handling and process-group termination have the same dependency. A supervisor crash or `SIGKILL` has no takeover path and can leave the ordinary tool process group alive.
+
+GATE launches the opened, hashed executable descriptor through `/proc/self/fd` with no shell, empty stdin, a fresh process group, a minimal environment, and private `HOME`, `TMPDIR`, sandbox, stdout, stderr, and result records. It rechecks descriptor metadata immediately before spawn. The launch still runs as the operator's UID on the host. The child may read or change anything that identity can access, reach any route available to the host, obtain credentials through accessible files or local services, load mutable dependencies or configuration, and create processes outside the group GATE can supervise. `supervisor-crash-containment`, daemon-escape containment, and `immutable-executable-snapshot` are unavailable. `executable-descriptor-observed-sha256` records bytes read through the opened descriptor, but a same-UID writer can mutate a writable inode before or during exec, so the digest does not prove atomically frozen or launched bytes or trusted provenance. Request, rate, concurrency, and token values are receipt-bounded declarations; the generic lane does not measure them. Arbitrary argv may exceed the declared action label, so execution events use the maximum of its action effect and the catalog risk ceiling for conservative audit visibility; this does not block launch. If process-group authentication is lost during teardown, GATE records status `unknown` with termination reason `supervision-lost` instead of claiming termination. Use a reviewed adapter or a lane that implements the approved isolated environment when the operation depends on those controls.
+
 ## Optional Docker provider
 
 Install Docker Desktop on Windows only when a selected tool profile needs OCI. Enable its WSL integration for Ubuntu, then verify from WSL:
@@ -263,7 +316,7 @@ Install host-integrated tools from their official distribution channels. At mini
 - Sysinternals and WinDbg for Windows process, filesystem, and debugger evidence;
 - Android platform tools when a mobile engagement needs USB or ADB.
 
-The target design treats each native program as a provider: a probe records its executable path and version, and an adapter supplies explicit arguments and evidence destinations. v0.1 provides catalog metadata and executable discovery, not these native probes or adapters. Until they exist, verify the program manually, record bounded evidence, and do not add an entire installation directory to prompts or grant an agent an unrestricted shell merely because the program is installed.
+The target design treats each native program as a provider: a probe records its executable path and version, and an adapter supplies explicit arguments and evidence destinations. v0.1 provides catalog metadata and filesystem-only executable discovery, but it does not verify the discovered version, integrity, or provenance. Compatible Linux/WSL2 command-line tools can use the supervised generic lane; native Windows and host-specific GUI or hardware paths still need a reviewed adapter or an operator-run step with bounded evidence. Do not add an entire installation directory to prompts or grant an agent an unrestricted shell merely because the program is installed.
 
 Kali can be added later as a named WSL distribution or pinned container image. It is a compatibility toolbox, not GATE's version source. The catalog and lock records remain authoritative for the tools an agent may select.
 
@@ -271,7 +324,7 @@ Kali can be added later as a named WSL distribution or pinned container image. I
 
 Codex cloud is suitable for repository edits, tests, builds, static analysis, and offline evidence processing when the selected image provides the required CLIs. Run the preflight on each image rather than assuming Node, npm, GitHub CLI, Codex CLI, Python, or Docker is present. The base bootstrap and tests can use a worker-local writable `GATE_HOME` such as `/tmp/gate`.
 
-Managed cloud workers may lack raw sockets, packet interfaces, debugger attachment, USB devices, kernel capabilities, and unrestricted target routing. In v0.1, `gate doctor --full` reports the OS, architecture, WSL detection, repository validation, presence-only results for optional executables, visible non-loopback interfaces, Linux `CAP_NET_RAW` and `CAP_NET_ADMIN`, Yama `ptrace_scope`, `/dev/bus/usb` presence, and whether the default Linux Docker socket path exists. It deliberately leaves Docker-engine reachability unprobed and does not execute optional tools. Those facts do not prove that debugger attachment, a specific capture, USB hardware, Docker, or target routing works. Probe the exact required capability before planning work and record an unavailable result when it cannot run. Live capture, interception of Windows applications, device analysis, and low-level active testing should remain on a deliberately configured laptop or lab until a narrow provider exists.
+Managed cloud workers may lack raw sockets, packet interfaces, debugger attachment, USB devices, kernel capabilities, and unrestricted target routing. In v0.1, `gate doctor --full` reports the OS, architecture, WSL detection, repository validation, presence-only results for optional executables, visible non-loopback interfaces, Linux `CAP_NET_RAW` and `CAP_NET_ADMIN`, Yama `ptrace_scope`, `/dev/bus/usb` presence, and whether the default Linux Docker socket path exists. It deliberately leaves Docker-engine reachability unprobed and does not execute optional tools. Those facts do not prove that debugger attachment, a specific capture, USB hardware, Docker, or target routing works. They also do not make generic execution egress-restricted: target-argument binding cannot prevent redirects, plug-ins, child processes, or the tool itself from contacting other systems. Probe the exact required capability before planning work and record an unavailable result when it cannot run. Live capture, interception of Windows applications, device analysis, and low-level active testing should remain on a deliberately configured laptop or lab until a narrow provider exists.
 
 Example cloud smoke run:
 

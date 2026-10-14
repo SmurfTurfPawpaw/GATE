@@ -128,17 +128,21 @@ Create an engagement from [engagement.json](../templates/engagement.json). Draft
 The active flow is:
 
 1. **Establish authority.** Store the written authority or ownership evidence privately and reference it from the engagement.
-2. **Map scope.** Add exact targets, exclusions, action classes, validity times, data destinations, and limits. URL path prefixes stop at segment boundaries; an approved query is exact, and URL fragments are rejected.
-3. **Build the plan.** Record hypotheses, commands, likely effects, credentials, rollback, stop conditions, coverage, and completion tests.
+2. **Map scope.** Add exact targets, exclusions, declared action classes, permitted catalog tool IDs, execution environment, validity times, data destinations, and limits. Include `gate-home` when the generic lane may run, because its raw evidence always lands there. URL path prefixes stop at segment boundaries; an approved query is exact, and URL fragments are rejected.
+3. **Build the plan.** Record hypotheses, exact command shapes, likely effects, credentials, rollback, stop conditions, coverage, completion tests, and which launches require a reviewed adapter or the supervised generic lane.
 4. **Validate the plan.** Run No Mistakes against the immutable plan, then record its run and head. v0.1 accepts that record but does not invoke No Mistakes or verify an attestation.
 5. **Report before engaging.** Present the target, actions, likely effects, limits, stop conditions, and plan digest directly to the operator. A dedicated local decision view is not implemented in v0.1.
-6. **Approve once.** The operator supplies the exact confirmation for the digest. GATE stores a local unsigned receipt whose provenance depends on the operator workflow and `GATE_HOME` permissions. In the target design it can cover repeated in-scope adapter launches until expiry or invalidation; v0.1 has no generic active adapter.
-7. **Stop at preflight in v0.1.** `gate engagement check` produces target/action decision evidence, but arbitrary active execution is disabled. A reviewed scope-aware adapter must bind exact arguments to scope, preserve tool-native evidence, and enforce the approved limits before target contact.
-8. **Execute and monitor through the future adapter.** Explore the stated hypotheses and new in-scope branches without stopping at a clean scanner result. The adapter must watch revocation and configured stop conditions, terminate the process group when one occurs, and preserve full commands, versions, timestamps, hashes, and raw output privately.
-9. **Validate findings.** Reproduce with an independent method where possible and separate observed facts from inference.
-10. **Report and retest.** Use [security-report.md](../templates/security-report.md), include limitations and residual unknowns, and assess the completion contract before closing. In v0.1, `engagement close` is an administrative state change; it does not inspect coverage, run completion tests, or certify completeness.
+6. **Approve the plan.** The operator supplies the exact `APPROVE ID` confirmation for the plan digest. GATE stores a local unsigned receipt whose provenance depends on the operator workflow and `GATE_HOME` permissions. It can cover repeated launches that stay within the receipt-bound target, action, tool, environment, limits, data, and validity envelope.
+7. **Check each operation.** `gate engagement check ID --target TARGET --action ACTION` produces an `executionBinding` for the current plan, envelope, receipt bytes, authorization expiry, exact target, declared action label, execution environment, permitted tools, and allowed destinations. It remains preflight evidence and does not select or launch a command. The label does not prove that arbitrary argv implements that action class.
+8. **Choose an execution lane.** Prefer a reviewed adapter when it supplies the guarantees the plan needs. The generic lane accepts only receipt-bound `scope.environment: host` whose allowed destinations include `gate-home`; container, rootless-container, VM, and remote-lab engagements require a lane that implements that environment. For a qualifying host engagement, create an expiring one-shot manifest with `gate engagement manifest`. The argument array after `--` must contain exactly one whole argument equal to `{{GATE_TARGET}}`; GATE expands it and binds the resulting target argument, declared action label, permitted tool, catalog risk class, allowed destinations, catalog-resolved executable descriptor and observed hash, declared bounds, and private evidence paths.
+9. **Confirm that exact manifest.** Present the expanded `operation`, catalog risk class, executable identity, bounds, expiry, and all `enforced`, `bestEffort`, and `unavailable` entries to the operator. Review whether the exact argv actually matches the selected action class, because only a reviewed adapter validates tool-specific flag semantics. Only the exact `EXECUTE MANIFEST_ID MANIFEST_SHA256 UNMETERED` value can launch it. The one-shot claim is durable before spawn; success, failure, interruption, or ambiguity all consume the manifest.
+10. **Execute and monitor.** `gate engagement exec` accepts a manifest ID and confirmation, never a new command. GATE launches without a shell or stdin through the already hashed Linux descriptor, uses a minimal environment and private sandbox, and captures bounded private stdout and stderr. While that original supervisor remains alive, it polls receipt validity and stop requests, applies wall duration, and attempts process-group termination. Use `gate engagement stop ID --run RUN_ID` for one run or `gate engagement revoke ID --confirm "REVOKE ID"` to end the engagement's authority.
+11. **Validate findings.** Reproduce with an independent method where possible and separate observed facts from inference.
+12. **Report and retest.** Use [security-report.md](../templates/security-report.md), include limitations and residual unknowns, and assess the completion contract before closing. `engagement close` is an administrative state change; it does not inspect coverage, run completion tests, or certify completeness.
 
 The operator receipt is necessary authority for target contact. No Mistakes supplies technical review; it does not create permission to test a target. Both provenance steps are procedural in v0.1: their identifiers are recorded and digest-checked locally, not cryptographically attested by their external principals.
+
+The generic lane enforces the engagement and host-environment binding, receipt-bound allowed destinations including `gate-home`, target argument, `declared-action-label-binding`, tool allowlist and catalog risk class, exact argv, `executable-descriptor-observed-sha256`, no-shell launch, minimal environment, private evidence, receipt-bounded declarations, and one-shot claim. Authorization/revocation/stop polling, wall duration, and process-group termination are best effort and require the original supervisor to remain alive. `argv-action-semantics-validation`, `supervisor-crash-containment`, and `immutable-executable-snapshot` are unavailable, as are egress enforcement and measurement of target requests, request rate, tool concurrency, or tokens; the lane also provides no daemon containment, filesystem isolation, credential broker, complete artifact inventory, or known-good executable provenance. A supervisor crash or force-kill can leave the ordinary tool process group alive, durable request files have no takeover worker, and processes may leave the supervised group. If authenticated group identity is lost during teardown, the run becomes `unknown` with termination reason `supervision-lost` rather than claiming termination. The observed digest records bytes read through the opened descriptor, but a same-UID writer can mutate a writable inode before or during exec, so it does not prove atomically frozen or launched bytes. Arbitrary argv can exceed the declared label. Audit events therefore use the maximum of the declared action effect and catalog risk ceiling; this conservative classification does not block launch. The child shares GATE's UID and host access. `UNMETERED` is an explicit acceptance of those unavailable controls, not a claim that the approved numeric limits disappeared.
 
 ## Plan changes
 
@@ -147,6 +151,8 @@ These changes invalidate an existing receipt:
 - any target is added;
 - an exclusion is removed;
 - an action class is added;
+- a permitted tool is added;
+- the execution environment changes;
 - a request, rate, concurrency, duration, or token limit is increased;
 - a data destination is added;
 - the plan content changes;
@@ -188,7 +194,7 @@ A lesson is complete only when the related behavior, configuration, test, or doc
 
 ## Evidence and reports
 
-Raw evidence stays under `GATE_HOME`. The public repository contains only sanitized summaries that have explicit release authority. Evidence references are stable URIs such as `private://`, `evidence://`, or `event://`.
+Raw evidence stays under `GATE_HOME`. The tracked repository contains only sanitized summaries that have explicit release authority. Evidence references are stable URIs such as `private://`, `evidence://`, or `event://`.
 
 Never turn inability to inspect into a negative claim. State that a surface is unverified or limited, include the cause, and describe the next test that would resolve it.
 
@@ -196,7 +202,7 @@ Never turn inability to inspect into a negative claim. State that a surface is u
 
 The observer displays aggregate usage and per-session or recorded-run values when its sources provide them. Provider-reported values are exact; explicitly modeled values are estimated; missing provider data is unavailable. Complete live Codex fleet and account-quota telemetry, plus grouping by day, require a future harness adapter.
 
-Token budgets are required bounds for GNHF loops and engagements. GATE does not yet orchestrate the GNHF loop or active engagement execution; the future adapter or external owner must enforce the runtime budget. A budget must never trigger a silent provider, model, account, or billing-mode change.
+Token budgets are required declared bounds for GNHF loops and engagements. GATE does not yet orchestrate the GNHF loop. A reviewed active-tool adapter may meter tokens when it can establish that counter, while the generic lane records token measurement as unavailable and requires `UNMETERED` confirmation. A budget must never trigger a silent provider, model, account, or billing-mode change.
 
 ## Local tool environments
 
@@ -220,7 +226,7 @@ These commands must be idempotent and documented before a profile is considered 
 - Use `gate workspace status --repo PATH` to reconcile the bounded aggregate of clone-bound, one-shot Treehouse task roots after an interruption. This reads bound state directly and never invokes Treehouse status. If it reports `operation-lock-present`, follow [Operation-lock recovery](#operation-lock-recovery); no task or Git state was inspected. Verification retains every lease. Automatic reset, return, destruction, and reuse remain disabled until Treehouse exposes a mount-safe primitive; the 511-root lifetime ceiling is recovered only with a new physical clone or future safe upstream lifecycle support. Firstmate task reconciliation, GNHF recovery, No Mistakes branch ownership, and their cross-owner bridges remain incomplete.
 - A changed PR head invalidates publication authority until the exact head passes again.
 - A changed security plan invalidates active authority until a new receipt exists.
-- Active execution is disabled in v0.1. A future adapter must enforce timeout and process-group termination while polling receipt revocation and other stop conditions.
-- Local engagement approvals share the operator-writable `GATE_HOME` with the state they describe and are not tamper-proof against a process allowed to rewrite both files. Managed-upstream integrity uses the reviewed repository locks as its anchor; writable installation receipts are evidence only.
+- A generic manifest is never recovered for a second attempt. Inspect its private claim and run record; treat a missing or ambiguous terminal record as consumed. Use a newly generated manifest after rechecking current authority. `engagement stop` and revocation are durable requests, but only the live original supervisor polls and acts on them. Wall duration and process-group termination are best effort; supervisor crash containment, takeover, and escaped-daemon containment are unavailable.
+- Local engagement approvals and execution provenance share the operator-writable `GATE_HOME` with the state they describe. A process allowed to rewrite the whole root can alter receipts, manifests, claims, runs, stops, and evidence, so these records are not tamper-proof against that same-user writer. Managed-upstream integrity uses the reviewed repository locks as its anchor; writable installation receipts are evidence only.
 
 Recovery never uses an unverified reset, force push, cleanup, scope expansion, credential substitution, or silent approval.

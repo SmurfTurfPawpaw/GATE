@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { reconcileRefreshResults } from "./app.js";
+import { executionPresentation, executionRunPresentation, reconcileRefreshResults } from "./app.js";
 
 const at = "2026-10-13T12:00:00.000Z";
 
@@ -63,4 +63,52 @@ test("a total refresh failure keeps the previous network-success timestamp", () 
   assert.strictEqual(next.events, current.events);
   assert.strictEqual(next.learnings, current.learnings);
   assert.equal(next.lastNetworkSuccess, 100);
+});
+
+test("execution presentation separates configuration, lane availability, and durable run counts", () => {
+  assert.deepEqual(executionPresentation({
+    configured: true,
+    laneAvailable: false,
+    mode: "supervised-generic",
+    reason: "proc-descriptor-unavailable",
+    runningCount: 3,
+    stoppingCount: 1
+  }), {
+    laneState: "unavailable",
+    laneLabel: "Unavailable",
+    configuredLabel: "Configured",
+    modeLabel: "Supervised generic",
+    reasonLabel: "Proc descriptor unavailable",
+    runningLabel: "3",
+    stoppingLabel: "1"
+  });
+
+  const unknown = executionPresentation({ configured: null, laneAvailable: true });
+  assert.equal(unknown.laneState, "unknown");
+  assert.equal(unknown.runningLabel, "—");
+  assert.equal(unknown.modeLabel, "Unknown");
+});
+
+test("execution run presentation uses lifecycle metadata only", () => {
+  assert.deepEqual(executionRunPresentation({
+    runId: "run_1111111111111111",
+    manifestId: "manifest_2222222222222222",
+    engagementId: "engagement_3333333333333333",
+    status: "failed",
+    createdAt: "2026-10-13T12:00:00.000Z",
+    startedAt: "2026-10-13T12:00:01.000Z",
+    finishedAt: "2026-10-13T12:00:02.000Z",
+    terminationReason: "duration-limit",
+    exitCode: 9,
+    target: "TARGET_CANARY",
+    argv: ["ARGV_CANARY"],
+    output: "OUTPUT_CANARY"
+  }), {
+    runId: "run_1111111111111111",
+    manifestId: "manifest_2222222222222222",
+    engagementId: "engagement_3333333333333333",
+    status: "failed",
+    observedAt: "2026-10-13T12:00:02.000Z",
+    result: "duration-limit"
+  });
 });

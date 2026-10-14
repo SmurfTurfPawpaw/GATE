@@ -76,17 +76,22 @@ export function toolInventory(options = {}) {
     .filter((tool) => !options.category || tool.category === options.category)
     .map((tool) => {
       const executable = commandAvailable(tool.command);
+      const compatible = tool.supportedHosts.includes(host);
+      const genericLaneEligible = Boolean(executable) && compatible && new Set(["linux", "wsl2"]).has(host);
       return {
         ...tool,
         host,
-        compatible: tool.supportedHosts.includes(host),
+        compatible,
         installed: Boolean(executable),
         executable,
         readiness: executable ? "discovered" : "candidate",
         versionVerified: false,
         integrityVerified: false,
+        knownGoodProvenance: false,
         adapterReady: false,
-        executionAvailable: false
+        genericLaneEligible,
+        executionMode: genericLaneEligible ? "supervised-generic" : null,
+        executionAvailable: genericLaneEligible
       };
     });
   return {
@@ -104,6 +109,8 @@ export function toolPlan(id, options = {}) {
   if (!tool) throw new Error(`unknown security tool: ${id}`);
   const host = currentHost();
   const executable = commandAvailable(tool.command);
+  const compatible = tool.supportedHosts.includes(host);
+  const genericLaneEligible = Boolean(executable) && compatible && new Set(["linux", "wsl2"]).has(host);
   return {
     id: tool.id,
     name: tool.name,
@@ -112,9 +119,12 @@ export function toolPlan(id, options = {}) {
     readiness: executable ? "discovered" : "candidate",
     versionVerified: false,
     integrityVerified: false,
+    knownGoodProvenance: false,
     adapterReady: false,
-    executionAvailable: false,
-    compatible: tool.supportedHosts.includes(host),
+    genericLaneEligible,
+    executionMode: genericLaneEligible ? "supervised-generic" : null,
+    executionAvailable: genericLaneEligible,
+    compatible,
     host,
     preferredLane: tool.installLanes[0],
     alternateLanes: tool.installLanes.slice(1),
@@ -124,8 +134,10 @@ export function toolPlan(id, options = {}) {
     upstream: tool.upstream,
     license: tool.license,
     openSource: tool.openSource,
-    next: executable
-      ? "Run through a scope-aware adapter; catalog presence does not grant target authority."
-      : "Resolve an exact artifact, integrity, license record, and smoke test through the admission workflow before use."
+    next: genericLaneEligible
+      ? "Prepare a one-shot supervised execution manifest; launch-time hashing proves executable identity, not trusted provenance."
+      : executable
+        ? "Use a reviewed host-specific adapter; the supervised generic lane requires Linux or WSL2."
+        : "Resolve an exact artifact, integrity, license record, and smoke test through the admission workflow before use."
   };
 }

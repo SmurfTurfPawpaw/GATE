@@ -1,10 +1,10 @@
 # GATE
 
-**Gateway for Agentic Tooling & Engineering** is a personal, single-operator control plane for agentic software delivery and authorized security work. GATE keeps the reusable system in a public repository while events, target details, credential references, evidence, receipts, and private learning stay under `GATE_HOME`; credential values should remain in an OS secret store or narrowly permissioned file.
+**Gateway for Agentic Tooling & Engineering** is a personal, single-operator control plane for agentic software delivery and authorized security work. GATE keeps the reusable system in a version-controlled repository while events, target details, credential references, evidence, receipts, and private learning stay under `GATE_HOME`; credential values should remain in an OS secret store or narrowly permissioned file.
 
 GATE is host-first. It is designed to run on a Windows 11 laptop through WSL2 with Codex CLI as the primary harness. Native tools remain appropriate when a GUI, the Windows certificate store, packet capture, USB, a GPU, or radio hardware needs direct host access. Containers can organize conflicting dependencies, but GATE does not treat a container, WSL2, or a Git worktree as a security boundary.
 
-> **Status: v0.1 foundation.** The checked-in policy, schemas, CLI, private project registry, verified Treehouse lease bridge, engagement receipts, observer, token reader, upstream pins, and security-tool catalog work today. Complete Firstmate, GNHF, and No Mistakes orchestration, background service management, scope-aware adapters for every security tool, automatic catalog-tool installation, deployment, and lab lifecycle remain integration work. See [Current limits](#current-limits).
+> **Status: v0.1 foundation.** The checked-in policy, schemas, CLI, private project registry, verified Treehouse lease bridge, engagement receipts, one-shot supervised generic execution, observer, token reader, upstream pins, and security-tool catalog work today. Complete Firstmate, GNHF, and No Mistakes orchestration, reviewed per-tool adapters, automatic catalog-tool installation, deployment, and lab lifecycle remain integration work. See [Current limits](#current-limits).
 
 ## Start on Windows 11 with WSL2
 
@@ -41,7 +41,7 @@ Private state defaults to `~/.local/share/gate` inside WSL2. Set `GATE_HOME` bef
 export GATE_HOME="$HOME/.local/share/gate"
 ```
 
-Do not place `GATE_HOME` inside this repository or a cloud-synced public folder. GATE rejects lexical or physical overlap between the private root and repository in either direction, repairs owner-only POSIX permissions, and rejects linked private paths. In v0.1 it is one local trust domain: a process that can write the whole directory can also change local engagement records, receipts, evidence, and installation receipts. Give write access only to the operator and trusted GATE processes, and keep credential values in a separate OS secret store or narrowly permissioned file referenced by `env://`, `keychain://`, or `file://`.
+Do not place `GATE_HOME` inside this repository or a cloud-synced public folder. GATE rejects lexical or physical overlap between the private root and repository in either direction, repairs owner-only POSIX permissions, and rejects linked control-state paths. In v0.1 it is one local trust domain: a process that can write the whole directory can also change local engagement records, receipts, execution manifests, claims, runs, stops, evidence, and installation receipts. Give write access only to the operator and trusted GATE processes, and keep credential values in a separate OS secret store or narrowly permissioned file referenced by `env://`, `keychain://`, or `file://`.
 
 ## What owns each transition
 
@@ -55,7 +55,7 @@ GATE composes upstream projects at exact commits rather than merging their sourc
 | **GNHF** | Optional bounded iteration inside one fresh Treehouse lease |
 | **No Mistakes** | Immutable handoff, review, tests, documentation, lint, push, PR, and CI |
 | **GATE publication authority** | Read-only exact-head publication preflight; future trusted mutation adapters |
-| **GATE engagement broker** | Digest-bound scope preflight; future scope-aware active-security adapters |
+| **GATE engagement broker** | Digest-bound scope preflight, one-shot supervised generic execution, and reviewed adapter admission |
 | **REA** | Analysis of saved artifacts, captures, binaries, and runtime evidence |
 | **Lavish** | Local interactive planning and decision artifacts |
 | **AXI** | Agent-facing command and output conventions |
@@ -142,7 +142,7 @@ Publication mutation is disabled in v0.1. The adapter treats `--run` as operator
 
 ## Active security workflow
 
-Local source review, hypothesis generation, passive research, and analysis of saved evidence can proceed without an active receipt. Contacting a target through scanning, crawling, interception, authentication, fuzzing, exploitation, persistence, denial-of-service testing, or data access requires an engagement whose reviewed report and operator receipt match the exact plan digest, plus a reviewed scope-aware adapter. No such generic execution adapter exists in v0.1.
+Local source review, hypothesis generation, passive research, and analysis of saved evidence can proceed without an active receipt. Contacting a target through scanning, crawling, interception, authentication, fuzzing, exploitation, persistence, denial-of-service testing, or data access requires an engagement whose reviewed report and operator receipt match the exact plan digest. Each launch then uses either a reviewed scope-aware adapter or the Linux/WSL2 supervised generic lane described below. The generic lane supports only receipt-bound `scope.environment: host`; container, rootless-container, VM, and remote-lab engagements need a lane that implements that environment.
 
 1. Create the envelope. Use exact targets and exclusions; catalog profiles do not grant authority. URL paths match only on segment boundaries. A query written into an approved URL selector must match exactly, while fragments are rejected because they are not sent to a server.
 
@@ -152,6 +152,9 @@ Local source review, hypothesis generation, passive research, and analysis of sa
      --targets app.acme.example \
      --exclude status.acme.example \
      --actions observe,scan,fuzz,exploit-safe \
+     --tools nmap \
+     --environment host \
+     --allowed-destinations gate-home \
      --basis client-written-authorization \
      --valid-until "$(date -u -d '+7 days' +%Y-%m-%dT%H:%M:%SZ)"
    ```
@@ -187,7 +190,7 @@ Local source review, hypothesis generation, passive research, and analysis of sa
      --confirm "APPROVE acme-web"
    ```
 
-6. Check the target and action immediately before the proposed active command.
+6. Check the target and declared action label immediately before the proposed active command. An allowed result includes an `executionBinding` for the exact engagement, plan, envelope, receipt, authorization expiry, target, action label, environment, permitted tool list, and allowed destinations. The generic lane requires receipt-approved `gate-home` because its raw evidence always lands under `GATE_HOME`. The recorded operator and No Mistakes provenance remains `local-unverified` rather than a cryptographic external attestation.
 
    ```bash
    ./bin/gate.mjs engagement check acme-web \
@@ -195,9 +198,45 @@ Local source review, hypothesis generation, passive research, and analysis of sa
      --action scan
    ```
 
-   The result explicitly reports `preflightOnly: true`, `executionAvailable: false`, and `local-unverified` operator and No Mistakes attestation status. Active execution is disabled in v0.1. A future reviewed adapter must bind the exact tool arguments to the approved target, enforce actual request, rate, concurrency, duration, and token limits, monitor stop conditions and revocation, terminate the whole process group, and preserve evidence. The current `check` result is preflight evidence and does not authorize bypassing that missing adapter.
+7. Create a private one-shot manifest. The values after `--` are the complete tool argument array; `--tool` selects the executable. The arguments must contain exactly one whole value equal to `{{GATE_TARGET}}`, which GATE replaces with the checked target. The tool ID must be in the receipt-bound `--tools` list, its catalog command must resolve on `PATH`, and the requested bounds must fit within the approved engagement limits.
 
-7. Close the engagement when planning or adapter-driven work ends.
+   ```bash
+   ./bin/gate.mjs engagement manifest acme-web \
+     --target app.acme.example \
+     --action scan \
+     --tool nmap \
+     --minutes 15 \
+     --requests 500 \
+     --parallel 2 \
+     --rate 5 \
+     --tokens 1000 \
+     --json -- -sV "{{GATE_TARGET}}"
+   ```
+
+   Review the returned `operation`, `argv0`, expanded `argv`, target argument index, catalog risk class, executable descriptor and observed SHA-256, declared bounds, expiry, and complete `enforcement` object. Inspect the owner-only manifest named by `manifestRef` for its receipt-bound `gate-home` destination, private sandbox, and stdout, stderr, and result paths. The manifest binds the current plan, envelope, receipt, host environment, allowed destinations, target, declared action label, permitted tool, catalog risk class, observed executable identity, exact arguments, and evidence paths. It expires and can be claimed only once; a failed or interrupted attempt does not make it reusable.
+
+8. Ask the operator to supply the exact `confirmationRequired` value. It has the form `EXECUTE MANIFEST_ID MANIFEST_SHA256 UNMETERED`. Agents must never generate, infer, shorten, or reuse this second confirmation. Execute only by manifest ID; `engagement exec` accepts no new target, tool, or command arguments.
+
+   ```bash
+   ./bin/gate.mjs engagement exec acme-web \
+     --manifest MANIFEST_ID \
+     --confirm "EXECUTE MANIFEST_ID MANIFEST_SHA256 UNMETERED" \
+     --json
+   ```
+
+   On Linux or WSL2, GATE opens and hashes the executable, rechecks its descriptor metadata immediately before spawn, launches that descriptor through `/proc/self/fd` with `shell: false`, supplies an empty stdin and minimal environment, creates a fresh process group, and writes bounded stdout, stderr, result metadata, and the working sandbox privately under `GATE_HOME`. While the original `gate engagement exec` supervisor remains alive, it polls engagement validity and operator stop state, applies the declared wall-duration bound, and attempts `SIGTERM` then `SIGKILL` for the process group when required.
+
+   The `UNMETERED` suffix acknowledges the generic lane's exact limits. `argv-action-semantics-validation`, egress-target restriction, request counting, rate measurement, tool concurrency measurement, token measurement, daemon-escape containment, `supervisor-crash-containment`, `immutable-executable-snapshot`, filesystem isolation, credential brokering, tool artifact inventory, and known-good executable provenance are `unavailable`. `declared-action-label-binding` does not prove the arbitrary argv implements that class; the operator must review it, and only a reviewed adapter validates tool-specific flags. For audit visibility, execution events use the more severe of the declared action effect and the catalog tool's risk ceiling. That conservative classification does not block launch. Revocation polling, duration enforcement, and process-group termination are best effort and require the original supervisor to remain alive. The child runs with the same UID and host access as GATE. `executable-descriptor-observed-sha256` records bytes read through the opened descriptor. A same-UID writer can mutate a writable inode before or during exec, so the digest does not prove an atomically frozen or launched byte snapshot, trusted provenance, or the identity of interpreters, shared libraries, plug-ins, configuration, inputs, or child processes. Use a reviewed adapter or a separately isolated lab when those guarantees matter.
+
+9. From another terminal, request a stop for one run, or revoke the complete engagement. Stop and revocation are durable requests, but only the live original supervisor polls and acts on them. A supervisor crash or `SIGKILL` has no takeover path and can leave the ordinary tool process group alive; same-user processes that leave the process group also remain outside supervision. If authenticated group identity is lost during teardown, the run becomes `unknown` with termination reason `supervision-lost` instead of claiming termination.
+
+   ```bash
+   ./bin/gate.mjs engagement stop acme-web --run RUN_ID --json
+   ./bin/gate.mjs engagement revoke acme-web \
+     --confirm "REVOKE acme-web" --json
+   ```
+
+10. Close the engagement when work ends.
 
    ```bash
    ./bin/gate.mjs engagement close acme-web
@@ -205,7 +244,7 @@ Local source review, hypothesis generation, passive research, and analysis of sa
 
    `close` is an administrative state change. It does not inspect the coverage map, validate findings, run completion tests, or certify that the assessment is complete.
 
-Changing a target, exclusion, permitted action, plan, written authorization, data destination, authorization window, or material limit requires a new report, review, and receipt. [policies/engagements.json](policies/engagements.json) is the authority contract.
+Changing a target, exclusion, permitted action or tool, execution environment, plan, written authorization, data destination, authorization window, or material limit requires a new report, review, and receipt. Raw `gate run`, `gate upstream exec`, and argument-taking execution shortcuts remain disabled. [policies/engagements.json](policies/engagements.json) is the authority contract.
 
 ## Security-tool catalog
 
@@ -217,7 +256,7 @@ Changing a target, exclusion, permitted action, plan, written authorization, dat
 ./bin/gate.mjs tool plan wireshark --json
 ```
 
-**Cataloged does not mean installed, trusted, licensed for redistribution, configured, or authorized for a target.** Inventory results report the current host, compatibility, and whether the executable is found. `tool plan` explains the preferred install lane, privileges, risk class, license, and admission work. A persistent addition needs an official source, exact version or commit, integrity evidence where available, license record, effect classification, telemetry decision, smoke test, learning record, and No Mistakes validation.
+**Cataloged does not mean installed, trusted, licensed for redistribution, configured, or authorized for a target.** Inventory results report the current host, compatibility, and whether the executable is found. A discovered compatible executable on Linux or WSL2 can be `genericLaneEligible` even while version, integrity, provenance, and adapter readiness are all false. That means it can be named in a separately approved one-shot supervised manifest; it is not an admission or safety claim. `tool plan` explains the preferred install lane, privileges, risk class, license, generic-lane status, and admission work. A persistent addition needs an official source, exact version or commit, integrity evidence where available, license record, effect classification, telemetry decision, smoke test, learning record, and No Mistakes validation.
 
 OWASP ZAP and mitmproxy are the open-source web interception defaults. Burp Suite is an optional, proprietary, operator-supplied integration. If a Kali profile is added, it must remain an optional compatibility toolbox with a pinned package subset, image digest, and SBOM rather than becoming GATE's source of truth. See [docs/security-tooling.md](docs/security-tooling.md).
 
@@ -305,9 +344,9 @@ The v0.1 boundary is intentionally explicit:
 - The private project registry validates, deduplicates, stores, lists, shows, and verifies contracts. It does not update or delete them, select a project implicitly, clone repositories, bind workspace commands to a registered contract, or enforce registered delivery and deployment fields in publication adapters.
 - The Treehouse bridge requires the exact integrity-verified 3.1.3 release, fixed system Git, local refs, and clone-bound one-shot task roots. It invokes only `get` for acquisition; status and verification read bound state directly, and GATE never invokes Treehouse `status`, `return`, or `destroy`. It has no credential/proxy/SSH/network broker, rejects unsafe local Git state including Git LFS filters and submodules, and accepts only the main worktree's checked-out branch as local proof of landing. Verification retains every lease; automatic return, reset, destruction, reuse, and mount-safe cleanup are unavailable. The lifetime limit is 511 retained task roots per physical clone, after which work continues from a new physical clone or waits for future safe upstream lifecycle support. Worktrees do not isolate same-user access to the shared common `.git`, processes, credentials, the kernel, or the host filesystem.
 - The 122-tool catalog is declarative. GATE detects executables and produces admission plans, but it does not automatically install the catalog.
-- v0.1 has no per-tool artifact lock or admission-record store. Catalog entries are capability metadata; they are not executable admissions until a reviewed adapter and immutable lock record exist.
-- Engagement creation, review recording, local receipt validation, and exact target/action checks are implemented. Arbitrary active execution is disabled until reviewed scope-aware adapters can validate tool arguments, enforce actual limits and stop conditions, terminate process groups, and preserve evidence.
-- Raw `gate run` and `gate upstream exec` command launchers are disabled. Run ordinary local development commands directly; target contact requires a reviewed scope-aware adapter.
+- v0.1 has no general per-tool artifact lock or admission-record store. A discovered Linux/WSL2 executable may enter the supervised generic lane, but `executable-descriptor-observed-sha256` is an observation rather than an immutable snapshot or known-good provenance. A same-UID writer can mutate a writable inode before or during exec. Normal admission still requires a reviewed adapter and immutable artifact record.
+- Engagement creation, review recording, local receipt validation, exact target, `declared-action-label-binding`, tool binding, one-shot manifest generation, supervised execution, stop, and revocation are implemented for host engagements whose approved destinations include `gate-home`. The generic lane enforces immutable argv, target and tool binding, no-shell descriptor execution, private evidence, and one-shot claims. `argv-action-semantics-validation` is unavailable; audit events conservatively use the maximum of the declared action effect and catalog risk ceiling without blocking launch. Wall duration, revocation polling, and process-group termination are best effort while the original supervisor is alive. Egress, request/rate/concurrency/token measurement, daemon containment, `supervisor-crash-containment`, `immutable-executable-snapshot`, filesystem isolation, credential brokering, complete artifact inventory, and known-good provenance are unavailable.
+- Raw `gate run` and `gate upstream exec` command launchers are disabled. `gate engagement exec` launches only a previously reviewed manifest and accepts no raw command arguments. Run ordinary local development commands directly; target contact requires a reviewed adapter or a separately confirmed supervised generic manifest.
 - Engagement completion fields are validated as data, but `engagement close` does not enforce coverage or completion tests; closing is administrative.
 - Repository configuration and policy files are schema-validated contracts. The project registry, Treehouse bridge, broker, publication adapter, observer, learning path, and upstream manager enforce only the fields they explicitly load; v0.1 has no general policy engine that applies every declared provider, limit, data, or lifecycle rule at runtime.
 - `gate up` is a foreground loopback server; service installation and boot-time startup are pending.

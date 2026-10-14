@@ -35,6 +35,7 @@ export function gateConfigHome(env = process.env) {
 export function runtimePaths(options = {}) {
   const home = path.resolve(options.home || gateHome(options.env));
   const repo = path.resolve(options.repo || findRepoRoot(options.cwd));
+  const executions = path.join(home, "executions");
   return {
     repo,
     home,
@@ -45,6 +46,12 @@ export function runtimePaths(options = {}) {
     authorizations: path.join(home, "authorizations"),
     plans: path.join(home, "plans"),
     evidence: path.join(home, "evidence"),
+    executions,
+    executionManifests: path.join(executions, "manifests"),
+    executionClaims: path.join(executions, "claims"),
+    executionRuns: path.join(executions, "runs"),
+    executionStops: path.join(executions, "stops"),
+    executionSandboxes: path.join(executions, "sandboxes"),
     projects: path.join(home, "projects"),
     upstreams: path.join(home, "upstreams"),
     upstreamTools: path.join(home, "upstream-tools"),
@@ -119,6 +126,12 @@ export function ensureRuntime(paths) {
     paths.authorizations,
     paths.plans,
     paths.evidence,
+    paths.executions,
+    paths.executionManifests,
+    paths.executionClaims,
+    paths.executionRuns,
+    paths.executionStops,
+    paths.executionSandboxes,
     paths.projects,
     paths.upstreams,
     paths.upstreamTools,
@@ -152,13 +165,40 @@ export function ensureRuntime(paths) {
   // These roots contain only GATE state files. Auditing their existing direct
   // children makes bootstrap fail before a planted link can be read or
   // appended, and remediates legacy 0644/0666 state to 0600.
-  for (const directory of [paths.engagements, paths.authorizations, paths.plans, paths.evidence, paths.projects].filter(Boolean)) {
+  for (const directory of [
+    paths.engagements,
+    paths.authorizations,
+    paths.plans,
+    paths.projects,
+    paths.executionManifests,
+    paths.executionClaims,
+    paths.executionStops
+  ].filter(Boolean)) {
     for (const entry of fs.readdirSync(directory)) {
       // The project writer owns these short-lived control files and project
       // readers validate them without following links. Skipping them here
       // prevents status/bootstrap calls from racing their unlink after readdir.
       if (directory === paths.projects && new Set([".registry.lock", ".registry.pending"]).has(entry)) continue;
-      securePrivateFile(path.join(directory, entry), { allowMissing: false, label: `private runtime entry ${entry}` });
+      try {
+        securePrivateFile(path.join(directory, entry), { allowMissing: false, label: `private runtime entry ${entry}` });
+      } catch (error) {
+        // Atomic writers rename a private temporary file after readdir. A file
+        // that is now absent is safe to ignore; every path still present must
+        // pass the full no-follow, owner, type, link-count, and mode checks.
+        if (error.code !== "ENOENT") throw error;
+      }
+    }
+  }
+
+  // Active-tool sandboxes contain arbitrary tool-created trees. Only their
+  // direct roots are part of GATE's control plane; their contents are opaque
+  // private evidence and are never traversed during bootstrap.
+  if (paths.executionSandboxes) {
+    for (const entry of fs.readdirSync(paths.executionSandboxes)) {
+      securePrivateDirectory(path.join(paths.executionSandboxes, entry), {
+        create: false,
+        label: `private execution sandbox ${entry}`
+      });
     }
   }
 

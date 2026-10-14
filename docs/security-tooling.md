@@ -1,6 +1,6 @@
 # Security tooling
 
-GATE describes security tools through a reviewed catalog instead of installing an unbounded tool collection onto the laptop. “Cataloged” means that GATE knows the official source, license, compatible hosts, installation lane, executable, privilege needs, and approval boundary; it does not mean installed or admitted. Readiness is explicit: `candidate` has metadata only, `discovered` means a command name was found on `PATH` without version or integrity proof, `admitted` has a reviewed immutable artifact, and `ready` also has a reviewed adapter and smoke evidence. In v0.1 the inventory can report only `candidate` or `discovered`; the operator explicitly installs tools, while GATE directly installs only its small managed-upstream subset. A catalog tool becomes usable through GATE only after its pinned artifact and adapter pass review and a smoke test.
+GATE describes security tools through a reviewed catalog instead of installing an unbounded tool collection onto the laptop. “Cataloged” means that GATE knows the official source, license, compatible hosts, installation lane, executable, privilege needs, and approval boundary; it does not mean installed or admitted. Readiness is explicit: `candidate` has metadata only, `discovered` means a command name was found on `PATH` without version or integrity proof, `admitted` has a reviewed immutable artifact, and `ready` also has a reviewed adapter and smoke evidence. In v0.1 the inventory can report only `candidate` or `discovered`; the operator explicitly installs tools, while GATE directly installs only its small managed-upstream subset. A compatible discovered executable on Linux or WSL2 can be eligible for a separately approved supervised generic launch while `knownGoodProvenance`, version verification, integrity verification, and adapter readiness remain false. Normal reusable admission still requires a pinned artifact, reviewed adapter, and smoke test.
 
 The machine-readable source of truth is [`catalog/security-tools.json`](../catalog/security-tools.json). It contains more than one hundred representative tools across web and API testing, network analysis, identity and exploitation, reverse engineering, mobile, DFIR, OSINT, cloud and Kubernetes, source security, fuzzing, and wireless or radio work. Profile files under [`config/profiles`](../config/profiles) select coherent subsets.
 
@@ -12,9 +12,9 @@ The catalog assigns the highest normal effect class exposed by each entry. A wra
 | --- | --- | --- |
 | `P0` | Offline analysis of supplied source, files, captures, images, or hashes | Normal data policy; no target contact |
 | `P1` | Passive public-source collection or local observation that does not contact a target | Declared evidence source and normal data policy |
-| `A1` | Live observation or low-impact DNS, HTTP, TLS, service, API, or asset enumeration | No Mistakes review, exact-plan operator receipt, per-command scope check, and a reviewed execution adapter |
-| `A2` | Fuzzing, injection probes, credential checks, interception, protocol mutation, or host changes | All `A1` requirements plus technique-specific limits |
-| `A3` | Exploitation, poisoning, C2, credential dumping, deauthentication, destructive cloud actions, or persistence | All `A1` and `A2` requirements plus a controlled environment and explicit high-impact limits |
+| `A1` | Live observation or low-impact DNS, HTTP, TLS, service, API, or asset enumeration | No Mistakes review, exact-plan operator receipt, per-command scope check, and either a reviewed adapter or a separately confirmed one-shot generic manifest |
+| `A2` | Fuzzing, injection probes, credential checks, interception, protocol mutation, or host changes | All `A1` requirements plus technique-specific limits and an execution lane whose available controls fit the plan |
+| `A3` | Exploitation, poisoning, C2, credential dumping, deauthentication, destructive cloud actions, or persistence | All `A1` and `A2` requirements plus a deliberately controlled environment, explicit high-impact limits, and independent command review |
 
 GATE can investigate a hypothesis, identify an attack path, prepare commands, and propose a deeper test without an active-operation receipt. It cannot turn curiosity into authority. An engagement envelope supplies targets, allowed action classes, accounts, rates, time window, exclusions, data rules, and stop conditions. Changing the target or material action invalidates the receipt.
 
@@ -39,7 +39,7 @@ Some suites span several classes. For example, Wireshark can analyze a saved cap
 | `radio` | Hardware-dependent Wi-Fi, Bluetooth, Zigbee, RFID, and SDR work |
 | `lab` | High-impact exploitation and adversary simulation |
 
-Profiles are additive selections, not authority grants. Selecting `pentest`, `identity`, `radio`, or `lab` makes catalog entries discoverable and eligible for installation planning; v0.1 does not automatically install them, and the engagement and adapter gates still apply.
+Profiles are additive selections, not authority grants. Selecting `pentest`, `identity`, `radio`, or `lab` makes catalog entries discoverable and eligible for installation planning; v0.1 does not automatically install them, and the engagement receipt plus reviewed-adapter or supervised-manifest gate still applies.
 
 ## Installation lanes
 
@@ -61,7 +61,7 @@ Kali Linux is an optional compatibility toolbox rather than GATE’s package sou
 
 ## Laptop execution
 
-The control plane, Codex, and lightweight tools can run directly on the laptop; the other named upstreams must first be installed and integrated. Large or conflicting user-space stacks may run in rootless containers after a pinned profile exists. The target architecture uses a narrow local capability broker for packet-capture handles, raw sockets, certificate-store changes, device access, and similar privileges. v0.1 does not implement that broker, so an operator must run and document native privileged steps.
+The control plane, Codex, and lightweight tools can run directly on the laptop. A compatible catalog command discovered on Linux or WSL2 may use the supervised generic lane after approval only when the receipt binds `scope.environment: host` and includes `gate-home` among its allowed destinations, because raw evidence always lands there; this does not admit or vouch for the installation. Large or conflicting user-space stacks may run in rootless containers after a pinned profile exists, but the generic lane does not implement container, rootless-container, VM, or remote-lab receipts. The target architecture uses a narrow local capability broker for packet-capture handles, raw sockets, certificate-store changes, device access, and similar privileges. v0.1 does not implement that broker, so an operator must run and document native privileged steps.
 
 Containers isolate dependencies, but they are not a security boundary after granting host networking, `NET_ADMIN`, raw devices, `--privileged`, or the Docker socket. WSL2 also cannot reliably provide Wi-Fi monitor mode, packet injection, or every USB radio. Those operations need compatible hardware on native Linux or a deliberately configured hardware environment. GATE must report “unsupported on this host” rather than pretending a command succeeded.
 
@@ -77,9 +77,9 @@ gate lab down
 
 The same inputs must recreate the image and tool versions, and reset must remove the test state.
 
-## Adapter contract
+## Execution lane contracts
 
-This is the admission contract for a future tool-specific adapter, expressed as a small manifest and wrapper rather than a copy of the upstream implementation. Arbitrary active execution is disabled in v0.1; catalog entries without a reviewed adapter and immutable tool lock remain candidates. Each admitted adapter must:
+A reviewed tool-specific adapter is the normal admission path. It is expressed as a small manifest and wrapper rather than a copy of the upstream implementation. Each admitted adapter must:
 
 1. Validate targets against the engagement envelope before launching a process.
 2. Show the exact target, technique, estimated traffic, privilege, mutations, rate, timeout, and stop conditions during preflight.
@@ -93,6 +93,22 @@ This is the admission contract for a future tool-specific adapter, expressed as 
 10. Report command time, requests, bytes, and targets separately from model token usage. Missing token data is `unavailable`, never zero.
 
 Tool-native output remains authoritative evidence. Parsed findings should link back to byte-addressable artifacts and label claims as observed, inferred, or unverified.
+
+The supervised generic lane is the deliberate fallback for a compatible catalog command discovered on Linux or WSL2 before a tool-specific adapter exists. It does not change the tool's `discovered` readiness or create a trusted artifact record. The engagement must list the exact tool ID, bind `scope.environment: host`, and approve `gate-home` as an allowed destination because raw evidence always lands there; each launch follows this separate contract:
+
+1. `gate engagement check` binds the current plan, envelope, receipt bytes, authorization expiry, host environment, exact target, declared action label, and permitted tools. The label is not a semantic analysis of the command.
+2. `gate engagement manifest` accepts bounds within the receipt plus the selected tool's complete argument array containing exactly one whole-argument `{{GATE_TARGET}}`; the stored array contains the expanded target at its bound index, while `argv0` identifies the catalog command.
+3. GATE resolves the catalog command without running a locator, binds its catalog risk class, opens and hashes the regular executable, and records descriptor identity. It rechecks descriptor metadata immediately before spawn. `executable-descriptor-observed-sha256` is the bytes read through the opened descriptor; a same-UID writer can mutate a writable inode before or during exec, so the digest does not prove an atomically frozen or launched byte snapshot, origin, version, signature, integrity history, or the safety of interpreters, libraries, plug-ins, configuration, or inputs.
+4. The operator reviews the immutable operation, catalog risk class, exact argv, and every control tier, including whether those arguments match the declared action. Only a reviewed adapter validates tool-specific flag semantics. The operator then supplies the exact `EXECUTE MANIFEST_ID MANIFEST_SHA256 UNMETERED` confirmation. A durable exclusive claim makes the manifest one-shot before spawn.
+5. GATE launches the open descriptor through `/proc/self/fd` with `shell: false`, an empty stdin, a fixed minimal environment, a fresh process group, a private working sandbox, and bounded private stdout, stderr, and result records. Polling and termination operate only while that original supervisor remains alive.
+
+The manifest reports the following truthfully:
+
+- **Enforced:** engagement and host-environment binding, receipt-bound allowed destinations including `gate-home`, target argument, `declared-action-label-binding`, tool allowlist and catalog risk binding, exact argv, no shell, `executable-descriptor-observed-sha256`, minimal environment, private stdout and stderr, one-shot claim, and declared bounds within the receipt.
+- **Best effort:** authorization, revocation, and stop polling; wall duration; and process-group termination, all requiring the original supervisor to remain alive.
+- **Unavailable:** `argv-action-semantics-validation`; egress-target restriction; request count, request rate, tool concurrency, and token measurement; daemon-escape containment; `supervisor-crash-containment`; `immutable-executable-snapshot`; filesystem isolation; credential brokering; complete tool-artifact inventory; and known-good executable provenance.
+
+`declared-action-label-binding` is not `argv-action-semantics-validation`, and target-argument binding is not egress enforcement. Arbitrary flags may invoke behavior outside the chosen class; redirects, proxy or tool configuration, plug-ins, child processes, or the executable itself may contact other systems. GATE records the more severe of the declared action effect and the catalog risk ceiling in audit events, but this conservative classification does not block launch. Durable stop and revocation files have no takeover worker: a supervisor crash or force-kill can leave the ordinary process group running, and same-user processes may also leave that group. The child runs with the operator's UID and can access whatever that identity and host permit, including files and local services not named in its minimal environment. Use an admitted adapter or a lane that implements a separate host, container, VM, or controlled lab when the plan depends on a generic-lane unavailable guarantee.
 
 ## Admission and learning
 

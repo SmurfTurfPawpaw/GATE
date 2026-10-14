@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { readPrivateJson } from "./config.mjs";
+import { executionStatus } from "./executions.mjs";
 import { readJsonLines } from "./jsonl.mjs";
 import { ensureRuntime, runtimePaths } from "./paths.mjs";
 import { projectRegistryStatus } from "./projects.mjs";
@@ -58,6 +59,7 @@ export async function buildStatus(options = {}) {
       .slice(-30)
       .reverse(),
     engagements,
+    execution: executionStatus({ paths }),
     projects: projectRegistryStatus({ paths }),
     tokens,
     upstreams: upstreamStatus({ paths, verifyIntegrity: false })
