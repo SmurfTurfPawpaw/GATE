@@ -170,7 +170,7 @@ Use the exact returned confirmation after reviewing the complete manifest. The [
 
 Possession of a local file authorizes neither network access nor testing of its publisher. A proprietary client or other proprietary artifact must be lawfully supplied by the operator and remains private under `GATE_HOME`. Strings, hostnames, URLs, certificate names, and update endpoints found in it are offline hypotheses. GATE must not resolve, browse, scan, authenticate to, intercept, or otherwise contact those systems until separate written authority and an exact active engagement cover the selector and action.
 
-The machine-readable [end-to-end penetration-testing workflow](config/workflows/pentest-e2e.json) and [operator guide](docs/pentest-workflow.md) carry offline observations through passive corroboration, active mapping, specialist workstreams, controlled exploitation, impact validation, cleanup, retest, and reporting. The workflow does not itself grant authority or prove that a cataloged tool is installed.
+The machine-readable [end-to-end penetration-testing workflow](config/workflows/pentest-e2e.json) and [operator guide](docs/pentest-workflow.md#admission-execution-and-a3-handoff) carry offline observations through passive corroboration, active mapping, specialist workstreams, controlled exploitation, impact validation, cleanup, retest, and reporting. The workflow does not itself grant authority or prove that a cataloged tool is installed.
 
 ## Active security workflow
 
@@ -178,7 +178,7 @@ Local source review, hypothesis generation, declared passive research, and analy
 
 Nmap remains a planning example: `./bin/gate.mjs tool plan nmap --json` reports its admission requirements. It is blocked from generic execution pending reviewed runtime admission, even when installed and permitted by an engagement.
 
-The runnable walkthrough below uses ExifTool to read metadata from an operator-supplied copied image. Before starting, set `GATE_HOME` to your private runtime root and place the authorized copy at `$GATE_HOME/artifacts/sample.jpg`. Install a reviewed, exactly versioned ExifTool from its official source through its `native-os` lane; GATE does not install it from the catalog. Its catalog ID and command are `exiftool`, risk class is `P0`, and command identity requires `pathDiscovery: command-name` and `genericLaneAdmission: path-discovery`. Linux/WSL2 with `/proc` mounted and the executable on `PATH` are required. Check `./bin/gate.mjs tool plan exiftool --json` and require `genericLaneEligible: true` before creating a manifest; that result does not verify version, integrity, or provenance. The plan and receipt must cover this exact file, `observe`, `exiftool`, the host environment, and `gate-home`. This generic metadata example has host access; use the separate fixed offline lane when zero-egress isolation is required.
+The boundary walkthrough below uses ExifTool and an operator-supplied copied image to exercise the engagement broker through exact preflight. It deliberately stops before manifest creation. ExifTool is mapped only to the non-contact `local-artifact-analysis` phase, while every generic execution manifest now requires an active target-contact phase with a reviewed admission and matching tool mapping. No valid workflow or phase-attempt ID can make this ExifTool example executable. `tool plan exiftool` may report PATH eligibility, but that does not create the missing workflow admission. Use the local-artifact procedure and retain ExifTool output as external evidence with its real provenance, or add a separately reviewed adapter and workflow mapping before exposing it through GATE.
 
 1. Create the envelope. Use exact targets and exclusions; catalog profiles do not grant authority. URL paths match only on segment boundaries. A query written into an approved URL selector must match exactly, while fragments are rejected because they are not sent to a server.
 
@@ -233,45 +233,16 @@ The runnable walkthrough below uses ExifTool to read metadata from an operator-s
      --action observe
    ```
 
-7. Create a private one-shot manifest. The values after `--` are the complete tool argument array; `--tool` selects the executable. The arguments must contain exactly one whole value equal to `{{GATE_TARGET}}`, which GATE replaces with the checked target. The tool ID must be in the receipt-bound `--tools` list, its catalog `commandIdentity.genericLaneAdmission` must be `path-discovery`, its command must resolve on `PATH`, its host must be supported, and the requested bounds must fit within the approved engagement limits. A verified managed core runtime does not satisfy this execution gate until a reviewed workflow-phase adapter binds its action and argument semantics.
+7. Stop at the execution boundary. Do not invent a workflow ID, phase-attempt ID, admission, or tool mapping to force this local-only example through `engagement manifest`. The [workflow admission procedure](docs/pentest-workflow.md#admission-execution-and-a3-handoff) shows the manifest and execution grammar for a future target-contact operation whose reviewed adapter and exact mapping are available.
+
+8. Revoke the complete engagement when its authority should end.
 
    ```bash
-   ./bin/gate.mjs engagement manifest acme-web \
-     --target "$GATE_HOME/artifacts/sample.jpg" \
-     --action observe \
-     --tool exiftool \
-     --minutes 15 \
-     --requests 500 \
-     --parallel 2 \
-     --rate 5 \
-     --tokens 1000 \
-     --json -- -json "{{GATE_TARGET}}"
-   ```
-
-   Review the returned `operation`, `argv0`, expanded `argv`, target argument index, catalog risk class, executable descriptor and observed SHA-256, declared bounds, expiry, and complete `enforcement` object. Inspect the owner-only manifest named by `manifestRef` for its receipt-bound `gate-home` destination, private sandbox, and stdout, stderr, and result paths. The manifest binds the current plan, envelope, receipt, host environment, allowed destinations, target, declared action label, permitted tool, catalog risk class, observed executable identity, exact arguments, and evidence paths. It expires and can be claimed only once; a failed or interrupted attempt does not make it reusable.
-
-8. Ask the operator to supply the exact `confirmationRequired` value. It has the form `EXECUTE MANIFEST_ID MANIFEST_SHA256 UNMETERED`. Agents must never generate, infer, shorten, or reuse this second confirmation. Execute only by manifest ID; `engagement exec` accepts no new target, tool, or command arguments.
-
-   ```bash
-   ./bin/gate.mjs engagement exec acme-web \
-     --manifest MANIFEST_ID \
-     --confirm "EXECUTE MANIFEST_ID MANIFEST_SHA256 UNMETERED" \
-     --json
-   ```
-
-   On Linux or WSL2, GATE opens and hashes the executable, rechecks its descriptor metadata immediately before spawn, launches that descriptor through `/proc/self/fd` with `shell: false`, supplies an empty stdin and minimal environment, creates a fresh process group, and writes bounded stdout, stderr, result metadata, and the working sandbox privately under `GATE_HOME`. While the original `gate engagement exec` supervisor remains alive, it polls engagement validity and operator stop state, applies the declared wall-duration bound, and attempts `SIGTERM` then `SIGKILL` for the process group when required.
-
-   The `UNMETERED` suffix acknowledges the generic lane's exact limits. `argv-action-semantics-validation`, egress-target restriction, request counting, rate measurement, tool concurrency measurement, token measurement, daemon-escape containment, `supervisor-crash-containment`, `immutable-executable-snapshot`, filesystem isolation, credential brokering, complete tool artifact inventory, and known-good executable provenance are `unavailable`. `declared-action-label-binding` does not prove the arbitrary argv implements that class; the operator must review it, and only a reviewed adapter validates tool-specific flags. For audit visibility, execution events use the more severe of the declared action effect and the catalog tool's risk ceiling. That conservative classification does not block launch. Revocation polling, duration enforcement, and process-group termination are best effort and require the original supervisor to remain alive. The child runs with the same UID and host access as GATE. `executable-descriptor-observed-sha256` records bytes read through the opened descriptor. A same-UID writer can mutate a writable inode before or during exec, so the digest does not prove an atomically frozen launched byte snapshot or the identity of interpreters, shared libraries, plug-ins, configuration, inputs, or child processes. Use a reviewed adapter or a separately isolated lab when those guarantees matter.
-
-9. From another terminal, request a stop for one run, or revoke the complete engagement. Stop and revocation are durable requests, but only the live original supervisor polls and acts on them. A supervisor crash or `SIGKILL` has no takeover path and can leave the ordinary tool process group alive; same-user processes that leave the process group also remain outside supervision. If authenticated group identity is lost during teardown, the run becomes `unknown` with termination reason `supervision-lost` instead of claiming termination.
-
-   ```bash
-   ./bin/gate.mjs engagement stop acme-web --run RUN_ID --json
    ./bin/gate.mjs engagement revoke acme-web \
      --confirm "REVOKE acme-web" --json
    ```
 
-10. Close the engagement when work ends.
+9. Close the engagement when work ends.
 
    ```bash
    ./bin/gate.mjs engagement close acme-web

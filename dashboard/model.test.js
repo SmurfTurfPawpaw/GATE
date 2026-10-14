@@ -258,7 +258,8 @@ test("missing fleet counters remain unknown while explicit empty counters remain
 
 test("execution projection keeps capability truth and drops unreviewed or sensitive fields", () => {
   const enforced = [
-    "engagement-binding", "target-argument-binding", "declared-action-label-binding", "tool-allowlist", "exact-argv",
+    "engagement-binding", "workflow-phase-binding", "workflow-reservation", "target-argument-binding",
+    "declared-action-label-binding", "tool-allowlist", "exact-argv",
     "shell-disabled", "executable-descriptor-observed-sha256", "minimal-environment", "private-stdout-stderr",
     "one-shot-claim", "declared-bounds-within-receipt"
   ];
@@ -291,6 +292,12 @@ test("execution projection keeps capability truth and drops unreviewed or sensit
         terminationReason: "process-group-remained",
         exitCode: null,
         signal: null,
+        workflow: {
+          instanceId: `workflow_${"4".repeat(16)}`,
+          phaseId: "active-testing",
+          phaseAttemptId: `phase-attempt_${"5".repeat(16)}`,
+          reservationId: `reservation_${"6".repeat(16)}`
+        },
         argv: ["--secret"],
         target: "TARGET_CANARY",
         output: "OUTPUT_CANARY"
@@ -319,7 +326,13 @@ test("execution projection keeps capability truth and drops unreviewed or sensit
     finishedAt: "2026-10-13T12:00:02.000Z",
     terminationReason: "process-group-remained",
     exitCode: null,
-    signal: null
+    signal: null,
+    workflow: {
+      instanceId: `workflow_${"4".repeat(16)}`,
+      phaseId: "active-testing",
+      phaseAttemptId: `phase-attempt_${"5".repeat(16)}`,
+      reservationId: `reservation_${"6".repeat(16)}`
+    }
   }]);
   const serialized = JSON.stringify(status);
   for (const forbidden of [
@@ -345,6 +358,122 @@ test("execution lane availability cannot become true without explicit configurat
   assert.equal(unsupported.execution.laneAvailable, false);
   assert.equal(unsupported.execution.reason, "unsupported-platform");
   assert.equal(unsupported.execution.runningCount, 0);
+});
+
+test("execution lane availability requires every workflow enforcement control", () => {
+  const enforced = [
+    "engagement-binding", "workflow-phase-binding", "workflow-reservation", "target-argument-binding",
+    "declared-action-label-binding", "tool-allowlist", "exact-argv", "shell-disabled",
+    "executable-descriptor-observed-sha256", "minimal-environment", "private-stdout-stderr",
+    "one-shot-claim", "declared-bounds-within-receipt"
+  ];
+  const bestEffort = ["authorization-revocation-polling", "wall-duration", "process-group-termination"];
+  const unavailable = [
+    "egress-target-restriction", "request-count-measurement", "request-rate-measurement",
+    "tool-concurrency-measurement", "token-measurement", "daemon-escape-containment", "filesystem-isolation",
+    "credential-broker", "tool-artifact-inventory", "known-good-executable-provenance",
+    "argv-action-semantics-validation", "supervisor-crash-containment", "immutable-executable-snapshot"
+  ];
+
+  for (const required of ["workflow-phase-binding", "workflow-reservation"]) {
+    const status = sanitizeStatusPayload({
+      execution: {
+        configured: true,
+        laneAvailable: true,
+        mode: "supervised-generic",
+        enforced: enforced.filter((value) => value !== required),
+        bestEffort,
+        unavailable
+      }
+    });
+
+    assert.equal(status.execution.laneAvailable, false, `missing ${required} must fail closed`);
+    assert.equal(status.execution.enforced.includes(required), false);
+  }
+});
+
+test("workflow projection preserves bounded operational state and drops private fields", () => {
+  const status = sanitizeStatusPayload({
+    workflows: {
+      counts: {
+        total: 2,
+        active: 1,
+        open: 1,
+        stopped: 0,
+        "recovery-hold": 0,
+        reported: 0,
+        closed: 0,
+        degraded: 1,
+        unknown: 1
+      },
+      instances: [{
+        instanceId: `workflow_${"a".repeat(16)}`,
+        status: "open",
+        activePhase: {
+          id: "active-testing",
+          lane: "active-testing",
+          effectClass: "A2",
+          toolId: "nuclei",
+          envelopeControls: {
+            wallTime: "enforced",
+            requests: "measured-only",
+            rate: "unavailable",
+            parallel: "enforced",
+            tokens: "measured-only",
+            evidenceBytes: "enforced",
+            spend: "unavailable"
+          }
+        },
+        journalSequence: 8,
+        reservations: 1,
+        stops: 0,
+        health: "bounded-replay-verified",
+        privateBody: "PRIVATE_WORKFLOW_CANARY"
+      }],
+      scan: { discovered: 2, scanned: 1, omitted: 1, complete: false, truncated: true },
+      privatePath: "/private/workflows"
+    }
+  });
+
+  assert.deepEqual(status.workflows, {
+    counts: {
+      total: 2,
+      active: 1,
+      open: 1,
+      stopped: 0,
+      "recovery-hold": 0,
+      reported: 0,
+      closed: 0,
+      degraded: 1,
+      unknown: 1
+    },
+    instances: [{
+      instanceId: `workflow_${"a".repeat(16)}`,
+      status: "open",
+      activePhase: {
+        id: "active-testing",
+        lane: "active-testing",
+        effectClass: "A2",
+        toolId: "nuclei",
+        envelopeControls: {
+          wallTime: "enforced",
+          requests: "measured-only",
+          rate: "unavailable",
+          parallel: "enforced",
+          tokens: "measured-only",
+          evidenceBytes: "enforced",
+          spend: "unavailable"
+        }
+      },
+      journalSequence: 8,
+      reservations: 1,
+      stops: 0,
+      health: "bounded-replay-verified"
+    }],
+    scan: { discovered: 2, scanned: 1, omitted: 1, complete: false, truncated: true }
+  });
+  assert.equal(JSON.stringify(status.workflows).includes("PRIVATE_WORKFLOW_CANARY"), false);
+  assert.equal(JSON.stringify(status.workflows).includes("/private/workflows"), false);
 });
 
 test("offline analysis projection keeps only lane, counts, and opaque run isolation state", () => {

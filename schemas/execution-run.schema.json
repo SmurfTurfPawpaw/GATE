@@ -5,7 +5,7 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "$schema", "apiVersion", "kind", "runId", "manifestId", "manifestSha256", "engagementId",
+    "$schema", "apiVersion", "kind", "runId", "manifestId", "manifestSha256", "engagementId", "workflow",
     "status", "createdAt", "startedAt", "finishedAt", "supervisor", "process", "terminationReason", "result", "evidence"
   ],
   "properties": {
@@ -16,6 +16,18 @@
     "manifestId": { "type": "string", "pattern": "^xmf_[a-f0-9]{32}$" },
     "manifestSha256": { "$ref": "#/$defs/sha256" },
     "engagementId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$" },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["instanceId", "phaseId", "phaseAttemptId", "reservationId", "executionEpochSha256"],
+      "properties": {
+        "instanceId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$" },
+        "phaseId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,79}$" },
+        "phaseAttemptId": { "type": "string", "pattern": "^wpa_[a-f0-9]{32}$" },
+        "reservationId": { "type": "string", "pattern": "^wxr_[a-f0-9]{32}$" },
+        "executionEpochSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
     "status": { "enum": ["queued", "running", "stopping", "succeeded", "failed", "cancelled", "blocked", "unknown"] },
     "createdAt": { "type": "string", "format": "date-time" },
     "startedAt": { "type": ["string", "null"], "format": "date-time" },
@@ -32,7 +44,7 @@
       "enum": [
         null, "completed", "operator-stop", "engagement-invalidated", "authorization-expired",
         "duration-limit", "evidence-limit", "evidence-write-failure", "spawn-failure", "supervisor-signal",
-        "process-group-remained", "supervision-lost"
+        "process-group-remained", "supervision-lost", "workflow-claim-failed"
       ]
     },
     "result": {

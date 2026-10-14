@@ -45,6 +45,7 @@ test("raw command surfaces fail closed before spawning passthrough commands", (t
     {
       args: [
         "engagement", "manifest", "demo", "--target", "example.test", "--action", "scan",
+        "--workflow", "demo-workflow", "--phase-attempt", `wpa_${"a".repeat(32)}`,
         "--tool", "nmap", "--requests", "1", "--parallel", "1", "--rate", "1",
         "--minutes", "1", "--tokens", "1000", "--", "{{GATE_TARGET}}", "-e", payload
       ],
@@ -163,4 +164,81 @@ test("offline analysis status commands expose metadata without requiring an inst
   const overall = JSON.parse(overallResult.stdout);
   assert.deepEqual(overall.offlineAnalysis.counts, status.counts);
   assert.equal(overall.offlineAnalysis.capability.mode, "bubblewrap-offline");
+});
+
+test("workflow CLI creates a journaled instance and rejects ambiguous command surfaces", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-cli-workflow-boundary-"));
+  const home = path.join(root, "home");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const instanceId = "cli-map-first";
+  const requestId = `wreq_${"a".repeat(32)}`;
+  const createdResult = invoke([
+    "workflow", "new", instanceId, "--request", requestId, "--json"
+  ], home);
+  assert.equal(createdResult.status, 0, createdResult.stderr);
+  const created = JSON.parse(createdResult.stdout);
+  assert.equal(created.ok, true);
+  assert.equal(created.instanceId, instanceId);
+  assert.equal(created.status, "open");
+  assert.equal(created.journal.sequence, 0);
+  assert.equal(created.contract.coverageDomainCount, 18);
+
+  const directory = path.join(home, "workflows", instanceId);
+  assert.equal(fs.statSync(directory).mode & 0o777, 0o700);
+  assert.equal(fs.statSync(path.join(directory, "journal.jsonl")).mode & 0o777, 0o600);
+  assert.equal(fs.statSync(path.join(directory, "instance.json")).mode & 0o777, 0o600);
+
+  const statusResult = invoke(["workflow", "status", instanceId, "--json"], home);
+  assert.equal(statusResult.status, 0, statusResult.stderr);
+  const status = JSON.parse(statusResult.stdout);
+  assert.equal(status.ok, true);
+  assert.equal(status.instanceId, instanceId);
+  assert.equal(status.status, "open");
+
+  const attempts = [
+    {
+      args: ["workflow", "new", "duplicate-request", "--request", requestId, "--request", `wreq_${"b".repeat(32)}`],
+      message: /workflow option must not be repeated: --request/
+    },
+    {
+      args: ["workflow", "status", instanceId, "--", "unexpected"],
+      message: /workflow commands do not accept passthrough arguments/
+    },
+    {
+      args: ["workflow", "status", instanceId, "--json=true"],
+      message: /--json does not accept a value/
+    },
+    {
+      args: ["workflow", "status", instanceId, "--contact-target"],
+      message: /unsupported option: --contact-target/
+    }
+  ];
+  for (const attempt of attempts) {
+    const result = invoke(attempt.args, home);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, attempt.message);
+  }
+  assert.equal(fs.existsSync(path.join(home, "workflows", "duplicate-request")), false);
+});
+
+test("blocked workflow status uses the operational-block exit code", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-cli-workflow-status-"));
+  const home = path.join(root, "home");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const instanceId = "cli-blocked-status";
+  const created = invoke(["workflow", "new", instanceId, "--json"], home);
+  assert.equal(created.status, 0, created.stderr);
+
+  const journal = path.join(home, "workflows", instanceId, "journal.jsonl");
+  const bytes = fs.readFileSync(journal);
+  fs.writeFileSync(journal, bytes.subarray(0, bytes.length - 1), { mode: 0o600 });
+
+  const blockedResult = invoke(["workflow", "status", instanceId, "--json"], home);
+  assert.equal(blockedResult.status, 2, blockedResult.stderr);
+  const blocked = JSON.parse(blockedResult.stdout);
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.status, "blocked");
+  assert.match(blocked.blocker, /truncated tail/);
 });

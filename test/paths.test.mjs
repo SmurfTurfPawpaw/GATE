@@ -40,6 +40,7 @@ test("runtime setup remediates private directories to 0700 and state files to 06
     paths.authorizations,
     paths.plans,
     paths.evidence,
+    paths.workflows,
     paths.projects,
     paths.upstreams,
     paths.upstreamTools,
@@ -51,6 +52,21 @@ test("runtime setup remediates private directories to 0700 and state files to 06
   }
   assert.equal(permissions(paths.events), 0o600);
   assert.equal(permissions(engagement), 0o600);
+});
+
+test("runtime setup creates the workflow root without scanning retained instances", {
+  skip: process.platform === "win32" && "creating symlinks can require elevated Windows privileges"
+}, (t) => {
+  const { root, home, paths } = fixture(t);
+  ensureRuntime({ home, repo: paths.repo });
+  const workflows = path.join(home, "workflows");
+  assert.equal(permissions(workflows), 0o700);
+
+  const outside = path.join(root, "outside-workflow");
+  fs.mkdirSync(outside);
+  fs.symlinkSync(outside, path.join(workflows, "retained-entry"), "dir");
+
+  assert.doesNotThrow(() => ensureRuntime(paths));
 });
 
 test("runtime setup rejects a filesystem-root GATE_HOME before changing it", () => {

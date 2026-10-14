@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/workflow-journal-entry.schema.json",
+  "title": "GATE authoritative workflow journal entry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "instanceId",
+    "sequence",
+    "at",
+    "requestId",
+    "requestSha256",
+    "type",
+    "definitionSha256",
+    "previousEntrySha256",
+    "payload",
+    "entrySha256"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "gate.workflow-journal/v1"
+    },
+    "kind": {
+      "const": "WorkflowJournalEntry"
+    },
+    "instanceId": {
+      "$ref": "#/$defs/id"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100000
+    },
+    "at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "requestId": {
+      "type": "string",
+      "pattern": "^wreq_[a-f0-9]{32}$"
+    },
+    "requestSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "type": {
+      "enum": [
+        "workflow.created",
+        "phase.started",
+        "phase.finished",
+        "evidence.added",
+        "coverage.set",
+        "ledger.opened",
+        "ledger.cleanup-recorded",
+        "ledger.verified",
+        "ledger.held",
+        "stop.triggered",
+        "execution.reserved",
+        "execution.claimed",
+        "execution.completed",
+        "execution.cancelled",
+        "coverage.joined",
+        "report.attached",
+        "workflow.closed"
+      ]
+    },
+    "definitionSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "previousEntrySha256": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/sha256"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "payload": {
+      "type": "object"
+    },
+    "entrySha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,62}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  }
+}

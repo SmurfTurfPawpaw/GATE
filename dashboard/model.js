@@ -57,6 +57,8 @@ const EXECUTION_REASONS = new Set([
 ]);
 const EXECUTION_ENFORCED = new Set([
   "engagement-binding",
+  "workflow-phase-binding",
+  "workflow-reservation",
   "target-argument-binding",
   "declared-action-label-binding",
   "tool-allowlist",
@@ -185,6 +187,14 @@ const TOOL_RUNTIME_REASONS = new Set([
   "workflow-phase-admission-unavailable",
   "zero-egress-smoke-sandbox-unavailable"
 ]);
+const WORKFLOW_STATUSES = new Set(["open", "stopped", "recovery-hold", "reported", "closed", "unknown"]);
+const WORKFLOW_HEALTH = new Set(["bounded-replay-verified", "degraded"]);
+const WORKFLOW_LANES = new Set([
+  "governance", "offline-static", "offline-dynamic", "passive-research", "active-observation",
+  "active-testing", "high-impact-controlled", "closure"
+]);
+const WORKFLOW_EFFECTS = new Set(["P0", "P1", "A1", "A2", "A3"]);
+const WORKFLOW_CONTROLS = new Set(["enforced", "measured-only", "unavailable"]);
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/;
 const EVENT_KIND = /^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+$/;
 
@@ -337,7 +347,23 @@ function executionRunShape(input) {
     : null;
   const runStatus = enumValue(value.status, EXECUTION_RUN_STATUSES, null);
   const createdAt = timestamp(value.createdAt);
-  if (!runId || !manifestId || !engagementId || !runStatus || !createdAt) return null;
+  const workflow = record(value.workflow);
+  const workflowInstanceId = typeof workflow.instanceId === "string" && /^workflow_[a-f0-9]{16}$/.test(workflow.instanceId)
+    ? workflow.instanceId
+    : null;
+  const phaseId = typeof workflow.phaseId === "string" && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$/.test(workflow.phaseId)
+    ? workflow.phaseId
+    : null;
+  const phaseAttemptId = typeof workflow.phaseAttemptId === "string" && /^phase-attempt_[a-f0-9]{16}$/.test(workflow.phaseAttemptId)
+    ? workflow.phaseAttemptId
+    : null;
+  const reservationId = typeof workflow.reservationId === "string" && /^reservation_[a-f0-9]{16}$/.test(workflow.reservationId)
+    ? workflow.reservationId
+    : null;
+  if (
+    !runId || !manifestId || !engagementId || !runStatus || !createdAt ||
+    !workflowInstanceId || !phaseId || !phaseAttemptId || !reservationId
+  ) return null;
   const exitCode = Number.isInteger(value.exitCode) && value.exitCode >= -2_147_483_648 && value.exitCode <= 2_147_483_647
     ? value.exitCode
     : null;
@@ -351,7 +377,8 @@ function executionRunShape(input) {
     finishedAt: timestamp(value.finishedAt),
     terminationReason: enumValue(value.terminationReason, EXECUTION_TERMINATION_REASONS, null),
     exitCode,
-    signal: enumValue(value.signal, EXECUTION_SIGNALS, null)
+    signal: enumValue(value.signal, EXECUTION_SIGNALS, null),
+    workflow: { instanceId: workflowInstanceId, phaseId, phaseAttemptId, reservationId }
   };
 }
 
@@ -385,6 +412,64 @@ function executionShape(input) {
         .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
         .slice(0, 30)
       : []
+  };
+}
+
+function workflowInstanceShape(input) {
+  const value = record(input);
+  const instanceId = typeof value.instanceId === "string" && /^workflow_[a-f0-9]{16}$/.test(value.instanceId)
+    ? value.instanceId
+    : null;
+  if (!instanceId) return null;
+  const active = record(value.activePhase);
+  const hasActive = Object.keys(active).length > 0;
+  let activePhase = null;
+  if (hasActive) {
+    const id = identifier(active.id, null, 80);
+    const lane = enumValue(active.lane, WORKFLOW_LANES, null);
+    const effectClass = enumValue(active.effectClass, WORKFLOW_EFFECTS, null);
+    const toolId = active.toolId === null ? null : identifier(active.toolId, null, 80);
+    if (!id || !lane || !effectClass || (active.toolId !== null && !toolId)) return null;
+    const rawControls = record(active.envelopeControls);
+    activePhase = {
+      id,
+      lane,
+      effectClass,
+      toolId,
+      envelopeControls: Object.keys(rawControls).length ? Object.fromEntries([
+        "wallTime", "requests", "rate", "parallel", "tokens", "evidenceBytes", "spend"
+      ].map((key) => [key, enumValue(rawControls[key], WORKFLOW_CONTROLS, null)])) : null
+    };
+  }
+  return {
+    instanceId,
+    status: enumValue(value.status, WORKFLOW_STATUSES, "unknown"),
+    activePhase,
+    journalSequence: count(value.journalSequence),
+    reservations: count(value.reservations),
+    stops: count(value.stops),
+    health: enumValue(value.health, WORKFLOW_HEALTH, "degraded")
+  };
+}
+
+function workflowsShape(input) {
+  const value = record(input);
+  const rawCounts = record(value.counts);
+  const rawScan = record(value.scan);
+  return {
+    counts: Object.fromEntries([
+      "total", "active", "open", "stopped", "recovery-hold", "reported", "closed", "degraded", "unknown"
+    ].map((key) => [key, count(rawCounts[key])])),
+    instances: Array.isArray(value.instances)
+      ? value.instances.slice(0, RECORD_LIMIT).map(workflowInstanceShape).filter(Boolean)
+      : [],
+    scan: {
+      discovered: count(rawScan.discovered),
+      scanned: count(rawScan.scanned),
+      omitted: count(rawScan.omitted),
+      complete: typeof rawScan.complete === "boolean" ? rawScan.complete : false,
+      truncated: typeof rawScan.truncated === "boolean" ? rawScan.truncated : true
+    }
   };
 }
 
@@ -575,6 +660,7 @@ export function sanitizeStatusPayload(input) {
     counts: safeCounts(value.counts),
     agents,
     execution: executionShape(value.execution),
+    workflows: workflowsShape(value.workflows),
     offlineAnalysis: offlineAnalysisShape(value.offlineAnalysis),
     toolRuntimes: toolRuntimesShape(value.toolRuntimes),
     usage: usageShape(firstDefined(value.usage, value.tokenUsage, value.tokens)),

@@ -65,6 +65,7 @@ export function runtimePaths(options = {}) {
     authorizations: path.join(home, "authorizations"),
     plans: path.join(home, "plans"),
     evidence: path.join(home, "evidence"),
+    workflows: path.join(home, "workflows"),
     executions,
     executionManifests: path.join(executions, "manifests"),
     executionClaims: path.join(executions, "claims"),
@@ -153,11 +154,18 @@ export function ensureRuntime(paths) {
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
   securePrivateDirectory(home, { create: false, label: "GATE_HOME" });
 
+  // Derive the workflow root for older callers that pass a partial paths
+  // object. Workflow operations validate individual instance directories;
+  // generic runtime bootstrap deliberately does not enumerate retained
+  // workflow history, so its cost stays bounded as that history grows.
+  const workflows = paths.workflows || path.join(home, "workflows");
+
   const directoryPaths = [
     paths.engagements,
     paths.authorizations,
     paths.plans,
     paths.evidence,
+    workflows,
     paths.executions,
     paths.executionManifests,
     paths.executionClaims,

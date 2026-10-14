@@ -10,6 +10,7 @@
     "kind",
     "metadata",
     "engagement",
+    "workflow",
     "operation",
     "declaredBounds",
     "runtime",
@@ -18,7 +19,7 @@
   ],
   "properties": {
     "$schema": { "type": "string", "minLength": 1 },
-    "apiVersion": { "const": "gate.execution/v1" },
+    "apiVersion": { "const": "gate.execution/v2" },
     "kind": { "const": "ExecutionManifest" },
     "metadata": {
       "type": "object",
@@ -57,6 +58,18 @@
           "contains": { "const": "gate-home" },
           "items": { "enum": ["gate-home", "configured-cloud-model", "client-destination"] }
         }
+      }
+    },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["instanceId", "phaseId", "phaseAttemptId", "reservationId", "executionEpochSha256"],
+      "properties": {
+        "instanceId": { "$ref": "#/$defs/id" },
+        "phaseId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,79}$" },
+        "phaseAttemptId": { "type": "string", "pattern": "^wpa_[a-f0-9]{32}$" },
+        "reservationId": { "type": "string", "pattern": "^wxr_[a-f0-9]{32}$" },
+        "executionEpochSha256": { "$ref": "#/$defs/sha256" }
       }
     },
     "operation": {
@@ -118,13 +131,14 @@
     "declaredBounds": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["maxMinutes", "estimatedRequests", "maxParallel", "maxRatePerSecond", "maxTokens"],
+      "required": ["maxMinutes", "estimatedRequests", "maxParallel", "maxRatePerSecond", "maxTokens", "maxEvidenceBytes"],
       "properties": {
         "maxMinutes": { "type": "integer", "minimum": 1, "maximum": 10080 },
         "estimatedRequests": { "type": "integer", "minimum": 1, "maximum": 10000000 },
         "maxParallel": { "type": "integer", "minimum": 1, "maximum": 256 },
         "maxRatePerSecond": { "type": "number", "exclusiveMinimum": 0, "maximum": 100000 },
-        "maxTokens": { "type": "integer", "minimum": 1000, "maximum": 100000000 }
+        "maxTokens": { "type": "integer", "minimum": 1000, "maximum": 100000000 },
+        "maxEvidenceBytes": { "type": "integer", "minimum": 2097152, "maximum": 2147483648 }
       }
     },
     "runtime": {
@@ -202,7 +216,7 @@
       "uniqueItems": true,
       "items": {
         "enum": [
-          "engagement-binding", "target-argument-binding", "declared-action-label-binding", "tool-allowlist", "exact-argv",
+          "engagement-binding", "workflow-phase-binding", "workflow-reservation", "target-argument-binding", "declared-action-label-binding", "tool-allowlist", "exact-argv",
           "shell-disabled", "executable-descriptor-observed-sha256", "minimal-environment", "private-stdout-stderr",
           "one-shot-claim", "declared-bounds-within-receipt"
         ]

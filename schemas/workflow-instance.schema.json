@@ -1,0 +1,216 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/workflow-instance.schema.json",
+  "title": "GATE workflow instance projection",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "instanceId",
+    "createdAt",
+    "definition",
+    "engagementId",
+    "status",
+    "appliedSequence",
+    "journalHeadSha256",
+    "activePhase",
+    "phases",
+    "evidence",
+    "coverage",
+    "ledger",
+    "stops",
+    "executionReservations",
+    "joined",
+    "report",
+    "closedAt",
+    "projectionSha256"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "gate.workflow-instance/v1"
+    },
+    "kind": {
+      "const": "WorkflowInstanceProjection"
+    },
+    "instanceId": {
+      "$ref": "#/$defs/id"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "definition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version",
+        "sha256",
+        "workflowSha256",
+        "catalogSha256",
+        "engagementPolicySha256",
+        "coverageDomains",
+        "mandatoryStops"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "workflowSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "catalogSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "engagementPolicySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "coverageDomains": {
+          "type": "array",
+          "minItems": 18,
+          "maxItems": 18,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/id"
+          }
+        },
+        "mandatoryStops": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "maxItems": 100
+        }
+      }
+    },
+    "engagementId": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/id"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "status": {
+      "enum": [
+        "open",
+        "stopped",
+        "recovery-hold",
+        "reported",
+        "closed"
+      ]
+    },
+    "appliedSequence": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100000
+    },
+    "journalHeadSha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "activePhase": {
+      "oneOf": [
+        {
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "phases": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object"
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "maxItems": 100000
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object"
+      }
+    },
+    "ledger": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object"
+      }
+    },
+    "stops": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "maxItems": 100000
+    },
+    "executionReservations": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object"
+      }
+    },
+    "joined": {
+      "oneOf": [
+        {
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "report": {
+      "oneOf": [
+        {
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "closedAt": {
+      "oneOf": [
+        {
+          "type": "string",
+          "format": "date-time"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "projectionSha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,62}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  }
+}

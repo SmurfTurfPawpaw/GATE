@@ -17,6 +17,7 @@ import {
 import {
   createExecutionManifest,
   executeExecutionManifest,
+  reconcileExecution,
   requestEngagementStops,
   requestExecutionStop
 } from "./lib/executions.mjs";
@@ -39,6 +40,23 @@ import { toolInventory, toolPlan, toolShow } from "./lib/tools.mjs";
 import { installUpstream, syncUpstream, upstreamStatus } from "./lib/upstreams.mjs";
 import { validateRepository } from "./lib/validation.mjs";
 import { leaseWorkspace, verifyWorkspace, workspaceStatus } from "./lib/workspaces.mjs";
+import {
+  addWorkflowEvidence,
+  attachWorkflowReport,
+  cancelWorkflowExecution,
+  closeWorkflow,
+  createWorkflowInstance,
+  finishWorkflowPhase,
+  holdWorkflowLedger,
+  joinWorkflowCoverage,
+  openWorkflowLedger,
+  recordWorkflowLedgerCleanup,
+  setWorkflowCoverage,
+  startWorkflowPhase,
+  stopWorkflow,
+  verifyWorkflowLedger,
+  workflowStatus
+} from "./lib/workflow-runtime.mjs";
 
 const help = `GATE — Gateway for Agentic Tooling & Engineering
 
@@ -87,13 +105,28 @@ Engagements
   engagement review ID --run RUN --head GIT_SHA --result passed|failed
   engagement approve ID --sha SHA256 --confirm "APPROVE ID"
   engagement check ID --target TARGET --action ACTION
-  engagement manifest ID --target TARGET --action ACTION --tool TOOL --minutes N
-                         --requests N --parallel N --rate N --tokens N -- ARGV...
+  engagement manifest ID --workflow ID --phase-attempt ID --target TARGET --action ACTION --tool TOOL --minutes N
+                         --requests N --parallel N --rate N --tokens N [--evidence-bytes N] -- ARGV...
   engagement exec ID --manifest ID --confirm "EXECUTE ID SHA256 UNMETERED"
+  engagement reconcile ID --manifest ID --confirm "RECONCILE EXECUTION ID SHA256"
   engagement stop ID --run RUN
   engagement revoke ID --confirm "REVOKE ID"
   engagement status ID
   engagement close ID
+
+Pentest workflows
+  workflow new ID [--engagement ID]  Create a private map-first workflow instance
+  workflow status ID                 Show the compact journal-derived projection
+  workflow phase start ID --phase PHASE [--from PHASE] [--admission FILE]
+  workflow phase finish ID --phase PHASE --disposition DISPOSITION
+  workflow evidence add ID --phase PHASE --evidence ID --file PATH
+  workflow coverage set ID --domain DOMAIN --disposition DISPOSITION
+  workflow ledger open|cleanup|verify|hold ID [options]
+  workflow execution cancel ID --reservation ID --reason TEXT
+  workflow stop ID --condition ID --reason TEXT
+  workflow join ID                    Enforce the 18-domain and clean-ledger barrier
+  workflow report ID --file PATH      Attach a content-addressed private report
+  workflow close ID --confirm "CLOSE ID REPORT_SHA256"
 
 Upstreams
   upstream list
@@ -166,10 +199,71 @@ function assertUnambiguousToolArgs(argv) {
   }
 }
 
+function assertUnambiguousWorkflowArgs(argv) {
+  const seen = new Set();
+  for (const value of argv) {
+    if (value === "--") throw new Error("workflow commands do not accept passthrough arguments");
+    if (!value.startsWith("--")) continue;
+    const equals = value.indexOf("=");
+    const name = value.slice(2, equals === -1 ? undefined : equals);
+    if (!name) throw new Error("workflow options must have a name");
+    if (seen.has(name)) throw new Error(`workflow option must not be repeated: --${name}`);
+    seen.add(name);
+  }
+}
+
 function optionalValueFlag(flags, name) {
   if (flags[name] === undefined) return undefined;
   if (typeof flags[name] !== "string" || !flags[name].trim()) throw new Error(`--${name} needs a value`);
   return flags[name];
+}
+
+function workflowMutationOptions(flags, paths) {
+  const expectedSequence = optionalValueFlag(flags, "expected-sequence");
+  return {
+    paths,
+    requestId: optionalValueFlag(flags, "request"),
+    expectedSequence: expectedSequence === undefined ? undefined : Number(expectedSequence),
+    expectedHead: optionalValueFlag(flags, "expected-head")
+  };
+}
+
+function workflowCommit(result) {
+  const payload = result.entry.payload;
+  const details = (() => {
+    switch (result.entry.type) {
+      case "phase.started": return { phaseId: payload.phaseId, attemptId: payload.attemptId };
+      case "phase.finished": return { phaseId: payload.phaseId, disposition: payload.disposition };
+      case "evidence.added": return { evidenceId: payload.evidenceId, sha256: payload.sha256 };
+      case "coverage.set": return { domain: payload.domain, disposition: payload.disposition };
+      case "ledger.opened": return { entryId: payload.entryId };
+      case "ledger.cleanup-recorded":
+      case "ledger.verified":
+      case "ledger.held": return { entryId: payload.entryId };
+      case "execution.cancelled": return { reservationId: payload.reservationId };
+      case "stop.triggered": return { condition: payload.condition };
+      case "coverage.joined": return { coverageSha256: payload.coverageSha256 };
+      case "report.attached": return { reportSha256: payload.sha256 };
+      case "workflow.closed": return { reportSha256: payload.reportSha256 };
+      default: return {};
+    }
+  })();
+  return {
+    ok: true,
+    instanceId: result.projection.instanceId,
+    status: result.projection.status,
+    event: {
+      type: result.entry.type,
+      sequence: result.entry.sequence,
+      headSha256: result.entry.entrySha256,
+      requestId: result.entry.requestId,
+      replayed: result.replayed,
+      details
+    },
+    activePhaseId: result.projection.activePhase?.phaseId || null,
+    coverageCount: Object.keys(result.projection.coverage).length,
+    ledgerEntries: Object.keys(result.projection.ledger).length
+  };
 }
 
 function printValidation(validation, json) {
@@ -547,7 +641,10 @@ export async function main(argv) {
       return;
     }
     if (action === "manifest") {
-      assertFlags(parsed.flags, ["target", "action", "tool", "minutes", "requests", "parallel", "rate", "tokens", "json"]);
+      assertFlags(parsed.flags, [
+        "workflow", "phase-attempt", "target", "action", "tool", "minutes", "requests", "parallel", "rate",
+        "tokens", "evidence-bytes", "json"
+      ]);
       if (parsed.passthrough.length === 0) {
         throw new Error("manifest command arguments are required after --");
       }
@@ -555,6 +652,8 @@ export async function main(argv) {
         createExecutionManifest(
           id,
           {
+            workflowId: requiredFlag(parsed.flags, "workflow"),
+            phaseAttemptId: requiredFlag(parsed.flags, "phase-attempt"),
             target: requiredFlag(parsed.flags, "target"),
             action: requiredFlag(parsed.flags, "action"),
             toolId: requiredFlag(parsed.flags, "tool"),
@@ -563,7 +662,8 @@ export async function main(argv) {
             estimatedRequests: requiredFlag(parsed.flags, "requests"),
             maxParallel: requiredFlag(parsed.flags, "parallel"),
             maxRatePerSecond: requiredFlag(parsed.flags, "rate"),
-            maxTokens: requiredFlag(parsed.flags, "tokens")
+            maxTokens: requiredFlag(parsed.flags, "tokens"),
+            maxEvidenceBytes: optionalValueFlag(parsed.flags, "evidence-bytes")
           },
           { paths }
         ),
@@ -574,6 +674,21 @@ export async function main(argv) {
       assertFlags(parsed.flags, ["manifest", "confirm", "json"]);
       if (parsed.passthrough.length > 0) throw new Error("engagement exec does not accept command arguments");
       const result = await executeExecutionManifest(
+        id,
+        {
+          manifestId: requiredFlag(parsed.flags, "manifest"),
+          confirm: requiredFlag(parsed.flags, "confirm")
+        },
+        { paths }
+      );
+      output(result, json);
+      if (!result.ok) process.exitCode = 2;
+      return;
+    }
+    if (action === "reconcile") {
+      assertFlags(parsed.flags, ["manifest", "confirm", "json"]);
+      if (parsed.passthrough.length > 0) throw new Error("engagement reconcile does not accept command arguments");
+      const result = reconcileExecution(
         id,
         {
           manifestId: requiredFlag(parsed.flags, "manifest"),
@@ -611,6 +726,158 @@ export async function main(argv) {
       return output(closeEngagement(id, { paths }), json);
     }
     throw new Error(`unknown engagement action: ${action}`);
+  }
+
+  if (command === "workflow") {
+    assertUnambiguousWorkflowArgs(rest);
+    assertBooleanSwitch(parsed.flags, "json");
+    const [area, actionOrId, maybeId] = parsed.positional;
+    const mutationFlags = ["request", "expected-sequence", "expected-head", "json"];
+    if (area === "new") {
+      assertPositionals(parsed.positional, 2, "gate workflow new ID [--engagement ID] [--definition pentest-e2e]");
+      assertFlags(parsed.flags, ["engagement", "definition", "request", "json"]);
+      const result = createWorkflowInstance(actionOrId, {
+        engagementId: optionalValueFlag(parsed.flags, "engagement"),
+        definitionId: optionalValueFlag(parsed.flags, "definition")
+      }, workflowMutationOptions(parsed.flags, paths));
+      return output(result, json);
+    }
+    if (area === "status") {
+      assertPositionals(parsed.positional, 2, "gate workflow status ID");
+      assertFlags(parsed.flags, ["json"]);
+      const result = workflowStatus(actionOrId, { paths });
+      output(result, json);
+      if (!result.ok) process.exitCode = 2;
+      return;
+    }
+    if (area === "phase" && actionOrId === "start") {
+      assertPositionals(parsed.positional, 3, "gate workflow phase start ID --phase PHASE [options]");
+      assertFlags(parsed.flags, [
+        "phase", "from", "admission", "handoff", "handoff-id", "confirm", ...mutationFlags
+      ]);
+      const result = startWorkflowPhase(maybeId, {
+        phaseId: requiredFlag(parsed.flags, "phase"),
+        sourcePhase: optionalValueFlag(parsed.flags, "from"),
+        admissionFile: optionalValueFlag(parsed.flags, "admission"),
+        handoffFile: optionalValueFlag(parsed.flags, "handoff"),
+        handoffId: optionalValueFlag(parsed.flags, "handoff-id"),
+        confirm: optionalValueFlag(parsed.flags, "confirm")
+      }, workflowMutationOptions(parsed.flags, paths));
+      return output(workflowCommit(result), json);
+    }
+    if (area === "phase" && actionOrId === "finish") {
+      assertPositionals(parsed.positional, 3, "gate workflow phase finish ID --phase PHASE --disposition DISPOSITION");
+      assertFlags(parsed.flags, ["phase", "disposition", "rationale", "evidence-sha", ...mutationFlags]);
+      const result = finishWorkflowPhase(maybeId, {
+        phaseId: requiredFlag(parsed.flags, "phase"),
+        disposition: requiredFlag(parsed.flags, "disposition"),
+        rationale: optionalValueFlag(parsed.flags, "rationale"),
+        evidenceSha256: listFlag(parsed.flags, "evidence-sha")
+      }, workflowMutationOptions(parsed.flags, paths));
+      return output(workflowCommit(result), json);
+    }
+    if (area === "evidence" && actionOrId === "add") {
+      assertPositionals(parsed.positional, 3, "gate workflow evidence add ID --phase PHASE --evidence ID --file PATH");
+      assertFlags(parsed.flags, ["phase", "evidence", "file", "claim", ...mutationFlags]);
+      const result = addWorkflowEvidence(maybeId, {
+        phaseId: requiredFlag(parsed.flags, "phase"),
+        evidenceId: requiredFlag(parsed.flags, "evidence"),
+        file: requiredFlag(parsed.flags, "file"),
+        claimState: optionalValueFlag(parsed.flags, "claim")
+      }, workflowMutationOptions(parsed.flags, paths));
+      return output(workflowCommit(result), json);
+    }
+    if (area === "coverage" && actionOrId === "set") {
+      assertPositionals(parsed.positional, 3, "gate workflow coverage set ID --domain DOMAIN --disposition DISPOSITION");
+      assertFlags(parsed.flags, ["domain", "disposition", "evidence-sha", "rationale", ...mutationFlags]);
+      const result = setWorkflowCoverage(maybeId, {
+        domain: requiredFlag(parsed.flags, "domain"),
+        disposition: requiredFlag(parsed.flags, "disposition"),
+        evidenceSha256: listFlag(parsed.flags, "evidence-sha"),
+        rationale: optionalValueFlag(parsed.flags, "rationale")
+      }, workflowMutationOptions(parsed.flags, paths));
+      return output(workflowCommit(result), json);
+    }
+    if (area === "ledger" && actionOrId === "open") {
+      assertPositionals(parsed.positional, 3, "gate workflow ledger open ID [options]");
+      assertFlags(parsed.flags, [
+        "type", "target-sha", "before-sha", "cleanup", "pivot-admission", "pivot-confirm", ...mutationFlags
+      ]);
+      const result = openWorkflowLedger(maybeId, {
+        changeType: requiredFlag(parsed.flags, "type"),
+        targetSelectorSha256: requiredFlag(parsed.flags, "target-sha"),
+        beforeEvidenceSha256: requiredFlag(parsed.flags, "before-sha"),
+        cleanupAction: requiredFlag(parsed.flags, "cleanup"),
+        pivotAdmissionFile: optionalValueFlag(parsed.flags, "pivot-admission"),
+        pivotConfirm: optionalValueFlag(parsed.flags, "pivot-confirm")
+      }, workflowMutationOptions(parsed.flags, paths));
+      return output(workflowCommit(result), json);
+    }
+    if (area === "ledger" && actionOrId === "cleanup") {
+      assertPositionals(parsed.positional, 3, "gate workflow ledger cleanup ID --entry ID --evidence-sha SHA256");
+      assertFlags(parsed.flags, ["entry", "evidence-sha", ...mutationFlags]);
+      const result = recordWorkflowLedgerCleanup(maybeId, {
+        entryId: requiredFlag(parsed.flags, "entry"),
+        cleanupEvidenceSha256: requiredFlag(parsed.flags, "evidence-sha")
+      }, workflowMutationOptions(parsed.flags, paths));
+      return output(workflowCommit(result), json);
+    }
+    if (area === "ledger" && actionOrId === "verify") {
+      assertPositionals(parsed.positional, 3, "gate workflow ledger verify ID --entry ID --evidence-sha SHA256");
+      assertFlags(parsed.flags, ["entry", "evidence-sha", ...mutationFlags]);
+      const result = verifyWorkflowLedger(maybeId, {
+        entryId: requiredFlag(parsed.flags, "entry"),
+        verificationEvidenceSha256: requiredFlag(parsed.flags, "evidence-sha")
+      }, workflowMutationOptions(parsed.flags, paths));
+      return output(workflowCommit(result), json);
+    }
+    if (area === "ledger" && actionOrId === "hold") {
+      assertPositionals(parsed.positional, 3, "gate workflow ledger hold ID --entry ID --reason TEXT");
+      assertFlags(parsed.flags, ["entry", "reason", ...mutationFlags]);
+      const result = holdWorkflowLedger(maybeId, {
+        entryId: requiredFlag(parsed.flags, "entry"),
+        reason: requiredFlag(parsed.flags, "reason")
+      }, workflowMutationOptions(parsed.flags, paths));
+      return output(workflowCommit(result), json);
+    }
+    if (area === "execution" && actionOrId === "cancel") {
+      assertPositionals(parsed.positional, 3, "gate workflow execution cancel ID --reservation ID --reason TEXT");
+      assertFlags(parsed.flags, ["reservation", "reason", ...mutationFlags]);
+      const result = cancelWorkflowExecution(maybeId, {
+        reservationId: requiredFlag(parsed.flags, "reservation"),
+        reason: requiredFlag(parsed.flags, "reason")
+      }, workflowMutationOptions(parsed.flags, paths));
+      return output(workflowCommit(result), json);
+    }
+    if (area === "stop") {
+      assertPositionals(parsed.positional, 2, "gate workflow stop ID --condition CONDITION --reason TEXT");
+      assertFlags(parsed.flags, ["condition", "reason", "evidence-sha", ...mutationFlags]);
+      const result = stopWorkflow(actionOrId, {
+        condition: requiredFlag(parsed.flags, "condition"),
+        reason: requiredFlag(parsed.flags, "reason"),
+        evidenceSha256: optionalValueFlag(parsed.flags, "evidence-sha")
+      }, workflowMutationOptions(parsed.flags, paths));
+      return output(workflowCommit(result), json);
+    }
+    if (area === "join") {
+      assertPositionals(parsed.positional, 2, "gate workflow join ID");
+      assertFlags(parsed.flags, mutationFlags);
+      const result = joinWorkflowCoverage(actionOrId, {}, workflowMutationOptions(parsed.flags, paths));
+      return output(workflowCommit(result), json);
+    }
+    if (area === "report") {
+      assertPositionals(parsed.positional, 2, "gate workflow report ID --file PATH");
+      assertFlags(parsed.flags, ["file", ...mutationFlags]);
+      const result = attachWorkflowReport(actionOrId, { file: requiredFlag(parsed.flags, "file") }, workflowMutationOptions(parsed.flags, paths));
+      return output(workflowCommit(result), json);
+    }
+    if (area === "close") {
+      assertPositionals(parsed.positional, 2, "gate workflow close ID --confirm TEXT");
+      assertFlags(parsed.flags, ["confirm", ...mutationFlags]);
+      const result = closeWorkflow(actionOrId, { confirm: requiredFlag(parsed.flags, "confirm") }, workflowMutationOptions(parsed.flags, paths));
+      return output(workflowCommit(result), json);
+    }
+    throw new Error(`unknown workflow action: ${parsed.positional.join(" ") || "missing"}`);
   }
 
   if (command === "upstream") {

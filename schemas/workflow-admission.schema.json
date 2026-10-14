@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/workflow-admission.schema.json",
+  "title": "GATE reviewed workflow phase admission",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "apiVersion",
+    "kind",
+    "instanceId",
+    "workflowDefinitionSha256",
+    "phaseId",
+    "target",
+    "action",
+    "toolId",
+    "toolMappingSha256",
+    "adapterConstraint",
+    "authority",
+    "envelope",
+    "issuedAt",
+    "expiresAt"
+  ],
+  "properties": {
+    "$schema": { "type": "string", "minLength": 1 },
+    "apiVersion": { "const": "gate.workflow-admission/v1" },
+    "kind": { "const": "WorkflowAdmission" },
+    "instanceId": { "$ref": "#/$defs/instanceId" },
+    "workflowDefinitionSha256": { "$ref": "#/$defs/sha256" },
+    "phaseId": { "$ref": "#/$defs/phaseId" },
+    "target": { "$ref": "#/$defs/oneLine" },
+    "action": { "$ref": "#/$defs/action" },
+    "toolId": { "$ref": "#/$defs/toolId" },
+    "toolMappingSha256": { "$ref": "#/$defs/sha256" },
+    "adapterConstraint": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 1000,
+      "pattern": "^[^\\u0000\\r\\n]+$"
+    },
+    "authority": { "$ref": "#/$defs/authority" },
+    "envelope": { "$ref": "#/$defs/envelope" },
+    "issuedAt": { "type": "string", "format": "date-time" },
+    "expiresAt": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "instanceId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$" },
+    "phaseId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,79}$" },
+    "toolId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "minLength": 2,
+      "maxLength": 64
+    },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "oneLine": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000,
+      "pattern": "^[^\\u0000\\r\\n]+$"
+    },
+    "action": {
+      "enum": [
+        "observe",
+        "scan",
+        "intercept",
+        "authenticate",
+        "fuzz",
+        "exploit-safe",
+        "exploit-stateful",
+        "persist",
+        "denial-of-service",
+        "destructive-test",
+        "data-access",
+        "data-removal",
+        "exfiltration-simulation"
+      ]
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "engagementId",
+        "planSha256",
+        "envelopeSha256",
+        "receiptSha256",
+        "authorizationValidUntil",
+        "checkedAt"
+      ],
+      "properties": {
+        "engagementId": { "$ref": "#/$defs/instanceId" },
+        "planSha256": { "$ref": "#/$defs/sha256" },
+        "envelopeSha256": { "$ref": "#/$defs/sha256" },
+        "receiptSha256": { "$ref": "#/$defs/sha256" },
+        "authorizationValidUntil": { "type": "string", "format": "date-time" },
+        "checkedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "controlState": {
+      "enum": ["enforced", "measured-only", "unavailable"]
+    },
+    "envelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxMinutes",
+        "maxRequests",
+        "maxRatePerSecond",
+        "maxParallel",
+        "maxInputTokens",
+        "maxOutputTokens",
+        "maxTotalTokens",
+        "maxEvidenceBytes",
+        "maxSpend",
+        "controls"
+      ],
+      "properties": {
+        "maxMinutes": { "type": "integer", "minimum": 1, "maximum": 10080 },
+        "maxRequests": { "type": "integer", "minimum": 1, "maximum": 10000000 },
+        "maxRatePerSecond": { "type": "number", "exclusiveMinimum": 0, "maximum": 100000 },
+        "maxParallel": { "type": "integer", "minimum": 1, "maximum": 256 },
+        "maxInputTokens": { "type": "integer", "minimum": 0, "maximum": 1000000000 },
+        "maxOutputTokens": { "type": "integer", "minimum": 0, "maximum": 1000000000 },
+        "maxTotalTokens": { "type": "integer", "minimum": 1, "maximum": 1000000000 },
+        "maxEvidenceBytes": { "type": "integer", "minimum": 1048576, "maximum": 2147483648 },
+        "maxSpend": { "type": "number", "minimum": 0, "maximum": 1000000000 },
+        "controls": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["wallTime", "requests", "rate", "parallel", "tokens", "evidenceBytes", "spend"],
+          "properties": {
+            "wallTime": { "$ref": "#/$defs/controlState" },
+            "requests": { "$ref": "#/$defs/controlState" },
+            "rate": { "$ref": "#/$defs/controlState" },
+            "parallel": { "$ref": "#/$defs/controlState" },
+            "tokens": { "$ref": "#/$defs/controlState" },
+            "evidenceBytes": { "$ref": "#/$defs/controlState" },
+            "spend": { "$ref": "#/$defs/controlState" }
+          }
+        }
+      }
+    }
+  }
+}

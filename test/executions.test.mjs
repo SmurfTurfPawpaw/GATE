@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import {
   approveEngagement,
   attachPlan,
+  checkEngagement,
   createEngagement,
   recordTechnicalReview,
   revokeEngagement
@@ -20,13 +21,24 @@ import {
   executionCapability,
   executionInternals,
   executionStatus,
+  reconcileExecution,
   requestExecutionStop
 } from "../src/lib/executions.mjs";
 import { runtimePaths } from "../src/lib/paths.mjs";
 import { validateDocument } from "../src/lib/schema.mjs";
+import {
+  addWorkflowEvidence,
+  cancelWorkflowExecution,
+  createWorkflowInstance,
+  finishWorkflowPhase,
+  startWorkflowPhase,
+  workflowRuntimeInternals,
+  workflowStatus
+} from "../src/lib/workflow-runtime.mjs";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const gate = path.join(repo, "bin", "gate.mjs");
+const workflowDefinition = JSON.parse(fs.readFileSync(path.join(repo, "config", "workflows", "pentest-e2e.json"), "utf8"));
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-execution-"));
@@ -44,7 +56,7 @@ function approve(paths, root, options = {}) {
   const id = options.id || "execution-test";
   const target = options.target || "127.0.0.1";
   const action = options.action || "scan";
-  const toolId = options.toolId || "fixture-node";
+  const toolId = "dnsx";
   const plan = path.join(root, `${id}.md`);
   fs.writeFileSync(plan, `# Plan\nBounded fixture execution for ${id}.\n`);
   createEngagement({
@@ -67,7 +79,102 @@ function approve(paths, root, options = {}) {
     status: "passed"
   }, { paths });
   approveEngagement(id, { sha256: planned.plan.sha256, confirm: `APPROVE ${id}` }, { paths });
-  return { id, target, action, toolId };
+  if (options.workflow === false) {
+    return {
+      id,
+      target,
+      action,
+      toolId,
+      workflowId: `${id}-workflow`,
+      phaseAttemptId: `wpa_${"0".repeat(32)}`
+    };
+  }
+
+  const workflowId = `${id}-workflow`;
+  createWorkflowInstance(workflowId, { engagementId: id }, { paths });
+  for (const phaseId of ["authorization-and-roe", "target-and-architecture-map"]) {
+    const phase = workflowDefinition.phases.find((candidate) => candidate.id === phaseId);
+    startWorkflowPhase(workflowId, {
+      phaseId,
+      sourcePhase: phaseId === "target-and-architecture-map" ? "authorization-and-roe" : undefined
+    }, { paths });
+    for (const evidence of phase.evidence.filter((record) => record.required)) {
+      const file = path.join(root, `${id}-${phaseId}-${evidence.id}.txt`);
+      fs.writeFileSync(file, `${evidence.id}: execution fixture evidence\n`, { mode: 0o600 });
+      addWorkflowEvidence(workflowId, {
+        phaseId,
+        evidenceId: evidence.id,
+        claimState: evidence.claimState,
+        file
+      }, { paths });
+    }
+    finishWorkflowPhase(workflowId, { phaseId, disposition: "tested" }, { paths });
+  }
+  const status = workflowStatus(workflowId, { paths });
+  assert.equal(status.ok, true);
+  const phaseId = "active-surface-validation";
+  const phase = workflowDefinition.phases.find((candidate) => candidate.id === phaseId);
+  const mapping = phase.toolMappings.find((candidate) => candidate.toolId === toolId);
+  const authority = checkEngagement(id, {
+    target,
+    action,
+    maxMinutes: 5,
+    estimatedRequests: 20,
+    maxParallel: 2,
+    maxRatePerSecond: 10,
+    maxTokens: 20_000
+  }, { paths }).executionBinding;
+  const admission = {
+    $schema: "../../schemas/workflow-admission.schema.json",
+    apiVersion: "gate.workflow-admission/v1",
+    kind: "WorkflowAdmission",
+    instanceId: workflowId,
+    workflowDefinitionSha256: status.contract.sha256,
+    phaseId,
+    target,
+    action,
+    toolId,
+    toolMappingSha256: workflowRuntimeInternals.canonicalDigest(mapping, "gate.workflow.tool-mapping.v1"),
+    adapterConstraint: mapping.adapterConstraint,
+    authority: {
+      engagementId: authority.engagementId,
+      planSha256: authority.planSha256,
+      envelopeSha256: authority.envelopeSha256,
+      receiptSha256: authority.receiptSha256,
+      authorizationValidUntil: authority.authorizationValidUntil,
+      checkedAt: new Date().toISOString()
+    },
+    envelope: {
+      maxMinutes: 5,
+      maxRequests: 20,
+      maxRatePerSecond: 10,
+      maxParallel: 2,
+      maxInputTokens: 0,
+      maxOutputTokens: 0,
+      maxTotalTokens: 20_000,
+      maxEvidenceBytes: 32 * 1024 * 1024,
+      maxSpend: 0,
+      controls: {
+        wallTime: "measured-only",
+        requests: "unavailable",
+        rate: "unavailable",
+        parallel: "unavailable",
+        tokens: "unavailable",
+        evidenceBytes: "enforced",
+        spend: "unavailable"
+      }
+    },
+    issuedAt: new Date(Date.now() - 1_000).toISOString(),
+    expiresAt: authority.authorizationValidUntil
+  };
+  const admissionFile = path.join(root, `${id}-admission.json`);
+  fs.writeFileSync(admissionFile, `${JSON.stringify(admission, null, 2)}\n`, { mode: 0o600 });
+  const started = startWorkflowPhase(workflowId, {
+    phaseId,
+    sourcePhase: "target-and-architecture-map",
+    admissionFile
+  }, { paths });
+  return { id, target, action, toolId, workflowId, phaseAttemptId: started.projection.activePhase.attemptId };
 }
 
 function resolver(toolId, executable = process.execPath, riskClass = "A1") {
@@ -85,6 +192,8 @@ function resolver(toolId, executable = process.execPath, riskClass = "A1") {
 
 function manifestInput(scope, argv) {
   return {
+    workflowId: scope.workflowId,
+    phaseAttemptId: scope.phaseAttemptId,
     target: scope.target,
     action: scope.action,
     toolId: scope.toolId,
@@ -93,7 +202,8 @@ function manifestInput(scope, argv) {
     estimatedRequests: 1,
     maxParallel: 1,
     maxRatePerSecond: 1,
-    maxTokens: 1_000
+    maxTokens: 1_000,
+    maxEvidenceBytes: 2 * 1024 * 1024
   };
 }
 
@@ -179,6 +289,12 @@ test("one-shot loopback execution binds exact argv and strips ambient credential
   }, { paths, pollIntervalMs: 20, terminationGraceMs: 50 }));
   assert.equal(result.status, "succeeded");
   assert.equal(result.terminationReason, "completed");
+  assert.deepEqual(result.workflow, {
+    instanceId: scope.workflowId,
+    phaseId: "active-surface-validation",
+    phaseAttemptId: scope.phaseAttemptId,
+    reservationId: created.workflow.reservationId
+  });
   assert.equal(requests, 1);
   assert.equal(result.evidence.stdout.available, true);
   assert.equal(result.evidence.resultAvailable, true);
@@ -195,6 +311,22 @@ test("one-shot loopback execution binds exact argv and strips ambient credential
   );
   assert.equal(requests, 1);
   assert.equal(executionStatus({ paths }).counts.succeeded, 1);
+  const workflow = workflowStatus(scope.workflowId, { paths });
+  assert.deepEqual(workflow.executionReservations, []);
+  assert.equal(workflow.activePhase.allocation.conservativelyReserved.maxMinutes, 1);
+  assert.equal(workflow.activePhase.allocation.conservativelyReserved.maxRequests, 1);
+  assert.equal(workflow.activePhase.allocation.conservativelyReserved.maxTotalTokens, 1_000);
+  assert.equal(workflow.activePhase.allocation.conservativelyReserved.maxEvidenceBytes, 2 * 1024 * 1024);
+  assert.throws(
+    () => reconcileExecution(scope.id, { manifestId: created.manifestId, confirm: "RECONCILE wrong" }, { paths }),
+    /confirmation must be exactly/
+  );
+  const reconciled = reconcileExecution(scope.id, {
+    manifestId: created.manifestId,
+    confirm: `RECONCILE EXECUTION ${created.manifestId} ${created.manifestSha256}`
+  }, { paths });
+  assert.equal(reconciled.status, "succeeded");
+  assert.equal(reconciled.workflow.reservationId, created.workflow.reservationId);
 });
 
 test("fast descriptor execution cannot outrun lifecycle listeners or the one-shot claim", async (t) => {
@@ -202,7 +334,7 @@ test("fast descriptor execution cannot outrun lifecycle listeners or the one-sho
   const { root, paths } = fixture(t);
   const executable = ["/usr/bin/true", "/bin/true"].find((candidate) => fs.existsSync(candidate));
   if (!executable) t.skip("true executable unavailable");
-  const scope = approve(paths, root, { id: "fast-tool", target: "fast.example.test", toolId: "fixture-true" });
+  const scope = approve(paths, root, { id: "fast-tool", target: "fast.example.test" });
   const created = createExecutionManifest(scope.id, manifestInput(scope, ["{{GATE_TARGET}}"]), {
     paths,
     resolveTool: resolver(scope.toolId, executable, "P0")
@@ -218,6 +350,58 @@ test("fast descriptor execution cannot outrun lifecycle listeners or the one-sho
   assert.equal(fulfilled[0].value.status, "succeeded");
   assert.equal(rejected.length, 1);
   assert.match(rejected[0].reason.message, /already consumed/);
+});
+
+test("reconciliation records recovery hold after a crash between the durable claims", (t) => {
+  requireLane(t);
+  const { root, paths } = fixture(t);
+  const scope = approve(paths, root, { id: "claim-gap", target: "claim-gap.example.test" });
+  const created = createExecutionManifest(scope.id, manifestInput(scope, ["{{GATE_TARGET}}"]), {
+    paths,
+    resolveTool: resolver(scope.toolId)
+  });
+  const manifest = JSON.parse(fs.readFileSync(
+    path.join(paths.executionManifests, `${created.manifestId}.json`),
+    "utf8"
+  ));
+  const deadSupervisor = executionInternals.processIdentity(process.pid);
+  deadSupervisor.startTimeTicks = String(BigInt(deadSupervisor.startTimeTicks) + 1n);
+  fs.writeFileSync(path.join(paths.executionClaims, `${created.manifestId}.json`), `${JSON.stringify({
+    apiVersion: "gate.execution-claim/v1",
+    manifestId: created.manifestId,
+    runId: created.runId,
+    manifestSha256: created.manifestSha256,
+    engagementId: scope.id,
+    workflow: { ...manifest.workflow },
+    claimedAt: new Date().toISOString(),
+    createdAt: manifest.metadata.createdAt,
+    supervisor: deadSupervisor
+  })}\n`, { mode: 0o600 });
+
+  assert.equal(workflowStatus(scope.workflowId, { paths }).executionReservations[0].status, "reserved");
+  const reconciled = reconcileExecution(scope.id, {
+    manifestId: created.manifestId,
+    confirm: `RECONCILE EXECUTION ${created.manifestId} ${created.manifestSha256}`
+  }, { paths });
+  assert.equal(reconciled.status, "unknown");
+  assert.equal(reconciled.terminationReason, "supervision-lost");
+  const workflow = workflowStatus(scope.workflowId, { paths });
+  assert.equal(workflow.status, "recovery-hold");
+  assert.deepEqual(workflow.executionReservations, [{
+    id: created.workflow.reservationId,
+    status: "unknown",
+    phaseId: "active-surface-validation"
+  }]);
+  assert.equal(JSON.parse(fs.readFileSync(
+    path.join(paths.executionRuns, `${created.runId}.json`),
+    "utf8"
+  )).status, "unknown");
+
+  const replayed = reconcileExecution(scope.id, {
+    manifestId: created.manifestId,
+    confirm: `RECONCILE EXECUTION ${created.manifestId} ${created.manifestSha256}`
+  }, { paths });
+  assert.equal(replayed.status, "unknown");
 });
 
 test("CLI reports a nonzero exit status when an executed tool fails", (t) => {
@@ -253,7 +437,7 @@ test("CLI reports a nonzero exit status when an executed tool fails", (t) => {
 test("manifest creation rejects environment, target, argv0, and placeholder mismatches", (t) => {
   requireLane(t);
   const { root, paths } = fixture(t);
-  const vm = approve(paths, root, { id: "vm-scope", target: "vm.example.test", environment: "vm" });
+  const vm = approve(paths, root, { id: "vm-scope", target: "vm.example.test", environment: "vm", workflow: false });
   assert.throws(
     () => createExecutionManifest(vm.id, manifestInput(vm, ["{{GATE_TARGET}}"]), {
       paths,
@@ -265,7 +449,8 @@ test("manifest creation rejects environment, target, argv0, and placeholder mism
   const externalEvidence = approve(paths, root, {
     id: "external-evidence",
     target: "evidence.example.test",
-    allowedDestinations: ["client-destination"]
+    allowedDestinations: ["client-destination"],
+    workflow: false
   });
   assert.throws(
     () => createExecutionManifest(externalEvidence.id, manifestInput(externalEvidence, ["{{GATE_TARGET}}"]), {
@@ -299,12 +484,40 @@ test("manifest creation rejects environment, target, argv0, and placeholder mism
   );
 });
 
+test("generic manifest creation rejects an active A3 workflow phase before persistence", (t) => {
+  requireLane(t);
+  const { root, paths } = fixture(t);
+  const scope = approve(paths, root, { id: "a3-generic", target: "a3.example.test" });
+  const workflowDirectory = path.join(paths.workflows, scope.workflowId);
+  const journalFile = path.join(workflowDirectory, "journal.jsonl");
+  const projectionFile = path.join(workflowDirectory, "instance.json");
+  const entries = fs.readFileSync(journalFile, "utf8").trimEnd().split("\n").map((line) => JSON.parse(line));
+  const activePhaseEntry = entries.at(-1);
+  assert.equal(activePhaseEntry.type, "phase.started");
+
+  // Exercise the execution boundary directly while retaining a valid journal chain.
+  activePhaseEntry.payload.effectClass = "A3";
+  activePhaseEntry.entrySha256 = workflowRuntimeInternals.entryDigest(activePhaseEntry);
+  fs.writeFileSync(journalFile, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`, { mode: 0o600 });
+  fs.rmSync(projectionFile);
+
+  assert.throws(
+    () => createExecutionManifest(scope.id, manifestInput(scope, ["{{GATE_TARGET}}"]), {
+      paths,
+      resolveTool: resolver(scope.toolId)
+    }),
+    /generic execution lane cannot execute an A3 phase/u
+  );
+  assert.deepEqual(workflowStatus(scope.workflowId, { paths }).executionReservations, []);
+  assert.deepEqual(fs.readdirSync(paths.executionManifests), []);
+});
+
 test("manifest invariants and launch-time executable identity fail closed", async (t) => {
   requireLane(t);
   const { root, paths } = fixture(t);
   const tool = path.join(root, "fixture-tool");
   fs.writeFileSync(tool, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
-  const scope = approve(paths, root, { id: "identity", target: "identity.example.test", toolId: "fixture-script" });
+  const scope = approve(paths, root, { id: "identity", target: "identity.example.test" });
   const first = createExecutionManifest(scope.id, manifestInput(scope, ["{{GATE_TARGET}}"]), {
     paths,
     resolveTool: resolver(scope.toolId, tool, "P0")
@@ -321,6 +534,10 @@ test("manifest invariants and launch-time executable identity fail closed", asyn
     }, { paths }),
     /target argument binding is invalid/
   );
+  cancelWorkflowExecution(scope.workflowId, {
+    reservationId: first.workflow.reservationId,
+    reason: "The tampered fixture manifest will not be executed."
+  }, { paths });
 
   const second = createExecutionManifest(scope.id, manifestInput(scope, ["{{GATE_TARGET}}"]), {
     paths,
@@ -350,8 +567,7 @@ test("evidence limiting durably records a bounded prefix and terminal audit", as
   const script = "process.stdout.write(Buffer.alloc(2*1024*1024,120));setInterval(()=>{},1000);";
   const created = createExecutionManifest(scope.id, manifestInput(scope, ["-e", script, "{{GATE_TARGET}}"]), {
     paths,
-    resolveTool: resolver(scope.toolId),
-    maxEvidenceBytesPerStream: 1024 * 1024
+    resolveTool: resolver(scope.toolId)
   });
   const result = await withTimeout(executeExecutionManifest(scope.id, {
     manifestId: created.manifestId,
@@ -493,8 +709,7 @@ test("audit effect uses the higher catalog risk and stale supervisors project un
   const scope = approve(paths, root, {
     id: "risk-floor",
     target: "127.0.0.1",
-    action: "observe",
-    toolId: "fixture-high-risk"
+    action: "observe"
   });
   const created = createExecutionManifest(scope.id, manifestInput(scope, ["-e", "process.exit(0)", "{{GATE_TARGET}}"]), {
     paths,

@@ -172,6 +172,60 @@ function runtimeEvidence(tool) {
   };
 }
 
+function workflowInstanceSummary(value) {
+  const instanceId = boundedString(value?.instanceId, 63);
+  const statuses = new Set(["open", "stopped", "recovery-hold", "reported", "closed", "unknown"]);
+  const health = new Set(["bounded-replay-verified", "degraded"]).has(value?.health) ? value.health : "degraded";
+  const active = value?.activePhase && typeof value.activePhase === "object" ? value.activePhase : null;
+  const controls = active?.envelopeControls && typeof active.envelopeControls === "object"
+    ? Object.fromEntries(["wallTime", "requests", "rate", "parallel", "tokens", "evidenceBytes", "spend"].map((key) => [
+      key,
+      new Set(["enforced", "measured-only", "unavailable"]).has(active.envelopeControls[key])
+        ? active.envelopeControls[key]
+        : null
+    ]))
+    : null;
+  return {
+    instanceId,
+    status: statuses.has(value?.status) ? value.status : "unknown",
+    activePhase: active ? {
+      id: boundedString(active.id, 80),
+      lane: boundedString(active.lane, 40),
+      effectClass: boundedString(active.effectClass, 8),
+      toolId: boundedString(active.toolId, 80),
+      envelopeControls: controls
+    } : null,
+    journalSequence: nonNegativeInteger(value?.journalSequence),
+    reservations: nonNegativeInteger(value?.reservations),
+    stops: nonNegativeInteger(value?.stops),
+    health
+  };
+}
+
+function workflowSummary(value) {
+  const workflows = value && typeof value === "object" ? value : {};
+  const rawCounts = workflows.counts && typeof workflows.counts === "object" ? workflows.counts : {};
+  const rawScan = workflows.scan && typeof workflows.scan === "object" ? workflows.scan : {};
+  const instances = Array.isArray(workflows.instances)
+    ? workflows.instances.slice(0, 12).map(workflowInstanceSummary)
+    : [];
+  const total = nonNegativeInteger(rawCounts.total);
+  return {
+    counts: Object.fromEntries([
+      "total", "active", "open", "stopped", "recovery-hold", "reported", "closed", "degraded", "unknown"
+    ].map((key) => [key, nonNegativeInteger(rawCounts[key])])),
+    instances,
+    omittedInstances: total === null ? null : Math.max(0, total - instances.length),
+    scan: {
+      discovered: nonNegativeInteger(rawScan.discovered),
+      scanned: nonNegativeInteger(rawScan.scanned),
+      omitted: nonNegativeInteger(rawScan.omitted),
+      complete: typeof rawScan.complete === "boolean" ? rawScan.complete : false,
+      truncated: typeof rawScan.truncated === "boolean" ? rawScan.truncated : true
+    }
+  };
+}
+
 export function statusSummary(status) {
   const source = serializedEvidence(status);
   const runtimes = status?.toolRuntimes || {};
@@ -188,6 +242,7 @@ export function statusSummary(status) {
     : [];
   const executionCounts = compactCounts(status?.execution?.counts);
   const offlineCounts = compactCounts(status?.offlineAnalysis?.counts);
+  const workflows = workflowSummary(status?.workflows);
   const result = {
     apiVersion: "gate.status-summary/v1",
     at: boundedString(status?.at, 40),
@@ -206,6 +261,7 @@ export function statusSummary(status) {
       counts: executionCounts.counts,
       omittedCountKinds: executionCounts.omittedKinds
     },
+    workflows,
     offlineAnalysis: {
       laneAvailable: status?.offlineAnalysis?.capability?.laneAvailable === true,
       mode: boundedString(status?.offlineAnalysis?.capability?.mode, 80),
@@ -244,6 +300,7 @@ export function statusSummary(status) {
       projectBodies: Array.isArray(status?.projects) ? status.projects.length : 0,
       upstreamBodies: Array.isArray(status?.upstreams) ? status.upstreams.length : 0,
       runtimeBodies: Array.isArray(runtimes.tools) ? runtimes.tools.length : 0,
+      workflowBodies: Array.isArray(status?.workflows?.instances) ? status.workflows.instances.length : 0,
       eventKinds: eventKinds.omittedKinds,
       learningStatuses: learningStatuses.omittedKinds,
       engagementStatuses: engagementStatuses.omittedKinds,
@@ -252,10 +309,17 @@ export function statusSummary(status) {
     },
     retrieval: {
       fullStatus: "gate status --json",
+      workflowDetail: "gate workflow status ID --json",
       toolPage: "gate tool list --summary --limit 10 --cursor 0 --json",
       toolDetail: "gate tool show ID --json"
     }
   };
+  while (prettyOutputBytes(result) >= AGENT_SUMMARY_MAX_BYTES && result.workflows.instances.length > 0) {
+    result.workflows.instances.pop();
+    result.workflows.omittedInstances = result.workflows.counts.total === null
+      ? null
+      : Math.max(0, result.workflows.counts.total - result.workflows.instances.length);
+  }
   if (prettyOutputBytes(result) >= AGENT_SUMMARY_MAX_BYTES) {
     throw new Error("status summary exceeded its 8 KiB output contract");
   }

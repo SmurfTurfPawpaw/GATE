@@ -69,6 +69,8 @@ const EXECUTION_TERMINATION_REASONS = new Set([
 const EXECUTION_SIGNALS = new Set(Object.keys(os.constants.signals || {}));
 const EXECUTION_ENFORCED = new Set([
   "engagement-binding",
+  "workflow-phase-binding",
+  "workflow-reservation",
   "target-argument-binding",
   "declared-action-label-binding",
   "tool-allowlist",
@@ -169,7 +171,16 @@ const TOOL_RUNTIME_REASONS = new Set([
   "workflow-phase-admission-unavailable",
   "zero-egress-smoke-sandbox-unavailable"
 ]);
+const WORKFLOW_STATUSES = new Set(["open", "stopped", "recovery-hold", "reported", "closed", "unknown"]);
+const WORKFLOW_HEALTH = new Set(["bounded-replay-verified", "degraded"]);
+const WORKFLOW_LANES = new Set([
+  "governance", "offline-static", "offline-dynamic", "passive-research", "active-observation",
+  "active-testing", "high-impact-controlled", "closure"
+]);
+const WORKFLOW_EFFECTS = new Set(["P0", "P1", "A1", "A2", "A3"]);
+const WORKFLOW_CONTROLS = new Set(["enforced", "measured-only", "unavailable"]);
 const MAX_TOOL_RUNTIMES = 256;
+const MAX_WORKFLOW_RECORDS = 64;
 const ENGAGEMENT_STATUSES = new Set(["draft", "proposed", "approved", "active", "paused", "closed", "expired", "revoked"]);
 const TECHNICAL_REVIEW_STATUSES = new Set(["pending", "passed", "failed"]);
 const OPERATOR_RECEIPT_STATUSES = new Set(["pending", "approved", "revoked"]);
@@ -628,6 +639,16 @@ function summarizeExecutionRun(value) {
     : null;
   const privateEngagementId = id(run.engagementId);
   if (!privateRunId || !privateManifestId || !privateEngagementId) return null;
+  const workflow = object(run.workflow);
+  const workflowInstanceId = id(workflow?.instanceId);
+  const phaseId = publicName(workflow?.phaseId, 80);
+  const phaseAttemptId = typeof workflow?.phaseAttemptId === "string" && /^wpa_[a-f0-9]{32}$/u.test(workflow.phaseAttemptId)
+    ? workflow.phaseAttemptId
+    : null;
+  const reservationId = typeof workflow?.reservationId === "string" && /^wxr_[a-f0-9]{32}$/u.test(workflow.reservationId)
+    ? workflow.reservationId
+    : null;
+  if (!workflowInstanceId || !phaseId || !phaseAttemptId || !reservationId) return null;
   return {
     runId: opaqueId("run", privateRunId),
     manifestId: opaqueId("manifest", privateManifestId),
@@ -638,7 +659,13 @@ function summarizeExecutionRun(value) {
     finishedAt: timestamp(run.finishedAt),
     terminationReason: safeEnum(run.terminationReason, EXECUTION_TERMINATION_REASONS, null),
     exitCode: signedInteger(run.exitCode),
-    signal: safeEnum(run.signal, EXECUTION_SIGNALS, null)
+    signal: safeEnum(run.signal, EXECUTION_SIGNALS, null),
+    workflow: {
+      instanceId: opaqueId("workflow", workflowInstanceId),
+      phaseId,
+      phaseAttemptId: opaqueId("phase-attempt", phaseAttemptId),
+      reservationId: opaqueId("reservation", reservationId)
+    }
   };
 }
 
@@ -676,6 +703,65 @@ function summarizeExecution(value) {
         .sort((left, right) => Date.parse(right.createdAt || 0) - Date.parse(left.createdAt || 0))
         .slice(0, 30)
       : []
+  };
+}
+
+function summarizeWorkflowInstance(value) {
+  const workflow = object(value);
+  if (!workflow) return null;
+  const privateInstanceId = id(workflow.instanceId);
+  const status = safeEnum(workflow.status, WORKFLOW_STATUSES, "unknown");
+  const health = safeEnum(workflow.health, WORKFLOW_HEALTH, "degraded");
+  if (!privateInstanceId) return null;
+  const active = object(workflow.activePhase);
+  let activePhase = null;
+  if (active) {
+    const phaseId = publicName(active.id, 80);
+    const lane = safeEnum(active.lane, WORKFLOW_LANES, null);
+    const effectClass = safeEnum(active.effectClass, WORKFLOW_EFFECTS, null);
+    const toolId = active.toolId === null ? null : publicName(active.toolId, 80);
+    const controls = object(active.envelopeControls);
+    if (!phaseId || !lane || !effectClass || (active.toolId !== null && !toolId)) return null;
+    activePhase = {
+      id: phaseId,
+      lane,
+      effectClass,
+      toolId,
+      envelopeControls: controls ? Object.fromEntries([
+        "wallTime", "requests", "rate", "parallel", "tokens", "evidenceBytes", "spend"
+      ].map((key) => [key, safeEnum(controls[key], WORKFLOW_CONTROLS, null)])) : null
+    };
+  }
+  return {
+    instanceId: opaqueId("workflow", privateInstanceId),
+    status,
+    activePhase,
+    journalSequence: nonNegativeInteger(workflow.journalSequence),
+    reservations: nonNegativeInteger(workflow.reservations),
+    stops: nonNegativeInteger(workflow.stops),
+    health
+  };
+}
+
+function summarizeWorkflows(value) {
+  const workflows = object(value) || {};
+  const rawCounts = object(workflows.counts) || {};
+  const rawScan = object(workflows.scan) || {};
+  const counts = Object.fromEntries([
+    "total", "active", "open", "stopped", "recovery-hold", "reported", "closed", "degraded", "unknown"
+  ].map((key) => [key, nonNegativeInteger(rawCounts[key])]));
+  return {
+    counts,
+    instances: Array.isArray(workflows.instances)
+      ? workflows.instances.slice(0, MAX_WORKFLOW_RECORDS).map(summarizeWorkflowInstance).filter(Boolean)
+      : [],
+    scan: {
+      discovered: nonNegativeInteger(rawScan.discovered),
+      scanned: nonNegativeInteger(rawScan.scanned),
+      omitted: nonNegativeInteger(rawScan.omitted),
+      complete: typeof rawScan.complete === "boolean" ? rawScan.complete : false,
+      truncated: typeof rawScan.truncated === "boolean" ? rawScan.truncated : true
+    }
   };
 }
 
@@ -947,17 +1033,32 @@ export function projectSnapshot(rawStatus, paths) {
     agents: agents.length,
     tasks: tasks.length
   };
+  const workflowInputPresent = object(raw.workflows) !== null;
+  const workflows = summarizeWorkflows(raw.workflows);
+  const workflowBlocked = workflowInputPresent && (
+    workflows.scan.complete !== true ||
+    Number(workflows.counts.stopped || 0) > 0 ||
+    Number(workflows.counts["recovery-hold"] || 0) > 0 ||
+    Number(workflows.counts.degraded || 0) > 0 ||
+    Number(workflows.counts.unknown || 0) > 0
+  );
+  const workflowRunning = workflowInputPresent && Number(workflows.counts.active || 0) > 0;
+  const workflowWaiting = workflowInputPresent && (
+    Number(workflows.counts.open || 0) > 0 || Number(workflows.counts.reported || 0) > 0
+  );
   const state = counts.failed > 0
     ? "failed"
-    : counts.blocked > 0
+    : counts.blocked > 0 || workflowBlocked
       ? "blocked"
       : counts.waiting > 0
         ? "waiting"
-        : counts.running > 0
+        : counts.running > 0 || workflowRunning
           ? "running"
-          : members.length
-            ? "idle"
-            : "unknown";
+          : workflowWaiting
+            ? "waiting"
+            : members.length || workflowInputPresent
+              ? "idle"
+              : "unknown";
   const usage = projectUsage(raw.tokens);
   const lastActivityAt = events[0]?.at || usage.sessions.map((session) => session.at).filter(Boolean).sort().at(-1) || null;
   const generatedAt = timestamp(raw.at) || new Date().toISOString();
@@ -989,6 +1090,7 @@ export function projectSnapshot(rawStatus, paths) {
       budget,
       telemetry: { freshness, lastActivityAt, ageSeconds },
       execution,
+      workflows,
       offlineAnalysis,
       toolRuntimes,
       engagements: Array.isArray(raw.engagements)

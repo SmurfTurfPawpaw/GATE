@@ -110,6 +110,8 @@ function executionFixture(overrides = {}) {
       reason: null,
       enforced: [
         "engagement-binding",
+        "workflow-phase-binding",
+        "workflow-reservation",
         "target-argument-binding",
         "declared-action-label-binding",
         "tool-allowlist",
@@ -161,6 +163,12 @@ function executionFixture(overrides = {}) {
         terminationReason: null,
         exitCode: null,
         signal: null,
+        workflow: {
+          instanceId: "workflow-canary",
+          phaseId: "active-testing",
+          phaseAttemptId: `wpa_${"3".repeat(32)}`,
+          reservationId: `wxr_${"4".repeat(32)}`
+        },
         targetArgument: "TARGET_ARGUMENT_CANARY",
         argv: ["ARGV_CANARY"],
         executablePath: "/private/EXECUTABLE_PATH_CANARY",
@@ -298,6 +306,44 @@ function statusFixture(overrides = {}) {
       }
     ],
     execution: executionFixture(),
+    workflows: {
+      counts: {
+        total: 1,
+        active: 1,
+        open: 1,
+        stopped: 0,
+        "recovery-hold": 0,
+        reported: 0,
+        closed: 0,
+        degraded: 0,
+        unknown: 0
+      },
+      instances: [{
+        instanceId: "workflow-canary",
+        status: "open",
+        activePhase: {
+          id: "active-testing",
+          lane: "active-testing",
+          effectClass: "A2",
+          toolId: "nuclei",
+          envelopeControls: {
+            wallTime: "enforced",
+            requests: "measured-only",
+            rate: "unavailable",
+            parallel: "enforced",
+            tokens: "measured-only",
+            evidenceBytes: "enforced",
+            spend: "unavailable"
+          }
+        },
+        journalSequence: 7,
+        reservations: 1,
+        stops: 0,
+        health: "bounded-replay-verified",
+        privateBody: "WORKFLOW_PRIVATE_CANARY"
+      }],
+      scan: { discovered: 1, scanned: 1, omitted: 0, complete: true, truncated: false }
+    },
     offlineAnalysis: offlineAnalysisFixture(),
     toolRuntimes: {
       ok: true,
@@ -492,16 +538,30 @@ test("observer endpoints coalesce status reads and expose metadata-only projecti
   assert.equal(status.execution.mode, "supervised-generic");
   assert.equal(status.execution.runningCount, 1);
   assert.equal(status.execution.counts.succeeded, 2);
+  assert.ok(status.execution.enforced.includes("workflow-phase-binding"));
+  assert.ok(status.execution.enforced.includes("workflow-reservation"));
   assert.equal(status.execution.bestEffort.length, 3);
   assert.equal(status.execution.unavailable.length, 13);
   assert.match(status.execution.recent[0].runId, /^run_[a-f0-9]{16}$/);
   assert.match(status.execution.recent[0].manifestId, /^manifest_[a-f0-9]{16}$/);
   assert.match(status.execution.recent[0].engagementId, /^engagement_[a-f0-9]{16}$/);
   assert.equal(status.execution.recent[0].status, "running");
+  assert.match(status.execution.recent[0].workflow.instanceId, /^workflow_[a-f0-9]{16}$/);
+  assert.equal(status.execution.recent[0].workflow.phaseId, "active-testing");
+  assert.match(status.execution.recent[0].workflow.phaseAttemptId, /^phase-attempt_[a-f0-9]{16}$/);
+  assert.match(status.execution.recent[0].workflow.reservationId, /^reservation_[a-f0-9]{16}$/);
   assert.notEqual(
     status.execution.recent[0].runId,
     `run_${crypto.createHash("sha256").update(`xrun_${"1".repeat(32)}`).digest("hex").slice(0, 16)}`
   );
+  assert.equal(status.workflows.counts.total, 1);
+  assert.equal(status.workflows.counts.active, 1);
+  assert.equal(status.workflows.scan.complete, true);
+  assert.equal(status.workflows.instances.length, 1);
+  assert.match(status.workflows.instances[0].instanceId, /^workflow_[a-f0-9]{16}$/);
+  assert.equal(status.workflows.instances[0].activePhase.id, "active-testing");
+  assert.equal(status.workflows.instances[0].health, "bounded-replay-verified");
+  assert.equal(JSON.stringify(status).includes("WORKFLOW_PRIVATE_CANARY"), false);
   assert.equal(status.offlineAnalysis.configured, true);
   assert.equal(status.offlineAnalysis.laneAvailable, true);
   assert.equal(status.offlineAnalysis.mode, "bubblewrap-offline");
@@ -730,6 +790,9 @@ test("execution metadata keeps opaque joins while excluding command and evidence
   const rawRunId = `xrun_${"a".repeat(32)}`;
   const rawManifestId = `xmf_${"b".repeat(32)}`;
   const rawEngagementId = "safe-test-engagement";
+  const rawWorkflowId = "workflow-metadata-test";
+  const rawPhaseAttemptId = `wpa_${"c".repeat(32)}`;
+  const rawReservationId = `wxr_${"d".repeat(32)}`;
   const projected = projectSnapshot(statusFixture({
     events: [canonicalEvent({ runId: rawRunId })],
     engagements: [{
@@ -751,6 +814,12 @@ test("execution metadata keeps opaque joins while excluding command and evidence
         terminationReason: "process-group-remained",
         exitCode: null,
         signal: null,
+        workflow: {
+          instanceId: rawWorkflowId,
+          phaseId: "active-testing",
+          phaseAttemptId: rawPhaseAttemptId,
+          reservationId: rawReservationId
+        },
         argv: ["JOIN_ARGV_CANARY"],
         target: "JOIN_TARGET_CANARY",
         evidence: "JOIN_EVIDENCE_CANARY"
@@ -763,9 +832,16 @@ test("execution metadata keeps opaque joins while excluding command and evidence
   assert.equal(run.engagementId, projected.status.engagements[0].id);
   assert.equal(run.status, "cancelled");
   assert.equal(run.terminationReason, "process-group-remained");
+  assert.match(run.workflow.instanceId, /^workflow_[a-f0-9]{16}$/);
+  assert.equal(run.workflow.phaseId, "active-testing");
+  assert.match(run.workflow.phaseAttemptId, /^phase-attempt_[a-f0-9]{16}$/);
+  assert.match(run.workflow.reservationId, /^reservation_[a-f0-9]{16}$/);
   assert.notEqual(run.runId, `run_${crypto.createHash("sha256").update(rawRunId).digest("hex").slice(0, 16)}`);
   const serialized = JSON.stringify(projected);
-  for (const forbidden of [rawRunId, rawManifestId, rawEngagementId, "JOIN_ARGV_CANARY", "JOIN_TARGET_CANARY", "JOIN_EVIDENCE_CANARY"]) {
+  for (const forbidden of [
+    rawRunId, rawManifestId, rawEngagementId, rawWorkflowId, rawPhaseAttemptId, rawReservationId,
+    "JOIN_ARGV_CANARY", "JOIN_TARGET_CANARY", "JOIN_EVIDENCE_CANARY"
+  ]) {
     assert.equal(serialized.includes(forbidden), false, `observer leaked ${forbidden}`);
   }
 });
@@ -800,6 +876,55 @@ test("execution availability fails closed on incomplete capabilities and malform
   assert.equal(unavailable.status.execution.configured, null);
   assert.equal(unavailable.status.execution.laneAvailable, false);
   assert.equal(unavailable.status.execution.runningCount, null);
+});
+
+test("execution availability requires every workflow enforcement control", () => {
+  for (const required of ["workflow-phase-binding", "workflow-reservation"]) {
+    const execution = executionFixture();
+    execution.capability.enforced = execution.capability.enforced.filter((value) => value !== required);
+
+    const projected = projectSnapshot(statusFixture({ execution }), paths);
+
+    assert.equal(projected.status.execution.laneAvailable, false, `missing ${required} must fail closed`);
+    assert.equal(projected.status.execution.enforced.includes(required), false);
+  }
+});
+
+test("workflow faults make observer state blocked without leaking private workflow state", () => {
+  const raw = statusFixture({
+    events: [],
+    workflows: {
+      counts: {
+        total: 2,
+        active: 0,
+        open: 0,
+        stopped: 1,
+        "recovery-hold": 0,
+        reported: 0,
+        closed: 0,
+        degraded: 1,
+        unknown: 1
+      },
+      instances: [{
+        instanceId: "faulted-workflow",
+        status: "unknown",
+        activePhase: null,
+        journalSequence: null,
+        reservations: null,
+        stops: null,
+        health: "degraded",
+        blocker: "PRIVATE_WORKFLOW_BLOCKER"
+      }],
+      scan: { discovered: 2, scanned: 1, omitted: 1, complete: false, truncated: true }
+    }
+  });
+  const projected = projectSnapshot(raw, paths);
+
+  assert.equal(projected.status.state, "blocked");
+  assert.equal(projected.status.workflows.counts.degraded, 1);
+  assert.equal(projected.status.workflows.scan.complete, false);
+  assert.equal(projected.status.workflows.scan.truncated, true);
+  assert.equal(JSON.stringify(projected).includes("PRIVATE_WORKFLOW_BLOCKER"), false);
 });
 
 test("offline analysis projection fails closed and withholds artifact and evidence details", () => {

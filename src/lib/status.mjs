@@ -10,6 +10,7 @@ import { validateDocument } from "./schema.mjs";
 import { scanCodexUsage } from "./tokens.mjs";
 import { managedToolSummary } from "./tool-runtimes.mjs";
 import { upstreamStatus } from "./upstreams.mjs";
+import { workflowFleetStatus } from "./workflow-runtime.mjs";
 
 function canonicalUsageRecords(values, paths, partial = false) {
   const records = new Map();
@@ -27,7 +28,9 @@ function canonicalUsageRecords(values, paths, partial = false) {
 }
 
 export async function buildStatus(options = {}) {
-  const paths = options.paths || runtimePaths(options);
+  const paths = options.paths
+    ? { ...runtimePaths({ home: options.paths.home, repo: options.paths.repo }), ...options.paths }
+    : runtimePaths(options);
   ensureRuntime(paths);
   const observedAt = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
   const tokenRead = {};
@@ -64,6 +67,7 @@ export async function buildStatus(options = {}) {
       .reverse(),
     engagements,
     execution: executionStatus({ paths }),
+    workflows: workflowFleetStatus({ paths, runtimeEnsured: true }),
     offlineAnalysis: offlineAnalysisStatus({ paths }),
     projects: projectRegistryStatus({ paths }),
     tokens,
