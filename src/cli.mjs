@@ -737,11 +737,10 @@ export async function main(argv) {
     const [area, actionOrId, maybeId] = parsed.positional;
     const mutationFlags = ["request", "expected-sequence", "expected-head", "json"];
     if (area === "new") {
-      assertPositionals(parsed.positional, 2, "gate workflow new ID [--engagement ID] [--definition pentest-e2e]");
-      assertFlags(parsed.flags, ["engagement", "definition", "request", "json"]);
+      assertPositionals(parsed.positional, 2, "gate workflow new ID [--engagement ID]");
+      assertFlags(parsed.flags, ["engagement", "request", "json"]);
       const result = createWorkflowInstance(actionOrId, {
-        engagementId: optionalValueFlag(parsed.flags, "engagement"),
-        definitionId: optionalValueFlag(parsed.flags, "definition")
+        engagementId: optionalValueFlag(parsed.flags, "engagement")
       }, workflowMutationOptions(parsed.flags, paths));
       return output(result, json);
     }

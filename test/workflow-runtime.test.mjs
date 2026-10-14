@@ -75,7 +75,7 @@ function instanceFiles(paths, id) {
   };
 }
 
-test("offline workflow completes the exact map-first lifecycle and closes against the report digest", (t) => {
+test("offline workflow cannot report or close with blocked retest", (t) => {
   const { root, paths } = fixture(t, "gate-workflow-lifecycle-");
   const id = "offline-lifecycle";
   const created = createWorkflowInstance(id, {}, { paths });
@@ -112,19 +112,14 @@ test("offline workflow completes the exact map-first lifecycle and closes agains
   const reportBytes = Buffer.from("# Offline workflow report\n\nAll target-contact coverage is explicitly blocked.\n");
   const reportFile = inputFile(root, "report.md", reportBytes);
   const reportSha256 = crypto.createHash("sha256").update(reportBytes).digest("hex");
-  const reported = attachWorkflowReport(id, { file: reportFile }, { paths });
-  assert.equal(reported.entry.type, "report.attached");
-  assert.equal(reported.projection.report.sha256, reportSha256);
-
-  const closed = closeWorkflow(id, { confirm: `CLOSE ${id} ${reportSha256}` }, { paths });
-  assert.equal(closed.entry.type, "workflow.closed");
+  assert.throws(() => attachWorkflowReport(id, { file: reportFile }, { paths }), /completed retest/u);
+  assert.throws(() => closeWorkflow(id, { confirm: `CLOSE ${id} ${reportSha256}` }, { paths }), /completed retest/u);
   const status = workflowStatus(id, { paths });
   assert.equal(status.ok, true);
-  assert.equal(status.status, "closed");
+  assert.equal(status.status, "open");
   assert.equal(status.coverage.recorded, 18);
-  assert.equal(status.coverage.required, 18);
   assert.equal(status.joined, true);
-  assert.equal(status.reportSha256, reportSha256);
+  assert.equal(status.reportSha256, null);
 
   const files = instanceFiles(paths, id);
   assert.equal(fs.statSync(files.directory).mode & 0o777, 0o700);
@@ -296,4 +291,9 @@ test("an A3 phase fails closed before target contact when admission and handoff 
   assert.equal(after.activePhase, null);
   assert.equal(after.journal.sequence, before.journal.sequence);
   assert.equal(after.journal.headSha256, before.journal.headSha256);
+});
+
+test("workflow creation rejects alternate definition selection", (t) => {
+  const { paths } = fixture(t);
+  assert.throws(() => createWorkflowInstance("alternate-definition", { definitionId: "pentest-e2e" }, { paths }), /unsupported/u);
 });

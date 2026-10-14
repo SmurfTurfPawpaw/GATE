@@ -24,7 +24,8 @@
     "joined",
     "report",
     "closedAt",
-    "projectionSha256"
+    "projectionSha256",
+    "budget"
   ],
   "properties": {
     "apiVersion": {
@@ -201,6 +202,117 @@
     },
     "projectionSha256": {
       "$ref": "#/$defs/sha256"
+    },
+    "budget": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "total",
+            "used",
+            "cleanup",
+            "reporting"
+          ],
+          "properties": {
+            "total": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "maxMinutes",
+                "maxRequests",
+                "maxTotalTokens"
+              ],
+              "properties": {
+                "maxMinutes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "maxRequests": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "maxTotalTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            },
+            "used": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "maxMinutes",
+                "maxRequests",
+                "maxTotalTokens"
+              ],
+              "properties": {
+                "maxMinutes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "maxRequests": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "maxTotalTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            },
+            "cleanup": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "maxMinutes",
+                "maxRequests",
+                "maxTotalTokens"
+              ],
+              "properties": {
+                "maxMinutes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "maxRequests": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "maxTotalTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            },
+            "reporting": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "maxMinutes",
+                "maxRequests",
+                "maxTotalTokens"
+              ],
+              "properties": {
+                "maxMinutes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "maxRequests": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "maxTotalTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          }
+        }
+      ]
     }
   },
   "$defs": {

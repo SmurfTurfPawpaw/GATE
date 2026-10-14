@@ -194,8 +194,8 @@ function readTrackedJson(file, schema, paths, maximumBytes = 16 * 1024 * 1024) {
   return { value, bytes, sha256: sha256(bytes) };
 }
 
-function loadDefinition(paths, definitionId = "pentest-e2e") {
-  const id = requireId(definitionId, "workflow definition id");
+function loadDefinition(paths) {
+  const id = "pentest-e2e";
   const workflow = readTrackedJson(
     path.join(paths.repo, "config", "workflows", `${id}.json`),
     "pentest-workflow.schema.json",
@@ -245,7 +245,7 @@ function phaseById(definition, id) {
 
 function effectiveStops(definition, phase) {
   return [...new Set([
-    ...(phase.stopPolicy?.inheritDefaultEngagementStops ? definition.value.defaultStopConditions : []),
+    ...(phase.stopPolicy?.inheritDefaultEngagementStops ? definition.mandatoryStops : []),
     ...(phase.stopPolicy?.additional || [])
   ])].sort();
 }
@@ -411,6 +411,7 @@ function applyEntry(previous, entry, paths) {
       ledger: {},
       stops: [],
       executionReservations: {},
+      budget: null,
       joined: null,
       report: null,
       closedAt: null,
@@ -424,6 +425,7 @@ function applyEntry(previous, entry, paths) {
   switch (entry.type) {
     case "phase.started": {
       const record = { ...structuredClone(payload), status: "running", startedAt: entry.at, finishedAt: null };
+      if (payload.budget) projection.budget = structuredClone(payload.budget);
       projection.activePhase = structuredClone(record);
       projection.phases[payload.phaseId] = record;
       break;
@@ -586,13 +588,11 @@ function parseJournal(paths, maximumBytes = MAX_JOURNAL_BYTES) {
 }
 
 function replay(entries, paths) {
-  const snapshots = [];
   let projection = null;
   for (const entry of entries) {
     projection = applyEntry(projection, entry, paths);
-    snapshots.push(structuredClone(projection));
   }
-  return { projection, snapshots };
+  return { projection };
 }
 
 function sameProjection(left, right) {
@@ -636,7 +636,7 @@ function loadProjection(paths, {
   const observedDigest = canonicalDigest(projectionEnvelope(observed), "gate.workflow.projection.v1");
   if (observed.projectionSha256 !== observedDigest) throw new Error("workflow projection digest is invalid");
   if (observed.appliedSequence > played.projection.appliedSequence) throw new Error("workflow projection is ahead of its authoritative journal");
-  const expectedPrefix = played.snapshots[observed.appliedSequence];
+  const expectedPrefix = replay(entries.slice(0, observed.appliedSequence + 1), paths).projection;
   if (!expectedPrefix || observed.journalHeadSha256 !== expectedPrefix.journalHeadSha256) {
     throw new Error("workflow projection does not name an exact authoritative journal prefix");
   }
@@ -653,7 +653,7 @@ function loadProjection(paths, {
     repaired = true;
   }
   if (requireCurrentContract) {
-    const definition = loadDefinition(paths, played.projection.definition.id);
+    const definition = loadDefinition(paths);
     if (played.projection.definition.sha256 !== definition.contractSha256 ||
       played.projection.definition.workflowSha256 !== definition.workflowSha256 ||
       played.projection.definition.catalogSha256 !== definition.catalogSha256 ||
@@ -969,13 +969,13 @@ function transitionKind(projection, sourcePhase) {
     reservation.phaseId === sourcePhase && (!source?.attemptId || reservation.phaseAttemptId === source.attemptId) &&
     ["failed", "unknown"].includes(reservation.status)
   );
-  return failed ? "failure" : "normal";
+  return failed || (source && !source.direct && ["blocked", "untested"].includes(source.status)) ? "failure" : "normal";
 }
 
 function applicabilityMatches(guard, projection, sourcePhase) {
   if (guard === "any" || guard === "all-required-dispositioned") return true;
   const status = projection.phases[sourcePhase]?.status;
-  if (guard === "applicable") return status === "tested" || status === "running";
+  if (guard === "applicable") return status === "tested" || status === "running" || transitionKind(projection, sourcePhase) === "failure";
   return status === guard;
 }
 
@@ -1108,10 +1108,25 @@ function validateAdmission(paths, projection, definition, phase, bytesOrFile, op
   if (binding.target.value !== value.target || binding.action !== action || !binding.permittedTools.includes(value.toolId)) {
     throw new Error("workflow admission target, action, or tool is outside current authority");
   }
+  const limits = check.engagement.limits;
+  const budget = structuredClone(projection.budget || {
+    total: { maxMinutes: limits.maxMinutes, maxRequests: limits.maxRequests, maxTotalTokens: limits.maxTokens },
+    used: { maxMinutes: 0, maxRequests: 0, maxTotalTokens: 0 },
+    cleanup: { maxMinutes: Math.ceil(limits.maxMinutes / 10), maxRequests: Math.ceil(limits.maxRequests / 10), maxTotalTokens: Math.ceil(limits.maxTokens / 10) },
+    reporting: { maxMinutes: Math.ceil(limits.maxMinutes / 10), maxRequests: Math.ceil(limits.maxRequests / 10), maxTotalTokens: Math.ceil(limits.maxTokens / 10) }
+  });
+  for (const field of Object.keys(budget.total)) {
+    const protectedAmount = budget.reporting[field] + (TEARDOWN_PHASES.has(phase.id) ? 0 : budget.cleanup[field]);
+    if (budget.used[field] + value.envelope[field] > budget.total[field] - protectedAmount) {
+      throw new Error(`workflow ${field} exceeds remaining capacity with protected closeout reserves`);
+    }
+    budget.used[field] += value.envelope[field];
+  }
   return {
     value,
     digest,
     mappingSha256,
+    budget,
     action,
     authority: {
       engagementId: binding.engagementId,
@@ -1173,7 +1188,7 @@ function validateHandoff(paths, projection, definition, phase, transition, admis
   return { value, digest };
 }
 
-function recheckAdmission(paths, phaseRecord) {
+function recheckAdmission(paths, phaseRecord, { completion = false } = {}) {
   if (!phaseRecord?.admissionSha256 || !phaseRecord.authority || !phaseRecord.envelope) {
     throw new Error("target-contact phase has no durable admission binding");
   }
@@ -1183,13 +1198,20 @@ function recheckAdmission(paths, phaseRecord) {
   const check = checkEngagement(phaseRecord.authority.engagementId, {
     target: phaseRecord.target,
     action: phaseRecord.action,
-    maxMinutes: phaseRecord.envelope.maxMinutes,
+    maxMinutes: completion ? 0 : phaseRecord.envelope.maxMinutes,
     estimatedRequests: phaseRecord.envelope.maxRequests,
     maxParallel: phaseRecord.envelope.maxParallel,
     maxRatePerSecond: phaseRecord.envelope.maxRatePerSecond,
     maxTokens: phaseRecord.envelope.maxTotalTokens
   }, { paths });
-  if (!check.allowed) throw new Error(`workflow phase authority failed: ${check.reasons.join("; ")}`);
+  if (!check.allowed) {
+    if (!completion || !phaseRecord.preauthorizedTeardown || check.reasons.some((reason) => !["authorization expired", "declared duration extends beyond the authorization window"].includes(reason))) {
+      throw new Error(`workflow phase authority failed: ${check.reasons.join("; ")}`);
+    }
+    const receipt = readPrivateFileBounded(path.join(paths.authorizations, `${phaseRecord.authority.engagementId}.receipt.json`), 64 * 1024, null, { label: "operator authorization receipt" });
+    if (sha256(receipt) !== phaseRecord.authority.receiptSha256) throw new Error("workflow phase authority receipt byte identity changed");
+    return phaseRecord.authority;
+  }
   if (check.executionBinding.receiptSha256 !== phaseRecord.authority.receiptSha256) {
     throw new Error("workflow phase authority receipt byte identity changed");
   }
@@ -1201,6 +1223,7 @@ function assertDirectMutationAllowed(projection, operation) {
 }
 
 export function createWorkflowInstance(id, input = {}, options = {}) {
+  if (input.definitionId !== undefined) throw new Error("alternate workflow definitions are unsupported");
   const instanceId = requireId(id);
   const requestId = options.requestId || newId("wreq");
   if (!REQUEST_PATTERN.test(requestId)) throw new Error("workflow request id is invalid");
@@ -1214,7 +1237,7 @@ export function createWorkflowInstance(id, input = {}, options = {}) {
     if (error.code !== "EEXIST") throw error;
   }
   ensureInstanceDirectories(paths, true);
-  const definition = loadDefinition(paths, input.definitionId || "pentest-e2e");
+  const definition = loadDefinition(paths);
   const engagementId = input.engagementId === undefined || input.engagementId === null
     ? null : requireId(input.engagementId, "engagement id");
   const requestSha256 = options.requestSha256 || canonicalDigest({
@@ -1291,7 +1314,7 @@ export function workflowStatus(id, options = {}) {
     ensureInstanceDirectories(paths, false);
     owner = acquireLock(paths);
     const loaded = loadProjection(paths, { repair: true, requireCurrentContract: true });
-    const definition = loadDefinition(paths, loaded.projection.definition.id);
+    const definition = loadDefinition(paths);
     result = compactStatus(loaded.projection, definition, {
       repaired: loaded.repaired, updatedAt: loaded.entries.at(-1)?.at || null
     });
@@ -1327,7 +1350,7 @@ function validatePhaseStart(projection, paths, input, admissionBytes, handoffByt
   if (["closed", "reported"].includes(projection.status)) throw new Error(`workflow status ${projection.status} cannot start a phase`);
   if (projection.activePhase) throw new Error(`phase ${projection.activePhase.phaseId} is already active`);
   if (projection.phases[phaseId]) throw new Error(`phase ${phaseId} already has an attempt`);
-  const definition = loadDefinition(paths, projection.definition.id);
+  const definition = loadDefinition(paths);
   const phase = phaseById(definition, phaseId);
   if (projection.joined && !new Set(["retest-and-regression", "retest-cleanup-verification"]).has(phaseId)) {
     throw new Error("joined coverage permits only the defined retest branch before reporting");
@@ -1513,6 +1536,8 @@ export function startWorkflowPhase(id, input, options = {}) {
         handoffSha256: handoff?.digest || null,
         authority: admission?.authority || null,
         envelope: admission?.value.envelope || null,
+        preauthorizedTeardown: transition?.guard.authorization === "preauthorized-teardown" && TEARDOWN_PHASES.has(phaseId),
+        budget: admission?.budget || null,
         effectiveStops: effectiveStops(definition, phase),
         executionEpochSha256
       }
@@ -1530,7 +1555,7 @@ export function addWorkflowEvidence(id, input, options = {}) {
   return mutate(id, intentOptions(options, "evidence.add", {
     phaseId, evidenceId, claimState, fileSha256: digest
   }), (projection, entries, paths) => {
-    const definition = loadDefinition(paths, projection.definition.id);
+    const definition = loadDefinition(paths);
     const phase = phaseById(definition, phaseId);
     if (projection.activePhase?.phaseId !== phaseId) throw new Error("evidence can be added only to the active phase");
     if (projection.status !== "open" && !TEARDOWN_PHASES.has(phaseId)) {
@@ -1569,7 +1594,7 @@ export function finishWorkflowPhase(id, input, options = {}) {
   const explicitEvidence = [...new Set(input.evidenceSha256 || [])].sort();
   if (explicitEvidence.some((digest) => !SHA256_PATTERN.test(digest))) throw new Error("phase disposition evidence digest is invalid");
   return mutate(id, intentOptions(options, "phase.finish", input), (projection, entries, paths) => {
-    const definition = loadDefinition(paths, projection.definition.id);
+    const definition = loadDefinition(paths);
     const phase = phaseById(definition, phaseId);
     const running = projection.activePhase?.phaseId === phaseId;
     if (projection.joined && !running) throw new Error("joined coverage rejects direct phase dispositions");
@@ -1594,7 +1619,7 @@ export function finishWorkflowPhase(id, input, options = {}) {
       if (pendingReservations(projection).some((reservation) => reservation.phaseAttemptId === record.attemptId)) {
         throw new Error("phase cannot finish while an execution reservation is pending");
       }
-      if (phase.targetContact) recheckAdmission(paths, record);
+      if (phase.targetContact) recheckAdmission(paths, record, { completion: true });
       if (explicitEvidence.length) throw new Error("tested disposition evidence is derived from the active phase and must not be supplied directly");
     } else {
       if (!input.rationale) throw new Error(`${disposition} disposition requires a rationale`);
@@ -1635,7 +1660,7 @@ export function setWorkflowCoverage(id, input, options = {}) {
     if (evidenceSha256.some((digest) => !known.has(digest))) throw new Error("coverage references unknown evidence");
     if (disposition === "tested" && !evidenceSha256.length) throw new Error("tested coverage requires evidence");
     if (disposition === "tested") {
-      const definition = loadDefinition(paths, projection.definition.id);
+      const definition = loadDefinition(paths);
       const supportsDomain = evidenceSha256.some((digest) => projection.evidence.some((record) => {
         const evidencePhase = phaseById(definition, record.phaseId);
         return record.sha256 === digest && record.claimState !== "unverified" &&
@@ -1656,7 +1681,7 @@ function validateLedgerOpen(projection, paths, input, pivotAdmissionBytes, optio
     record.phaseId === projection.activePhase.phaseId && record.attemptId === projection.activePhase.attemptId)) {
     throw new Error("ledger before-evidence digest is not bound to the active phase attempt");
   }
-  const definition = loadDefinition(paths, projection.definition.id);
+  const definition = loadDefinition(paths);
   const phase = phaseById(definition, projection.activePhase.phaseId);
   if (!phase.stateChangeHandling?.mayChangeState) throw new Error("active phase does not permit target-side state change");
   const pivotEntries = Object.values(projection.ledger).filter((entry) => entry.changeType === "pivot");
@@ -1828,12 +1853,8 @@ export function recordWorkflowLedgerCleanup(id, input, options = {}) {
     if (!Number.isInteger(openedSequence) || !Number.isInteger(evidenceSequence) || evidenceSequence <= openedSequence) {
       throw new Error("ledger cleanup evidence must be recorded after the state change");
     }
-    if (record.changeType === "pivot") {
-      const outstanding = Object.values(projection.ledger).filter((entry) =>
-        entry.changeType === "pivot" && entry.status !== "verified-clean"
-      );
-      if (outstanding.at(-1)?.entryId !== entryId) throw new Error("pivot cleanup must proceed in LIFO order");
-    }
+    const outstanding = Object.values(projection.ledger).filter((entry) => entry.status !== "verified-clean");
+    if (outstanding.at(-1)?.entryId !== entryId) throw new Error("cleanup must proceed in LIFO order");
     return { type: "ledger.cleanup-recorded", payload: { entryId, cleanupEvidenceSha256: digest } };
   });
 }
@@ -1858,6 +1879,8 @@ export function verifyWorkflowLedger(id, input, options = {}) {
       throw new Error("ledger verification evidence must be recorded after cleanup");
     }
     if (record.cleanupEvidenceSha256 === digest) throw new Error("ledger verification requires independent evidence");
+    const outstanding = Object.values(projection.ledger).filter((entry) => entry.status !== "verified-clean");
+    if (outstanding.at(-1)?.entryId !== entryId) throw new Error("verification must proceed in LIFO order");
     return { type: "ledger.verified", payload: { entryId, verificationEvidenceSha256: digest } };
   });
 }
@@ -1896,7 +1919,7 @@ export function stopWorkflow(id, input, options = {}) {
 export function joinWorkflowCoverage(id, input = {}, options = {}) {
   return mutate(id, intentOptions(options, "coverage.join", input), (projection, entries, paths) => {
     assertDirectMutationAllowed(projection, "join coverage");
-    const definition = loadDefinition(paths, projection.definition.id);
+    const definition = loadDefinition(paths);
     if (projection.activePhase) throw new Error("coverage cannot join while a phase is active");
     if (pendingReservations(projection).length) throw new Error("coverage cannot join while an execution reservation is pending");
     if (projection.joined) throw new Error("coverage is already joined");
@@ -1929,11 +1952,19 @@ export function joinWorkflowCoverage(id, input = {}, options = {}) {
   });
 }
 
+function assertCloseout(projection) {
+  if (projection.activePhase) throw new Error("reporting requires no active phase");
+  if (projection.phases["retest-and-regression"]?.status !== "tested") throw new Error("reporting requires completed retest");
+  if (Object.values(projection.ledger).some((entry) => entry.phaseId === "retest-and-regression") &&
+    projection.phases["retest-cleanup-verification"]?.status !== "tested") throw new Error("reporting requires completed retest cleanup verification");
+}
+
 export function attachWorkflowReport(id, input, options = {}) {
   const bytes = stableFileBytes(input.file, MAX_EXTERNAL_BYTES, "workflow report file");
   const digest = sha256(bytes);
   return mutate(id, intentOptions(options, "report.attach", { fileSha256: digest }), (projection, entries, paths) => {
     assertDirectMutationAllowed(projection, "attach a report");
+    assertCloseout(projection);
     if (!projection.joined) throw new Error("reporting requires a successful coverage join");
     if (!CLEAN_LEDGER_STATES.has(ledgerState(projection))) throw new Error("reporting requires an empty or verified-clean ledger");
     if (pendingReservations(projection).length) throw new Error("reporting cannot proceed while an execution reservation is pending");
@@ -1959,6 +1990,7 @@ export function attachWorkflowReport(id, input, options = {}) {
 
 export function closeWorkflow(id, input, options = {}) {
   return mutate(id, intentOptions(options, "workflow.close", input), (projection) => {
+    assertCloseout(projection);
     if (projection.status !== "reported" || !projection.report || !projection.joined) {
       throw new Error("workflow can close only after joined reporting");
     }

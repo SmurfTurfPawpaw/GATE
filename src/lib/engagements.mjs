@@ -116,7 +116,7 @@ function mandatoryStopConditions(paths) {
   }
   const workflow = JSON.parse(content.toString("utf8"));
   assertValidDocument(workflow, "pentest-workflow.schema.json", { paths });
-  const conditions = Object.freeze([...workflow.defaultStopConditions]);
+  const conditions = Object.freeze([...new Set([...workflow.defaultStopConditions, ...workflow.phases.flatMap((phase) => phase.stopPolicy?.additional || [])])].sort());
   mandatoryStopCache.set(file, { identity, conditions });
   return conditions;
 }
