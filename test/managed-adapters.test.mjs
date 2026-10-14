@@ -302,13 +302,13 @@ function approve(paths, root, { id, target, toolId }) {
       checkedAt: new Date().toISOString()
     },
     envelope: {
-      maxMinutes: 5,
-      maxRequests: 4,
+      maxMinutes: 1,
+      maxRequests: 1,
       maxRatePerSecond: 2,
       maxParallel: 1,
       maxInputTokens: 0,
       maxOutputTokens: 0,
-      maxTotalTokens: 20_000,
+      maxTotalTokens: 1_000,
       maxEvidenceBytes: 32 * 1024 * 1024,
       maxSpend: 0,
       controls: {

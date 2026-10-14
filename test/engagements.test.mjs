@@ -89,9 +89,14 @@ test("engagement creation requires and normalizes an explicit tool scope", (t) =
 
 test("engagements retain every mandatory workflow stop on creation and load", (t) => {
   const { paths } = fixture(t);
-  const mandatory = JSON.parse(
+  const workflow = JSON.parse(
     fs.readFileSync(path.join(paths.repo, "config", "workflows", "pentest-e2e.json"), "utf8")
-  ).defaultStopConditions;
+  );
+  const mandatory = [...new Set([
+    ...workflow.defaultStopConditions,
+    ...workflow.phases.flatMap((phase) => phase.stopPolicy?.additional || [])
+  ])].sort();
+  assert.equal(mandatory.length, 13);
   const engagement = createEngagement(
     {
       id: "mandatory-stops",
