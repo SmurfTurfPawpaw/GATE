@@ -67,6 +67,8 @@ Add proposed lessons here only after removing sensitive context. Promotion must 
 
 - 2026-10-14 | Cause: Portable npm hardening coverage launched Bubblewrap without prerequisite checks. | Change: Separate the namespace regression and skip unavailable prerequisites locally while failing required integration. | Evidence: evidence://review-R1-npm-namespace-prerequisites | Status: proposed
 
+- 2026-10-14 | Cause: Generic guides selected Nmap despite its admission block. | Change: Keep Nmap for planning and document admitted P0 ExifTool metadata execution with exact prerequisites. | Evidence: evidence://review-R1-generic-execution-examples | Status: proposed
+
 ## Superseded or reverted
 
 Move old entries here with the new evidence and replacement learning. Do not erase history.

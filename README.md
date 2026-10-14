@@ -176,15 +176,18 @@ The machine-readable [end-to-end penetration-testing workflow](config/workflows/
 
 Local source review, hypothesis generation, declared passive research, and analysis of saved evidence can proceed without an active receipt under their data and provider rules. Contacting a target through scanning, crawling, interception, authentication, fuzzing, exploitation, persistence, denial-of-service testing, or data access requires an engagement whose reviewed report and operator receipt match the exact plan digest. Each launch then uses either a reviewed scope-aware adapter or the Linux/WSL2 supervised generic lane described below. The generic lane supports only receipt-bound `scope.environment: host`; container, rootless-container, VM, and remote-lab engagements need a lane that implements that environment. Follow the [end-to-end workflow](docs/pentest-workflow.md) to map prerequisites, evidence, stop conditions, and handoffs before selecting a tool.
 
+Nmap remains a planning example: `./bin/gate.mjs tool plan nmap --json` reports its admission requirements. It is blocked from generic execution pending reviewed runtime admission, even when installed and permitted by an engagement.
+
+The runnable walkthrough below uses ExifTool to read metadata from an operator-supplied copied image. Before starting, set `GATE_HOME` to your private runtime root and place the authorized copy at `$GATE_HOME/artifacts/sample.jpg`. Install a reviewed, exactly versioned ExifTool from its official source through its `native-os` lane; GATE does not install it from the catalog. Its catalog ID and command are `exiftool`, risk class is `P0`, and command identity requires `pathDiscovery: command-name` and `genericLaneAdmission: path-discovery`. Linux/WSL2 with `/proc` mounted and the executable on `PATH` are required. Check `./bin/gate.mjs tool plan exiftool --json` and require `genericLaneEligible: true` before creating a manifest; that result does not verify version, integrity, or provenance. The plan and receipt must cover this exact file, `observe`, `exiftool`, the host environment, and `gate-home`. This generic metadata example has host access; use the separate fixed offline lane when zero-egress isolation is required.
+
 1. Create the envelope. Use exact targets and exclusions; catalog profiles do not grant authority. URL paths match only on segment boundaries. A query written into an approved URL selector must match exactly, while fragments are rejected because they are not sent to a server.
 
    ```bash
    ./bin/gate.mjs engagement new acme-web \
-     --title "Authorized Acme web assessment" \
-     --targets app.acme.example \
-     --exclude status.acme.example \
-     --actions observe,scan,fuzz,exploit-safe \
-     --tools nmap \
+     --title "Authorized Acme artifact inspection" \
+     --targets "$GATE_HOME/artifacts/sample.jpg" \
+     --actions observe \
+     --tools exiftool \
      --environment host \
      --allowed-destinations gate-home \
      --basis client-written-authorization \
@@ -226,23 +229,23 @@ Local source review, hypothesis generation, declared passive research, and analy
 
    ```bash
    ./bin/gate.mjs engagement check acme-web \
-     --target app.acme.example \
-     --action scan
+     --target "$GATE_HOME/artifacts/sample.jpg" \
+     --action observe
    ```
 
-7. Create a private one-shot manifest. The values after `--` are the complete tool argument array; `--tool` selects the executable. The arguments must contain exactly one whole value equal to `{{GATE_TARGET}}`, which GATE replaces with the checked target. The tool ID must be in the receipt-bound `--tools` list, its catalog command must resolve on `PATH`, and the requested bounds must fit within the approved engagement limits.
+7. Create a private one-shot manifest. The values after `--` are the complete tool argument array; `--tool` selects the executable. The arguments must contain exactly one whole value equal to `{{GATE_TARGET}}`, which GATE replaces with the checked target. The tool ID must be in the receipt-bound `--tools` list, its catalog `commandIdentity.genericLaneAdmission` must be `path-discovery`, its command must resolve on `PATH`, its host must be supported, and the requested bounds must fit within the approved engagement limits.
 
    ```bash
    ./bin/gate.mjs engagement manifest acme-web \
-     --target app.acme.example \
-     --action scan \
-     --tool nmap \
+     --target "$GATE_HOME/artifacts/sample.jpg" \
+     --action observe \
+     --tool exiftool \
      --minutes 15 \
      --requests 500 \
      --parallel 2 \
      --rate 5 \
      --tokens 1000 \
-     --json -- -sV "{{GATE_TARGET}}"
+     --json -- -json "{{GATE_TARGET}}"
    ```
 
    Review the returned `operation`, `argv0`, expanded `argv`, target argument index, catalog risk class, executable descriptor and observed SHA-256, declared bounds, expiry, and complete `enforcement` object. Inspect the owner-only manifest named by `manifestRef` for its receipt-bound `gate-home` destination, private sandbox, and stdout, stderr, and result paths. The manifest binds the current plan, envelope, receipt, host environment, allowed destinations, target, declared action label, permitted tool, catalog risk class, observed executable identity, exact arguments, and evidence paths. It expires and can be claimed only once; a failed or interrupted attempt does not make it reusable.

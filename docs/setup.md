@@ -313,34 +313,38 @@ A proprietary client or other proprietary artifact must be lawfully supplied by 
 
 ## Run a supervised security tool
 
-The generic execution lane requires Linux or WSL2 with `/proc` mounted, an installed catalog command discoverable on `PATH`, a receipt-bound `scope.environment: host`, and receipt-approved `gate-home` because raw evidence always lands there. It rejects container, rootless-container, VM, and remote-lab engagements because it does not create those environments. Add the exact tool ID, host environment, and data destination when creating the engagement:
+The generic execution lane requires Linux or WSL2 with `/proc` mounted, an installed catalog command discoverable on `PATH` with `commandIdentity.genericLaneAdmission: path-discovery` and a supported host, a receipt-bound `scope.environment: host`, and receipt-approved `gate-home` because raw evidence always lands there. It rejects container, rootless-container, VM, and remote-lab engagements because it does not create those environments. Add the exact tool ID, host environment, and data destination when creating the engagement:
+
+Nmap is a planning example: `./bin/gate.mjs tool plan nmap --json` reports its requirements. It remains blocked from generic execution pending reviewed runtime admission, even if installed and engagement-approved.
+
+For the runnable example, set `GATE_HOME` to your private runtime root and supply an authorized copied image at `$GATE_HOME/artifacts/sample.jpg`. Install a reviewed, exactly versioned ExifTool from its official source through the catalog's `native-os` lane; catalog presence does not install it. The ID and executable command are `exiftool`, risk class is `P0`, and its command identity is `pathDiscovery: command-name`, `genericLaneAdmission: path-discovery`. Put that executable on `PATH` and require `genericLaneEligible: true` from `./bin/gate.mjs tool plan exiftool --json`. Eligibility does not verify version, integrity, or provenance. The read-only `-json` operation below reads metadata; the generic lane has host access and does not provide the fixed offline lane's zero-egress isolation.
 
 ```bash
 ./bin/gate.mjs engagement new local-assessment \
-  --targets 127.0.0.1 \
-  --actions observe,scan \
-  --tools nmap \
+  --targets "$GATE_HOME/artifacts/sample.jpg" \
+  --actions observe \
+  --tools exiftool \
   --environment host \
   --allowed-destinations gate-home \
   --basis owner
 ```
 
-Complete the authorization, plan, No Mistakes record, and `APPROVE ID` receipt workflow in the [README](../README.md#active-security-workflow). Then check the exact target/action and create one manifest. `--tool` selects the catalog executable; everything after `--` is its proposed argument array and must contain exactly one whole argument equal to `{{GATE_TARGET}}`:
+Complete the authorization, plan, No Mistakes record, and `APPROVE ID` receipt workflow in the [README](../README.md#active-security-workflow). The plan and receipt must cover the exact file, `observe`, `exiftool`, host environment, and `gate-home`. Then check the exact target/action and create one manifest. `--tool` selects the catalog executable; everything after `--` is its proposed argument array and must contain exactly one whole argument equal to `{{GATE_TARGET}}`:
 
 ```bash
 ./bin/gate.mjs engagement check local-assessment \
-  --target 127.0.0.1 --action scan --json
+  --target "$GATE_HOME/artifacts/sample.jpg" --action observe --json
 
 ./bin/gate.mjs engagement manifest local-assessment \
-  --target 127.0.0.1 \
-  --action scan \
-  --tool nmap \
+  --target "$GATE_HOME/artifacts/sample.jpg" \
+  --action observe \
+  --tool exiftool \
   --minutes 10 \
   --requests 250 \
   --parallel 2 \
   --rate 5 \
   --tokens 1000 \
-  --json -- -sV "{{GATE_TARGET}}"
+  --json -- -json "{{GATE_TARGET}}"
 ```
 
 Read the returned `operation.argv0`, expanded `operation.argv`, target argument index, catalog risk class, executable path and observed SHA-256, expiry, declared bounds, and complete `enforcement` object. Inspect the owner-only manifest named by `manifestRef` for its receipt-bound `gate-home` destination, private sandbox, and stdout, stderr, and result references. `declared-action-label-binding` records only a receipt-bound label; `argv-action-semantics-validation` is unavailable. Review whether the exact arguments implement that action, because only a reviewed adapter validates tool-specific flag semantics. The operator must provide the returned exact confirmation string before launch:
