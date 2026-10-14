@@ -22,6 +22,45 @@ const fixedGitHubCli = process.platform === "win32"
   ? "C:\\Program Files\\GitHub CLI\\gh.exe"
   : ["/usr/bin/gh", "/bin/gh", "/usr/local/bin/gh"].find((candidate) => fs.existsSync(candidate));
 
+function npmNamespacePrerequisite({
+  platform = process.platform,
+  exists = fs.existsSync,
+  probe = childProcess.spawnSync,
+  required = process.env.GATE_REQUIRE_OFFLINE_INTEGRATION === "1"
+} = {}) {
+  let reason;
+  if (platform !== "linux") reason = "npm namespace regression requires Linux/WSL2";
+  else if (!exists("/usr/bin/bwrap")) reason = "Bubblewrap is unavailable";
+  else {
+    const result = probe("/usr/bin/bwrap", [
+      "--unshare-user", "--die-with-parent", "--ro-bind", "/", "/",
+      "--proc", "/proc", "--dev", "/dev", "--", "/usr/bin/true"
+    ], { encoding: "utf8", env: {}, timeout: 10_000 });
+    if (result.status !== 0) {
+      reason = `Bubblewrap namespace probe failed: ${String(result.stderr || result.error?.message || result.status).trim()}`;
+    }
+  }
+  if (reason && required) throw new Error(`required npm namespace regression is unavailable: ${reason}`);
+  return reason || false;
+}
+
+test("npm namespace prerequisites skip locally and fail when integration is required", () => {
+  for (const required of [false, true]) {
+    for (const unavailable of [
+      { exists: () => false, probe: () => { throw new Error("missing Bubblewrap must not launch"); } },
+      { exists: () => true, probe: () => ({ status: 1, stderr: "user namespaces denied" }) }
+    ]) {
+      const options = { platform: "linux", required, ...unavailable };
+      if (required) assert.throws(() => npmNamespacePrerequisite(options), /required npm namespace regression is unavailable/u);
+      else assert.ok(npmNamespacePrerequisite(options));
+    }
+    assert.equal(npmNamespacePrerequisite({
+      platform: "linux", required, exists: () => true,
+      probe: () => ({ status: 0, stderr: "" })
+    }), false);
+  }
+});
+
 function sha256(value) {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
@@ -349,7 +388,7 @@ cp "$GATE_TEST_RELEASE_ARCHIVE" "$destination/fixture-release.tar.gz"
 
 test("offline REA resolution uses bundled npm with a clean environment and rejects a forged tree receipt", {
   skip: process.platform === "win32"
-}, (t) => {
+}, async (t) => {
   const { root, repo, home, paths } = fixture(t);
   const packageRoot = path.join(root, "fixture-package");
   const cache = path.join(home, "cache", "npm");
@@ -475,8 +514,12 @@ test("offline REA resolution uses bundled npm with a clean environment and rejec
     else process.env.NODE_OPTIONS = previousNodeOptions;
   }
 
-  if (process.platform === "linux") {
-    assert.equal(fs.existsSync("/usr/bin/bwrap"), true, "Linux npm closure coverage requires Bubblewrap");
+  await t.test("mutable npm implementation is rejected before execution", (namespaceTest) => {
+    const skip = npmNamespacePrerequisite();
+    if (skip) {
+      namespaceTest.skip(skip);
+      return;
+    }
     const realNode = fs.realpathSync.native(process.execPath);
     const realInstallationRoot = path.resolve(path.dirname(realNode), "..");
     const npmCli = [
@@ -509,6 +552,7 @@ try {
 }
 `);
     const rejection = execFileSync("/usr/bin/bwrap", [
+      "--unshare-user",
       "--die-with-parent",
       "--ro-bind", "/", "/",
       "--bind", root, root,
@@ -525,7 +569,7 @@ try {
     });
     assert.match(rejection, /bundled npm implementation is owned by the current process identity/u);
     assert.equal(fs.existsSync(mutableMarker), false, "a mutable npm implementation must be rejected before execution");
-  }
+  });
 
   const installedCli = path.join(directory, "node_modules", "rea-agents", "cli.js");
   fs.writeFileSync(installedCli, "#!/usr/bin/env node\nconsole.log('modified');\n");
