@@ -7,6 +7,9 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { buildStatus } from "../src/lib/status.mjs";
+import { runtimePaths } from "../src/lib/paths.mjs";
+
 import {
   createObserver,
   isLoopbackHost,
@@ -20,7 +23,7 @@ const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const paths = { repo };
 const at = "2026-10-13T12:00:00.000Z";
 
-test("observer usage breaks equal cumulative timestamps by original log order", () => {
+test("observer usage preserves last occurrence order for duplicate usage IDs", async (t) => {
   const usage = (id, totalTokens) => ({
     apiVersion: "gate.usage/v1",
     id,
@@ -39,12 +42,22 @@ test("observer usage breaks equal cumulative timestamps by original log order", 
     totalTokens,
     source: "gate-token-log"
   });
-  const projected = projectUsage([
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-observer-usage-order-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const runtime = runtimePaths({ repo, home: path.join(root, "home") });
+  fs.mkdirSync(runtime.home, { recursive: true, mode: 0o700 });
+  const records = [
     usage("use_observer_first", 10),
-    usage("use_observer_second", 20)
-  ]);
-  assert.equal(projected.totalTokens, 20);
-  assert.equal(projected.sessions[0].totalTokens, 20);
+    usage("use_observer_second", 20),
+    usage("use_observer_first", 30)
+  ];
+  fs.writeFileSync(runtime.tokens, `${records.map((value) => JSON.stringify(value)).join("\n")}\n`, { mode: 0o600 });
+  const status = await buildStatus({ paths: runtime });
+  assert.equal(projectUsage(records.slice(0, 2)).totalTokens, 20);
+  const projected = projectUsage(status.tokens);
+  assert.equal(projected.totalTokens, 30);
+  assert.equal(projected.sessions.length, 1);
+  assert.equal(projected.sessions[0].totalTokens, 30);
 });
 
 function canonicalEvent(overrides = {}) {

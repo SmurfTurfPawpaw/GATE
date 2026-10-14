@@ -17,6 +17,7 @@ function canonicalUsageRecords(values, paths, partial = false) {
     if (!validateDocument(value, "token-usage.schema.json", { paths }).ok) continue;
     // Repeated reads or retries can append the same canonical record. Its ID is
     // the idempotency boundary, so retain one copy rather than counting it twice.
+    records.delete(value.id);
     records.set(
       value.id,
       partial && value.availability !== "unavailable" ? { ...value, availability: "estimated" } : value

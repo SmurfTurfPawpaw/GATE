@@ -164,9 +164,10 @@ test("agent status summary selects the latest cumulative usage per logical sessi
   assert.equal(summary.tokens.sessions, 1);
 });
 
-test("agent status summary breaks equal usage timestamps by original log order", () => {
+test("agent status summary preserves last occurrence order for duplicate usage IDs", async (t) => {
   const at = "2026-10-14T16:00:00.000Z";
   const record = (id, totalTokens) => ({
+    apiVersion: "gate.usage/v1",
     id,
     at,
     runId: "run.same",
@@ -180,18 +181,22 @@ test("agent status summary breaks equal usage timestamps by original log order",
     cachedInputTokens: null,
     outputTokens: null,
     reasoningTokens: null,
-    totalTokens
+    totalTokens,
+    source: "gate-token-log"
   });
-  const summary = statusSummary({
-    tokens: [record("use_first", 10), record("use_second", 20)],
-    events: [],
-    learnings: [],
-    engagements: [],
-    projects: [],
-    upstreams: [],
-    toolRuntimes: { tools: [] }
-  });
-  assert.equal(summary.tokens.totals.totalTokens, 20);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-usage-order-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const paths = runtimePaths({ repo, home: path.join(root, "home") });
+  fs.mkdirSync(paths.home, { recursive: true, mode: 0o700 });
+  const records = [record("use_first", 10), record("use_second", 20), record("use_first", 30)];
+  fs.writeFileSync(paths.tokens, `${records.map((value) => JSON.stringify(value)).join("\n")}\n`, { mode: 0o600 });
+  const status = await buildStatus({ paths });
+  assert.equal(statusSummary({ tokens: records.slice(0, 2) }).tokens.totals.totalTokens, 20);
+  assert.deepEqual(status.tokens.map((value) => value.id), ["use_second", "use_first"]);
+  assert.equal(status.tokens.length, 2);
+  const summary = statusSummary(status);
+  assert.equal(summary.tokens.totals.totalTokens, 30);
+  assert.equal(summary.tokens.sessions, 1);
 });
 
 test("tool summary is digest-bound, paged, and below 8 KiB", () => {

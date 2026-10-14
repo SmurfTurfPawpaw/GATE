@@ -77,6 +77,8 @@ Add proposed lessons here only after removing sensitive context. Promotion must 
 - 2026-10-14 | Cause: A truncated token cache treated a matching EOF suffix as proof that earlier usage-bearing bytes were unchanged. | Change: Never seed cached token totals from a suffix witness; accept only a complete newer delta event or rescan the complete current tail within the byte cap. | Evidence: event://evt_20261014171554_32c683e6 | Status: proposed
 - 2026-10-14 | Cause: Equal-millisecond cumulative usage records were resolved by timestamp alone, so an earlier total could be presented as current. | Change: Break equal usage timestamps by original append order and cover both compact agent and observer projections with regression tests. | Evidence: event://evt_20261014182116_5c3b238b | Status: proposed
 
+- 2026-10-14 | Cause: Replacing a duplicate token ID retained its first Map position and selected stale equal-timestamp cumulative totals. | Change: Delete each valid token ID before reinserting it so canonical records retain last-occurrence order for all status consumers. | Evidence: evidence://test/optimization.test.mjs, evidence://test/observer.test.mjs | Status: proposed
+
 ## Superseded or reverted
 
 Move old entries here with the new evidence and replacement learning. Do not erase history.
