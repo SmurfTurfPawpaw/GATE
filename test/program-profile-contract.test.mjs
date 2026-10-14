@@ -576,3 +576,56 @@ test("module answer types hold for individual answers, nested answers, and store
   delete missing.modules["web-api"].answers.automationRules;
   assert.equal(validateProgramProfile(missing, { repo }).ok, false);
 });
+
+test("applicable required module answers contain non-empty content when ready", () => {
+  const cases = [
+    ["entryPoints", [], "modules.web-api.answers.entryPoints must contain at least one item when ready"],
+    ["entryPoints", [null], "modules.web-api.answers.entryPoints.0 must contain only meaningful non-empty values when ready"],
+    ["entryPoints", ["  \t"], "modules.web-api.answers.entryPoints.0 must contain only meaningful non-empty values when ready"],
+    ["entryPoints", ["\u200b\u200d"], "modules.web-api.answers.entryPoints.0 must contain only meaningful non-empty values when ready"],
+    ["entryPoints", [{}], "modules.web-api.answers.entryPoints.0 must contain only meaningful non-empty values when ready"],
+    ["entryPoints", [[]], "modules.web-api.answers.entryPoints.0 must contain only meaningful non-empty values when ready"],
+    ["entryPoints", [{ selector: "", note: null }], "modules.web-api.answers.entryPoints.0 must contain only meaningful non-empty values when ready"],
+    ["authenticationFlows", [], "modules.web-api.answers.authenticationFlows must contain at least one item when ready"],
+    ["automationRules", "", "modules.web-api.answers.automationRules must contain non-whitespace text when ready"],
+    ["automationRules", " \n\t", "modules.web-api.answers.automationRules must contain non-whitespace text when ready"],
+    ["automationRules", "\u200b\u200d", "modules.web-api.answers.automationRules must contain non-whitespace text when ready"]
+  ];
+  for (const [key, answer, message] of cases) {
+    const value = readyProfile();
+    value.modules["web-api"].answers[key] = answer;
+    const validation = validateProgramProfile(value, { repo });
+    assert.equal(validation.ok, false, key);
+    assert.ok(validation.errors.includes(message), key);
+  }
+
+  const explicitOptionalValue = readyProfile();
+  explicitOptionalValue.modules["web-api"].answers.entryPoints = [{
+    selector: "https://example.test",
+    note: null
+  }];
+  assert.equal(validateProgramProfile(explicitOptionalValue, { repo }).ok, true);
+});
+
+test("ready profiles reject invisible-only text outside conditional modules", () => {
+  for (const [pathName, mutate] of [
+    ["identity.objective", (value) => { value.identity.objective = "\u200b\u200d"; }],
+    ["identity.deliverables.0", (value) => { value.identity.deliverables[0] = "\u200b\u200d"; }]
+  ]) {
+    const value = readyProfile();
+    mutate(value);
+    const validation = validateProgramProfile(value, { repo });
+    assert.equal(validation.ok, false, pathName);
+    assert.ok(validation.errors.includes(`${pathName} must contain visible text when ready`), pathName);
+  }
+
+  const literalPayload = readyProfile();
+  literalPayload.techniquePolicy.techniques.push({
+    id: "literal-invisible-payload",
+    name: "Literal invisible-character payload",
+    action: "observe",
+    ...decision("allowed", ["program-rules"]),
+    parameters: { payload: "\u200b" }
+  });
+  assert.equal(validateProgramProfile(literalPayload, { repo }).ok, true);
+});

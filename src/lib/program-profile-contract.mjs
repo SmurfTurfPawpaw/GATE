@@ -590,7 +590,39 @@ function validateExecutionPolicies(value, paths, assetIds, errors) {
 }
 
 function requiredReadyList(value, pathName, errors) {
-  if (!Array.isArray(value) || value.length === 0) errors.push(`${pathName} must contain at least one item when ready`);
+  if (!Array.isArray(value) || value.length === 0) {
+    errors.push(`${pathName} must contain at least one item when ready`);
+    return;
+  }
+  value.forEach((item, index) => {
+    if (typeof item === "string" && !meaningfulText(item)) {
+      errors.push(`${pathName}.${index} must contain visible text when ready`);
+    }
+  });
+}
+
+function meaningfulText(value) {
+  const visible = value.normalize("NFKC").replace(/[\p{White_Space}\p{Default_Ignorable_Code_Point}]/gu, "");
+  return /[\p{Letter}\p{Number}\p{Punctuation}\p{Symbol}]/u.test(visible);
+}
+
+function valueAtQuestionPath(value, fieldPath) {
+  return fieldPath.split(".").reduce((current, part) =>
+    current && typeof current === "object" && Object.hasOwn(current, part) ? current[part] : undefined
+  , value);
+}
+
+function baseQuestionApplies(question, value) {
+  if (question.module) return false;
+  if (!question.condition) return true;
+  const actual = valueAtQuestionPath(value, question.condition.path);
+  if (Object.hasOwn(question.condition, "equals")) return actual === question.condition.equals;
+  if (Object.hasOwn(question.condition, "includes")) {
+    return Array.isArray(actual)
+      ? actual.includes(question.condition.includes)
+      : typeof actual === "string" && actual.includes(question.condition.includes);
+  }
+  return false;
 }
 
 function semanticProfileErrors(value, paths) {
@@ -633,6 +665,14 @@ function semanticProfileErrors(value, paths) {
 
   if (value.metadata.status !== "ready-to-materialize") return errors;
 
+  for (const question of PROGRAM_PROFILE_QUESTIONS) {
+    if (!question.required || !baseQuestionApplies(question, value)) continue;
+    const answer = valueAtQuestionPath(value, question.path);
+    if (typeof answer === "string" && !meaningfulText(answer)) {
+      errors.push(`${question.path} must contain visible text when ready`);
+    }
+  }
+
   for (const sectionId of PROGRAM_PROFILE_SECTION_IDS) {
     if (value.questionnaire.sectionStatus[sectionId] !== "complete") {
       errors.push(`questionnaire section is not complete: ${sectionId}`);
@@ -660,7 +700,12 @@ function semanticProfileErrors(value, paths) {
   if (!value.authorization.operatorConfirmed) errors.push("authorization must be confirmed by the operator when ready");
   for (const [location, item] of decisionEntries(value)) {
     if (item.disposition === "unknown") errors.push(`${location} remains unknown`);
-    if (!item.rationale) errors.push(`${location} requires a rationale when ready`);
+    if (typeof item.rationale !== "string" || !meaningfulText(item.rationale)) {
+      errors.push(`${location} requires a rationale when ready`);
+    }
+    item.conditions.forEach((condition, index) => {
+      if (!meaningfulText(condition)) errors.push(`${location}/conditions/${index} must contain visible text when ready`);
+    });
     if (!item.sourceRefs.length) errors.push(`${location} requires sourceRefs when ready`);
   }
   if (!value.scope.assets.some((item) => item.disposition === "allowed")) {
@@ -721,6 +766,31 @@ function semanticProfileErrors(value, paths) {
   return errors;
 }
 
+function meaningfulStructuredAnswer(value) {
+  if (typeof value === "string") return meaningfulText(value);
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value === "boolean") return true;
+  if (Array.isArray(value)) return value.length > 0 && value.some(meaningfulStructuredAnswer);
+  if (value && typeof value === "object") {
+    const entries = Object.values(value);
+    return entries.length > 0 && entries.some(meaningfulStructuredAnswer);
+  }
+  return false;
+}
+
+export function programProfileQuestionAnswerIsComplete(question, value) {
+  if (value === undefined) return false;
+  if (value === null) return question?.allowNull === true;
+  if (typeof value === "string") return meaningfulText(value);
+  if (!question?.module) return true;
+  if (question?.type === "structured-list") {
+    return Array.isArray(value) && value.length > 0 && value.every(meaningfulStructuredAnswer);
+  }
+  if (Array.isArray(value)) return value.length > 0 && value.every(meaningfulStructuredAnswer);
+  if (value && typeof value === "object") return meaningfulStructuredAnswer(value);
+  return typeof value === "number" ? Number.isFinite(value) : typeof value === "boolean";
+}
+
 function moduleAnswerErrors(moduleId, answers, required = false) {
   const errors = [];
   for (const question of PROGRAM_PROFILE_MODULE_QUESTIONS) {
@@ -732,10 +802,24 @@ function moduleAnswerErrors(moduleId, answers, required = false) {
       continue;
     }
     const answer = answers[key];
-    if (question.type === "structured-list" && !Array.isArray(answer)) {
-      errors.push(`${question.path} must be an array`);
-    } else if (question.type === "multiline" && typeof answer !== "string") {
-      errors.push(`${question.path} must be a string`);
+    if (question.type === "structured-list") {
+      if (!Array.isArray(answer)) {
+        errors.push(`${question.path} must be an array`);
+      } else if (required && question.required && answer.length === 0) {
+        errors.push(`${question.path} must contain at least one item when ready`);
+      } else if (required && question.required) {
+        answer.forEach((item, index) => {
+          if (!meaningfulStructuredAnswer(item)) {
+            errors.push(`${question.path}.${index} must contain only meaningful non-empty values when ready`);
+          }
+        });
+      }
+    } else if (question.type === "multiline") {
+      if (typeof answer !== "string") {
+        errors.push(`${question.path} must be a string`);
+      } else if (required && question.required && !meaningfulStructuredAnswer(answer)) {
+        errors.push(`${question.path} must contain non-whitespace text when ready`);
+      }
     }
   }
   return errors;

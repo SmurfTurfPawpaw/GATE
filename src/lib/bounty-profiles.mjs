@@ -842,6 +842,13 @@ function assertRawAnswersSafe(input) {
   if (errors.length) throw new Error(`program profile answers rejected: ${errors.join("; ")}`);
 }
 
+function readyContractErrorPath(detail) {
+  const pointer = detail.match(/^\/([A-Za-z0-9_/-]+)/u)?.[1];
+  if (pointer) return pointer.split("/").filter(Boolean).join(".");
+  if (detail.startsWith("sources ")) return "sources";
+  return detail.match(/^([A-Za-z][A-Za-z0-9-]*(?:\.[A-Za-z0-9-]+)+)\s/u)?.[1] || null;
+}
+
 function semanticProfileChecks(profile, id, options = {}) {
   const now = new Date(options.now || new Date().toISOString());
   const sourceIds = new Set((profile.sources || []).map((source) => source.id));
@@ -1006,13 +1013,21 @@ function semanticProfileChecks(profile, id, options = {}) {
   readyCandidate.metadata.status = "ready-to-materialize";
   const readyContract = validateProgramProfile(readyCandidate, options);
   for (const detail of readyContract.errors) {
-    if (!blockers.some((item) => item.detail === detail)) addBlocker("ready-contract-incomplete", detail);
+    if (!blockers.some((item) => item.detail === detail)) {
+      addBlocker("ready-contract-incomplete", detail, readyContractErrorPath(detail));
+    }
   }
 
   checks.push(check("compile-readiness", blockers.length === 0, blockers.length
     ? `${blockers.length} blocking issue(s) remain`
     : "profile is ready for no-contact compilation"));
-  return { checks, blockers, warnings, allowedActions };
+  const effectiveActionDispositions = effectiveGlobalActionDispositions(profile);
+  return {
+    checks,
+    blockers,
+    warnings,
+    allowedActions: allowedActions.filter((action) => effectiveActionDispositions[action] === "allowed")
+  };
 }
 
 function loadStoredProfileState(paths, id, options = {}) {
@@ -1477,13 +1492,17 @@ function decisionLine(label, item) {
 }
 
 function operatorReview(profile, verification) {
+  const executionPolicy = exactExecutionPolicy(profile);
+  const modulePolicy = executionPolicy.modulePolicy;
+  const effectiveActionDispositions = executionPolicy.globalCeilings.effectiveActionDispositions;
+  const executableActions = conservativeExecutableActions(profile, executionPolicy);
   const lines = [
     `# ${profile.metadata.title}`,
     "",
     `Program profile: \`${profile.metadata.id}\``,
     `Revision: ${profile.metadata.revision}`,
     `Profile status: ${profile.metadata.status}`,
-    `Compile readiness: ${verification.ready ? "ready" : "blocked"}`,
+    `Profile compilation readiness: ${verification.ready ? "ready" : "blocked"} (report generation only)`,
     "",
     "## Objective",
     "",
@@ -1505,9 +1524,23 @@ function operatorReview(profile, verification) {
       `- ${asset.id}: ${asset.selector.type} \`${asset.selector.value}\` — **${asset.disposition}** (${asset.claimState})`
     ) : ["- No asset selectors recorded."]),
     "",
+    "## Applicable module policy",
+    "",
+    `- Combination: ${modulePolicy.combination}`,
+    `- Application: ${modulePolicy.application}`,
+    `- Effective module disposition: **${modulePolicy.effectiveDisposition}**`,
+    ...(modulePolicy.modules.length
+      ? modulePolicy.modules.map((module) => decisionLine(module.id, module))
+      : ["- Selected modules: none (neutral allowed ceiling)."]),
+    "",
     "## Action policy",
     "",
-    ...PROGRAM_PROFILE_ACTIONS.map((action) => decisionLine(action, profile.techniquePolicy.actions[action])),
+    ...PROGRAM_PROFILE_ACTIONS.map((action) =>
+      `${decisionLine(action, profile.techniquePolicy.actions[action])}; effective after module ceiling: **${effectiveActionDispositions[action]}**`
+    ),
+    "",
+    `Effectively allowed after module ceilings: ${verification.allowedActions.length ? verification.allowedActions.join(", ") : "none"}.`,
+    `Conservatively executable across every configured phase/asset slice: ${executableActions.length ? executableActions.join(", ") : "none"}.`,
     "",
     "## Coverage",
     "",
@@ -1604,11 +1637,13 @@ function techniqueMatrix(profile, verification) {
     profileId: profile.metadata.id,
     profileSha256: verification.profileSha256,
     actions: profile.techniquePolicy.actions,
+    effectiveActionDispositions: policy.globalCeilings.effectiveActionDispositions,
+    modulePolicy: policy.modulePolicy,
     techniques: profile.techniquePolicy.techniques,
     globalAllowedActionCeilings: verification.allowedActions || [],
     executableAllowedActions,
     phaseScopedExecutableActions: executionActionSlices(profile, policy),
-    note: "An action is executable only when a phase requests it for an allowed asset and both its global and per-asset decisions are unconditional allowed dispositions."
+    note: "An action is executable only when a phase requests it for an allowed asset and its global, applicable-module, and per-asset decisions are unconditional allowed dispositions."
   };
 }
 
@@ -1630,28 +1665,56 @@ function effectiveLimitEnvelope(profile, asset, phase = null) {
   }));
 }
 
-function combinedActionDisposition(globalDecision, assetDecision) {
-  const dispositions = [globalDecision?.disposition || "unknown", assetDecision?.disposition || "unknown"];
+function combinedActionDisposition(...decisions) {
+  const dispositions = decisions.map((decision) => decision?.disposition || "unknown");
   if (dispositions.includes("denied")) return "denied";
   if (dispositions.includes("unknown")) return "unknown";
   if (dispositions.includes("conditional")) return "conditional";
   return "allowed";
 }
 
-function effectiveAssetPolicy(profile, asset) {
+function applicableModulePolicy(profile) {
+  const modules = (profile.questionnaire?.applicableModules || []).map((id) => {
+    const module = profile.modules?.[id] || {};
+    return {
+      id,
+      disposition: module.disposition || "unknown",
+      claimState: module.claimState || "unverified",
+      sourceRefs: module.sourceRefs || [],
+      rationale: module.rationale ?? null,
+      conditions: module.conditions || []
+    };
+  });
+  return {
+    combination: "intersection",
+    application: "global-ceiling-until-assets-have-explicit-module-bindings",
+    effectiveDisposition: modules.length ? combinedActionDisposition(...modules) : "allowed",
+    modules
+  };
+}
+
+function effectiveGlobalActionDispositions(profile, modulePolicy = applicableModulePolicy(profile)) {
+  return Object.fromEntries(PROGRAM_PROFILE_ACTIONS.map((id) => [
+    id,
+    combinedActionDisposition(profile.techniquePolicy.actions[id], ...modulePolicy.modules)
+  ]));
+}
+
+function effectiveAssetPolicy(profile, asset, modulePolicy = applicableModulePolicy(profile)) {
   const assignedPhases = (profile.executionPolicy?.phases || [])
     .filter((phase) => phase.assetRefs.includes(asset.id));
   const phaseActions = new Set(assignedPhases.flatMap((phase) => phase.actions));
   const actions = Object.fromEntries(PROGRAM_PROFILE_ACTIONS.map((id) => {
     const globalDecision = profile.techniquePolicy.actions[id];
     const assetDecision = asset.actionOverrides?.[id] || null;
-    const disposition = combinedActionDisposition(globalDecision, assetDecision);
+    const disposition = combinedActionDisposition(globalDecision, assetDecision, ...modulePolicy.modules);
     return [id, {
       disposition,
       permittedUnderCeilings: asset.disposition === "allowed" && disposition === "allowed",
       executable: asset.disposition === "allowed" && disposition === "allowed" && phaseActions.has(id),
       globalDecision,
-      assetDecision
+      assetDecision,
+      moduleDisposition: modulePolicy.effectiveDisposition
     }];
   }));
   const phases = assignedPhases
@@ -1687,11 +1750,15 @@ function effectiveAssetPolicy(profile, asset) {
 }
 
 function exactExecutionPolicy(profile) {
-  const assets = profile.scope.assets.map((asset) => effectiveAssetPolicy(profile, asset));
+  const modulePolicy = applicableModulePolicy(profile);
+  const effectiveActionDispositions = effectiveGlobalActionDispositions(profile, modulePolicy);
+  const assets = profile.scope.assets.map((asset) => effectiveAssetPolicy(profile, asset, modulePolicy));
   return {
     requestedAssistanceModes: profile.executionPolicy?.requestedAssistanceModes || [],
+    modulePolicy,
     globalCeilings: {
       actions: profile.techniquePolicy.actions,
+      effectiveActionDispositions,
       limits: Object.fromEntries(PROGRAM_PROFILE_EXECUTION_LIMITS.map((key) => [key, profile.limits[key]]))
     },
     assets,
@@ -1765,6 +1832,7 @@ function modelContext(profile, verification, input) {
   const allowedAssets = profile.scope.assets.filter((asset) => asset.disposition === "allowed");
   const exclusions = profile.scope.assets.filter((asset) => asset.disposition === "denied");
   const executionPolicy = exactExecutionPolicy(profile);
+  const effectiveActionDispositions = executionPolicy.globalCeilings.effectiveActionDispositions;
   const conditionalPolicy = {
     safeHarbor: profile.authorization.safeHarbor.disposition === "conditional"
       ? profile.authorization.safeHarbor
@@ -1836,10 +1904,12 @@ function modelContext(profile, verification, input) {
     rules: {
       globalAllowedActionCeilings: verification.allowedActions || [],
       permittedActions: conservativeExecutableActions(profile, executionPolicy),
-      deniedActions: PROGRAM_PROFILE_ACTIONS.filter((id) => profile.techniquePolicy.actions[id].disposition === "denied"),
-      conditionalActions: PROGRAM_PROFILE_ACTIONS.filter((id) => profile.techniquePolicy.actions[id].disposition === "conditional"),
-      unresolvedActions: PROGRAM_PROFILE_ACTIONS.filter((id) => profile.techniquePolicy.actions[id].disposition === "unknown"),
+      deniedActions: PROGRAM_PROFILE_ACTIONS.filter((id) => effectiveActionDispositions[id] === "denied"),
+      conditionalActions: PROGRAM_PROFILE_ACTIONS.filter((id) => effectiveActionDispositions[id] === "conditional"),
+      unresolvedActions: PROGRAM_PROFILE_ACTIONS.filter((id) => effectiveActionDispositions[id] === "unknown"),
       actionDecisions: profile.techniquePolicy.actions,
+      effectiveActionDispositions,
+      modulePolicy: executionPolicy.modulePolicy,
       namedTechniques: profile.techniquePolicy.techniques,
       limits: profile.limits,
       stops: PROGRAM_PROFILE_STOP_CONDITIONS.filter((id) => profile.stops.conditions[id].enabled),
@@ -1998,6 +2068,7 @@ function engagementProposal(profile, verification, input) {
     });
   }
   const executionPolicy = executionPolicyPlan(profile, verification);
+  const effectiveActionDispositions = executionPolicy.globalCeilings.effectiveActionDispositions;
   return {
     apiVersion: "gate.dev/engagement-proposal/v1",
     kind: "EngagementProposal",
@@ -2022,15 +2093,23 @@ function engagementProposal(profile, verification, input) {
       exclude: profile.scope.assets.filter((asset) => asset.disposition === "denied").map((asset) => asset.selector),
       assetPolicies: executionPolicy.assets,
       globalAllowedActionCeilings: verification.allowedActions || [],
+      effectiveActionDispositions,
+      modulePolicy: executionPolicy.modulePolicy,
       permittedActions: conservativeExecutableActions(profile, executionPolicy),
       conditionalActions: PROGRAM_PROFILE_ACTIONS
-        .filter((id) => profile.techniquePolicy.actions[id].disposition === "conditional")
-        .map((id) => ({ id, ...profile.techniquePolicy.actions[id] })),
-      unresolvedActions: PROGRAM_PROFILE_ACTIONS.filter((id) => profile.techniquePolicy.actions[id].disposition === "unknown"),
+        .filter((id) => effectiveActionDispositions[id] === "conditional")
+        .map((id) => ({
+          id,
+          effectiveDisposition: "conditional",
+          globalDecision: profile.techniquePolicy.actions[id],
+          moduleDecisions: executionPolicy.modulePolicy.modules
+        })),
+      unresolvedActions: PROGRAM_PROFILE_ACTIONS.filter((id) => effectiveActionDispositions[id] === "unknown"),
       environment: "host"
     },
     executionPolicy: {
       requestedAssistanceModes: executionPolicy.requestedAssistanceModes,
+      modulePolicy: executionPolicy.modulePolicy,
       phases: executionPolicy.phases
     },
     workflow: { id: input.workflowId, definition: "pentest-e2e" },

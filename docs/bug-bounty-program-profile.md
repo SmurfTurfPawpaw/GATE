@@ -21,6 +21,8 @@ Have the following available before the questionnaire:
 
 Web/API, cloud/container, mobile, desktop, AI/LLM, network/identity, wireless/radio, human/physical, and embedded/IoT/OT answers open focused follow-up modules only when applicable. A conditional or unknown technique stays conditional or unknown; compilation never silently turns it into an allowed action.
 
+An applicable module's permission decision is also an execution ceiling. The v1 profile does not bind individual assets or phases to individual technology modules, so compilation conservatively applies every selected module to every action in that profile. Selected modules combine by the most restrictive disposition: `denied`, then `unknown`, then `conditional`, then `allowed`. One denied module therefore denies the compiled actions, while one conditional module keeps otherwise allowed actions conditional and non-executable. Unselected module records do not affect execution. Use separate profiles for technology surfaces with different module permissions until an exact asset- and phase-to-module binding is available.
+
 ## Complete and review the questionnaire
 
 Interactive creation requires a terminal. The wizard saves every accepted answer, so it can be resumed and corrected before compilation. A `multiline` prompt accepts the first content line at the primary prompt, then shows a `... ` continuation prompt. Enter `.` on its own line to finish; GATE joins the content lines with newline characters. Wizard controls such as `back`, `edit ID`, `why`, `save`, and `quit` are recognized only at the primary prompt, before multiline collection begins. Use an answers file with `--answers` for a headless or repeatable workflow, long structured content that is easier to edit as JSON, or content that must contain a line consisting only of `.`. Keep that file in a private location outside the repository because it may contain targets, program terms, contacts, or unpublished testing plans. Store credentials separately and answer with `env://`, `keychain://`, or `file://` references only.
@@ -92,7 +94,7 @@ Verify, then compile. Optional engagement and workflow IDs label proposed downst
 The canonical profile is stored at `GATE_HOME/programs/acme-program/program-profile.json`. A successful compile writes a 64-character digest-named directory below `GATE_HOME/programs/acme-program/compiled/`. The digest binds the profile, proposed IDs, provider snapshot, verification result, and minute-bounded assessment time, so a repeated compile in the same assessment interval is idempotent and changed input cannot overwrite an earlier bundle. The directory contains:
 
 - `source-ledger.json`, `authorization-summary.md`, `operator-review.md`, and `ambiguities.json`/`ambiguities.md` for provenance and operator review;
-- `scope-matrix.json`, `technique-matrix.json`, and `coverage-plan.json` for deterministic planning;
+- `scope-matrix.json`, `technique-matrix.json`, `coverage-plan.json`, and `execution-policy.json` for deterministic planning;
 - `credential-plan.json`, `limits-and-schedule.json`, and `data-evidence-plan.json` for access and resource handling;
 - `stop-escalation-plan.md`, `reporting-disclosure-plan.md`, and `cleanup-ledger-template.json` for closeout and reporting;
 - `model-context.json` and `model-preflight.json` for bounded context and compatibility routing;

@@ -176,7 +176,33 @@ test("interactive numeric questions can record an explicit allowed null", { time
   }
 });
 
-test("resume opens the missing required attestation instead of restarting at question one", { timeout: 5000 }, async (t) => {
+test("interactive answer completeness rejects placeholders and preserves explicit values", () => {
+  const profile = {};
+  const structured = PROGRAM_PROFILE_QUESTIONS.find(({ id }) => id === "web-api-entry-points");
+  const multiline = PROGRAM_PROFILE_QUESTIONS.find(({ id }) => id === "web-api-automation-rules");
+  const boolean = PROGRAM_PROFILE_QUESTIONS.find(({ type }) => type === "boolean");
+  const nullable = PROGRAM_PROFILE_QUESTIONS.find(({ id }) => id === "limits-max-spend");
+  const applicableModules = PROGRAM_PROFILE_QUESTIONS.find(({ id }) => id === "coverage-applicable-modules");
+  const objective = PROGRAM_PROFILE_QUESTIONS.find(({ id }) => id === "identity-objective");
+  const envelope = (value, question = structured) => ({ answers: { [question.id]: value } });
+
+  for (const value of [[], [null], [" \t"], ["\u200b\u200d"], [{}], [[]], [{ selector: "", note: null }]]) {
+    assert.equal(cliInternals.questionHasAnswer(structured, profile, envelope(value)), false);
+  }
+  assert.equal(cliInternals.questionHasAnswer(
+    structured,
+    profile,
+    envelope([{ selector: "https://example.test", note: null }])
+  ), true);
+  assert.equal(cliInternals.questionHasAnswer(multiline, profile, envelope(" \n\t", multiline)), false);
+  assert.equal(cliInternals.questionHasAnswer(multiline, profile, envelope("\u200b\u200d", multiline)), false);
+  assert.equal(cliInternals.questionHasAnswer(boolean, profile, envelope(false, boolean)), true);
+  assert.equal(cliInternals.questionHasAnswer(nullable, profile, envelope(null, nullable)), true);
+  assert.equal(cliInternals.questionHasAnswer(applicableModules, profile, envelope([], applicableModules)), true);
+  assert.equal(cliInternals.questionHasAnswer(objective, profile, envelope("\u200b\u200d", objective)), false);
+});
+
+test("resume maps a ready-required empty list back to its exact question", { timeout: 5000 }, async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-bounty-attestation-resume-"));
   const home = path.join(root, "home");
   const paths = runtimePaths({ repo, home });
@@ -185,8 +211,11 @@ test("resume opens the missing required attestation instead of restarting at que
   createProgramProfile(id, {}, { paths, now });
   const profile = resumeProgramProfile(id, { paths }).profile;
   const answers = Object.fromEntries(PROGRAM_PROFILE_QUESTIONS
-    .filter((question) => question.section && question.required && question.id !== "attestation-at")
-    .map((question) => [question.id, structuredClone(profileValueAt(profile, question.path))]));
+    .filter((question) => question.section && question.required)
+    .map((question) => [
+      question.id,
+      question.id === "attestation-at" ? now : structuredClone(profileValueAt(profile, question.path))
+    ]));
   applyProgramProfileAnswers(id, {
     $schema: "https://gate.local/schemas/bug-bounty-program-profile-answers.schema.json",
     apiVersion: "gate.dev/program-profile-answers/v1",
@@ -218,8 +247,8 @@ test("resume opens the missing required attestation instead of restarting at que
   });
   input.end();
 
-  assert.match(transcript, /Resuming at unanswered required question: attestation-at\./u);
-  assert.match(transcript, /attestation-at/u);
+  assert.match(transcript, /All required answers are recorded\. Verification still has \d+ blocker\(s\); opening identity-deliverables for review\./u);
+  assert.match(transcript, /identity-deliverables/u);
   assert.doesNotMatch(transcript, /Resuming at unanswered required question: identity-program-name\./u);
 });
 

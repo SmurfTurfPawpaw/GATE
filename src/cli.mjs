@@ -54,7 +54,8 @@ import { validateRepository } from "./lib/validation.mjs";
 import { leaseWorkspace, verifyWorkspace, workspaceStatus } from "./lib/workspaces.mjs";
 import {
   PROGRAM_PROFILE_QUESTIONS,
-  PROGRAM_PROFILE_SECTIONS
+  PROGRAM_PROFILE_SECTIONS,
+  programProfileQuestionAnswerIsComplete
 } from "./lib/program-profile-contract.mjs";
 import {
   addWorkflowEvidence,
@@ -358,9 +359,11 @@ async function readMultilineAnswer(terminal, firstLine, terminalOutput) {
 }
 
 function questionHasAnswer(question, profile, answers = null) {
-  if (answers?.answers && typeof answers.answers === "object") return Object.hasOwn(answers.answers, question.id);
-  const value = profileValueAt(profile, question.path);
-  return value !== undefined && value !== null && value !== "" && (!Array.isArray(value) || value.length > 0);
+  if (answers?.answers && typeof answers.answers === "object") {
+    if (!Object.hasOwn(answers.answers, question.id)) return false;
+    return programProfileQuestionAnswerIsComplete(question, answers.answers[question.id]);
+  }
+  return programProfileQuestionAnswerIsComplete(question, profileValueAt(profile, question.path));
 }
 
 function questionSection(question) {
@@ -490,6 +493,9 @@ async function runProgramProfileQuestionnaire(id, mode, options = {}) {
           ? await readMultilineAnswer(terminal, raw, terminalOutput)
           : raw;
         answer = parseQuestionAnswer(question, answerInput);
+        if (question.required && !programProfileQuestionAnswerIsComplete(question, answer)) {
+          throw new Error("enter a substantive non-empty answer for this required question");
+        }
       } catch (error) {
         terminalOutput.write(`${error.message}\n`);
         continue;
@@ -516,7 +522,7 @@ async function runProgramProfileQuestionnaire(id, mode, options = {}) {
   return programProfileStatus(id, { paths });
 }
 
-export const cliInternals = Object.freeze({ runProgramProfileQuestionnaire });
+export const cliInternals = Object.freeze({ questionHasAnswer, runProgramProfileQuestionnaire });
 
 function optionalValueFlag(flags, name) {
   if (flags[name] === undefined) return undefined;

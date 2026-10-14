@@ -526,6 +526,64 @@ test("answer provenance time cannot make expired authorization verify as current
   assert.ok(verification.blockers.some(({ code }) => code === "authorization-expired"));
 });
 
+test("empty and placeholder required answers keep an applicable module blocked through verification and compilation", (t) => {
+  const { home, paths } = fixture(t);
+  const id = "empty-module-answers";
+  const profile = completeProfile(id);
+  profile.questionnaire.applicableModules = ["web-api"];
+  profile.modules["web-api"] = {
+    ...sourceDecision("allowed"),
+    answers: {
+      entryPoints: [null],
+      authenticationFlows: [" \t"],
+      automationRules: "\u200b\u200d"
+    }
+  };
+
+  const created = createProgramProfile(id, profile, { paths, now: fixedAt });
+  assert.equal(created.ready, false);
+  const stored = readJson(path.join(home, "programs", id, "program-profile.json"));
+  assert.notEqual(stored.metadata.status, "ready-to-materialize");
+
+  const verification = verifyProgramProfile(id, { paths, now: fixedAt });
+  assert.equal(verification.structuralValid, true);
+  assert.equal(verification.ready, false);
+  for (const key of ["entryPoints", "authenticationFlows", "automationRules"]) {
+    assert.ok(verification.blockers.some(({ code, detail }) =>
+      code === "ready-contract-incomplete" && detail.startsWith(`modules.web-api.answers.${key}`)
+    ), key);
+  }
+
+  const compilation = compileProgramProfile(id, {}, { paths, now: fixedAt });
+  assert.equal(compilation.profileReady, false);
+  assert.equal(compilation.ready, false);
+  assert.equal(compilation.gateDecision, "block");
+  assert.ok(compilation.blockers.some(({ code, detail }) =>
+    code === "ready-contract-incomplete" && detail.includes("modules.web-api.answers.entryPoints")
+  ));
+});
+
+test("invisible-only required core text cannot become ready or compile", (t) => {
+  const { paths } = fixture(t);
+  const id = "invisible-core-answer";
+  const profile = completeProfile(id);
+  profile.identity.objective = "\u200b\u200d";
+
+  const created = createProgramProfile(id, profile, { paths, now: fixedAt });
+  assert.equal(created.ready, false);
+  const verification = verifyProgramProfile(id, { paths, now: fixedAt });
+  assert.equal(verification.ready, false);
+  assert.ok(verification.blockers.some(({ code, detail, path: profilePath }) =>
+    code === "ready-contract-incomplete" &&
+    detail === "identity.objective must contain visible text when ready" &&
+    profilePath === "identity.objective"
+  ));
+
+  const compilation = compileProgramProfile(id, {}, { paths, now: fixedAt });
+  assert.equal(compilation.gateDecision, "block");
+  assert.equal(compilation.profileReady, false);
+});
+
 test("compilation is deterministic, lossless across every policy matrix, and keeps provider prediction separate", (t) => {
   const { home, paths } = fixture(t);
   const id = "matrix-canary";
@@ -732,7 +790,8 @@ test("source-backed conditional decisions are complete but never compile as exec
   const techniques = readJson(path.join(compiled, "technique-matrix.json"));
   const context = readJson(path.join(compiled, "model-context.json"));
   assert.equal(techniques.executableAllowedActions.includes("fuzz"), false);
-  assert.deepEqual(context.rules.conditionalActions, ["fuzz"]);
+  assert.deepEqual(context.rules.permittedActions, []);
+  assert.deepEqual(context.rules.conditionalActions, ["observe", "scan", "authenticate", "fuzz"]);
   assert.deepEqual(context.rules.unresolvedActions, []);
   assert.deepEqual(context.conditionalPolicy.actions.map(({ id: action }) => action), ["fuzz"]);
   assert.deepEqual(context.conditionalPolicy.coverage.map(({ id: domain }) => domain), ["inputs"]);
@@ -740,6 +799,149 @@ test("source-backed conditional decisions are complete but never compile as exec
   assert.equal(context.conditionalPolicy.techniques[0].id, "bounded-fuzz");
   assert.equal(context.scope.conditional[0].id, "conditional-api");
   assert.deepEqual(context.conditionalPolicy.safeHarbor.conditions, ["Use the named test account only."]);
+});
+
+test("applicable module ceilings constrain every compiled surface and denied wins their intersection", (t) => {
+  const { home, paths } = fixture(t);
+  const id = "denied-module-ceiling";
+  const profile = completeProfile(id);
+  profile.questionnaire.applicableModules = ["desktop", "web-api"];
+  profile.modules["web-api"] = {
+    ...sourceDecision("conditional", { conditions: ["Use only the named web test tenant."] }),
+    answers: {
+      entryPoints: [targetCanary],
+      authenticationFlows: ["researcher account login"],
+      automationRules: "Use only reviewed tools under the recorded limits."
+    }
+  };
+  profile.modules.desktop = {
+    ...sourceDecision("denied", { rationale: "The rules exclude desktop-client testing." }),
+    answers: {
+      artifacts: ["Signed desktop build supplied by the program"],
+      dynamicConditions: "Do not execute or instrument the desktop client.",
+      liveProtocolRules: "Do not contact desktop update, telemetry, or service endpoints."
+    }
+  };
+
+  const created = createProgramProfile(id, profile, { paths, now: fixedAt });
+  assert.equal(created.ready, true);
+  const verification = verifyProgramProfile(id, { paths, now: fixedAt });
+  assert.equal(verification.ready, true);
+  assert.deepEqual(verification.allowedActions, []);
+  const provider = providerProfile();
+  provider.metadata.destination = "local";
+  const compilation = compileProgramProfile(id, { providerProfile: provider }, { paths, now: fixedAt });
+  assert.equal(compilation.gateDecision, "pass");
+  assert.equal(compilation.providerPrediction, "compatible");
+
+  const compiled = path.join(home, "programs", id, "compiled", compilation.compilationId);
+  const execution = readJson(path.join(compiled, "execution-policy.json"));
+  const techniques = readJson(path.join(compiled, "technique-matrix.json"));
+  const context = readJson(path.join(compiled, "model-context.json"));
+  const preflight = readJson(path.join(compiled, "model-preflight.json"));
+  const proposal = readJson(path.join(compiled, "engagement-proposal.json"));
+  const review = fs.readFileSync(path.join(compiled, "operator-review.md"), "utf8");
+  const assetPolicy = execution.assets.find(({ id: assetId }) => assetId === "primary-web");
+
+  assert.equal(execution.modulePolicy.combination, "intersection");
+  assert.equal(execution.modulePolicy.application, "global-ceiling-until-assets-have-explicit-module-bindings");
+  assert.equal(execution.modulePolicy.effectiveDisposition, "denied");
+  assert.deepEqual(execution.modulePolicy.modules.map(({ id: moduleId, disposition }) => [moduleId, disposition]), [
+    ["web-api", "conditional"],
+    ["desktop", "denied"]
+  ]);
+  assert.equal(execution.globalCeilings.effectiveActionDispositions.observe, "denied");
+  assert.equal(assetPolicy.actions.observe.disposition, "denied");
+  assert.equal(assetPolicy.actions.observe.executable, false);
+  assert.deepEqual(assetPolicy.allowedActionCeilings, []);
+  assert.deepEqual(assetPolicy.executableAllowedActions, []);
+  assert.deepEqual(execution.phases[0].assets[0].executableAllowedActions, []);
+  assert.deepEqual(techniques.globalAllowedActionCeilings, []);
+  assert.deepEqual(techniques.executableAllowedActions, []);
+  assert.deepEqual(techniques.phaseScopedExecutableActions[0].executableAllowedActions, []);
+  assert.deepEqual(context.rules.permittedActions, []);
+  assert.deepEqual(context.rules.deniedActions, PROGRAM_PROFILE_ACTIONS);
+  assert.deepEqual(context.conditionalPolicy.modules.map(({ id: moduleId }) => moduleId), ["web-api"]);
+  assert.equal(context.executionPolicy.modulePolicy.effectiveDisposition, "denied");
+  assert.deepEqual(proposal.scope.permittedActions, []);
+  assert.deepEqual(proposal.scope.globalAllowedActionCeilings, []);
+  assert.equal(proposal.scope.assetPolicies[0].actions.observe.executable, false);
+  assert.equal(proposal.executionPolicy.modulePolicy.effectiveDisposition, "denied");
+  assert.match(review, /Effective module disposition: \*\*denied\*\*/u);
+  assert.match(review, /- web-api: \*\*conditional\*\*/u);
+  assert.match(review, /- desktop: \*\*denied\*\*/u);
+  assert.match(review, /Effectively allowed after module ceilings: none\./u);
+  assert.match(review, /Conservatively executable across every configured phase\/asset slice: none\./u);
+
+  assert.deepEqual(preflight.requestedActions, ["observe", "scan", "authenticate"]);
+  assert.equal(preflight.providerPrediction, "compatible");
+  assert.deepEqual(preflight.providerBlockers, []);
+});
+
+test("an allowed and conditional module keep requested provider checks while blocking executable actions", (t) => {
+  const { home, paths } = fixture(t);
+  const id = "conditional-module-ceiling";
+  const profile = completeProfile(id);
+  profile.questionnaire.applicableModules = ["desktop", "web-api"];
+  profile.modules["web-api"] = {
+    ...sourceDecision("allowed"),
+    answers: {
+      entryPoints: [targetCanary],
+      authenticationFlows: ["researcher account login"],
+      automationRules: "Use only reviewed tools under the recorded limits."
+    }
+  };
+  profile.modules.desktop = {
+    ...sourceDecision("conditional", { conditions: ["Use only the isolated program desktop build."] }),
+    answers: {
+      artifacts: ["Signed desktop build supplied by the program"],
+      dynamicConditions: "Run only the isolated program build under the recorded reset procedure.",
+      liveProtocolRules: "Use only endpoints in the exact scope matrix."
+    }
+  };
+  profile.executionPolicy.requestedAssistanceModes = ["plan"];
+
+  createProgramProfile(id, profile, { paths, now: fixedAt });
+  const verification = verifyProgramProfile(id, { paths, now: fixedAt });
+  assert.equal(verification.ready, true);
+  assert.deepEqual(verification.allowedActions, []);
+  const provider = providerProfile({ scan: { plan: "deny" } });
+  provider.metadata.destination = "local";
+  const compilation = compileProgramProfile(id, { providerProfile: provider }, { paths, now: fixedAt });
+  assert.equal(compilation.gateDecision, "pass");
+  assert.equal(compilation.providerPrediction, "incompatible");
+
+  const compiled = path.join(home, "programs", id, "compiled", compilation.compilationId);
+  const execution = readJson(path.join(compiled, "execution-policy.json"));
+  const context = readJson(path.join(compiled, "model-context.json"));
+  const preflight = readJson(path.join(compiled, "model-preflight.json"));
+  const proposal = readJson(path.join(compiled, "engagement-proposal.json"));
+  const review = fs.readFileSync(path.join(compiled, "operator-review.md"), "utf8");
+
+  assert.equal(execution.modulePolicy.effectiveDisposition, "conditional");
+  assert.deepEqual(execution.modulePolicy.modules.map(({ id: moduleId, disposition }) => [moduleId, disposition]), [
+    ["web-api", "allowed"],
+    ["desktop", "conditional"]
+  ]);
+  assert.equal(execution.assets[0].actions.observe.disposition, "conditional");
+  assert.deepEqual(execution.assets[0].executableAllowedActions, []);
+  assert.deepEqual(context.rules.permittedActions, []);
+  assert.deepEqual(context.rules.conditionalActions, ["observe", "scan", "authenticate"]);
+  assert.deepEqual(context.conditionalPolicy.actions, []);
+  assert.deepEqual(context.conditionalPolicy.modules.map(({ id: moduleId }) => moduleId), ["desktop"]);
+  assert.deepEqual(proposal.scope.permittedActions, []);
+  assert.deepEqual(proposal.scope.globalAllowedActionCeilings, []);
+  assert.deepEqual(proposal.scope.conditionalActions.map(({ id: action }) => action), ["observe", "scan", "authenticate"]);
+  assert.deepEqual(proposal.executionPolicy.modulePolicy.modules[1].conditions, ["Use only the isolated program desktop build."]);
+  assert.match(review, /Effective module disposition: \*\*conditional\*\*/u);
+  assert.match(review, /Effectively allowed after module ceilings: none\./u);
+  assert.match(review, /Conservatively executable across every configured phase\/asset slice: none\./u);
+
+  assert.deepEqual(preflight.requestedActions, ["observe", "scan", "authenticate"]);
+  assert.deepEqual(preflight.requestedAssistanceModes, ["plan"]);
+  assert.ok(preflight.providerBlockers.some(({ action, assistanceMode }) =>
+    action === "scan" && assistanceMode === "plan"
+  ));
 });
 
 test("an open-ended reusable program profile requires a finite downstream engagement window", (t) => {
