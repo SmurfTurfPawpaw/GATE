@@ -54,7 +54,7 @@ function sha256(bytes) {
 }
 
 function writeExecutable(file, source) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   fs.writeFileSync(file, `#!${process.execPath}\n${source}\n`, { mode: 0o700 });
   fs.chmodSync(file, 0o700);
   return sha256(fs.readFileSync(file));
