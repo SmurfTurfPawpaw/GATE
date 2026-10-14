@@ -5,7 +5,7 @@ import path from "node:path";
 import { readJson, readPrivateJson, writeJsonAtomic } from "./config.mjs";
 import { recordEvent } from "./events.mjs";
 import { ensureRuntime, runtimePaths } from "./paths.mjs";
-import { readPrivateFile, writePrivateFileAtomic } from "./private-fs.mjs";
+import { readPrivateFile, readPrivateFileBounded, writePrivateFileAtomic } from "./private-fs.mjs";
 import { assertValidDocument } from "./schema.mjs";
 import { oneLine, slug } from "./text.mjs";
 
@@ -213,6 +213,20 @@ function positiveNumber(value, fallback, name) {
   return result;
 }
 
+function normalizePermittedTools(values) {
+  if (!Array.isArray(values) || values.length === 0) {
+    throw new Error("at least one permitted tool is required");
+  }
+  const normalized = values.map((value) => {
+    const toolId = oneLine(value, { name: "tool id", max: 64 }).toLowerCase();
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(toolId) || toolId.length < 2) {
+      throw new Error("tool ids must use 2-64 lowercase letters, numbers, or single dashes");
+    }
+    return toolId;
+  });
+  return [...new Set(normalized)];
+}
+
 export function createEngagement(input, options = {}) {
   const paths = options.paths || runtimePaths(options);
   ensureRuntime(paths);
@@ -227,6 +241,7 @@ export function createEngagement(input, options = {}) {
   const include = (input.targets || []).map(normalizeSelector);
   const exclude = (input.exclude || []).map(normalizeSelector);
   const permittedActions = [...new Set((input.actions || []).map((action) => slug(action, "action")))];
+  const permittedTools = normalizePermittedTools(input.tools);
   if (!include.length) throw new Error("at least one target is required");
   if (!permittedActions.length) throw new Error("at least one permitted action is required");
   for (const action of permittedActions) {
@@ -257,6 +272,7 @@ export function createEngagement(input, options = {}) {
     include,
     exclude,
     permittedActions,
+    permittedTools,
     environment: input.environment || "host"
   };
   value.plan.reportRef = `private://plans/${id}.md`;
@@ -498,6 +514,8 @@ export function targetMatches(selector, target) {
 export function checkEngagement(id, input, options = {}) {
   const paths = options.paths || runtimePaths(options);
   const { value } = load(paths, id);
+  const checkedTarget = normalizeSelector(input.target);
+  const checkedAction = oneLine(input.action, { name: "action", max: 80 });
   const reasons = [];
   if (!new Set(["approved", "active"]).has(value.metadata.status)) reasons.push("engagement is not approved");
   if (value.review.operatorReceipt.status !== "approved") reasons.push("operator receipt is not approved");
@@ -510,9 +528,9 @@ export function checkEngagement(id, input, options = {}) {
   ) {
     reasons.push("declared duration extends beyond the authorization window");
   }
-  if (!value.scope.permittedActions.includes(input.action)) reasons.push(`action is outside scope: ${input.action}`);
-  if (!value.scope.include.some((selector) => targetMatches(selector, input.target))) reasons.push(`target is outside scope: ${input.target}`);
-  if (value.scope.exclude.some((selector) => targetMatches(selector, input.target))) reasons.push(`target is explicitly excluded: ${input.target}`);
+  if (!value.scope.permittedActions.includes(checkedAction)) reasons.push(`action is outside scope: ${checkedAction}`);
+  if (!value.scope.include.some((selector) => targetMatches(selector, checkedTarget))) reasons.push(`target is outside scope: ${checkedTarget.value}`);
+  if (value.scope.exclude.some((selector) => targetMatches(selector, checkedTarget))) reasons.push(`target is explicitly excluded: ${checkedTarget.value}`);
   try {
     const approvedPlanFile = planFile(paths, value);
     if (!value.plan.sha256 || hashBuffer(readPrivateFile(approvedPlanFile, null, { label: "approved plan" })) !== value.plan.sha256) {
@@ -540,9 +558,15 @@ export function checkEngagement(id, input, options = {}) {
     if (!Number.isFinite(amount) || amount <= 0) reasons.push(`declared ${label} must be positive`);
     else if (amount > value.limits[limitKey]) reasons.push(`declared ${label} exceeds the approved limit`);
   }
+  const expectedEnvelopeSha256 = envelopeDigest(value);
+  let receiptSha256 = null;
   try {
     const receiptFile = path.join(paths.authorizations, `${value.metadata.id}.receipt.json`);
-    const receipt = readPrivateJson(receiptFile);
+    const receiptBytes = readPrivateFileBounded(receiptFile, 64 * 1024, null, {
+      label: "operator authorization receipt"
+    });
+    receiptSha256 = hashBuffer(receiptBytes);
+    const receipt = JSON.parse(receiptBytes.toString("utf8"));
     const expectedReceipt = {
       apiVersion: "gate.authorization/v1",
       engagementId: value.metadata.id,
@@ -557,7 +581,7 @@ export function checkEngagement(id, input, options = {}) {
     for (const [key, expected] of Object.entries(expectedReceipt)) {
       if (receipt[key] !== expected) reasons.push(`operator authorization receipt ${key} changed`);
     }
-    if (receipt.envelopeSha256 !== envelopeDigest(value)) reasons.push("approved engagement envelope changed");
+    if (receipt.envelopeSha256 !== expectedEnvelopeSha256) reasons.push("approved engagement envelope changed");
     if (externalAuthorizationRequired && authorizationRefMatches && receipt.authorizationEvidenceRef === expectedAuthorizationRef) {
       const evidenceFile = authorizationFile(paths, expectedAuthorizationRef);
       if (receipt.authorizationEvidenceSha256 !== hashBuffer(readPrivateFile(evidenceFile, null, { label: "authorization evidence" }))) {
@@ -567,17 +591,58 @@ export function checkEngagement(id, input, options = {}) {
   } catch {
     reasons.push("operator authorization receipt is unavailable");
   }
+  const allowed = reasons.length === 0;
   return {
-    allowed: reasons.length === 0,
+    allowed,
     reasons: [...new Set(reasons)],
     preflightOnly: true,
-    executionAvailable: false,
     attestation: {
       operatorProvenance: "local-unverified",
       noMistakesReview: "local-unverified"
     },
-    engagement: value
+    engagement: value,
+    ...(allowed ? {
+      executionBinding: {
+        engagementId: value.metadata.id,
+        planSha256: value.plan.sha256,
+        envelopeSha256: expectedEnvelopeSha256,
+        receiptSha256,
+        authorizationValidUntil: value.authorization.validUntil,
+        target: checkedTarget,
+        action: checkedAction,
+        environment: value.scope.environment,
+        allowedDestinations: [...value.dataHandling.allowedDestinations],
+        permittedTools: [...value.scope.permittedTools]
+      }
+    } : {})
   };
+}
+
+export function revokeEngagement(id, input, options = {}) {
+  const paths = options.paths || runtimePaths(options);
+  const { file, value } = load(paths, id);
+  if (input?.confirm !== `REVOKE ${value.metadata.id}`) {
+    throw new Error(`operator confirmation must be exactly: REVOKE ${value.metadata.id}`);
+  }
+  value.metadata.status = "revoked";
+  value.review.operatorReceipt.status = "revoked";
+  assertValidDocument(value, "engagement.schema.json", { paths });
+  writeJsonAtomic(file, value, 0o600);
+  recordEvent(
+    {
+      kind: "engagement.revoked",
+      summary: `Engagement ${value.metadata.id} was revoked by the operator.`,
+      effect: {
+        class: "host-write",
+        targetRef: `private://engagements/${value.metadata.id}.json`,
+        engagementId: value.metadata.id,
+        planDigest: value.plan.sha256
+      },
+      evidenceRefs: [`private://engagements/${value.metadata.id}.json`]
+    },
+    { paths }
+  );
+  return value;
 }
 
 export function getEngagement(id, options = {}) {

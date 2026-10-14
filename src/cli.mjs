@@ -11,16 +11,25 @@ import {
   closeEngagement,
   createEngagement,
   getEngagement,
-  recordTechnicalReview
+  recordTechnicalReview,
+  revokeEngagement
 } from "./lib/engagements.mjs";
+import {
+  createExecutionManifest,
+  executeExecutionManifest,
+  requestEngagementStops,
+  requestExecutionStop
+} from "./lib/executions.mjs";
 import { recordEvent } from "./lib/events.mjs";
 import { addLearning } from "./lib/learnings.mjs";
 import { ensureRuntime, runtimePaths } from "./lib/paths.mjs";
 import { checkPublication, publishPullRequest } from "./lib/publication.mjs";
+import { listProjects, registerProject, showProject, verifyProject } from "./lib/projects.mjs";
 import { buildStatus } from "./lib/status.mjs";
 import { toolInventory, toolPlan } from "./lib/tools.mjs";
 import { installUpstream, syncUpstream, upstreamStatus } from "./lib/upstreams.mjs";
 import { validateRepository } from "./lib/validation.mjs";
+import { leaseWorkspace, verifyWorkspace, workspaceStatus } from "./lib/workspaces.mjs";
 
 const help = `GATE — Gateway for Agentic Tooling & Engineering
 
@@ -39,13 +48,31 @@ Operations
   learn --cause TEXT --change TEXT [--private] [--scope session|project|repository]
                                     Record one cause → change learning candidate
 
+Projects
+  project register --file PATH      Register a private validated project contract
+  project list                      List registered project summaries
+  project show ID                   Show one registered project contract
+  project verify ID                 Verify one registered project contract
+
+Workspaces
+  workspace lease --repo PATH --task ID --branch REF [--base REF]
+                                    Acquire a verified Treehouse lease
+  workspace status --repo PATH      Inspect Treehouse workspace state
+  workspace verify --repo PATH --path PATH --task ID --lease ID --landed-ref REF
+                                    Verify landing and retain the durable lease
+
 Engagements
-  engagement new ID --targets CSV --actions CSV
+  engagement new ID --targets CSV --actions CSV --tools CSV
   engagement plan ID --file PATH
   engagement authorization ID --file PATH
   engagement review ID --run RUN --head GIT_SHA --result passed|failed
   engagement approve ID --sha SHA256 --confirm "APPROVE ID"
   engagement check ID --target TARGET --action ACTION
+  engagement manifest ID --target TARGET --action ACTION --tool TOOL --minutes N
+                         --requests N --parallel N --rate N --tokens N -- ARGV...
+  engagement exec ID --manifest ID --confirm "EXECUTE ID SHA256 UNMETERED"
+  engagement stop ID --run RUN
+  engagement revoke ID --confirm "REVOKE ID"
   engagement status ID
   engagement close ID
 
@@ -201,6 +228,68 @@ export async function main(argv) {
     return;
   }
 
+  if (command === "project") {
+    const [action = "list", id] = parsed.positional;
+    if (action === "register") {
+      assertPositionals(parsed.positional, 1, "gate project register --file PATH");
+      assertFlags(parsed.flags, ["file", "json"]);
+      return output(registerProject(requiredFlag(parsed.flags, "file"), { paths }), json);
+    }
+    if (action === "list") {
+      assertPositionals(parsed.positional, 1, "gate project list");
+      assertFlags(parsed.flags, ["json"]);
+      return output(listProjects({ paths }), json);
+    }
+    if (action === "show") {
+      assertPositionals(parsed.positional, 2, "gate project show ID");
+      assertFlags(parsed.flags, ["json"]);
+      if (!id) throw new Error("project id is required");
+      return output(showProject(id, { paths }), json);
+    }
+    if (action === "verify") {
+      assertPositionals(parsed.positional, 2, "gate project verify ID");
+      assertFlags(parsed.flags, ["json"]);
+      if (!id) throw new Error("project id is required");
+      const verification = verifyProject(id, { paths });
+      output(verification, json);
+      if (!verification.ok) process.exitCode = 2;
+      return;
+    }
+    throw new Error(`unknown project action: ${action}`);
+  }
+
+  if (command === "workspace") {
+    const [action] = parsed.positional;
+    if (!action) throw new Error("workspace action is required");
+    assertPositionals(parsed.positional, 1, "gate workspace ACTION [options]");
+    if (action === "lease") {
+      assertFlags(parsed.flags, ["repo", "task", "branch", "base", "json"]);
+      return output(leaseWorkspace({
+        repository: requiredFlag(parsed.flags, "repo"),
+        taskId: requiredFlag(parsed.flags, "task"),
+        branch: requiredFlag(parsed.flags, "branch"),
+        baseBranch: typeof parsed.flags.base === "string" ? parsed.flags.base : undefined
+      }, { paths }), json);
+    }
+    if (action === "status") {
+      assertFlags(parsed.flags, ["repo", "json"]);
+      return output(workspaceStatus({
+        repository: requiredFlag(parsed.flags, "repo")
+      }, { paths }), json);
+    }
+    if (action === "verify") {
+      assertFlags(parsed.flags, ["repo", "path", "task", "lease", "landed-ref", "json"]);
+      return output(verifyWorkspace({
+        repository: requiredFlag(parsed.flags, "repo"),
+        path: requiredFlag(parsed.flags, "path"),
+        taskId: requiredFlag(parsed.flags, "task"),
+        leaseId: requiredFlag(parsed.flags, "lease"),
+        landedRef: requiredFlag(parsed.flags, "landed-ref")
+      }, { paths }), json);
+    }
+    throw new Error(`unknown workspace action: ${action}`);
+  }
+
   if (command === "event") {
     assertFlags(parsed.flags, ["summary", "json"]);
     assertPositionals(parsed.positional, 1, "gate event KIND --summary TEXT");
@@ -236,7 +325,7 @@ export async function main(argv) {
     assertPositionals(parsed.positional, 2, "gate engagement ACTION ID [options]");
     if (action === "new") {
       assertFlags(parsed.flags, [
-        "title", "owner", "basis", "targets", "actions", "exclude", "environment", "depth",
+        "title", "owner", "basis", "targets", "actions", "tools", "exclude", "environment", "depth",
         "valid-from", "valid-until", "max-minutes", "max-requests", "max-parallel", "max-rate", "max-tokens",
         "retention-days", "hypotheses", "classification", "allowed-destinations", "secret-refs", "stop-on", "json"
       ]);
@@ -249,6 +338,7 @@ export async function main(argv) {
             basis: parsed.flags.basis,
             targets: listFlag(parsed.flags, "targets"),
             actions: listFlag(parsed.flags, "actions"),
+            tools: listFlag(parsed.flags, "tools"),
             exclude: listFlag(parsed.flags, "exclude"),
             environment: parsed.flags.environment,
             depth: parsed.flags.depth,
@@ -306,18 +396,79 @@ export async function main(argv) {
       );
     }
     if (action === "check") {
-      assertFlags(parsed.flags, ["target", "action", "json"]);
+      assertFlags(parsed.flags, ["target", "action", "minutes", "requests", "parallel", "rate", "tokens", "json"]);
       const check = checkEngagement(
         id,
-        { target: requiredFlag(parsed.flags, "target"), action: requiredFlag(parsed.flags, "action") },
+        {
+          target: requiredFlag(parsed.flags, "target"),
+          action: requiredFlag(parsed.flags, "action"),
+          maxMinutes: parsed.flags.minutes,
+          estimatedRequests: parsed.flags.requests,
+          maxParallel: parsed.flags.parallel,
+          maxRatePerSecond: parsed.flags.rate,
+          maxTokens: parsed.flags.tokens
+        },
         { paths }
       );
       output(check, json);
       if (!check.allowed) process.exitCode = 2;
       return;
     }
+    if (action === "manifest") {
+      assertFlags(parsed.flags, ["target", "action", "tool", "minutes", "requests", "parallel", "rate", "tokens", "json"]);
+      if (parsed.passthrough.length === 0) {
+        throw new Error("manifest command arguments are required after --");
+      }
+      return output(
+        createExecutionManifest(
+          id,
+          {
+            target: requiredFlag(parsed.flags, "target"),
+            action: requiredFlag(parsed.flags, "action"),
+            toolId: requiredFlag(parsed.flags, "tool"),
+            argv: parsed.passthrough,
+            maxMinutes: requiredFlag(parsed.flags, "minutes"),
+            estimatedRequests: requiredFlag(parsed.flags, "requests"),
+            maxParallel: requiredFlag(parsed.flags, "parallel"),
+            maxRatePerSecond: requiredFlag(parsed.flags, "rate"),
+            maxTokens: requiredFlag(parsed.flags, "tokens")
+          },
+          { paths }
+        ),
+        json
+      );
+    }
     if (action === "exec") {
-      throw new Error("active execution is disabled until a reviewed scope-aware adapter can bind command arguments to the approved target and enforce actual limits");
+      assertFlags(parsed.flags, ["manifest", "confirm", "json"]);
+      if (parsed.passthrough.length > 0) throw new Error("engagement exec does not accept command arguments");
+      const result = await executeExecutionManifest(
+        id,
+        {
+          manifestId: requiredFlag(parsed.flags, "manifest"),
+          confirm: requiredFlag(parsed.flags, "confirm")
+        },
+        { paths }
+      );
+      output(result, json);
+      if (!result.ok) process.exitCode = 2;
+      return;
+    }
+    if (action === "stop") {
+      assertFlags(parsed.flags, ["run", "json"]);
+      return output(
+        requestExecutionStop(id, { runId: requiredFlag(parsed.flags, "run") }, { paths }),
+        json
+      );
+    }
+    if (action === "revoke") {
+      assertFlags(parsed.flags, ["confirm", "json"]);
+      const engagement = revokeEngagement(
+        id,
+        { confirm: requiredFlag(parsed.flags, "confirm") },
+        { paths }
+      );
+      const stops = requestEngagementStops(id, { paths });
+      return output({ ok: true, engagement, stops }, json);
     }
     if (action === "status") {
       assertFlags(parsed.flags, ["json"]);

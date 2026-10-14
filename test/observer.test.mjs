@@ -59,6 +59,77 @@ function canonicalLearning(overrides = {}) {
   };
 }
 
+function executionFixture(overrides = {}) {
+  return {
+    capability: {
+      configured: true,
+      laneAvailable: true,
+      mode: "supervised-generic",
+      reason: null,
+      enforced: [
+        "engagement-binding",
+        "target-argument-binding",
+        "declared-action-label-binding",
+        "tool-allowlist",
+        "exact-argv",
+        "shell-disabled",
+        "executable-descriptor-observed-sha256",
+        "minimal-environment",
+        "private-stdout-stderr",
+        "one-shot-claim",
+        "declared-bounds-within-receipt",
+        "PRIVATE_CAPABILITY_CANARY"
+      ],
+      bestEffort: ["authorization-revocation-polling", "wall-duration", "process-group-termination"],
+      unavailable: [
+        "egress-target-restriction",
+        "request-count-measurement",
+        "request-rate-measurement",
+        "tool-concurrency-measurement",
+        "token-measurement",
+        "daemon-escape-containment",
+        "filesystem-isolation",
+        "credential-broker",
+        "tool-artifact-inventory",
+        "known-good-executable-provenance",
+        "argv-action-semantics-validation",
+        "supervisor-crash-containment",
+        "immutable-executable-snapshot"
+      ]
+    },
+    counts: {
+      queued: 0,
+      running: 1,
+      stopping: 0,
+      succeeded: 2,
+      failed: 0,
+      cancelled: 0,
+      blocked: 0,
+      unknown: 0
+    },
+    recent: [
+      {
+        runId: `xrun_${"1".repeat(32)}`,
+        manifestId: `xmf_${"2".repeat(32)}`,
+        engagementId: "customer-canary",
+        status: "running",
+        createdAt: at,
+        startedAt: at,
+        finishedAt: null,
+        terminationReason: null,
+        exitCode: null,
+        signal: null,
+        targetArgument: "TARGET_ARGUMENT_CANARY",
+        argv: ["ARGV_CANARY"],
+        executablePath: "/private/EXECUTABLE_PATH_CANARY",
+        stdout: "STDOUT_CANARY",
+        evidence: "EVIDENCE_CONTENT_CANARY"
+      }
+    ],
+    ...overrides
+  };
+}
+
 function statusFixture(overrides = {}) {
   return {
     at,
@@ -92,6 +163,22 @@ function statusFixture(overrides = {}) {
           operatorReceipt: { status: "approved" }
         },
         limits: { maxTokens: 25000 }
+      }
+    ],
+    execution: executionFixture(),
+    projects: [
+      {
+        id: "project_CUSTOMER_PROJECT_CANARY",
+        status: "ready",
+        provider: "github",
+        executionProfile: "CLIENT_EXECUTION_PROFILE_CANARY",
+        environment: "host",
+        deliveryMode: "no-mistakes",
+        deploymentEnabled: false,
+        securityProfile: "CLIENT_SECURITY_PROFILE_CANARY",
+        activeTestingEnabled: true,
+        repositoryUrl: "https://github.com/CLIENT_OWNER_CANARY/CLIENT_REPOSITORY_CANARY",
+        displayName: "CLIENT_DISPLAY_NAME_CANARY"
       }
     ],
     upstreams: [],
@@ -223,9 +310,38 @@ test("observer endpoints coalesce status reads and expose metadata-only projecti
     `engagement_${crypto.createHash("sha256").update("eng_CUSTOMER_CANARY").digest("hex").slice(0, 16)}`
   );
   assert.equal(status.engagements[0].status, "approved");
-  assert.equal(status.engagements[0].preflightOnly, true);
-  assert.equal(status.engagements[0].executionAvailable, false);
+  assert.equal(status.engagements[0].manifestRequired, true);
+  assert.equal(status.engagements[0].executionLaneAvailable, true);
+  assert.equal(status.engagements[0].executionMode, "supervised-generic");
+  assert.equal(status.engagements[0].executionEligibility, "manifest-required");
+  assert.equal("preflightOnly" in status.engagements[0], false);
+  assert.equal("executionAvailable" in status.engagements[0], false);
   assert.equal(status.engagements[0].attestation.operatorProvenance, "local-unverified");
+  assert.equal(status.execution.configured, true);
+  assert.equal(status.execution.laneAvailable, true);
+  assert.equal(status.execution.mode, "supervised-generic");
+  assert.equal(status.execution.runningCount, 1);
+  assert.equal(status.execution.counts.succeeded, 2);
+  assert.equal(status.execution.bestEffort.length, 3);
+  assert.equal(status.execution.unavailable.length, 13);
+  assert.match(status.execution.recent[0].runId, /^run_[a-f0-9]{16}$/);
+  assert.match(status.execution.recent[0].manifestId, /^manifest_[a-f0-9]{16}$/);
+  assert.match(status.execution.recent[0].engagementId, /^engagement_[a-f0-9]{16}$/);
+  assert.equal(status.execution.recent[0].status, "running");
+  assert.notEqual(
+    status.execution.recent[0].runId,
+    `run_${crypto.createHash("sha256").update(`xrun_${"1".repeat(32)}`).digest("hex").slice(0, 16)}`
+  );
+  assert.match(status.projects[0].id, /^project_[a-f0-9]{16}$/);
+  assert.equal(status.projects[0].status, "ready");
+  assert.equal(status.projects[0].provider, "github");
+  assert.equal(status.projects[0].environment, "host");
+  assert.equal(status.projects[0].deliveryMode, "no-mistakes");
+  assert.equal(status.projects[0].activeTestingConfigured, true);
+  assert.equal(status.projects[0].deploymentConfigured, false);
+  assert.equal(status.projects[0].executionLaneAvailable, true);
+  assert.equal(status.projects[0].executionEligibility, "not-evaluated");
+  assert.equal("activeTestingEnabled" in status.projects[0], false);
 
   assert.equal(events.apiVersion, "gate.observer/v1");
   assert.deepEqual(events.events[0].effect, { class: "network-probe" });
@@ -256,8 +372,23 @@ test("observer endpoints coalesce status reads and expose metadata-only projecti
     "learning-evidence-canary",
     "private-canary.json",
     "CUSTOMER_CANARY",
+    "CUSTOMER_PROJECT_CANARY",
+    "CLIENT_EXECUTION_PROFILE_CANARY",
+    "CLIENT_SECURITY_PROFILE_CANARY",
+    "CLIENT_OWNER_CANARY",
+    "CLIENT_REPOSITORY_CANARY",
+    "CLIENT_DISPLAY_NAME_CANARY",
     "REPOSITORY_CANARY",
-    "GATE_HOME_CANARY"
+    "GATE_HOME_CANARY",
+    "PRIVATE_CAPABILITY_CANARY",
+    "TARGET_ARGUMENT_CANARY",
+    "ARGV_CANARY",
+    "EXECUTABLE_PATH_CANARY",
+    "STDOUT_CANARY",
+    "EVIDENCE_CONTENT_CANARY",
+    "customer-canary",
+    `xrun_${"1".repeat(32)}`,
+    `xmf_${"2".repeat(32)}`
   ]) {
     assert.equal(serialized.includes(canary), false, `observer leaked ${canary}`);
   }
@@ -293,6 +424,94 @@ test("missing token telemetry remains unavailable instead of becoming zero", () 
   }
   assert.equal(projected.status.usage.context.usedTokens, null);
   assert.equal(projected.status.usage.budget.usedTokens, null);
+});
+
+test("execution metadata keeps opaque joins while excluding command and evidence data", () => {
+  const rawRunId = `xrun_${"a".repeat(32)}`;
+  const rawManifestId = `xmf_${"b".repeat(32)}`;
+  const rawEngagementId = "safe-test-engagement";
+  const projected = projectSnapshot(statusFixture({
+    events: [canonicalEvent({ runId: rawRunId })],
+    engagements: [{
+      metadata: { id: rawEngagementId, status: "active" },
+      review: {
+        noMistakes: { status: "passed" },
+        operatorReceipt: { status: "approved" }
+      }
+    }],
+    execution: executionFixture({
+      recent: [{
+        runId: rawRunId,
+        manifestId: rawManifestId,
+        engagementId: rawEngagementId,
+        status: "cancelled",
+        createdAt: at,
+        startedAt: at,
+        finishedAt: at,
+        terminationReason: "process-group-remained",
+        exitCode: null,
+        signal: null,
+        argv: ["JOIN_ARGV_CANARY"],
+        target: "JOIN_TARGET_CANARY",
+        evidence: "JOIN_EVIDENCE_CANARY"
+      }]
+    })
+  }), paths);
+
+  const run = projected.status.execution.recent[0];
+  assert.equal(run.runId, projected.events.events[0].runId);
+  assert.equal(run.engagementId, projected.status.engagements[0].id);
+  assert.equal(run.status, "cancelled");
+  assert.equal(run.terminationReason, "process-group-remained");
+  assert.notEqual(run.runId, `run_${crypto.createHash("sha256").update(rawRunId).digest("hex").slice(0, 16)}`);
+  const serialized = JSON.stringify(projected);
+  for (const forbidden of [rawRunId, rawManifestId, rawEngagementId, "JOIN_ARGV_CANARY", "JOIN_TARGET_CANARY", "JOIN_EVIDENCE_CANARY"]) {
+    assert.equal(serialized.includes(forbidden), false, `observer leaked ${forbidden}`);
+  }
+});
+
+test("execution availability fails closed on incomplete capabilities and malformed recent records", () => {
+  const execution = executionFixture();
+  execution.capability.enforced = execution.capability.enforced.filter((value) => value !== "shell-disabled");
+  execution.recent = [
+    {
+      runId: "/private/run-canary",
+      manifestId: `xmf_${"2".repeat(32)}`,
+      engagementId: "safe-test-engagement",
+      status: "running",
+      createdAt: at,
+      startedAt: at,
+      finishedAt: null,
+      terminationReason: null,
+      exitCode: 2 ** 40,
+      signal: "SIG_PRIVATE_CANARY"
+    }
+  ];
+  const projected = projectSnapshot(statusFixture({ execution }), paths);
+
+  assert.equal(projected.status.execution.configured, true);
+  assert.equal(projected.status.execution.laneAvailable, false);
+  assert.equal(projected.status.execution.recent.length, 0);
+  const serialized = JSON.stringify(projected.status.execution);
+  assert.equal(serialized.includes("/private/run-canary"), false);
+  assert.equal(serialized.includes("SIG_PRIVATE_CANARY"), false);
+
+  const unavailable = projectSnapshot(statusFixture({ execution: undefined }), paths);
+  assert.equal(unavailable.status.execution.configured, null);
+  assert.equal(unavailable.status.execution.laneAvailable, false);
+  assert.equal(unavailable.status.execution.runningCount, null);
+});
+
+test("observer retains an opaque invalid project for filesystem-valid corrupt names", () => {
+  const corruptName = `${"x".repeat(180)}\rprivate`;
+  const projected = projectSnapshot(statusFixture({
+    projects: [{ id: null, registryEntry: corruptName, status: "invalid" }]
+  }), paths);
+
+  assert.equal(projected.status.projects.length, 1);
+  assert.match(projected.status.projects[0].id, /^project_[a-f0-9]{16}$/);
+  assert.equal(projected.status.projects[0].status, "invalid");
+  assert.equal(JSON.stringify(projected).includes(corruptName), false);
 });
 
 test("observer preserves canonical forge and publication effects", () => {

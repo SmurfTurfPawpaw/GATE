@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { buildStatus } from "../lib/status.mjs";
 import { redactSensitiveHeaders } from "../lib/text.mjs";
@@ -32,6 +33,76 @@ const LEARNING_STATUSES = new Set(["proposed", "active", "superseded", "reverted
 const LEARNING_SENSITIVITIES = new Set(["public", "private"]);
 const USAGE_AVAILABILITY = new Set(["exact", "estimated", "unavailable"]);
 const UPSTREAM_INTEGRITY = new Set(["verified", "receipt-only", "commit-only", "invalid", "not-installed"]);
+const PROJECT_STATUSES = new Set(["ready", "invalid"]);
+const PROJECT_PROVIDERS = new Set(["github", "gitlab", "forgejo", "gitea", "local"]);
+const PROJECT_ENVIRONMENTS = new Set(["host", "rootless-container", "container", "vm", "remote-lab"]);
+const PROJECT_DELIVERY_MODES = new Set(["no-mistakes", "direct-pr", "local-only"]);
+const EXECUTION_MODES = new Set(["supervised-generic"]);
+const EXECUTION_REASONS = new Set([
+  "unsupported-platform",
+  "proc-descriptor-unavailable",
+  "proc-process-identity-unavailable"
+]);
+const EXECUTION_STATUSES = new Set([
+  "queued",
+  "running",
+  "stopping",
+  "succeeded",
+  "failed",
+  "cancelled",
+  "blocked",
+  "unknown"
+]);
+const EXECUTION_TERMINATION_REASONS = new Set([
+  "completed",
+  "operator-stop",
+  "engagement-invalidated",
+  "authorization-expired",
+  "duration-limit",
+  "evidence-limit",
+  "evidence-write-failure",
+  "spawn-failure",
+  "supervisor-signal",
+  "process-group-remained",
+  "supervision-lost"
+]);
+const EXECUTION_SIGNALS = new Set(Object.keys(os.constants.signals || {}));
+const EXECUTION_ENFORCED = new Set([
+  "engagement-binding",
+  "target-argument-binding",
+  "declared-action-label-binding",
+  "tool-allowlist",
+  "exact-argv",
+  "shell-disabled",
+  "executable-descriptor-observed-sha256",
+  "minimal-environment",
+  "private-stdout-stderr",
+  "one-shot-claim",
+  "declared-bounds-within-receipt"
+]);
+const EXECUTION_BEST_EFFORT = new Set([
+  "authorization-revocation-polling",
+  "wall-duration",
+  "process-group-termination"
+]);
+const EXECUTION_UNAVAILABLE = new Set([
+  "egress-target-restriction",
+  "request-count-measurement",
+  "request-rate-measurement",
+  "tool-concurrency-measurement",
+  "token-measurement",
+  "daemon-escape-containment",
+  "filesystem-isolation",
+  "credential-broker",
+  "tool-artifact-inventory",
+  "known-good-executable-provenance",
+  "argv-action-semantics-validation",
+  "supervisor-crash-containment",
+  "immutable-executable-snapshot"
+]);
+const ENGAGEMENT_STATUSES = new Set(["draft", "proposed", "approved", "active", "paused", "closed", "expired", "revoked"]);
+const TECHNICAL_REVIEW_STATUSES = new Set(["pending", "passed", "failed"]);
+const OPERATOR_RECEIPT_STATUSES = new Set(["pending", "approved", "revoked"]);
 const OBSERVER_API_VERSION = "gate.observer/v1";
 const MAX_STATIC_ASSET_BYTES = 1_048_576;
 // Pseudonyms only need to be stable for one observer process. A random HMAC
@@ -100,6 +171,10 @@ function timestamp(value) {
 
 function nonNegativeInteger(value) {
   return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function signedInteger(value) {
+  return Number.isInteger(value) && value >= -2_147_483_648 && value <= 2_147_483_647 ? value : null;
 }
 
 function safeEnum(value, allowed, fallback) {
@@ -462,7 +537,75 @@ function publicLearning(learning) {
   };
 }
 
-function summarizeEngagement(value) {
+function executionCapabilityList(value, allowed) {
+  if (!Array.isArray(value)) return [];
+  const supplied = new Set(value);
+  return [...allowed].filter((item) => supplied.has(item));
+}
+
+function summarizeExecutionRun(value) {
+  const run = object(value);
+  if (!run) return null;
+  const status = safeEnum(run.status, EXECUTION_STATUSES, null);
+  if (!status) return null;
+  const privateRunId = typeof run.runId === "string" && /^xrun_[a-f0-9]{32}$/u.test(run.runId) ? run.runId : null;
+  const privateManifestId = typeof run.manifestId === "string" && /^xmf_[a-f0-9]{32}$/u.test(run.manifestId)
+    ? run.manifestId
+    : null;
+  const privateEngagementId = id(run.engagementId);
+  if (!privateRunId || !privateManifestId || !privateEngagementId) return null;
+  return {
+    runId: opaqueId("run", privateRunId),
+    manifestId: opaqueId("manifest", privateManifestId),
+    engagementId: opaqueId("engagement", privateEngagementId),
+    status,
+    createdAt: timestamp(run.createdAt),
+    startedAt: timestamp(run.startedAt),
+    finishedAt: timestamp(run.finishedAt),
+    terminationReason: safeEnum(run.terminationReason, EXECUTION_TERMINATION_REASONS, null),
+    exitCode: signedInteger(run.exitCode),
+    signal: safeEnum(run.signal, EXECUTION_SIGNALS, null)
+  };
+}
+
+function summarizeExecution(value) {
+  const execution = object(value) || {};
+  const capability = object(execution.capability) || {};
+  const rawCounts = object(execution.counts) || {};
+  const configured = typeof capability.configured === "boolean" ? capability.configured : null;
+  const mode = safeEnum(capability.mode, EXECUTION_MODES, null);
+  const enforced = executionCapabilityList(capability.enforced, EXECUTION_ENFORCED);
+  const bestEffort = executionCapabilityList(capability.bestEffort, EXECUTION_BEST_EFFORT);
+  const unavailable = executionCapabilityList(capability.unavailable, EXECUTION_UNAVAILABLE);
+  const completeCapability = enforced.length === EXECUTION_ENFORCED.size &&
+    bestEffort.length === EXECUTION_BEST_EFFORT.size &&
+    unavailable.length === EXECUTION_UNAVAILABLE.size;
+  const laneAvailable = configured === true && capability.laneAvailable === true && mode !== null && completeCapability;
+  const counts = Object.fromEntries(
+    [...EXECUTION_STATUSES].map((status) => [status, nonNegativeInteger(rawCounts[status])])
+  );
+  return {
+    configured,
+    laneAvailable,
+    mode,
+    reason: laneAvailable ? null : safeEnum(capability.reason, EXECUTION_REASONS, null),
+    runningCount: counts.running,
+    counts,
+    enforced,
+    bestEffort,
+    unavailable,
+    recent: Array.isArray(execution.recent)
+      ? execution.recent
+        .slice(0, 100)
+        .map(summarizeExecutionRun)
+        .filter(Boolean)
+        .sort((left, right) => Date.parse(right.createdAt || 0) - Date.parse(left.createdAt || 0))
+        .slice(0, 30)
+      : []
+  };
+}
+
+function summarizeEngagement(value, execution) {
   const engagement = object(value);
   if (!engagement) return null;
   const metadata = object(engagement.metadata);
@@ -472,15 +615,17 @@ function summarizeEngagement(value) {
   const authorization = object(engagement.authorization) || {};
   const limits = object(engagement.limits) || {};
   const engagementId = id(metadata?.id ?? engagement.id);
-  const status = boundedString(metadata?.status ?? engagement.status, 32);
+  const status = safeEnum(metadata?.status ?? engagement.status, ENGAGEMENT_STATUSES, null);
   if (!engagementId || !status) return null;
   return {
     id: opaqueId("engagement", engagementId),
     status,
-    technicalReview: boundedString(noMistakes.status, 32) || "unknown",
-    operatorReceipt: boundedString(operator.status, 32) || "unknown",
-    preflightOnly: true,
-    executionAvailable: false,
+    technicalReview: safeEnum(noMistakes.status, TECHNICAL_REVIEW_STATUSES, "unknown"),
+    operatorReceipt: safeEnum(operator.status, OPERATOR_RECEIPT_STATUSES, "unknown"),
+    manifestRequired: true,
+    executionLaneAvailable: execution.laneAvailable,
+    executionMode: execution.mode,
+    executionEligibility: "manifest-required",
     attestation: {
       operatorProvenance: "local-unverified",
       noMistakesReview: "local-unverified"
@@ -502,6 +647,28 @@ function summarizeUpstream(value) {
     integrityState,
     ready: integrityState === "verified" && upstream.ready === true,
     commit: typeof upstream.commit === "string" && /^[a-f0-9]{40}$/u.test(upstream.commit) ? upstream.commit : null
+  };
+}
+
+function summarizeProject(value, execution) {
+  const project = object(value);
+  const status = safeEnum(project?.status, PROJECT_STATUSES, null);
+  // Invalid registry entries can contain any filesystem-valid name. Hash the
+  // raw nonempty name so corrupt entries remain visible without exposing it.
+  const privateId = status === "invalid" && typeof project?.registryEntry === "string" && project.registryEntry
+    ? project.registryEntry
+    : boundedString(project?.id, 128);
+  if (!privateId || !status) return null;
+  return {
+    id: opaqueId("project", privateId),
+    status,
+    provider: safeEnum(project.provider, PROJECT_PROVIDERS, null),
+    environment: safeEnum(project.environment, PROJECT_ENVIRONMENTS, null),
+    deliveryMode: safeEnum(project.deliveryMode, PROJECT_DELIVERY_MODES, null),
+    deploymentConfigured: typeof project.deploymentEnabled === "boolean" ? project.deploymentEnabled : null,
+    activeTestingConfigured: typeof project.activeTestingEnabled === "boolean" ? project.activeTestingEnabled : null,
+    executionLaneAvailable: execution.laneAvailable,
+    executionEligibility: "not-evaluated"
   };
 }
 
@@ -574,6 +741,7 @@ export function projectSnapshot(rawStatus, paths) {
     context: { usedTokens: null, windowTokens: latestSession?.contextWindow ?? null },
     budget: { usedTokens: null, limitTokens: budget.limitTokens }
   };
+  const execution = summarizeExecution(raw.execution);
   return {
     status: {
       apiVersion: OBSERVER_API_VERSION,
@@ -585,7 +753,13 @@ export function projectSnapshot(rawStatus, paths) {
       usage: dashboardUsage,
       budget,
       telemetry: { freshness, lastActivityAt, ageSeconds },
-      engagements: Array.isArray(raw.engagements) ? raw.engagements.map(summarizeEngagement).filter(Boolean) : [],
+      execution,
+      engagements: Array.isArray(raw.engagements)
+        ? raw.engagements.map((value) => summarizeEngagement(value, execution)).filter(Boolean)
+        : [],
+      projects: Array.isArray(raw.projects)
+        ? raw.projects.map((value) => summarizeProject(value, execution)).filter(Boolean)
+        : [],
       upstreams: Array.isArray(raw.upstreams) ? raw.upstreams.map(summarizeUpstream).filter(Boolean) : []
     },
     events: { apiVersion: OBSERVER_API_VERSION, at: generatedAt, events: events.map(publicEvent) },

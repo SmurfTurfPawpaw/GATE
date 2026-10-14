@@ -2,10 +2,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { appendPrivateFile, openPrivateFile } from "./private-fs.mjs";
 
-export function appendJsonLine(file, value, mode = 0o600) {
+export function appendJsonLine(file, value, mode = 0o600, options = {}) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const line = `${JSON.stringify(value)}\n`;
-  if (mode === 0o600) appendPrivateFile(file, line, { encoding: "utf8", label: `private JSONL file ${file}` });
+  if (mode === 0o600) {
+    appendPrivateFile(file, line, {
+      encoding: "utf8",
+      label: `private JSONL file ${file}`,
+      sync: options.sync === true
+    });
+  }
   else fs.appendFileSync(file, line, { encoding: "utf8", mode });
 }
 

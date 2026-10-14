@@ -192,14 +192,117 @@ export function readPrivateFile(file, encoding = null, options = {}) {
   }
 }
 
+/** Read a stable private file with an explicit byte ceiling. */
+export function readPrivateFileBounded(file, maximumBytes, encoding = null, options = {}) {
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 0) {
+    throw new Error("maximum private file size must be a non-negative safe integer");
+  }
+  const resolved = path.resolve(file);
+  const label = options.label || `private file ${resolved}`;
+  const descriptor = openPrivateFile(resolved, { operation: "read", label });
+  try {
+    const before = fs.fstatSync(descriptor);
+    if (before.size > maximumBytes) throw new Error(`${label} exceeds the ${maximumBytes}-byte limit`);
+    const chunks = [];
+    let total = 0;
+    while (total <= maximumBytes) {
+      const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, maximumBytes + 1 - total));
+      const bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      chunks.push(buffer.subarray(0, bytesRead));
+      total += bytesRead;
+    }
+    if (total > maximumBytes) throw new Error(`${label} exceeds the ${maximumBytes}-byte limit`);
+    const after = fs.fstatSync(descriptor);
+    if (
+      !sameFile(before, after) || before.size !== after.size ||
+      before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || total !== after.size
+    ) {
+      throw new Error(`${label} changed while it was being read`);
+    }
+    verifyPathStillNames(resolved, after, assertFileStat, label);
+    const content = Buffer.concat(chunks, total);
+    return encoding === null ? content : content.toString(encoding);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
 export function appendPrivateFile(file, content, options = {}) {
   securePrivateDirectory(path.dirname(file), { create: false, label: `parent directory for ${file}` });
   const descriptor = openPrivateFile(file, { operation: "append", create: true, label: options.label });
   try {
     fs.writeFileSync(descriptor, content, options.encoding || "utf8");
+    if (options.sync === true) fs.fsyncSync(descriptor);
   } finally {
     fs.closeSync(descriptor);
   }
+}
+
+/**
+ * Create a new owner-only regular file without following links or accepting an
+ * existing path. The returned descriptor remains owned by the caller. This is
+ * the primitive for one-shot claims and evidence files where replacing an
+ * existing record would erase the security boundary.
+ */
+export function openPrivateFileExclusive(file, options = {}) {
+  const resolved = path.resolve(file);
+  const parent = path.dirname(resolved);
+  const label = options.label || `private exclusive file ${resolved}`;
+  securePrivateDirectory(parent, { create: false, label: `parent directory for ${resolved}` });
+  const descriptor = fs.openSync(
+    resolved,
+    privateFlags(fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | nonBlocking),
+    PRIVATE_FILE_MODE
+  );
+  try {
+    let opened = fs.fstatSync(descriptor);
+    assertFileStat(opened, label);
+    if (usesPosixPermissions && (opened.mode & 0o7777) !== PRIVATE_FILE_MODE) {
+      fs.fchmodSync(descriptor, PRIVATE_FILE_MODE);
+      opened = fs.fstatSync(descriptor);
+    }
+    if (usesPosixPermissions && (opened.mode & 0o7777) !== PRIVATE_FILE_MODE) {
+      throw new Error(`${label} permissions are not owner-only (expected 0600)`);
+    }
+    verifyPathStillNames(resolved, opened, assertFileStat, label);
+    return descriptor;
+  } catch (error) {
+    fs.closeSync(descriptor);
+    throw error;
+  }
+}
+
+/** Flush a private directory entry update before reporting durable success. */
+export function syncPrivateDirectory(directory, options = {}) {
+  const resolved = securePrivateDirectory(directory, {
+    create: false,
+    label: options.label || `private directory ${path.resolve(directory)}`
+  });
+  const descriptor = fs.openSync(resolved, privateFlags(fs.constants.O_RDONLY | directoryOnly));
+  try {
+    fs.fsyncSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+/**
+ * Write and durably publish a new private file. On an ambiguous write/fsync
+ * failure the path is intentionally retained so a one-shot claim fails closed.
+ */
+export function writePrivateFileExclusive(file, content, options = {}) {
+  const resolved = path.resolve(file);
+  const descriptor = openPrivateFileExclusive(resolved, options);
+  try {
+    fs.writeFileSync(descriptor, content, options.encoding);
+    fs.fsyncSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  syncPrivateDirectory(path.dirname(resolved), {
+    label: `parent directory for ${resolved}`
+  });
 }
 
 export function writePrivateFileAtomic(file, content, options = {}) {

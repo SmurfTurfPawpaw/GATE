@@ -44,6 +44,9 @@ export function recordEvent(input, options = {}) {
     usageRef: input.usageRef || null
   };
   assertValidDocument(event, "event.schema.json", { paths });
-  appendJsonLine(paths.events, event);
+  // A caller may make a state transition contingent on this audit append.
+  // Flush the complete line before reporting success; any fsync or close error
+  // remains ambiguous and the caller must preserve its recovery state.
+  appendJsonLine(paths.events, event, 0o600, { sync: true });
   return event;
 }

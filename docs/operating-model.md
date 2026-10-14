@@ -18,18 +18,108 @@ The working v0.1 non-AI lifecycle is:
 
 On Windows, the intended v0.1 setup runs in WSL2 because Firstmate supports macOS and Linux. The doctor reports the platform and WSL state; it does not yet provide a dedicated native-Windows remediation flow.
 
+## Private project contracts
+
+Prepare a project contract from [project.json](../templates/project.json) in a private working directory, then register and verify it:
+
+```bash
+./bin/gate.mjs project register --file "$HOME/.config/gate/projects/my-project.json" --json
+./bin/gate.mjs project verify my-project --json
+./bin/gate.mjs project list --json
+./bin/gate.mjs project show my-project --json
+```
+
+The registry validates the contract schema, canonical repository identity, default branch, and referenced execution and security profiles. It stores the canonical contract as an owner-only file under `GATE_HOME/projects`; repository URLs, destination references, and other project-specific settings therefore remain private. General status and the observer receive only a contract summary, and the observer pseudonymizes the project ID. `project show` is the explicit full-detail read and can disclose the complete contract to its caller.
+
+Registration is append-only in v0.1. Re-registering identical content is an idempotent read, while replacement under the same ID and duplicate canonical repository identities fail closed. Remote forge path segments are case-normalized before comparison. A local `file://` locator is rewritten to its physical realpath in the stored contract; load and verification fail if a moved or replaced alias later resolves to another path. There is no update or delete command. A writer lock serializes registration and is never declared stale or stolen automatically. Invalid or unexpected registry entries remain visible as opaque invalid rows and block new registrations instead of being ignored. Both source and canonical stored JSON are byte-bounded. A contract-write failure rolls back the exact new file when safe; an audit append, flush, or close error preserves both the contract and durable `.registry.pending` marker because the event may already have been written.
+
+While `.registry.lock` or `.registry.pending` exists, `project show` fails and verify, list, general status, and observer status report invalid or degraded registry state. The pending marker survives removal of a stale lock so an unaudited contract cannot silently become ready. Reconcile an interruption in this order:
+
+1. Verify that no registration process is active; inspect the lock and pending owner details before changing anything.
+2. Require the pending marker to identify `gate.project-registration/v1`, `ProjectRegistrationPending`, its `projectId`, 32-character `transactionNonce`, `eventId`, and 64-character `contractSha256`. Hash the exact stored contract bytes and require that SHA-256 to equal `contractSha256` before trusting either file.
+3. Locate the event whose ID exactly equals `eventId`. Require kind `project.registered`, target and evidence reference `private://projects/PROJECT_ID.json`, and evidence reference `evidence://project-registration/TRANSACTION_NONCE/CONTRACT_SHA256`. Reject a conflicting, duplicate, malformed, or digest-mismatched record as unresolved rather than choosing one.
+4. If that exact event is absent, remove the unaudited project contract and pending marker, then remove the stale lock and retry registration. If the exact bound event exists, remove only the pending marker and stale lock, then run `project verify`.
+
+Never blindly delete either control file or treat removal of only the lock as recovery.
+
+The project record is configuration, not authority. Registration does not clone a repository, acquire a workspace, authorize target contact, verify a No Mistakes run, or enable merge, deployment, or publication. Current workspace and publication commands also require explicit repository inputs; they do not yet resolve or enforce every registered project field.
+
+## Verified Treehouse leases
+
+The GATE workspace bridge runs only on Linux or WSL2 and accepts only managed Treehouse 3.1.3 whose executable bytes pass full verification against [upstreams.lock.json](../locks/upstreams.lock.json). Install it through the reviewed release lane, and inspect the repository's durable Treehouse state before acquiring work:
+
+```bash
+./bin/gate.mjs upstream install treehouse --json
+./bin/gate.mjs workspace status --repo "$HOME/src/my-project" --json
+./bin/gate.mjs workspace lease \
+  --repo "$HOME/src/my-project" \
+  --task issue-123 \
+  --branch gate/issue-123 \
+  --base main --json
+```
+
+Lease acquisition is the only operation that invokes Treehouse. GATE runs the exact verified executable as `treehouse get --lease --json --no-fetch --branch BRANCH --lease-holder HOLDER [--base BASE]`, with update checks and interactive prompting disabled. Omitting `--base` lets the repository's Treehouse configuration select it. GATE never invokes Treehouse `status`, `return`, `destroy`, `prune`, or `enter`. It selects Git from fixed trusted system locations rather than the caller's `PATH`, and gives each subprocess a minimal environment with an empty private home and private temporary directory. Inherited credentials, proxies, SSH agents, language loaders, and general session variables are absent.
+
+Lease always passes `--no-fetch`; GATE also disables Git lazy fetch and all transports. Any requested branch, base, object, or blob must already resolve locally. Fetching or refreshing refs is a separate reviewed workflow with its own narrow network and credential handling. The workspace bridge itself has no credential, proxy, SSH-agent, or network broker.
+
+GATE inspects the shared repository-local config and every per-worktree config before and after lease acquisition. It accepts only a narrow reviewed allowlist of keys with validated values; every unreviewed key fails closed. Includes, filters, credential/SSH/proxy commands, diff and merge drivers, editors, pagers, external protocols, commit graphs, and similar command or object-redirection paths therefore block workspace operations. Git LFS `filter.lfs.*` is unsupported. Repository-redirecting and integrity-weakening settings also fail closed, including `core.worktree`, `core.gitdir`, repository input-file overrides, weakened stat settings, and a non-false `core.bare`. On POSIX, configured `core.filemode` and `core.symlinks` must be true. GATE confirms that Git's top-level path is the intended worktree. Separate inspections cannot exclude a concurrent same-user writer to the shared Git directory.
+
+GATE binds one private root to the physical main clone and allocates a separate SHA-256 task-ID root for each lease. Creation is exclusive: once a task ID has a root, it is burned and can never be reused, including after an interrupted or failed lease attempt. Choose a fresh task ID for every retry. A physical clone has a lifetime limit of 511 retained task roots. At the limit, continue with a new physical clone or wait for future mount-safe upstream lifecycle support; never delete retained roots to recover a slot.
+
+`workspace status` never invokes Treehouse. It stable-reads each clone and task binding, the exact version-4 state containing one healthy lease, and the exact 32-byte owner-only state key. It validates the seed-inventory HMAC and requires SHA-256 of the raw state and key bytes to match the immutable completed GATE binding. The HMAC authenticates only the seed inventory. Lease evidence also depends on the trusted `get` receipt and immutable raw-file digests. Treehouse 3.1.3 `status` can run recovery and move user files, so it cannot serve as a read-only query.
+
+Before `get`, GATE durably publishes a `pending` binding for holder `gate:TASK_ID`. After Treehouse returns, GATE checks the returned base, path, 128-bit lease ID, holder, timestamp, requested branch, and direct state read. It rejects in-progress Git operations and transaction locks, submodules, nested Git metadata, hidden or staged real-index state, corrupt or unreachable objects, and a filesystem that differs from a fresh private-index checkout of exact `HEAD`. It then records the durable `workspace.leased` event and atomically replaces `pending` with `complete`, binding the event receipt and immutable state/key digests, before stable-reading state again. Treehouse persists the lease independently of the CLI process. Save the returned path, task ID, and lease ID. If interruption leaves a pending binding or a durable lease without a complete receipt, GATE status reports it as unverified for manual reconciliation; this local evidence is not a power-loss durability guarantee.
+
+After the exact workspace commit has landed, stop its processes and verify the lease:
+
+```bash
+./bin/gate.mjs workspace verify \
+  --repo "$HOME/src/my-project" \
+  --path WORKSPACE_PATH \
+  --task issue-123 \
+  --lease 0123456789abcdef0123456789abcdef \
+  --landed-ref main --json
+```
+
+`workspace verify` does not return, reset, destroy, or otherwise mutate the Treehouse lease. `--repo` must be the main worktree and `--landed-ref` must exactly name the branch checked out there; GATE resolves that branch through `refs/heads/BRANCH` instead of accepting an arbitrary revision. The main and leased worktrees must share one Git common directory. Verification rechecks the lease ID and derived holder, requires no recorded processes or in-progress Git operation, rejects submodules and nested Git metadata, and rejects grafts, filesystem or HTTP object alternates, replacement refs, corrupt objects, and any unreachable object. It checks the real indexes as well as fresh controlled checkouts, so assume-unchanged, skip-worktree, staged, tracked-byte, mode, link, untracked, and ignored workspace changes all fail. Git-confirmed ignored cache paths may remain in the main worktree; other main-worktree extras and every leased-workspace extra fail.
+
+After a second object-integrity and zero-unreachable check, GATE proves that the exact current workspace `HEAD` is an ancestor of the checked-out main branch. “Landed” means only local Git reachability. It is not evidence that a provider accepted a push, that a pull request completed No Mistakes, or that publication occurred. A successful check appends `workspace.verified` and returns `retained: true`; the durable lease and its task root remain allocated.
+
+Automatic Treehouse return, reset, destruction, and reuse are disabled. Reproduced bind-mount races in Treehouse 3.1.3 can make those destructive paths alter or delete host data, and the upstream release has no mount-safe primitive GATE can call. Never invoke any Treehouse command directly against a GATE root, including `treehouse status`, `return`, `destroy`, `prune`, or `enter`. Use GATE workspace commands only. Retained leases consume disk until future mount-safe upstream support exists.
+
+### Operation-lock recovery
+
+If `gate workspace status` returns phase `operation-lock-present`, it did not inspect any task or Git state. The lock is `$GATE_HOME/treehouse/repos/<sha256(realpath repo)>/.gate-workspace-operation.lock`. Its age is never enough to declare it stale, and its PID plus timestamp does not record a process-start identity. PID reuse, reboot, or an orphan Treehouse or Git child can therefore make a plausible lock misleading. Reconcile it in this order:
+
+1. Stop new workspace operations for this physical clone. Identify every GATE workspace operation and every Treehouse or Git process whose working directory, arguments, or open files refer to the repository or its clone-specific or task-specific GATE roots. Wait for or stop the owning operation and its children. If this cannot be proved, leave the lock in place.
+2. Inspect only the exact clone-specific lock. It must be owned by the current operator, mode `0600`, a physical single-link regular file, and contain exactly `<positive PID> <canonical UTC timestamp>`, where the timestamp has the millisecond form emitted by `new Date().toISOString()`. A malformed, unreadable, unowned, symlinked, multi-link, or changing lock remains unresolved; leave it in place and do not repair or replace it.
+3. Check `/proc/PID`. If that PID exists, do not remove the lock, even if it appears unrelated or may have been reused. Wait for or stop the owning operation, then rerun GATE status. Apply the same PID check after a reboot; reboot alone does not prove staleness.
+4. If `/proc/PID` is absent and step 1 proved that no related GATE, Treehouse, or Git process remains, record the lock's device, inode, ownership, mode, link count, metadata, and exact content. Immediately re-read and revalidate all of them. Any difference leaves recovery unresolved.
+5. Unlink only that exact unchanged `.gate-workspace-operation.lock`. Do not delete task roots, pending or complete bindings, Treehouse state, keys, provider lock files, or Git locks, and do not invoke Treehouse directly.
+6. Immediately rerun `gate workspace status --repo PATH --json`. Do not mutate or lease a workspace unless that GATE status completes and its task entries have been reviewed. Use a fresh task ID for any new acquisition.
+
+Treehouse provides change isolation only. Every worktree for a clone shares the common `.git`, so unknown or hostile same-user work can mutate hooks, configuration, objects, and refs outside its allocated directory. Use a standalone clone or OS-level sandbox for that work; the verified bridge cannot turn a shared worktree into a security boundary.
+
 ## Daily software work
 
-1. Prepare and validate a project contract from [project.json](../templates/project.json). The persistent project registry is not implemented in v0.1, so retain the reviewed contract with the project's private operating records.
-2. State the outcome and acceptance criteria to the Firstmate session.
-3. Watch GATE-emitted activity, derived agent/task state, learning, freshness, and available token totals in the observer. Firstmate and Treehouse do not yet emit their complete lifecycle into it.
-4. Answer only decisions that are ambiguous, scope-expanding, destructive, or blocked by unavailable evidence.
-5. Run the real No Mistakes workflow for review, tests, documentation, push, PR, and CI, and retain its genuine run evidence. GATE does not yet orchestrate that complete lifecycle or verify a run ID against an external attestation.
-6. Run `gate publication check` and `gate publication dry-run` for the expected repository, pull request, exact head, genuine No Mistakes run reference, and intended merge mode. The v0.1 adapter checks PR state, head, mergeability, and a nonempty green required-check set, but it does not verify the external run or project-level facts.
-7. Report publication as blocked. A future trusted adapter may merge, deploy, or publish only after it verifies a No Mistakes attestation bound to that head and enforces the registered base branch, merge posture, and destination.
-8. Review the outcome, limitations, costs, and learning entries.
+1. Register and verify the private project contract.
+2. State the outcome and acceptance criteria to the Firstmate session. GATE does not yet invoke or persist that Firstmate flow.
+3. Acquire a verified Treehouse lease for a named task and branch, then give Codex only the returned workspace path. GATE does not launch Codex or GNHF.
+4. Watch GATE-emitted activity, project summaries, derived agent/task state, learning, freshness, and available token totals in the observer. Firstmate, Treehouse, GNHF, and No Mistakes do not yet emit their complete lifecycle into it.
+5. Answer only decisions that are ambiguous, scope-expanding, destructive, or blocked by unavailable evidence.
+6. Run the real No Mistakes workflow with `axi run --no-publish-intent` for review, tests, documentation, push, PR, and CI, and retain its genuine run evidence. The caller-side omission withholds private intent from PR drafting; GATE does not yet orchestrate that handoff or verify a run ID against an external attestation.
+7. Run `gate publication check` and `gate publication dry-run` for the expected repository, pull request, exact head, genuine No Mistakes run reference, and intended merge mode. The v0.1 adapter checks PR state, head, mergeability, and a nonempty green required-check set, but it does not verify the external run or automatically enforce the registered project contract.
+8. Report publication as blocked. A future trusted adapter may merge, deploy, or publish only after it verifies a No Mistakes attestation bound to that head and enforces the registered base branch, merge posture, and destination.
+9. After the exact workspace head has landed, stop its processes and run nonmutating `workspace verify`. Record the local reachability result and retain the lease for manual reconciliation.
+10. Review the outcome, limitations, costs, and learning entries.
 
 The target operating model routes edit, test, commit, push, PR, CI, merge, deploy, and publication through the named owners. v0.1 wires local GATE primitives and read-only exact-head GitHub PR preflight. Mutation adapters and other owner bridges remain explicit integration work. No component may bypass a missing owner or adapter because another tool offers a similar command.
+
+### Bootstrap the No Mistakes repository controls
+
+No Mistakes trusts repository controls from the fetched default branch. The first pull request that adds `.no-mistakes.yaml` cannot use that same unmerged file to govern or approve itself. Run that bootstrap review with `--no-publish-intent`, independently run `npm ci --ignore-scripts`, `npm test`, and `npm run check`, perform a manual diff and policy review, and require the normal CI checks. Rely on the repository config only after that pull request has merged and the default branch has been fetched again. Later `.no-mistakes.yaml` changes follow the same rule: the proposed version does not take effect until it is trusted on the fetched default branch.
+
+Keep `--no-publish-intent` on later runs as well. Trusted `pr.publish_intent: false` prevents a generated Intent section, but only the caller-side omission also removes the full intent from the PR-drafting prompts. The local No Mistakes global config carries the same default for this environment; the explicit flag keeps the behavior portable.
 
 ## Active security work
 
@@ -38,17 +128,21 @@ Create an engagement from [engagement.json](../templates/engagement.json). Draft
 The active flow is:
 
 1. **Establish authority.** Store the written authority or ownership evidence privately and reference it from the engagement.
-2. **Map scope.** Add exact targets, exclusions, action classes, validity times, data destinations, and limits. URL path prefixes stop at segment boundaries; an approved query is exact, and URL fragments are rejected.
-3. **Build the plan.** Record hypotheses, commands, likely effects, credentials, rollback, stop conditions, coverage, and completion tests.
+2. **Map scope.** Add exact targets, exclusions, declared action classes, permitted catalog tool IDs, execution environment, validity times, data destinations, and limits. Include `gate-home` when the generic lane may run, because its raw evidence always lands there. URL path prefixes stop at segment boundaries; an approved query is exact, and URL fragments are rejected.
+3. **Build the plan.** Record hypotheses, exact command shapes, likely effects, credentials, rollback, stop conditions, coverage, completion tests, and which launches require a reviewed adapter or the supervised generic lane.
 4. **Validate the plan.** Run No Mistakes against the immutable plan, then record its run and head. v0.1 accepts that record but does not invoke No Mistakes or verify an attestation.
 5. **Report before engaging.** Present the target, actions, likely effects, limits, stop conditions, and plan digest directly to the operator. A dedicated local decision view is not implemented in v0.1.
-6. **Approve once.** The operator supplies the exact confirmation for the digest. GATE stores a local unsigned receipt whose provenance depends on the operator workflow and `GATE_HOME` permissions. In the target design it can cover repeated in-scope adapter launches until expiry or invalidation; v0.1 has no generic active adapter.
-7. **Stop at preflight in v0.1.** `gate engagement check` produces target/action decision evidence, but arbitrary active execution is disabled. A reviewed scope-aware adapter must bind exact arguments to scope, preserve tool-native evidence, and enforce the approved limits before target contact.
-8. **Execute and monitor through the future adapter.** Explore the stated hypotheses and new in-scope branches without stopping at a clean scanner result. The adapter must watch revocation and configured stop conditions, terminate the process group when one occurs, and preserve full commands, versions, timestamps, hashes, and raw output privately.
-9. **Validate findings.** Reproduce with an independent method where possible and separate observed facts from inference.
-10. **Report and retest.** Use [security-report.md](../templates/security-report.md), include limitations and residual unknowns, and assess the completion contract before closing. In v0.1, `engagement close` is an administrative state change; it does not inspect coverage, run completion tests, or certify completeness.
+6. **Approve the plan.** The operator supplies the exact `APPROVE ID` confirmation for the plan digest. GATE stores a local unsigned receipt whose provenance depends on the operator workflow and `GATE_HOME` permissions. It can cover repeated launches that stay within the receipt-bound target, action, tool, environment, limits, data, and validity envelope.
+7. **Check each operation.** `gate engagement check ID --target TARGET --action ACTION` produces an `executionBinding` for the current plan, envelope, receipt bytes, authorization expiry, exact target, declared action label, execution environment, permitted tools, and allowed destinations. It remains preflight evidence and does not select or launch a command. The label does not prove that arbitrary argv implements that action class.
+8. **Choose an execution lane.** Prefer a reviewed adapter when it supplies the guarantees the plan needs. The generic lane accepts only receipt-bound `scope.environment: host` whose allowed destinations include `gate-home`; container, rootless-container, VM, and remote-lab engagements require a lane that implements that environment. For a qualifying host engagement, create an expiring one-shot manifest with `gate engagement manifest`. The argument array after `--` must contain exactly one whole argument equal to `{{GATE_TARGET}}`; GATE expands it and binds the resulting target argument, declared action label, permitted tool, catalog risk class, allowed destinations, catalog-resolved executable descriptor and observed hash, declared bounds, and private evidence paths.
+9. **Confirm that exact manifest.** Present the expanded `operation`, catalog risk class, executable identity, bounds, expiry, and all `enforced`, `bestEffort`, and `unavailable` entries to the operator. Review whether the exact argv actually matches the selected action class, because only a reviewed adapter validates tool-specific flag semantics. Only the exact `EXECUTE MANIFEST_ID MANIFEST_SHA256 UNMETERED` value can launch it. The one-shot claim is durable before spawn; success, failure, interruption, or ambiguity all consume the manifest.
+10. **Execute and monitor.** `gate engagement exec` accepts a manifest ID and confirmation, never a new command. GATE launches without a shell or stdin through the already hashed Linux descriptor, uses a minimal environment and private sandbox, and captures bounded private stdout and stderr. While that original supervisor remains alive, it polls receipt validity and stop requests, applies wall duration, and attempts process-group termination. Use `gate engagement stop ID --run RUN_ID` for one run or `gate engagement revoke ID --confirm "REVOKE ID"` to end the engagement's authority.
+11. **Validate findings.** Reproduce with an independent method where possible and separate observed facts from inference.
+12. **Report and retest.** Use [security-report.md](../templates/security-report.md), include limitations and residual unknowns, and assess the completion contract before closing. `engagement close` is an administrative state change; it does not inspect coverage, run completion tests, or certify completeness.
 
 The operator receipt is necessary authority for target contact. No Mistakes supplies technical review; it does not create permission to test a target. Both provenance steps are procedural in v0.1: their identifiers are recorded and digest-checked locally, not cryptographically attested by their external principals.
+
+The generic lane enforces the engagement and host-environment binding, receipt-bound allowed destinations including `gate-home`, target argument, `declared-action-label-binding`, tool allowlist and catalog risk class, exact argv, `executable-descriptor-observed-sha256`, no-shell launch, minimal environment, private evidence, receipt-bounded declarations, and one-shot claim. Authorization/revocation/stop polling, wall duration, and process-group termination are best effort and require the original supervisor to remain alive. `argv-action-semantics-validation`, `supervisor-crash-containment`, and `immutable-executable-snapshot` are unavailable, as are egress enforcement and measurement of target requests, request rate, tool concurrency, or tokens; the lane also provides no daemon containment, filesystem isolation, credential broker, complete artifact inventory, or known-good executable provenance. A supervisor crash or force-kill can leave the ordinary tool process group alive, durable request files have no takeover worker, and processes may leave the supervised group. If authenticated group identity is lost during teardown, the run becomes `unknown` with termination reason `supervision-lost` rather than claiming termination. The observed digest records bytes read through the opened descriptor, but a same-UID writer can mutate a writable inode before or during exec, so it does not prove atomically frozen or launched bytes. Arbitrary argv can exceed the declared label. Audit events therefore use the maximum of the declared action effect and catalog risk ceiling; this conservative classification does not block launch. The child shares GATE's UID and host access. `UNMETERED` is an explicit acceptance of those unavailable controls, not a claim that the approved numeric limits disappeared.
 
 ## Plan changes
 
@@ -57,6 +151,8 @@ These changes invalidate an existing receipt:
 - any target is added;
 - an exclusion is removed;
 - an action class is added;
+- a permitted tool is added;
+- the execution environment changes;
 - a request, rate, concurrency, duration, or token limit is increased;
 - a data destination is added;
 - the plan content changes;
@@ -98,7 +194,7 @@ A lesson is complete only when the related behavior, configuration, test, or doc
 
 ## Evidence and reports
 
-Raw evidence stays under `GATE_HOME`. The public repository contains only sanitized summaries that have explicit release authority. Evidence references are stable URIs such as `private://`, `evidence://`, or `event://`.
+Raw evidence stays under `GATE_HOME`. The tracked repository contains only sanitized summaries that have explicit release authority. Evidence references are stable URIs such as `private://`, `evidence://`, or `event://`.
 
 Never turn inability to inspect into a negative claim. State that a surface is unverified or limited, include the cause, and describe the next test that would resolve it.
 
@@ -106,7 +202,7 @@ Never turn inability to inspect into a negative claim. State that a surface is u
 
 The observer displays aggregate usage and per-session or recorded-run values when its sources provide them. Provider-reported values are exact; explicitly modeled values are estimated; missing provider data is unavailable. Complete live Codex fleet and account-quota telemetry, plus grouping by day, require a future harness adapter.
 
-Token budgets are required bounds for GNHF loops and engagements. GATE does not yet orchestrate the GNHF loop or active engagement execution; the future adapter or external owner must enforce the runtime budget. A budget must never trigger a silent provider, model, account, or billing-mode change.
+Token budgets are required declared bounds for GNHF loops and engagements. GATE does not yet orchestrate the GNHF loop. A reviewed active-tool adapter may meter tokens when it can establish that counter, while the generic lane records token measurement as unavailable and requires `UNMETERED` confirmation. A budget must never trigger a silent provider, model, account, or billing-mode change.
 
 ## Local tool environments
 
@@ -127,10 +223,10 @@ These commands must be idempotent and documented before a profile is considered 
 ## Recovery
 
 - A stopped or crashed observer rebuilds its current GATE view from append-only events.
-- Target integrations require Firstmate to reconcile durable task state, Treehouse to preserve dirty or unlanded leases, GNHF to preserve interrupted work, and No Mistakes to retain branch ownership during validation. These bridges are not complete in v0.1.
+- Use `gate workspace status --repo PATH` to reconcile the bounded aggregate of clone-bound, one-shot Treehouse task roots after an interruption. This reads bound state directly and never invokes Treehouse status. If it reports `operation-lock-present`, follow [Operation-lock recovery](#operation-lock-recovery); no task or Git state was inspected. Verification retains every lease. Automatic reset, return, destruction, and reuse remain disabled until Treehouse exposes a mount-safe primitive; the 511-root lifetime ceiling is recovered only with a new physical clone or future safe upstream lifecycle support. Firstmate task reconciliation, GNHF recovery, No Mistakes branch ownership, and their cross-owner bridges remain incomplete.
 - A changed PR head invalidates publication authority until the exact head passes again.
 - A changed security plan invalidates active authority until a new receipt exists.
-- Active execution is disabled in v0.1. A future adapter must enforce timeout and process-group termination while polling receipt revocation and other stop conditions.
-- Local engagement approvals share the operator-writable `GATE_HOME` with the state they describe and are not tamper-proof against a process allowed to rewrite both files. Managed-upstream integrity uses the reviewed repository locks as its anchor; writable installation receipts are evidence only.
+- A generic manifest is never recovered for a second attempt. Inspect its private claim and run record; treat a missing or ambiguous terminal record as consumed. Use a newly generated manifest after rechecking current authority. `engagement stop` and revocation are durable requests, but only the live original supervisor polls and acts on them. Wall duration and process-group termination are best effort; supervisor crash containment, takeover, and escaped-daemon containment are unavailable.
+- Local engagement approvals and execution provenance share the operator-writable `GATE_HOME` with the state they describe. A process allowed to rewrite the whole root can alter receipts, manifests, claims, runs, stops, and evidence, so these records are not tamper-proof against that same-user writer. Managed-upstream integrity uses the reviewed repository locks as its anchor; writable installation receipts are evidence only.
 
 Recovery never uses an unverified reset, force push, cleanup, scope expansion, credential substitution, or silent approval.

@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { writeJsonAtomic } from "../src/lib/config.mjs";
 import { ensureRuntime, runtimePaths } from "../src/lib/paths.mjs";
+import { readPrivateFileBounded } from "../src/lib/private-fs.mjs";
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-runtime-"));
@@ -39,6 +40,7 @@ test("runtime setup remediates private directories to 0700 and state files to 06
     paths.authorizations,
     paths.plans,
     paths.evidence,
+    paths.projects,
     paths.upstreams,
     paths.upstreamTools,
     path.dirname(paths.privateLearnings),
@@ -159,6 +161,18 @@ test("runtime setup rejects planted engagement entries and paths outside GATE_HO
   assert.throws(() => ensureRuntime(escaped), /private directory escapes GATE_HOME/);
 });
 
+test("runtime setup rejects linked project registry entries", {
+  skip: process.platform === "win32" && "creating links can require elevated Windows privileges"
+}, (t) => {
+  const { root, paths } = fixture(t);
+  ensureRuntime(paths);
+  const outsideFile = path.join(root, "outside-project.json");
+  fs.writeFileSync(outsideFile, "{}\n", { mode: 0o600 });
+  fs.symlinkSync(outsideFile, path.join(paths.projects, "linked-project.json"));
+  assert.throws(() => ensureRuntime(paths), /private runtime entry linked-project\.json must not be a symbolic link/);
+  assert.equal(fs.readFileSync(outsideFile, "utf8"), "{}\n");
+});
+
 test("private atomic JSON writes reject a pre-positioned destination symlink", {
   skip: process.platform === "win32" && "creating symlinks can require elevated Windows privileges"
 }, (t) => {
@@ -171,6 +185,14 @@ test("private atomic JSON writes reject a pre-positioned destination symlink", {
 
   assert.throws(() => writeJsonAtomic(destination, { changed: true }), /must not be a symbolic link/);
   assert.equal(fs.readFileSync(outsideFile, "utf8"), "unchanged\n");
+});
+
+test("bounded private reads reject oversized state without returning partial content", (t) => {
+  const { paths } = fixture(t);
+  ensureRuntime(paths);
+  const file = path.join(paths.projects, "large-project.json");
+  fs.writeFileSync(file, "x".repeat(1025), { mode: 0o600 });
+  assert.throws(() => readPrivateFileBounded(file, 1024, "utf8"), /exceeds the 1024-byte limit/);
 });
 
 test("runtime setup rejects hard-linked private state", {

@@ -48,6 +48,74 @@ const AVAILABILITY = new Set(["exact", "estimated", "unavailable"]);
 const FRESHNESS = new Set(["live", "fresh", "stale", "offline", "unknown"]);
 const LEARNING_STATUS = new Set(["proposed", "active", "superseded", "reverted"]);
 const LEARNING_SCOPE = new Set(["session", "project", "repository"]);
+const EXECUTION_MODES = new Set(["supervised-generic"]);
+const EXECUTION_REASONS = new Set([
+  "unsupported-platform",
+  "proc-descriptor-unavailable",
+  "proc-process-identity-unavailable"
+]);
+const EXECUTION_ENFORCED = new Set([
+  "engagement-binding",
+  "target-argument-binding",
+  "declared-action-label-binding",
+  "tool-allowlist",
+  "exact-argv",
+  "shell-disabled",
+  "executable-descriptor-observed-sha256",
+  "minimal-environment",
+  "private-stdout-stderr",
+  "one-shot-claim",
+  "declared-bounds-within-receipt"
+]);
+const EXECUTION_BEST_EFFORT = new Set([
+  "authorization-revocation-polling",
+  "wall-duration",
+  "process-group-termination"
+]);
+const EXECUTION_UNAVAILABLE = new Set([
+  "egress-target-restriction",
+  "request-count-measurement",
+  "request-rate-measurement",
+  "tool-concurrency-measurement",
+  "token-measurement",
+  "daemon-escape-containment",
+  "filesystem-isolation",
+  "credential-broker",
+  "tool-artifact-inventory",
+  "known-good-executable-provenance",
+  "argv-action-semantics-validation",
+  "supervisor-crash-containment",
+  "immutable-executable-snapshot"
+]);
+const EXECUTION_RUN_STATUSES = new Set([
+  "queued",
+  "running",
+  "stopping",
+  "succeeded",
+  "failed",
+  "cancelled",
+  "blocked",
+  "unknown"
+]);
+const EXECUTION_TERMINATION_REASONS = new Set([
+  "completed",
+  "operator-stop",
+  "engagement-invalidated",
+  "authorization-expired",
+  "duration-limit",
+  "evidence-limit",
+  "evidence-write-failure",
+  "spawn-failure",
+  "supervisor-signal",
+  "process-group-remained",
+  "supervision-lost"
+]);
+const EXECUTION_SIGNALS = new Set([
+  "SIGHUP", "SIGINT", "SIGQUIT", "SIGILL", "SIGTRAP", "SIGABRT", "SIGBUS", "SIGFPE", "SIGKILL",
+  "SIGUSR1", "SIGSEGV", "SIGUSR2", "SIGPIPE", "SIGALRM", "SIGTERM", "SIGCHLD", "SIGCONT", "SIGSTOP",
+  "SIGTSTP", "SIGTTIN", "SIGTTOU", "SIGURG", "SIGXCPU", "SIGXFSZ", "SIGVTALRM", "SIGPROF", "SIGWINCH",
+  "SIGIO", "SIGPWR", "SIGSYS", "SIGBREAK"
+]);
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/;
 const EVENT_KIND = /^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+$/;
 
@@ -183,6 +251,74 @@ function safeCounts(input) {
   };
 }
 
+function capabilityList(value, allowed) {
+  if (!Array.isArray(value)) return [];
+  const supplied = new Set(value);
+  return [...allowed].filter((item) => supplied.has(item));
+}
+
+function executionRunShape(input) {
+  const value = record(input);
+  const runId = typeof value.runId === "string" && /^run_[a-f0-9]{16}$/.test(value.runId) ? value.runId : null;
+  const manifestId = typeof value.manifestId === "string" && /^manifest_[a-f0-9]{16}$/.test(value.manifestId)
+    ? value.manifestId
+    : null;
+  const engagementId = typeof value.engagementId === "string" && /^engagement_[a-f0-9]{16}$/.test(value.engagementId)
+    ? value.engagementId
+    : null;
+  const runStatus = enumValue(value.status, EXECUTION_RUN_STATUSES, null);
+  const createdAt = timestamp(value.createdAt);
+  if (!runId || !manifestId || !engagementId || !runStatus || !createdAt) return null;
+  const exitCode = Number.isInteger(value.exitCode) && value.exitCode >= -2_147_483_648 && value.exitCode <= 2_147_483_647
+    ? value.exitCode
+    : null;
+  return {
+    runId,
+    manifestId,
+    engagementId,
+    status: runStatus,
+    createdAt,
+    startedAt: timestamp(value.startedAt),
+    finishedAt: timestamp(value.finishedAt),
+    terminationReason: enumValue(value.terminationReason, EXECUTION_TERMINATION_REASONS, null),
+    exitCode,
+    signal: enumValue(value.signal, EXECUTION_SIGNALS, null)
+  };
+}
+
+function executionShape(input) {
+  const value = record(input);
+  const counts = record(value.counts);
+  const configured = typeof value.configured === "boolean" ? value.configured : null;
+  const mode = enumValue(value.mode, EXECUTION_MODES, null);
+  const enforced = capabilityList(value.enforced, EXECUTION_ENFORCED);
+  const bestEffort = capabilityList(value.bestEffort, EXECUTION_BEST_EFFORT);
+  const unavailable = capabilityList(value.unavailable, EXECUTION_UNAVAILABLE);
+  const completeCapability = enforced.length === EXECUTION_ENFORCED.size &&
+    bestEffort.length === EXECUTION_BEST_EFFORT.size &&
+    unavailable.length === EXECUTION_UNAVAILABLE.size;
+  const laneAvailable = configured === true && value.laneAvailable === true && mode !== null && completeCapability;
+  return {
+    configured,
+    laneAvailable,
+    mode,
+    reason: laneAvailable ? null : enumValue(value.reason, EXECUTION_REASONS, null),
+    runningCount: count(firstDefined(value.runningCount, counts.running)),
+    stoppingCount: count(counts.stopping),
+    enforced,
+    bestEffort,
+    unavailable,
+    recent: Array.isArray(value.recent)
+      ? value.recent
+        .slice(0, RECORD_LIMIT)
+        .map(executionRunShape)
+        .filter(Boolean)
+        .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
+        .slice(0, 30)
+      : []
+  };
+}
+
 function agentShape(input) {
   const value = record(input);
   const agentName = identifier(firstDefined(value.agent, value.name, value.agentId, value.id), null);
@@ -227,6 +363,7 @@ export function sanitizeStatusPayload(input) {
     state: status(firstDefined(value.state, value.status)),
     counts: safeCounts(value.counts),
     agents,
+    execution: executionShape(value.execution),
     usage: usageShape(firstDefined(value.usage, value.tokenUsage, value.tokens)),
     telemetry: {
       state: telemetryState === "fresh" ? "live" : telemetryState,

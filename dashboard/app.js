@@ -31,6 +31,16 @@ const view = {
   eventList: select("#event-list"),
   learningList: select("#learning-list"),
   learningCount: select("#learning-count"),
+  executionLane: select("#execution-lane"),
+  executionMode: select("#execution-mode"),
+  executionRunning: select("#execution-running"),
+  executionStopping: select("#execution-stopping"),
+  executionConfigured: select("#execution-configured"),
+  executionEnforced: select("#execution-enforced"),
+  executionBestEffort: select("#execution-best-effort"),
+  executionUnavailable: select("#execution-unavailable"),
+  executionRuns: select("#execution-runs"),
+  executionNote: select("#execution-note"),
   metricRunning: select("#metric-running"),
   metricRunningDetail: select("#metric-running-detail"),
   metricWaiting: select("#metric-waiting"),
@@ -121,6 +131,46 @@ function relativeTime(value) {
 function readableKind(kind) {
   const words = kind.replace(/[.-]/g, " ");
   return `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
+}
+
+function readableCapability(value) {
+  if (!value) return "Unknown";
+  const words = value.replace(/-/g, " ");
+  return `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
+}
+
+export function executionPresentation(execution = {}) {
+  const configured = execution.configured;
+  const laneAvailable = configured === true && execution.laneAvailable === true;
+  const laneState = configured === null || configured === undefined
+    ? "unknown"
+    : configured === false
+      ? "not-configured"
+      : laneAvailable
+        ? "available"
+        : "unavailable";
+  return {
+    laneState,
+    laneLabel: laneState === "not-configured" ? "Not configured" : readableCapability(laneState),
+    configuredLabel: configured === true ? "Configured" : configured === false ? "Not configured" : "Unknown",
+    modeLabel: execution.mode ? readableCapability(execution.mode) : "Unknown",
+    reasonLabel: execution.reason ? readableCapability(execution.reason) : null,
+    runningLabel: Number.isFinite(execution.runningCount) ? String(execution.runningCount) : "—",
+    stoppingLabel: Number.isFinite(execution.stoppingCount) ? String(execution.stoppingCount) : "—"
+  };
+}
+
+export function executionRunPresentation(run = {}) {
+  const observedAt = run.finishedAt || run.startedAt || run.createdAt || null;
+  const result = run.terminationReason || run.signal || (Number.isFinite(run.exitCode) ? `exit-${run.exitCode}` : null);
+  return {
+    runId: run.runId || null,
+    manifestId: run.manifestId || null,
+    engagementId: run.engagementId || null,
+    status: run.status || "unknown",
+    observedAt,
+    result
+  };
 }
 
 function shortId(value) {
@@ -322,6 +372,71 @@ function renderLearnings() {
   view.learningList.replaceChildren(fragment);
 }
 
+function renderCapabilityList(node, values, emptyLabel) {
+  const entries = values.length ? values : [emptyLabel];
+  const fragment = document.createDocumentFragment();
+  for (const value of entries) fragment.append(element("li", values.length ? "" : "empty", readableCapability(value)));
+  node.replaceChildren(fragment);
+}
+
+function renderExecution() {
+  const execution = state.status.execution;
+  const presentation = executionPresentation(execution);
+  setText(view.executionLane, presentation.laneLabel);
+  view.executionLane.className = `source-badge execution-${presentation.laneState}`;
+  setText(view.executionMode, presentation.modeLabel);
+  setText(view.executionRunning, presentation.runningLabel);
+  setText(view.executionStopping, presentation.stoppingLabel);
+  setText(view.executionConfigured, presentation.configuredLabel);
+  renderCapabilityList(
+    view.executionEnforced,
+    execution.enforced,
+    execution.configured === null ? "awaiting-status" : "none-reported"
+  );
+  renderCapabilityList(
+    view.executionBestEffort,
+    execution.bestEffort,
+    execution.configured === null ? "awaiting-status" : "none-reported"
+  );
+  renderCapabilityList(
+    view.executionUnavailable,
+    execution.unavailable,
+    execution.configured === null ? "awaiting-status" : "none-reported"
+  );
+  if (!execution.recent.length) {
+    view.executionRuns.replaceChildren(element("li", "execution-run-empty", "No execution records observed"));
+  } else {
+    const fragment = document.createDocumentFragment();
+    for (const run of execution.recent.slice(0, 12)) {
+      const display = executionRunPresentation(run);
+      const item = element("li", "execution-run");
+      const head = element("div", "execution-run-head");
+      const runId = element("code", "", shortId(display.runId));
+      runId.title = display.runId;
+      head.append(runId, element("span", `state-pill ${display.status}`, display.status));
+      const detail = element("div", "execution-run-detail");
+      detail.append(
+        element("span", "", `manifest ${shortId(display.manifestId)}`),
+        element("span", "", `engagement ${shortId(display.engagementId)}`)
+      );
+      if (display.result) detail.append(element("span", "", readableCapability(display.result)));
+      const observed = element("time", "timeline-time", relativeTime(display.observedAt));
+      if (display.observedAt) {
+        observed.dateTime = display.observedAt;
+        observed.title = dateTime(display.observedAt);
+      }
+      item.append(head, detail, observed);
+      fragment.append(item);
+    }
+    view.executionRuns.replaceChildren(fragment);
+  }
+  setText(
+    view.executionNote,
+    `${presentation.reasonLabel ? `${presentation.reasonLabel}. ` : ""}` +
+      "Every launch requires an approved, digest-bound one-shot manifest. Running counts reflect durable records, not independent process proof."
+  );
+}
+
 function setMeter(meter, fill, percent, label) {
   const available = Number.isFinite(percent);
   const width = available ? percent : 0;
@@ -462,6 +577,7 @@ function renderMetrics() {
 
 function render() {
   renderMetrics();
+  renderExecution();
   renderAgents();
   renderEvents();
   renderLearnings();
@@ -590,8 +706,9 @@ function handleKeyboard(event) {
   const focusTargets = {
     "1": "#fleet-panel",
     "2": "#timeline-panel",
-    "3": "#telemetry-panel",
-    "4": "#learning-panel"
+    "3": "#execution-panel",
+    "4": "#telemetry-panel",
+    "5": "#learning-panel"
   };
   if (focusTargets[event.key]) {
     event.preventDefault();
