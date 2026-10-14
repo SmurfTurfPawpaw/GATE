@@ -116,6 +116,41 @@ const EXECUTION_SIGNALS = new Set([
   "SIGTSTP", "SIGTTIN", "SIGTTOU", "SIGURG", "SIGXCPU", "SIGXFSZ", "SIGVTALRM", "SIGPROF", "SIGWINCH",
   "SIGIO", "SIGPWR", "SIGSYS", "SIGBREAK"
 ]);
+const OFFLINE_ANALYSIS_MODES = new Set(["bubblewrap-offline"]);
+const OFFLINE_ANALYSIS_REASONS = new Set(["unavailable"]);
+const OFFLINE_ANALYSIS_STATUSES = new Set([
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+  "cancelled",
+  "blocked",
+  "unknown"
+]);
+const OFFLINE_ANALYSIS_ENFORCED = new Set([
+  "project-contract-binding",
+  "typed-path-binding",
+  "artifact-snapshot-sha256",
+  "pinned-upstream-integrity",
+  "fixed-adapter-argv",
+  "bubblewrap-network-namespace",
+  "read-only-runtime-mounts",
+  "ephemeral-sandbox-writes",
+  "shell-disabled",
+  "cleared-environment",
+  "private-bounded-evidence",
+  "one-shot-claim",
+  "wall-duration"
+]);
+const OFFLINE_ANALYSIS_UNAVAILABLE = new Set([
+  "cpu-limit",
+  "memory-limit",
+  "immutable-managed-upstream-snapshot",
+  "same-uid-gate-home-tamper-resistance",
+  "unix-socket-system-call-denial"
+]);
+const OFFLINE_RETENTION_LOCK_STATES = new Set(["absent", "active", "stale", "invalid", "indeterminate"]);
+const OFFLINE_SNAPSHOT_STATES = new Set(["stable", "consistent", "mutation-active", "indeterminate"]);
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/;
 const EVENT_KIND = /^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+$/;
 
@@ -319,6 +354,67 @@ function executionShape(input) {
   };
 }
 
+function offlineAnalysisRunShape(input) {
+  const value = record(input);
+  const runId = typeof value.runId === "string" && /^run_[a-f0-9]{16}$/.test(value.runId) ? value.runId : null;
+  const runStatus = enumValue(value.status, OFFLINE_ANALYSIS_STATUSES, null);
+  if (!runId || !runStatus) return null;
+  return {
+    runId,
+    status: runStatus,
+    isolationVerified: typeof value.isolationVerified === "boolean" ? value.isolationVerified : null
+  };
+}
+
+function offlineRetentionShape(input) {
+  const value = record(input);
+  const retention = {};
+  for (const field of [
+    "quotaBytes", "quotaArtifacts", "retainedBytes", "availableBytes", "retainedArtifacts", "availableArtifacts", "pendingManifests",
+    "pendingTransactions", "invalidTransactionRecords", "creatingManifests", "invalidCreationIntents",
+    "invalidClaimRecords", "invalidPurgeRecords", "invalidRunRecords", "blockedManifests",
+    "expiredManifests", "activeManifests", "terminalManifests", "unknownManifests",
+    "purgePendingManifests", "purgedManifests", "orphanedArtifacts", "orphanedBytes",
+    "missingArtifacts", "invalidEntries"
+  ]) retention[field] = count(value[field]);
+  retention.retentionLockState = enumValue(value.retentionLockState, OFFLINE_RETENTION_LOCK_STATES, null);
+  retention.snapshotState = enumValue(value.snapshotState, OFFLINE_SNAPSHOT_STATES, null);
+  retention.overQuota = typeof value.overQuota === "boolean" ? value.overQuota : null;
+  retention.mutationBlocked = typeof value.mutationBlocked === "boolean" ? value.mutationBlocked : null;
+  return retention;
+}
+
+function offlineAnalysisShape(input) {
+  const value = record(input);
+  const rawCounts = record(value.counts);
+  const configured = typeof value.configured === "boolean" ? value.configured : null;
+  const mode = enumValue(value.mode, OFFLINE_ANALYSIS_MODES, null);
+  const enforced = capabilityList(value.enforced, OFFLINE_ANALYSIS_ENFORCED);
+  const unavailable = capabilityList(value.unavailable, OFFLINE_ANALYSIS_UNAVAILABLE);
+  const completeCapability = enforced.length === OFFLINE_ANALYSIS_ENFORCED.size &&
+    unavailable.length === OFFLINE_ANALYSIS_UNAVAILABLE.size;
+  const laneAvailable = configured === true && value.laneAvailable === true && mode !== null && completeCapability;
+  const counts = Object.fromEntries(
+    [...OFFLINE_ANALYSIS_STATUSES].map((runStatus) => [runStatus, count(rawCounts[runStatus])])
+  );
+  return {
+    configured,
+    laneAvailable,
+    mode,
+    reason: laneAvailable ? null : enumValue(value.reason, OFFLINE_ANALYSIS_REASONS, null),
+    runningCount: count(firstDefined(value.runningCount, rawCounts.running)),
+    counts,
+    retention: offlineRetentionShape(value.retention),
+    recent: Array.isArray(value.recent)
+      ? value.recent
+        .slice(0, RECORD_LIMIT)
+        .map(offlineAnalysisRunShape)
+        .filter(Boolean)
+        .slice(0, 25)
+      : []
+  };
+}
+
 function agentShape(input) {
   const value = record(input);
   const agentName = identifier(firstDefined(value.agent, value.name, value.agentId, value.id), null);
@@ -364,6 +460,7 @@ export function sanitizeStatusPayload(input) {
     counts: safeCounts(value.counts),
     agents,
     execution: executionShape(value.execution),
+    offlineAnalysis: offlineAnalysisShape(value.offlineAnalysis),
     usage: usageShape(firstDefined(value.usage, value.tokenUsage, value.tokens)),
     telemetry: {
       state: telemetryState === "fresh" ? "live" : telemetryState,

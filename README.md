@@ -4,7 +4,7 @@
 
 GATE is host-first. It is designed to run on a Windows 11 laptop through WSL2 with Codex CLI as the primary harness. Native tools remain appropriate when a GUI, the Windows certificate store, packet capture, USB, a GPU, or radio hardware needs direct host access. Containers can organize conflicting dependencies, but GATE does not treat a container, WSL2, or a Git worktree as a security boundary.
 
-> **Status: v0.1 foundation.** The checked-in policy, schemas, CLI, private project registry, verified Treehouse lease bridge, engagement receipts, one-shot supervised generic execution, observer, token reader, upstream pins, and security-tool catalog work today. Complete Firstmate, GNHF, and No Mistakes orchestration, reviewed per-tool adapters, automatic catalog-tool installation, deployment, and lab lifecycle remain integration work. See [Current limits](#current-limits).
+> **Status: v0.1 foundation.** The checked-in policy, schemas, CLI, private project registry, project-bound zero-network PE-resource analysis, verified Treehouse lease bridge, engagement receipts, one-shot supervised generic execution, observer, token reader, upstream pins, security-tool catalog, and end-to-end penetration-testing map work today. Complete Firstmate, GNHF, and No Mistakes orchestration, broader reviewed per-tool adapters, automatic catalog-tool installation, deployment, and lab lifecycle remain integration work. See [Current limits](#current-limits).
 
 ## Start on Windows 11 with WSL2
 
@@ -14,11 +14,12 @@ Install WSL2 once from an elevated PowerShell prompt, then restart Windows if pr
 wsl --install -d Ubuntu-24.04
 ```
 
-Inside Ubuntu, install a user-scoped Node.js **22.20 or newer** (Node 24 is also tested), Git, GitHub CLI, and Codex CLI. Authenticate `gh` and `codex` before running the preflight. [docs/setup.md](docs/setup.md) gives the complete laptop, native-tool, Docker, cloud, and troubleshooting guide. The repeatable base setup is:
+Inside Ubuntu, install Node.js **22.20 or newer** (Node 24 is also tested) from an OS- or administrator-owned location that your normal account cannot modify, plus Git, GitHub CLI, and Codex CLI. User-owned Node managers are incompatible with managed-upstream verification because they can replace npm between verification and launch. Authenticate `gh` and `codex`, then export a GitHub token for the isolated release downloader. [docs/setup.md](docs/setup.md) gives verified Node 24 installation commands and the complete laptop, native-tool, Docker, cloud, and troubleshooting guide. The repeatable base setup is:
 
 ```bash
 git clone https://github.com/SmurfTurfPawpaw/GATE.git ~/src/GATE
 cd ~/src/GATE
+export GH_TOKEN="$(gh auth token)"
 ./scripts/bootstrap.sh --check-only
 ./scripts/bootstrap.sh
 npm run dashboard
@@ -28,11 +29,10 @@ The bootstrap script does not install system packages or broad security suites. 
 
 Open <http://127.0.0.1:4173> from Windows. `gate up` stays in the foreground in v0.1, so keep that terminal open or run it in a session manager such as `tmux`. Stop it with `Ctrl+C`. The server rejects non-loopback bind addresses.
 
-The CLI works directly as `./bin/gate.mjs`. If Node was installed with a user-scoped version manager, `npm link` also exposes it as `gate` without `sudo`:
+The CLI works directly from the checkout:
 
 ```bash
-npm link
-gate status
+./bin/gate.mjs status
 ```
 
 Private state defaults to `~/.local/share/gate` inside WSL2. Set `GATE_HOME` before `bootstrap` to use another private location:
@@ -41,7 +41,7 @@ Private state defaults to `~/.local/share/gate` inside WSL2. Set `GATE_HOME` bef
 export GATE_HOME="$HOME/.local/share/gate"
 ```
 
-Do not place `GATE_HOME` inside this repository or a cloud-synced public folder. GATE rejects lexical or physical overlap between the private root and repository in either direction, repairs owner-only POSIX permissions, and rejects linked control-state paths. In v0.1 it is one local trust domain: a process that can write the whole directory can also change local engagement records, receipts, execution manifests, claims, runs, stops, evidence, and installation receipts. Give write access only to the operator and trusted GATE processes, and keep credential values in a separate OS secret store or narrowly permissioned file referenced by `env://`, `keychain://`, or `file://`.
+Do not place `GATE_HOME` inside this repository or a cloud-synced public folder. GATE rejects lexical or physical overlap between the private root and repository in either direction, repairs owner-only POSIX permissions, and rejects linked control-state paths. In v0.1 it is one local trust domain: a process that can write the whole directory can also change project records, offline snapshots and manifests, engagement records, receipts, active-execution manifests, claims, runs, stops, evidence, and installation receipts. Give write access only to the operator and trusted GATE processes, and keep credential values in a separate OS secret store or narrowly permissioned file referenced by `env://`, `keychain://`, or `file://`.
 
 ## What owns each transition
 
@@ -56,6 +56,7 @@ GATE composes upstream projects at exact commits rather than merging their sourc
 | **No Mistakes** | Immutable handoff, review, tests, documentation, lint, push, PR, and CI |
 | **GATE publication authority** | Read-only exact-head publication preflight; future trusted mutation adapters |
 | **GATE engagement broker** | Digest-bound scope preflight, one-shot supervised generic execution, and reviewed adapter admission |
+| **GATE offline-analysis lane** | Project-bound, zero-network execution of one fixed REA PE-resource adapter |
 | **REA** | Analysis of saved artifacts, captures, binaries, and runtime evidence |
 | **Lavish** | Local interactive planning and decision artifacts |
 | **AXI** | Agent-facing command and output conventions |
@@ -140,9 +141,57 @@ The preflight requires an open, non-draft pull request whose head matches exactl
 
 Publication mutation is disabled in v0.1. The adapter treats `--run` as operator-supplied provenance; it does not invoke No Mistakes, correlate the ID with the head, or verify an attestation. A future trusted adapter must verify a No Mistakes attestation bound to the exact head and enforce the registered repository, base branch, merge posture, and destination before it can merge, deploy, or publish. `check` and `dry-run` create reviewable evidence without mutation.
 
+## Offline artifact analysis
+
+GATE has one narrow implemented offline adapter for a supplied Windows PE file. It runs REA's `inspect-pe-resources` operation without executing the input. The lane is bound to a registered project but is separate from the engagement broker because the operation has no target contact. Install the pinned `rea-stable` upstream and Bubblewrap on Linux or WSL2, then inspect capability:
+
+```bash
+./bin/gate.mjs upstream install rea-stable --json
+./bin/gate.mjs analysis capability --json
+```
+
+`analysis capability` uses cheap presence checks for Linux, Node, the fixed adapter, the expected managed REA entrypoint, and Bubblewrap, then runs `/usr/bin/true` through the actual minimal Bubblewrap namespace shape. It proves that the prerequisite files are present and that this host can launch that namespace shape at the time of the check. It deliberately does not reconstruct or hash the full managed REA npm tree. Manifest creation performs the full reviewed-lock integrity reconstruction and observes the runtime file hashes and identities. It then snapshots one exact absolute regular-file path into owner-only private state. It preserves spaces and commas in the path, rejects a symlink or non-file at that path, limits the input to 512 MiB, hashes the copied bytes, and binds the snapshot to the current canonical project contract and observed runtime identities:
+
+```bash
+./bin/gate.mjs analysis manifest \
+  --project my-project \
+  --path "$HOME/private/client-installer.exe" \
+  --minutes 15 --json
+```
+
+Review the returned project-contract digest, artifact digest and size, fixed adapter and arguments, `networkPolicy: none`, zero requests, zero request rate, parallelism one, zero model tokens, runtime identities, evidence destinations, expiry, and enforced and unavailable controls. The manifest is digest-bound, expires after 15 minutes, and can be claimed once. Run it with the exact returned `confirmationRequired` value:
+
+```bash
+./bin/gate.mjs analysis run \
+  --project my-project \
+  --manifest MANIFEST_ID \
+  --confirm "ANALYZE MANIFEST_ID MANIFEST_SHA256 OFFLINE" --json
+
+./bin/gate.mjs analysis status --json
+```
+
+Artifact snapshots have a fixed aggregate ceiling of 64 files and 2 GiB of logical bytes. Manifest creation is serialized with execution claims and purges, and fails closed when either ceiling is full or an input-storage entry is malformed. A durable creation intent covers the interval from snapshot creation through manifest publication; recovery removes only a verified incomplete snapshot and keeps one protected by a durably published manifest. `analysis status` reports retained bytes and files plus pending, expired, active, terminal, purge-pending, purged, orphaned, missing, and invalid state. Purge one exact manifest-bound snapshot with the returned `purgeConfirmationRequired` value:
+
+```bash
+./bin/gate.mjs analysis purge \
+  --project my-project \
+  --manifest MANIFEST_ID \
+  --confirm "PURGE MANIFEST_ID MANIFEST_SHA256 OFFLINE ARTIFACT" --json
+```
+
+Purge records an `abandoned` transition for a current unclaimed manifest, `expired` for an expired unclaimed manifest, or `terminal` after a succeeded, failed, cancelled, or blocked run. It refuses queued, running, unknown, malformed, or mismatched state. The digest-bound purge removes only the private snapshot and an empty per-run sandbox; the manifest, claim, run, purge receipt, and evidence remain for review. This is logical retention cleanup, not secure media erasure. Evidence streams are bounded per run, but their aggregate retention has no repository-wide quota yet and requires separate operator management.
+
+Before execution, the launcher repeats the full reviewed-lock reconstruction and rechecks the project digest, artifact snapshot, upstream lock, and observed Bubblewrap, Node, adapter, and REA-entrypoint identities. It invokes a fixed argument array without a shell inside fresh user, PID, network, IPC, and UTS namespaces, requests a cgroup namespace where supported, drops every capability, clears the environment, mounts runtime inputs read-only, and supplies private temporary paths inside the namespace. Stdout and stderr are capped at 64 MiB each and remain private under `GATE_HOME`. A run reports `isolationVerified: true` only when the adapter also observes loopback as the sole interface, no IPv4 routes, zero inherited/permitted/effective/bounding/ambient capabilities, and `NoNewPrivs`.
+
+This is a fixed zero-network execution shape with stated limits. CPU and memory quotas, an immutable snapshot of the managed REA installation against same-UID mutation, protection from another same-UID writer to `GATE_HOME`, and syscall-level denial of Unix sockets are unavailable. The adapter performs only PE-resource inspection; it is not yet a general installer extractor, signature verifier, disassembler, decompiler, malware sandbox, Wine runner, or Windows VM.
+
+Possession of a local file authorizes neither network access nor testing of its publisher. A proprietary client or other proprietary artifact must be lawfully supplied by the operator and remains private under `GATE_HOME`. Strings, hostnames, URLs, certificate names, and update endpoints found in it are offline hypotheses. GATE must not resolve, browse, scan, authenticate to, intercept, or otherwise contact those systems until separate written authority and an exact active engagement cover the selector and action.
+
+The machine-readable [end-to-end penetration-testing workflow](config/workflows/pentest-e2e.json) and [operator guide](docs/pentest-workflow.md) carry offline observations through passive corroboration, active mapping, specialist workstreams, controlled exploitation, impact validation, cleanup, retest, and reporting. The workflow does not itself grant authority or prove that a cataloged tool is installed.
+
 ## Active security workflow
 
-Local source review, hypothesis generation, passive research, and analysis of saved evidence can proceed without an active receipt. Contacting a target through scanning, crawling, interception, authentication, fuzzing, exploitation, persistence, denial-of-service testing, or data access requires an engagement whose reviewed report and operator receipt match the exact plan digest. Each launch then uses either a reviewed scope-aware adapter or the Linux/WSL2 supervised generic lane described below. The generic lane supports only receipt-bound `scope.environment: host`; container, rootless-container, VM, and remote-lab engagements need a lane that implements that environment.
+Local source review, hypothesis generation, declared passive research, and analysis of saved evidence can proceed without an active receipt under their data and provider rules. Contacting a target through scanning, crawling, interception, authentication, fuzzing, exploitation, persistence, denial-of-service testing, or data access requires an engagement whose reviewed report and operator receipt match the exact plan digest. Each launch then uses either a reviewed scope-aware adapter or the Linux/WSL2 supervised generic lane described below. The generic lane supports only receipt-bound `scope.environment: host`; container, rootless-container, VM, and remote-lab engagements need a lane that implements that environment. Follow the [end-to-end workflow](docs/pentest-workflow.md) to map prerequisites, evidence, stop conditions, and handoffs before selecting a tool.
 
 1. Create the envelope. Use exact targets and exclusions; catalog profiles do not grant authority. URL paths match only on segment boundaries. A query written into an approved URL selector must match exactly, while fragments are rejected because they are not sent to a server.
 
@@ -248,7 +297,7 @@ Changing a target, exclusion, permitted action or tool, execution environment, p
 
 ## Security-tool catalog
 
-[catalog/security-tools.json](catalog/security-tools.json) currently describes **122 distinct tools** across web/API, network, identity, exploitation, reverse engineering, mobile, DFIR, OSINT, cloud/Kubernetes, source security, and wireless/radio work. Profiles under [config/profiles](config/profiles) select useful subsets:
+[catalog/security-tools.json](catalog/security-tools.json) currently describes **126 distinct tools** across web/API, network, identity, exploitation, reverse engineering, mobile, DFIR, OSINT, cloud/Kubernetes, source security, and wireless/radio work. Profiles under [config/profiles](config/profiles) select useful subsets:
 
 ```bash
 ./bin/gate.mjs tool list --profile pentest --json
@@ -256,17 +305,24 @@ Changing a target, exclusion, permitted action or tool, execution environment, p
 ./bin/gate.mjs tool plan wireshark --json
 ```
 
-**Cataloged does not mean installed, trusted, licensed for redistribution, configured, or authorized for a target.** Inventory results report the current host, compatibility, and whether the executable is found. A discovered compatible executable on Linux or WSL2 can be `genericLaneEligible` even while version, integrity, provenance, and adapter readiness are all false. That means it can be named in a separately approved one-shot supervised manifest; it is not an admission or safety claim. `tool plan` explains the preferred install lane, privileges, risk class, license, generic-lane status, and admission work. A persistent addition needs an official source, exact version or commit, integrity evidence where available, license record, effect classification, telemetry decision, smoke test, learning record, and No Mistakes validation.
+**Cataloged does not mean installed, trusted, licensed for redistribution, configured, or authorized for a target.** Inventory results report the current host, compatibility, and PATH candidate where one exists. A compatible Linux/WSL2 candidate can be `genericLaneEligible` without verified version, integrity, provenance, or adapter readiness only when its catalog `commandIdentity.genericLaneAdmission` is `path-discovery`. Entries marked `reviewed-admission` report a PATH namesake as `identity-unverified`, withhold it as the executable, and block the generic lane. This prevents the ambiguous `httpx` command from being mistaken for ProjectDiscovery httpx and keeps REA's broader A2 command surface outside generic execution.
+
+`tool list` stays cheap. For managed REA it can report a matching install receipt as `managed-receipt`, but that is no integrity or readiness claim. `tool plan rea` performs full managed-upstream verification; when its host prerequisites pass, it exposes only the `offline-static-pe-resources` adapter while `genericLaneEligible` and `broadCapabilityReady` remain false. `tool plan` otherwise explains the preferred install lane, privileges, risk class, license, generic-lane status, and admission work. A persistent addition needs an official source, exact version or commit, integrity evidence where available, license record, effect classification, telemetry decision, smoke test, learning record, and No Mistakes validation.
 
 OWASP ZAP and mitmproxy are the open-source web interception defaults. Burp Suite is an optional, proprietary, operator-supplied integration. If a Kali profile is added, it must remain an optional compatibility toolbox with a pinned package subset, image digest, and SBOM rather than becoming GATE's source of truth. See [docs/security-tooling.md](docs/security-tooling.md).
 
 ## Observer and token visibility
 
-`gate up` serves a dependency-free, read-only cockpit on loopback. The browser shows activity, agent/task state, learnings, telemetry freshness, and token use. Its bounded status API also carries engagement and upstream summaries; v0.1 does not yet render dedicated panels for those summaries. Keyboard shortcuts are:
+`gate up` serves a dependency-free, read-only cockpit on loopback. The browser shows activity, agent/task state, active execution, a privacy-filtered offline-analysis panel, learnings, telemetry freshness, and token use. Its bounded status API also carries engagement and upstream summaries; v0.1 does not yet render dedicated panels for those two summaries. Keyboard shortcuts are:
 
 | Key | Action |
 | --- | --- |
-| `1`–`4` | Focus fleet, activity, usage, or learning |
+| `1` | Focus agents and tasks |
+| `2` | Focus activity |
+| `3` | Focus active execution |
+| `4` | Focus resource posture |
+| `5` | Focus learning |
+| `6` | Focus offline analysis |
 | `/` | Focus the safe metadata filter |
 | `R` | Refresh now |
 | `P` | Pause or resume polling |
@@ -304,7 +360,7 @@ Inspect pins before installing anything:
 ./bin/gate.mjs upstream list --json
 ```
 
-`upstream sync ID` clones the named source and detaches it at the locked full commit under `GATE_HOME`. For npm entries, `upstream install ID` verifies the committed package-lock digest, runs `npm ci` with lifecycle scripts disabled, and verifies the installed tree against a second offline reconstruction. It also installs the locked Treehouse and No Mistakes release artifacts on supported hosts after verifying their SHA-256, archive paths, and single executable. The installer records the version from the reviewed lock and does not execute a freshly downloaded binary. Later full status and path-resolution checks revalidate the npm tree or release executable. `upstream install all` covers both managed lanes. Source, skill, and other lanes still require their documented sync or installer and smoke test.
+`upstream sync ID` clones the named source and detaches it at the locked full commit under `GATE_HOME`. Source verification invokes only a fixed, non-group-writable system Git with a minimal configuration and command path; an ambient `PATH`, loader variable, Git configuration, hook, filter, or helper cannot select the verifier. For npm entries, `upstream install ID` verifies the committed package-lock digest, runs `npm ci` with lifecycle scripts disabled, and verifies the installed tree against a second offline reconstruction. Npm execution uses the `npm-cli.js` bundled inside the real installation of the currently running Node executable, invokes it through that exact Node path, hashes the complete npm package tree before and after use, and supplies a minimal environment with fresh empty user/global config files; ambient `PATH`, `NODE_OPTIONS`, and npm configuration do not reach the child. GATE also installs the locked Treehouse and No Mistakes release artifacts after verifying their SHA-256, archive paths, and single executable. Release downloads use a fixed GitHub CLI with a fresh configuration directory and only the required token and proxy variables. The installer reads each bounded archive once, verifies and inspects those exact bytes, and asks fixed tar to emit only the locked executable to stdout; it never unpacks the archive tree. Export `GH_TOKEN` or `GITHUB_TOKEN` because stored GitHub CLI configuration is intentionally isolated. Git, tar, GitHub CLI, Node, npm, and their path chains must be protected from writes by the current process; root execution, user-owned Node managers, user-writable Homebrew installations, and writable `/usr/local` tools therefore fail closed. Native Windows cannot establish this protected-runtime contract and must use WSL2. Use OS- or administrator-owned read-only installations for these upstream operations. The installer records the version from the reviewed lock and does not execute a freshly downloaded binary. Later full status and path-resolution checks revalidate the npm tree or release executable. `upstream install all` covers both managed lanes. Source, skill, and other lanes still require their documented sync or installer and smoke test.
 
 Installation receipts under `GATE_HOME` are evidence, not the trust anchor. Full npm verification rebuilds a clean tree offline from the repository-tracked dependency lock and integrity-addressed GATE npm cache, then compares the deterministic tree digest. Release verification compares the archive and executable bytes with SHA-256 values in the reviewed upstream lock. A process that can write only `GATE_HOME` cannot re-anchor modified installed bytes by rewriting a receipt; a process that can also alter the trusted repository lock or verifier is outside this check's trust boundary.
 
@@ -343,8 +399,9 @@ The v0.1 boundary is intentionally explicit:
 - GitHub exact-head PR and required-check preflight is implemented read-only. Merge, deploy, and publish remain blocked until a trusted adapter can verify an external No Mistakes attestation for the exact head and enforce project policy. `status --watch`, `down`, and the documented `gate lab` lifecycle are not implemented yet.
 - The private project registry validates, deduplicates, stores, lists, shows, and verifies contracts. It does not update or delete them, select a project implicitly, clone repositories, bind workspace commands to a registered contract, or enforce registered delivery and deployment fields in publication adapters.
 - The Treehouse bridge requires the exact integrity-verified 3.1.3 release, fixed system Git, local refs, and clone-bound one-shot task roots. It invokes only `get` for acquisition; status and verification read bound state directly, and GATE never invokes Treehouse `status`, `return`, or `destroy`. It has no credential/proxy/SSH/network broker, rejects unsafe local Git state including Git LFS filters and submodules, and accepts only the main worktree's checked-out branch as local proof of landing. Verification retains every lease; automatic return, reset, destruction, reuse, and mount-safe cleanup are unavailable. The lifetime limit is 511 retained task roots per physical clone, after which work continues from a new physical clone or waits for future safe upstream lifecycle support. Worktrees do not isolate same-user access to the shared common `.git`, processes, credentials, the kernel, or the host filesystem.
-- The 122-tool catalog is declarative. GATE detects executables and produces admission plans, but it does not automatically install the catalog.
-- v0.1 has no general per-tool artifact lock or admission-record store. A discovered Linux/WSL2 executable may enter the supervised generic lane, but `executable-descriptor-observed-sha256` is an observation rather than an immutable snapshot or known-good provenance. A same-UID writer can mutate a writable inode before or during exec. Normal admission still requires a reviewed adapter and immutable artifact record.
+- The 126-tool catalog is declarative. GATE detects executables and produces admission plans, but it does not automatically install the catalog.
+- Offline analysis is implemented only on Linux/WSL2 for one project-bound, fixed-argument REA PE-resource adapter. It requires the pinned `rea-stable` managed upstream and Bubblewrap. The manifest fixes network requests, request rate, and model tokens at zero and parallelism at one; it creates a private input snapshot and bounded evidence, rechecks exact project, artifact, upstream, and runtime identities, and is consumed once. Retained snapshots are capped at 64 files and 2 GiB, with explicit digest-bound purge; aggregate evidence retention remains unbounded. Bubblewrap supplies a fresh network namespace and the adapter verifies loopback-only/no-route/no-capability state, but CPU and memory limits, immutable same-UID protection for the managed REA tree or `GATE_HOME`, and syscall-level Unix-socket denial are unavailable. Installer extraction, signature verification, broader reverse engineering, dynamic Wine analysis, and a resettable Windows VM are not implemented by this lane.
+- v0.1 has no general per-tool artifact lock or admission-record store. A discovered Linux/WSL2 executable may enter the supervised generic lane only when its catalog command identity permits PATH discovery; `reviewed-admission` entries remain blocked. For eligible entries, `executable-descriptor-observed-sha256` is an observation rather than an immutable snapshot or known-good provenance. A same-UID writer can mutate a writable inode before or during exec. Normal admission still requires a reviewed adapter and immutable artifact record.
 - Engagement creation, review recording, local receipt validation, exact target, `declared-action-label-binding`, tool binding, one-shot manifest generation, supervised execution, stop, and revocation are implemented for host engagements whose approved destinations include `gate-home`. The generic lane enforces immutable argv, target and tool binding, no-shell descriptor execution, private evidence, and one-shot claims. `argv-action-semantics-validation` is unavailable; audit events conservatively use the maximum of the declared action effect and catalog risk ceiling without blocking launch. Wall duration, revocation polling, and process-group termination are best effort while the original supervisor is alive. Egress, request/rate/concurrency/token measurement, daemon containment, `supervisor-crash-containment`, `immutable-executable-snapshot`, filesystem isolation, credential brokering, complete artifact inventory, and known-good provenance are unavailable.
 - Raw `gate run` and `gate upstream exec` command launchers are disabled. `gate engagement exec` launches only a previously reviewed manifest and accepts no raw command arguments. Run ordinary local development commands directly; target contact requires a reviewed adapter or a separately confirmed supervised generic manifest.
 - Engagement completion fields are validated as data, but `engagement close` does not enforce coverage or completion tests; closing is administrative.
@@ -359,7 +416,7 @@ Commands that are unavailable must be reported as unavailable. GATE never treats
 
 | Path | Purpose |
 | --- | --- |
-| `config/` | Public defaults and security-tool profiles |
+| `config/` | Public defaults, security-tool profiles, and the end-to-end penetration-testing workflow |
 | `policies/` | Autonomy, data, engagement, learning, and update authority |
 | `schemas/` | Machine-readable contracts |
 | `catalog/` | Reviewed security-tool metadata |

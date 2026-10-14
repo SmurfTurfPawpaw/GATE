@@ -1,16 +1,26 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import childProcess, { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { runtimePaths } from "../src/lib/paths.mjs";
-import { inspectReleaseArchive, installUpstream, resolveUpstreamBinary, upstreamStatus } from "../src/lib/upstreams.mjs";
+import {
+  inspectReleaseArchive,
+  installUpstream,
+  readVerifiedReleaseExecutable,
+  resolveUpstreamBinary,
+  upstreamStatus
+} from "../src/lib/upstreams.mjs";
 
 const sourceRepo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+const fixedGitHubCli = process.platform === "win32"
+  ? "C:\\Program Files\\GitHub CLI\\gh.exe"
+  : ["/usr/bin/gh", "/bin/gh", "/usr/local/bin/gh"].find((candidate) => fs.existsSync(candidate));
 
 function sha256(value) {
   return crypto.createHash("sha256").update(value).digest("hex");
@@ -118,14 +128,103 @@ test("release archive inspection rejects links before extraction", { skip: proce
   assert.throws(() => inspectReleaseArchive(archive), /unsafe paths or entry types/);
 });
 
-test("release admission verifies bytes without executing the fresh binary", { skip: process.platform === "win32" }, (t) => {
+test("native Windows protected upstream execution fails closed in favor of WSL", {
+  skip: process.platform !== "win32"
+}, (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-native-windows-upstream-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const archive = path.join(root, "fixture.tar");
+  fs.writeFileSync(archive, "not an archive");
+  assert.throws(
+    () => inspectReleaseArchive(archive),
+    /protected upstream execution is unavailable on native Windows; run GATE inside WSL/u
+  );
+});
+
+test("release verification binds hash, inspection, and executable extraction to one archive snapshot", {
+  skip: process.platform === "win32"
+}, (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-release-snapshot-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const content = path.join(root, "content");
+  fs.mkdirSync(content);
+  const executableBytes = Buffer.from("reviewed executable bytes\n");
+  fs.writeFileSync(path.join(content, "fixture-release"), executableBytes);
+  fs.writeFileSync(path.join(content, "unrelated.txt"), "must not be extracted\n");
+  const archive = path.join(root, "fixture-release.tar.gz");
+  execFileSync("tar", ["-czf", archive, "-C", content, "fixture-release", "unrelated.txt"]);
+  const artifact = {
+    name: path.basename(archive),
+    sha256: sha256(fs.readFileSync(archive)),
+    executableSha256: sha256(executableBytes)
+  };
+  const before = fs.readdirSync(root).sort();
+  const verified = readVerifiedReleaseExecutable(archive, artifact, "fixture-release");
+  assert.deepEqual(verified.executable, executableBytes);
+  assert.deepEqual(fs.readdirSync(root).sort(), before, "verification must not unpack archive entries");
+
+  const originalSpawnSync = childProcess.spawnSync;
+  childProcess.spawnSync = function failBinaryTarExtraction(command, args, options) {
+    if (/^-x/u.test(args?.[0] || "") && options?.encoding === null) {
+      return { status: 2, signal: null, error: undefined, stdout: Buffer.alloc(0), stderr: Buffer.from("binary tar failure\n") };
+    }
+    return originalSpawnSync.call(childProcess, command, args, options);
+  };
+  syncBuiltinESMExports();
+  try {
+    assert.throws(
+      () => readVerifiedReleaseExecutable(archive, artifact, "fixture-release"),
+      /binary tar failure/u
+    );
+  } finally {
+    childProcess.spawnSync = originalSpawnSync;
+    syncBuiltinESMExports();
+  }
+
+  const raceArchive = path.join(root, "race.tar.gz");
+  fs.copyFileSync(archive, raceArchive);
+  const replacementContent = path.join(root, "replacement-content");
+  fs.mkdirSync(replacementContent);
+  fs.writeFileSync(path.join(replacementContent, "fixture-release"), "unreviewed replacement\n");
+  const replacementArchive = path.join(root, "replacement.tar.gz");
+  execFileSync("tar", ["-czf", replacementArchive, "-C", replacementContent, "fixture-release"]);
+  const raceIdentity = fs.statSync(raceArchive, { bigint: true });
+  const originalReadSync = fs.readSync;
+  let swapped = false;
+  fs.readSync = function readAndSwap(file, buffer, offset, length, position) {
+    const bytesRead = originalReadSync.call(fs, file, buffer, offset, length, position);
+    if (!swapped && typeof file === "number" && BigInt(offset + bytesRead) === raceIdentity.size) {
+      const identity = fs.fstatSync(file, { bigint: true });
+      if (identity.dev === raceIdentity.dev && identity.ino === raceIdentity.ino) {
+        fs.renameSync(replacementArchive, raceArchive);
+        swapped = true;
+      }
+    }
+    return bytesRead;
+  };
+  try {
+    assert.throws(
+      () => readVerifiedReleaseExecutable(raceArchive, artifact, "fixture-release"),
+      /release archive changed while it was read/u
+    );
+  } finally {
+    fs.readSync = originalReadSync;
+  }
+  assert.equal(swapped, true, "the regression must replace the archive after its descriptor is read");
+});
+
+test("release archive and download tooling reject ambient command and configuration injection", {
+  skip: process.platform === "win32" || !fixedGitHubCli
+}, (t) => {
   const { root, repo, paths } = fixture(t);
   const content = path.join(root, "release-content");
   const fakeBin = path.join(root, "fake-bin");
   const sentinel = path.join(root, "fresh-binary-ran");
   const tarOptionsSentinel = path.join(root, "tar-options-ran");
   const pathTarSentinel = path.join(root, "path-tar-ran");
+  const pathGitHubCliSentinel = path.join(root, "path-gh-ran");
   const tarOptionsCanary = path.join(root, "tar-options-canary");
+  const hostileGitHubConfig = path.join(root, "ambient-gh-config-file");
   fs.mkdirSync(content);
   fs.mkdirSync(fakeBin);
   const binary = path.join(content, "fixture-release");
@@ -155,6 +254,7 @@ test("release admission verifies bytes without executing the fresh binary", { sk
   }]);
   const fakeGh = path.join(fakeBin, "gh");
   fs.writeFileSync(fakeGh, `#!/bin/sh
+printf ran > '${pathGitHubCliSentinel}'
 destination=""
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "--dir" ]; then
@@ -166,6 +266,7 @@ done
 cp "$GATE_TEST_RELEASE_ARCHIVE" "$destination/fixture-release.tar.gz"
 `);
   fs.chmodSync(fakeGh, 0o700);
+  fs.writeFileSync(hostileGitHubConfig, "ambient config must not be read\n", { mode: 0o600 });
   fs.writeFileSync(tarOptionsCanary, "#!/bin/sh\nprintf ran > \"${0%/*}/tar-options-ran\"\n");
   fs.chmodSync(tarOptionsCanary, 0o700);
   const fakeTar = path.join(fakeBin, "tar");
@@ -187,36 +288,77 @@ cp "$GATE_TEST_RELEASE_ARCHIVE" "$destination/fixture-release.tar.gz"
   const previousPath = process.env.PATH;
   const previousArchive = process.env.GATE_TEST_RELEASE_ARCHIVE;
   const previousTarOptions = process.env.TAR_OPTIONS;
+  const protectedEnvironment = new Map([
+    ["GH_CONFIG_DIR", process.env.GH_CONFIG_DIR],
+    ["GH_HOST", process.env.GH_HOST],
+    ["GH_TOKEN", process.env.GH_TOKEN],
+    ["GITHUB_TOKEN", process.env.GITHUB_TOKEN],
+    ["HTTP_PROXY", process.env.HTTP_PROXY],
+    ["HTTPS_PROXY", process.env.HTTPS_PROXY],
+    ["NO_PROXY", process.env.NO_PROXY],
+    ["http_proxy", process.env.http_proxy],
+    ["https_proxy", process.env.https_proxy],
+    ["no_proxy", process.env.no_proxy],
+    ["LD_PRELOAD", process.env.LD_PRELOAD]
+  ]);
   process.env.PATH = `${fakeBin}${path.delimiter}${previousPath}`;
   process.env.GATE_TEST_RELEASE_ARCHIVE = archive;
   process.env.TAR_OPTIONS = maliciousTarOptions;
+  process.env.GH_CONFIG_DIR = hostileGitHubConfig;
+  process.env.GH_HOST = "attacker.invalid";
+  delete process.env.GH_TOKEN;
+  delete process.env.GITHUB_TOKEN;
+  assert.throws(
+    () => installUpstream("fixture-release", { paths }),
+    /requires GH_TOKEN or GITHUB_TOKEN/u
+  );
+  process.env.GH_TOKEN = "gate-test-token";
+  process.env.HTTP_PROXY = "http://127.0.0.1:1";
+  process.env.HTTPS_PROXY = "http://127.0.0.1:1";
+  process.env.NO_PROXY = "";
+  process.env.http_proxy = "http://127.0.0.1:1";
+  process.env.https_proxy = "http://127.0.0.1:1";
+  process.env.no_proxy = "";
+  process.env.LD_PRELOAD = path.join(root, "ambient-loader-must-not-load.so");
   try {
-    const result = installUpstream("fixture-release", { paths });
-    assert.equal(result.version, "1.0.0");
-    assert.equal(result.versionSource, "reviewed-lock");
-    assert.equal(result.executedDuringInstall, false);
+    assert.deepEqual(inspectReleaseArchive(archive), ["fixture-release"]);
+    assert.throws(
+      () => installUpstream("fixture-release", { paths }),
+      (error) => {
+        assert.match(error.message, /(?:proxy|connect|127\.0\.0\.1)/iu);
+        assert.doesNotMatch(error.message, /(?:LD_PRELOAD|ld\.so|ambient-gh-config-file|attacker\.invalid)/iu);
+        return true;
+      }
+    );
   } finally {
     process.env.PATH = previousPath;
     if (previousArchive === undefined) delete process.env.GATE_TEST_RELEASE_ARCHIVE;
     else process.env.GATE_TEST_RELEASE_ARCHIVE = previousArchive;
     if (previousTarOptions === undefined) delete process.env.TAR_OPTIONS;
     else process.env.TAR_OPTIONS = previousTarOptions;
+    for (const [name, value] of protectedEnvironment) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
   }
   assert.equal(fs.existsSync(sentinel), false);
   assert.equal(fs.existsSync(tarOptionsSentinel), false);
   assert.equal(fs.existsSync(pathTarSentinel), false);
+  assert.equal(fs.existsSync(pathGitHubCliSentinel), false);
 });
 
-test("npm execution reconstructs reviewed lock bytes and rejects a forged tree receipt", (t) => {
+test("offline REA resolution uses bundled npm with a clean environment and rejects a forged tree receipt", {
+  skip: process.platform === "win32"
+}, (t) => {
   const { root, repo, home, paths } = fixture(t);
   const packageRoot = path.join(root, "fixture-package");
   const cache = path.join(home, "cache", "npm");
   fs.mkdirSync(packageRoot, { recursive: true });
   fs.mkdirSync(cache, { recursive: true });
   fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({
-    name: "fixture-tool",
+    name: "rea-agents",
     version: "1.0.0",
-    bin: { "fixture-tool": "cli.js" }
+    bin: { rea: "cli.js" }
   }));
   fs.writeFileSync(path.join(packageRoot, "cli.js"), "#!/usr/bin/env node\nconsole.log('trusted');\n");
   const tarballName = execFileSync(
@@ -228,25 +370,25 @@ test("npm execution reconstructs reviewed lock bytes and rejects a forged tree r
   const integrity = `sha512-${crypto.createHash("sha512").update(fs.readFileSync(tarball)).digest("base64")}`;
   execFileSync(npm, ["cache", "add", tarball, "--ignore-scripts", "--silent", "--cache", cache]);
 
-  const lockDirectory = path.join(repo, "locks", "npm", "fixture-tool");
+  const lockDirectory = path.join(repo, "locks", "npm", "rea-stable");
   fs.mkdirSync(lockDirectory, { recursive: true });
   const packageManifest = {
-    name: "gate-upstream-fixture-tool",
+    name: "gate-upstream-rea-stable",
     private: true,
     version: "0.0.0",
-    dependencies: { "fixture-tool": "1.0.0" }
+    dependencies: { "rea-agents": "1.0.0" }
   };
   const packageLock = {
-    name: "gate-upstream-fixture-tool",
+    name: "gate-upstream-rea-stable",
     lockfileVersion: 3,
     requires: true,
     packages: {
-      "": { dependencies: { "fixture-tool": "1.0.0" } },
-      "node_modules/fixture-tool": {
+      "": { dependencies: { "rea-agents": "1.0.0" } },
+      "node_modules/rea-agents": {
         version: "1.0.0",
-        resolved: "https://registry.npmjs.org/fixture-tool/-/fixture-tool-1.0.0.tgz",
+        resolved: "https://registry.npmjs.org/rea-agents/-/rea-agents-1.0.0.tgz",
         integrity,
-        bin: { "fixture-tool": "cli.js" }
+        bin: { rea: "cli.js" }
       }
     }
   };
@@ -256,20 +398,20 @@ test("npm execution reconstructs reviewed lock bytes and rejects a forged tree r
   fs.writeFileSync(lockFile, `${JSON.stringify(packageLock, null, 2)}\n`);
   const lockSha256 = sha256(fs.readFileSync(lockFile));
   writeLock(repo, [{
-    id: "fixture-tool",
-    repository: "https://github.com/example/fixture-tool.git",
+    id: "rea-stable",
+    repository: "https://github.com/example/rea.git",
     commit: "c".repeat(40),
     version: "1.0.0",
     install: {
       lane: "npm",
-      package: "fixture-tool",
+      package: "rea-agents",
       integrity,
-      lockfile: "locks/npm/fixture-tool/package-lock.json",
+      lockfile: "locks/npm/rea-stable/package-lock.json",
       lockSha256
     }
   }]);
 
-  const directory = path.join(paths.upstreamTools, "fixture-tool");
+  const directory = path.join(paths.upstreamTools, "rea-stable");
   fs.mkdirSync(directory, { recursive: true });
   fs.copyFileSync(packageFile, path.join(directory, "package.json"));
   fs.copyFileSync(lockFile, path.join(directory, "package-lock.json"));
@@ -281,9 +423,9 @@ test("npm execution reconstructs reviewed lock bytes and rejects a forged tree r
   const receiptFile = path.join(directory, "install.json");
   const receipt = {
     apiVersion: "gate.upstream-install/v2",
-    id: "fixture-tool",
+    id: "rea-stable",
     lane: "npm",
-    package: "fixture-tool",
+    package: "rea-agents",
     version: "1.0.0",
     integrity,
     lockSha256,
@@ -291,19 +433,113 @@ test("npm execution reconstructs reviewed lock bytes and rejects a forged tree r
   };
   fs.writeFileSync(receiptFile, `${JSON.stringify(receipt)}\n`);
 
-  assert.match(resolveUpstreamBinary("fixture-tool", null, { paths }).executable, /fixture-tool/);
+  assert.match(resolveUpstreamBinary("rea-stable", "rea", { paths }).executable, /rea/u);
 
-  const installedCli = path.join(directory, "node_modules", "fixture-tool", "cli.js");
+  const fakeBin = path.join(root, "fake-npm-bin");
+  const pathSentinel = path.join(root, "ambient-path-npm-ran");
+  const nodeOptionsSentinel = path.join(root, "ambient-node-options-ran");
+  const nodeOptionsHook = path.join(root, "ambient-node-options.cjs");
+  fs.mkdirSync(fakeBin);
+  fs.writeFileSync(
+    path.join(fakeBin, process.platform === "win32" ? "npm.cmd" : "npm"),
+    process.platform === "win32"
+      ? `@echo ran>"${pathSentinel}"\r\n@exit /b 99\r\n`
+      : `#!/bin/sh\nprintf ran > '${pathSentinel}'\nexit 99\n`,
+    { mode: 0o700 }
+  );
+  fs.writeFileSync(
+    nodeOptionsHook,
+    `require("node:fs").writeFileSync(${JSON.stringify(nodeOptionsSentinel)}, "ran");\n`,
+    { mode: 0o600 }
+  );
+  const previousPath = process.env.PATH;
+  const previousNodeOptions = process.env.NODE_OPTIONS;
+  try {
+    process.env.PATH = `${fakeBin}${path.delimiter}${previousPath || ""}`;
+    delete process.env.NODE_OPTIONS;
+    assert.match(resolveUpstreamBinary("rea-stable", "rea", { paths }).executable, /rea/u);
+    assert.equal(fs.existsSync(pathSentinel), false, "ambient PATH npm must not execute");
+
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    process.env.NODE_OPTIONS = `--require=${nodeOptionsHook}`;
+    execFileSync(process.execPath, ["-e", ""], { env: { ...process.env } });
+    assert.equal(fs.existsSync(nodeOptionsSentinel), true, "the NODE_OPTIONS fixture must execute without hardening");
+    fs.rmSync(nodeOptionsSentinel);
+    assert.match(resolveUpstreamBinary("rea-stable", "rea", { paths }).executable, /rea/u);
+    assert.equal(fs.existsSync(nodeOptionsSentinel), false, "ambient NODE_OPTIONS must not reach bundled npm");
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    if (previousNodeOptions === undefined) delete process.env.NODE_OPTIONS;
+    else process.env.NODE_OPTIONS = previousNodeOptions;
+  }
+
+  if (process.platform === "linux") {
+    assert.equal(fs.existsSync("/usr/bin/bwrap"), true, "Linux npm closure coverage requires Bubblewrap");
+    const realNode = fs.realpathSync.native(process.execPath);
+    const realInstallationRoot = path.resolve(path.dirname(realNode), "..");
+    const npmCli = [
+      path.join(realInstallationRoot, "lib", "node_modules", "npm", "bin", "npm-cli.js"),
+      path.join(realInstallationRoot, "share", "nodejs", "npm", "bin", "npm-cli.js"),
+      path.join(realInstallationRoot, "node_modules", "npm", "bin", "npm-cli.js")
+    ].find((candidate) => fs.existsSync(candidate));
+    assert.ok(npmCli, "the current Node installation must expose its bundled npm CLI for this regression");
+    const npmRoot = path.resolve(path.dirname(npmCli), "..");
+    const mutableLib = path.join(root, "mutable-npm-lib");
+    const mutableMarker = path.join(root, "mutable-npm-implementation-ran");
+    fs.cpSync(path.join(npmRoot, "lib"), mutableLib, {
+      recursive: true,
+      preserveTimestamps: true
+    });
+    const mutableCliImplementation = path.join(mutableLib, "cli.js");
+    fs.writeFileSync(
+      mutableCliImplementation,
+      `require("node:fs").writeFileSync(${JSON.stringify(mutableMarker)}, "ran");\n${fs.readFileSync(mutableCliImplementation, "utf8")}`
+    );
+    const childScript = path.join(root, "mutable-runtime-check.mjs");
+    fs.writeFileSync(childScript, `
+import { installUpstream } from ${JSON.stringify(pathToFileURL(path.join(sourceRepo, "src", "lib", "upstreams.mjs")).href)};
+const paths = ${JSON.stringify(paths)};
+try {
+  installUpstream("rea-stable", { paths });
+  process.exitCode = 91;
+} catch (error) {
+  process.stdout.write(String(error.message));
+}
+`);
+    const rejection = execFileSync("/usr/bin/bwrap", [
+      "--die-with-parent",
+      "--ro-bind", "/", "/",
+      "--bind", root, root,
+      "--bind", mutableLib, path.join(npmRoot, "lib"),
+      "--proc", "/proc",
+      "--dev", "/dev",
+      "--",
+      realNode,
+      childScript
+    ], {
+      encoding: "utf8",
+      env: {},
+      timeout: 120_000
+    });
+    assert.match(rejection, /bundled npm implementation is owned by the current process identity/u);
+    assert.equal(fs.existsSync(mutableMarker), false, "a mutable npm implementation must be rejected before execution");
+  }
+
+  const installedCli = path.join(directory, "node_modules", "rea-agents", "cli.js");
   fs.writeFileSync(installedCli, "#!/usr/bin/env node\nconsole.log('modified');\n");
   fs.writeFileSync(receiptFile, `${JSON.stringify({ ...receipt, treeSha256: sha256(fs.readFileSync(installedCli)) })}\n`);
   assert.throws(
-    () => resolveUpstreamBinary("fixture-tool", null, { paths }),
+    () => resolveUpstreamBinary("rea-stable", "rea", { paths }),
     /failed integrity verification/
   );
 });
 
-test("source readiness rejects replacement refs, hidden index flags, and every extra path", (t) => {
-  const { repo, paths } = fixture(t);
+test("source readiness rejects replacement refs, hidden index flags, and every extra path", {
+  skip: process.platform === "win32"
+}, (t) => {
+  const { root, repo, paths } = fixture(t);
   const directory = path.join(paths.upstreams, "fixture-source");
   fs.mkdirSync(directory, { recursive: true });
   git(directory, "init");
@@ -323,6 +559,26 @@ test("source readiness rejects replacement refs, hidden index flags, and every e
   }]);
 
   assert.equal(upstreamStatus({ paths })[0].ready, true);
+
+  const fakeBin = path.join(root, "fake-git-bin");
+  const pathGitSentinel = path.join(root, "ambient-path-git-ran");
+  fs.mkdirSync(fakeBin);
+  fs.writeFileSync(
+    path.join(fakeBin, process.platform === "win32" ? "git.exe" : "git"),
+    process.platform === "win32"
+      ? "This fixture is intentionally not a valid executable.\n"
+      : `#!/bin/sh\nprintf ran > '${pathGitSentinel}'\nexit 99\n`,
+    { mode: 0o700 }
+  );
+  const previousPath = process.env.PATH;
+  try {
+    process.env.PATH = `${fakeBin}${path.delimiter}${previousPath || ""}`;
+    assert.equal(upstreamStatus({ paths })[0].ready, true);
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+  }
+  assert.equal(fs.existsSync(pathGitSentinel), false, "ambient PATH Git must not execute");
 
   fs.writeFileSync(path.join(directory, "tracked.txt"), "tampered\n");
   git(directory, "add", "tracked.txt");
@@ -358,7 +614,9 @@ test("source readiness rejects replacement refs, hidden index flags, and every e
   assert.equal(upstreamStatus({ paths })[0].ready, false);
 });
 
-test("source verification does not invoke repository-configured filters or fsmonitor", (t) => {
+test("source verification does not invoke repository-configured filters or fsmonitor", {
+  skip: process.platform === "win32"
+}, (t) => {
   const { root, repo, paths } = fixture(t);
   const directory = path.join(paths.upstreams, "filtered-source");
   const sentinel = path.join(root, "filter-ran");

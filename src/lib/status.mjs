@@ -3,6 +3,7 @@ import path from "node:path";
 import { readPrivateJson } from "./config.mjs";
 import { executionStatus } from "./executions.mjs";
 import { readJsonLines } from "./jsonl.mjs";
+import { offlineAnalysisStatus } from "./offline-analysis.mjs";
 import { ensureRuntime, runtimePaths } from "./paths.mjs";
 import { projectRegistryStatus } from "./projects.mjs";
 import { validateDocument } from "./schema.mjs";
@@ -60,6 +61,7 @@ export async function buildStatus(options = {}) {
       .reverse(),
     engagements,
     execution: executionStatus({ paths }),
+    offlineAnalysis: offlineAnalysisStatus({ paths }),
     projects: projectRegistryStatus({ paths }),
     tokens,
     upstreams: upstreamStatus({ paths, verifyIntegrity: false })

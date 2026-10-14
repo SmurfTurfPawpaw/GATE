@@ -22,6 +22,13 @@ import {
 } from "./lib/executions.mjs";
 import { recordEvent } from "./lib/events.mjs";
 import { addLearning } from "./lib/learnings.mjs";
+import {
+  createOfflineAnalysisManifest,
+  executeOfflineAnalysisManifest,
+  offlineAnalysisCapability,
+  offlineAnalysisStatus,
+  purgeOfflineAnalysisArtifact
+} from "./lib/offline-analysis.mjs";
 import { ensureRuntime, runtimePaths } from "./lib/paths.mjs";
 import { checkPublication, publishPullRequest } from "./lib/publication.mjs";
 import { listProjects, registerProject, showProject, verifyProject } from "./lib/projects.mjs";
@@ -53,6 +60,16 @@ Projects
   project list                      List registered project summaries
   project show ID                   Show one registered project contract
   project verify ID                 Verify one registered project contract
+
+Offline analysis
+  analysis capability               Check the zero-network Bubblewrap analysis lane
+  analysis manifest --project ID --path EXACT [--minutes N]
+                                    Snapshot one local artifact and bind an offline run
+  analysis run --project ID --manifest ID --confirm "ANALYZE ID SHA256 OFFLINE"
+                                    Execute the one-shot fixed REA adapter manifest
+  analysis purge --project ID --manifest ID --confirm "PURGE ID SHA256 OFFLINE ARTIFACT"
+                                    Purge one retained digest-bound artifact snapshot
+  analysis status                   Show capability and recent offline analysis runs
 
 Workspaces
   workspace lease --repo PATH --task ID --branch REF [--base REF]
@@ -108,6 +125,31 @@ function assertFlags(flags, allowed = []) {
 
 function assertPositionals(positional, count, usage) {
   if (positional.length !== count) throw new Error(`expected ${usage}`);
+}
+
+function assertUnambiguousAnalysisArgs(argv) {
+  const seen = new Set();
+  for (const value of argv) {
+    if (value === "--") throw new Error("analysis commands do not accept -- passthrough arguments");
+    if (!value.startsWith("--")) continue;
+    const equals = value.indexOf("=");
+    const name = value.slice(2, equals === -1 ? undefined : equals);
+    if (!name) throw new Error("analysis options must have a name");
+    if (seen.has(name)) throw new Error(`analysis option must not be repeated: --${name}`);
+    seen.add(name);
+  }
+}
+
+function assertBooleanSwitch(flags, name) {
+  if (flags[name] !== undefined && flags[name] !== true) {
+    throw new Error(`--${name} does not accept a value`);
+  }
+}
+
+function optionalValueFlag(flags, name) {
+  if (flags[name] === undefined) return undefined;
+  if (typeof flags[name] !== "string" || !flags[name].trim()) throw new Error(`--${name} needs a value`);
+  return flags[name];
 }
 
 function printValidation(validation, json) {
@@ -256,6 +298,68 @@ export async function main(argv) {
       return;
     }
     throw new Error(`unknown project action: ${action}`);
+  }
+
+  if (command === "analysis") {
+    assertUnambiguousAnalysisArgs(rest);
+    const [action] = parsed.positional;
+    if (!action) throw new Error("analysis action is required");
+    assertPositionals(parsed.positional, 1, "gate analysis capability|manifest|run|purge|status [options]");
+    assertBooleanSwitch(parsed.flags, "json");
+    if (action === "capability") {
+      assertFlags(parsed.flags, ["json"]);
+      const capability = offlineAnalysisCapability({ paths });
+      output(capability, json);
+      if (!capability.laneAvailable) process.exitCode = 2;
+      return;
+    }
+    if (action === "manifest") {
+      assertFlags(parsed.flags, ["project", "path", "minutes", "json"]);
+      return output(
+        createOfflineAnalysisManifest(
+          requiredFlag(parsed.flags, "project"),
+          {
+            path: requiredFlag(parsed.flags, "path"),
+            maxMinutes: optionalValueFlag(parsed.flags, "minutes")
+          },
+          { paths }
+        ),
+        json
+      );
+    }
+    if (action === "run") {
+      assertFlags(parsed.flags, ["project", "manifest", "confirm", "json"]);
+      const result = await executeOfflineAnalysisManifest(
+        requiredFlag(parsed.flags, "project"),
+        {
+          manifestId: requiredFlag(parsed.flags, "manifest"),
+          confirm: requiredFlag(parsed.flags, "confirm")
+        },
+        { paths }
+      );
+      output(result, json);
+      if (!result.ok) process.exitCode = 2;
+      return;
+    }
+    if (action === "purge") {
+      assertFlags(parsed.flags, ["project", "manifest", "confirm", "json"]);
+      return output(
+        purgeOfflineAnalysisArtifact(
+          requiredFlag(parsed.flags, "project"),
+          {
+            manifestId: requiredFlag(parsed.flags, "manifest"),
+            confirm: requiredFlag(parsed.flags, "confirm")
+          },
+          { paths }
+        ),
+        json
+      );
+    }
+    if (action === "status") {
+      assertFlags(parsed.flags, ["json"]);
+      return output(offlineAnalysisStatus({ paths }), json);
+    }
+    throw new Error(`unknown analysis action: ${action}`);
   }
 
   if (command === "workspace") {

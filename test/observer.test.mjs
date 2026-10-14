@@ -130,6 +130,96 @@ function executionFixture(overrides = {}) {
   };
 }
 
+function offlineAnalysisFixture(overrides = {}) {
+  return {
+    capability: {
+      configured: true,
+      laneAvailable: true,
+      mode: "bubblewrap-offline",
+      reason: "PRIVATE_OFFLINE_REASON_CANARY",
+      enforced: [
+        "project-contract-binding",
+        "typed-path-binding",
+        "artifact-snapshot-sha256",
+        "pinned-upstream-integrity",
+        "fixed-adapter-argv",
+        "bubblewrap-network-namespace",
+        "read-only-runtime-mounts",
+        "ephemeral-sandbox-writes",
+        "shell-disabled",
+        "cleared-environment",
+        "private-bounded-evidence",
+        "one-shot-claim",
+        "wall-duration",
+        "PRIVATE_OFFLINE_CAPABILITY_CANARY"
+      ],
+      unavailable: [
+        "cpu-limit",
+        "memory-limit",
+        "immutable-managed-upstream-snapshot",
+        "same-uid-gate-home-tamper-resistance",
+        "unix-socket-system-call-denial"
+      ]
+    },
+    counts: {
+      queued: 0,
+      running: 1,
+      succeeded: 2,
+      failed: 0,
+      cancelled: 0,
+      blocked: 0,
+      unknown: 0
+    },
+    retention: {
+      quotaBytes: 2_147_483_648,
+      quotaArtifacts: 64,
+      retainedBytes: 512,
+      availableBytes: 2_147_483_136,
+      overQuota: false,
+      retainedArtifacts: 1,
+      availableArtifacts: 63,
+      retentionLockState: "absent",
+      snapshotState: "consistent",
+      pendingTransactions: 0,
+      invalidTransactionRecords: 0,
+      creatingManifests: 0,
+      invalidCreationIntents: 0,
+      invalidClaimRecords: 0,
+      invalidPurgeRecords: 0,
+      invalidRunRecords: 0,
+      blockedManifests: 0,
+      mutationBlocked: false,
+      pendingManifests: 1,
+      expiredManifests: 0,
+      activeManifests: 0,
+      terminalManifests: 0,
+      unknownManifests: 0,
+      purgePendingManifests: 0,
+      purgedManifests: 0,
+      orphanedArtifacts: 0,
+      orphanedBytes: 0,
+      missingArtifacts: 0,
+      invalidEntries: 0,
+      privatePath: "/private/OFFLINE_RETENTION_CANARY"
+    },
+    recent: [{
+      runId: `arun_${"3".repeat(32)}`,
+      manifestId: `amf_${"4".repeat(32)}`,
+      projectId: "private-project-canary",
+      status: "running",
+      createdAt: at,
+      startedAt: at,
+      finishedAt: null,
+      terminationReason: null,
+      isolationVerified: null,
+      artifactPath: "/private/OFFLINE_ARTIFACT_PATH_CANARY.exe",
+      artifactSha256: "OFFLINE_ARTIFACT_HASH_CANARY",
+      evidence: "OFFLINE_EVIDENCE_CANARY"
+    }],
+    ...overrides
+  };
+}
+
 function statusFixture(overrides = {}) {
   return {
     at,
@@ -166,6 +256,7 @@ function statusFixture(overrides = {}) {
       }
     ],
     execution: executionFixture(),
+    offlineAnalysis: offlineAnalysisFixture(),
     projects: [
       {
         id: "project_CUSTOMER_PROJECT_CANARY",
@@ -332,6 +423,33 @@ test("observer endpoints coalesce status reads and expose metadata-only projecti
     status.execution.recent[0].runId,
     `run_${crypto.createHash("sha256").update(`xrun_${"1".repeat(32)}`).digest("hex").slice(0, 16)}`
   );
+  assert.equal(status.offlineAnalysis.configured, true);
+  assert.equal(status.offlineAnalysis.laneAvailable, true);
+  assert.equal(status.offlineAnalysis.mode, "bubblewrap-offline");
+  assert.equal(status.offlineAnalysis.reason, null);
+  assert.equal(status.offlineAnalysis.runningCount, 1);
+  assert.equal(status.offlineAnalysis.counts.succeeded, 2);
+  assert.equal(status.offlineAnalysis.retention.retainedBytes, 512);
+  assert.equal(status.offlineAnalysis.retention.quotaArtifacts, 64);
+  assert.equal(status.offlineAnalysis.retention.pendingManifests, 1);
+  assert.equal(status.offlineAnalysis.retention.availableArtifacts, 63);
+  assert.equal(status.offlineAnalysis.retention.expiredManifests, 0);
+  assert.equal(status.offlineAnalysis.retention.overQuota, false);
+  assert.equal(status.offlineAnalysis.retention.retentionLockState, "absent");
+  assert.equal(status.offlineAnalysis.retention.snapshotState, "consistent");
+  assert.equal(status.offlineAnalysis.retention.mutationBlocked, false);
+  assert.equal(status.offlineAnalysis.retention.pendingTransactions, 0);
+  assert.equal(status.offlineAnalysis.retention.blockedManifests, 0);
+  assert.equal(status.offlineAnalysis.enforced.length, 13);
+  assert.equal(status.offlineAnalysis.unavailable.length, 5);
+  assert.match(status.offlineAnalysis.recent[0].runId, /^run_[a-f0-9]{16}$/);
+  assert.equal(status.offlineAnalysis.recent[0].status, "running");
+  assert.equal(status.offlineAnalysis.recent[0].isolationVerified, null);
+  assert.deepEqual(Object.keys(status.offlineAnalysis.recent[0]).sort(), ["isolationVerified", "runId", "status"]);
+  assert.notEqual(
+    status.offlineAnalysis.recent[0].runId,
+    `run_${crypto.createHash("sha256").update(`arun_${"3".repeat(32)}`).digest("hex").slice(0, 16)}`
+  );
   assert.match(status.projects[0].id, /^project_[a-f0-9]{16}$/);
   assert.equal(status.projects[0].status, "ready");
   assert.equal(status.projects[0].provider, "github");
@@ -381,6 +499,15 @@ test("observer endpoints coalesce status reads and expose metadata-only projecti
     "REPOSITORY_CANARY",
     "GATE_HOME_CANARY",
     "PRIVATE_CAPABILITY_CANARY",
+    "PRIVATE_OFFLINE_REASON_CANARY",
+    "PRIVATE_OFFLINE_CAPABILITY_CANARY",
+    "OFFLINE_ARTIFACT_PATH_CANARY",
+    "OFFLINE_ARTIFACT_HASH_CANARY",
+    "OFFLINE_EVIDENCE_CANARY",
+    "OFFLINE_RETENTION_CANARY",
+    "private-project-canary",
+    `arun_${"3".repeat(32)}`,
+    `amf_${"4".repeat(32)}`,
     "TARGET_ARGUMENT_CANARY",
     "ARGV_CANARY",
     "EXECUTABLE_PATH_CANARY",
@@ -500,6 +627,122 @@ test("execution availability fails closed on incomplete capabilities and malform
   assert.equal(unavailable.status.execution.configured, null);
   assert.equal(unavailable.status.execution.laneAvailable, false);
   assert.equal(unavailable.status.execution.runningCount, null);
+});
+
+test("offline analysis projection fails closed and withholds artifact and evidence details", () => {
+  const analysis = offlineAnalysisFixture();
+  analysis.capability.enforced = analysis.capability.enforced.filter((value) => value !== "shell-disabled");
+  analysis.capability.reason = "/private/OFFLINE_FAILURE_DETAIL_CANARY";
+  analysis.recent = [{
+    runId: "/private/OFFLINE_RUN_CANARY",
+    manifestId: `amf_${"4".repeat(32)}`,
+    projectId: "private-project-canary",
+    status: "running",
+    createdAt: at,
+    artifactPath: "/private/OFFLINE_PATH_CANARY",
+    artifactSha256: "OFFLINE_HASH_CANARY",
+    evidence: "OFFLINE_OUTPUT_CANARY"
+  }];
+  const projected = projectSnapshot(statusFixture({ offlineAnalysis: analysis }), paths);
+
+  assert.equal(projected.status.offlineAnalysis.configured, true);
+  assert.equal(projected.status.offlineAnalysis.laneAvailable, false);
+  assert.equal(projected.status.offlineAnalysis.reason, "unavailable");
+  assert.equal(projected.status.offlineAnalysis.recent.length, 0);
+  const serialized = JSON.stringify(projected.status.offlineAnalysis);
+  for (const forbidden of [
+    "OFFLINE_FAILURE_DETAIL_CANARY",
+    "OFFLINE_RUN_CANARY",
+    "private-project-canary",
+    "OFFLINE_PATH_CANARY",
+    "OFFLINE_HASH_CANARY",
+    "OFFLINE_OUTPUT_CANARY"
+  ]) assert.equal(serialized.includes(forbidden), false, `observer leaked ${forbidden}`);
+
+  const absent = projectSnapshot(statusFixture({ offlineAnalysis: undefined }), paths);
+  assert.equal(absent.status.offlineAnalysis.configured, null);
+  assert.equal(absent.status.offlineAnalysis.laneAvailable, false);
+  assert.equal(absent.status.offlineAnalysis.reason, "unavailable");
+  assert.equal(absent.status.offlineAnalysis.runningCount, null);
+});
+
+test("observer exposes only aggregate offline retention fault signals", () => {
+  const analysis = offlineAnalysisFixture();
+  Object.assign(analysis.retention, {
+    overQuota: true,
+    missingArtifacts: 2,
+    invalidEntries: 3,
+    orphanedArtifacts: 4,
+    orphanedBytes: 1536,
+    purgePendingManifests: 1,
+    unknownManifests: 5,
+    retentionLockState: "invalid",
+    snapshotState: "indeterminate",
+    pendingTransactions: 6,
+    invalidTransactionRecords: 7,
+    creatingManifests: 8,
+    invalidCreationIntents: 9,
+    invalidClaimRecords: 10,
+    invalidPurgeRecords: 11,
+    invalidRunRecords: 13,
+    blockedManifests: 12,
+    mutationBlocked: true,
+    privatePath: "/private/RETENTION_PATH_CANARY",
+    manifestDigest: "RETENTION_DIGEST_CANARY"
+  });
+  const projected = projectSnapshot(statusFixture({ offlineAnalysis: analysis }), paths);
+  const retention = projected.status.offlineAnalysis.retention;
+
+  assert.deepEqual({
+    overQuota: retention.overQuota,
+    missingArtifacts: retention.missingArtifacts,
+    invalidEntries: retention.invalidEntries,
+    orphanedArtifacts: retention.orphanedArtifacts,
+    orphanedBytes: retention.orphanedBytes,
+    purgePendingManifests: retention.purgePendingManifests,
+    unknownManifests: retention.unknownManifests,
+    retentionLockState: retention.retentionLockState,
+    snapshotState: retention.snapshotState,
+    pendingTransactions: retention.pendingTransactions,
+    invalidTransactionRecords: retention.invalidTransactionRecords,
+    creatingManifests: retention.creatingManifests,
+    invalidCreationIntents: retention.invalidCreationIntents,
+    invalidClaimRecords: retention.invalidClaimRecords,
+    invalidPurgeRecords: retention.invalidPurgeRecords,
+    invalidRunRecords: retention.invalidRunRecords,
+    blockedManifests: retention.blockedManifests,
+    mutationBlocked: retention.mutationBlocked
+  }, {
+    overQuota: true,
+    missingArtifacts: 2,
+    invalidEntries: 3,
+    orphanedArtifacts: 4,
+    orphanedBytes: 1536,
+    purgePendingManifests: 1,
+    unknownManifests: 5,
+    retentionLockState: "invalid",
+    snapshotState: "indeterminate",
+    pendingTransactions: 6,
+    invalidTransactionRecords: 7,
+    creatingManifests: 8,
+    invalidCreationIntents: 9,
+    invalidClaimRecords: 10,
+    invalidPurgeRecords: 11,
+    invalidRunRecords: 13,
+    blockedManifests: 12,
+    mutationBlocked: true
+  });
+  const serialized = JSON.stringify(retention);
+  assert.equal(serialized.includes("RETENTION_PATH_CANARY"), false);
+  assert.equal(serialized.includes("RETENTION_DIGEST_CANARY"), false);
+
+  analysis.retention.retentionLockState = "/private/LOCK_OWNER_CANARY";
+  analysis.retention.snapshotState = "/private/SNAPSHOT_CANARY";
+  const invalidLockText = projectSnapshot(statusFixture({ offlineAnalysis: analysis }), paths);
+  assert.equal(invalidLockText.status.offlineAnalysis.retention.retentionLockState, null);
+  assert.equal(invalidLockText.status.offlineAnalysis.retention.snapshotState, null);
+  assert.equal(JSON.stringify(invalidLockText).includes("LOCK_OWNER_CANARY"), false);
+  assert.equal(JSON.stringify(invalidLockText).includes("SNAPSHOT_CANARY"), false);
 });
 
 test("observer retains an opaque invalid project for filesystem-valid corrupt names", () => {

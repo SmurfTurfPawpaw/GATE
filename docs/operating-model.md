@@ -42,7 +42,7 @@ While `.registry.lock` or `.registry.pending` exists, `project show` fails and v
 
 Never blindly delete either control file or treat removal of only the lock as recovery.
 
-The project record is configuration, not authority. Registration does not clone a repository, acquire a workspace, authorize target contact, verify a No Mistakes run, or enable merge, deployment, or publication. Current workspace and publication commands also require explicit repository inputs; they do not yet resolve or enforce every registered project field.
+The project record is configuration, not authority. Registration does not clone a repository, acquire a workspace, authorize target contact, verify a No Mistakes run, or enable merge, deployment, or publication. The offline-analysis lane uses its canonical digest to bind a supplied artifact to one project, but that provenance binding still grants no authority over a publisher, vendor, account, service, or embedded endpoint. Current workspace and publication commands also require explicit repository inputs; they do not yet resolve or enforce every registered project field.
 
 ## Verified Treehouse leases
 
@@ -121,9 +121,67 @@ No Mistakes trusts repository controls from the fetched default branch. The firs
 
 Keep `--no-publish-intent` on later runs as well. Trusted `pr.publish_intent: false` prevents a generated Intent section, but only the caller-side omission also removes the full intent from the PR-drafting prompts. The local No Mistakes global config carries the same default for this environment; the explicit flag keeps the behavior portable.
 
+## Offline static artifact analysis
+
+Use this lane for a lawfully supplied local Windows PE when the fixed REA PE-resource operation can answer the first question. It is separate from active engagements and never executes the artifact. Linux or WSL2 must provide Bubblewrap, and the managed `rea-stable` upstream must pass its repository-locked integrity checks:
+
+```bash
+./bin/gate.mjs upstream install rea-stable --json
+./bin/gate.mjs analysis capability --json
+```
+
+Capability performs cheap presence checks for Linux, Node, the fixed adapter, the expected managed REA entrypoint, and Bubblewrap, then launches `/usr/bin/true` through the actual minimal Bubblewrap namespace shape. It does not reconstruct or hash the full managed REA npm tree. Register and verify the private project first. Then create one manifest from an exact absolute regular-file path:
+
+```bash
+./bin/gate.mjs analysis manifest \
+  --project my-project \
+  --path "$HOME/private/client-installer.exe" \
+  --minutes 15 --json
+```
+
+Creation first performs full reviewed-lock integrity reconstruction for the managed REA tree and observes the runtime hashes and file identities. It then copies at most 512 MiB into an owner-only snapshot under `GATE_HOME`, preserving spaces and commas in the resolved path value while rejecting a symlink, directory, device, or pipe at that path and rejecting relative paths. The stored digest-bound manifest binds:
+
+- the current canonical project-contract digest;
+- the source identity and copied artifact SHA-256 and byte count;
+- the pinned `rea-stable` version, full source commit, npm integrity, and dependency-lock digest;
+- observed Bubblewrap, Node, adapter, and REA entrypoint paths, SHA-256 values, and filesystem identities;
+- the single fixed REA `inspect-pe-resources` adapter, its arguments, read-only mounts, cleared environment, and private evidence references;
+- a zero-network policy, zero requests, zero request rate, parallelism one, zero model tokens, one to 60 minutes of wall duration, and a validity window no longer than 15 minutes;
+- the controls that are enforced and unavailable.
+
+Review the complete manifest and use only the exact returned confirmation:
+
+```bash
+./bin/gate.mjs analysis run \
+  --project my-project \
+  --manifest MANIFEST_ID \
+  --confirm "ANALYZE MANIFEST_ID MANIFEST_SHA256 OFFLINE" --json
+
+./bin/gate.mjs analysis status --json
+```
+
+The retained-snapshot pool is owner-only and capped at 64 artifacts and 2 GiB of logical bytes. One retention lock serializes manifest snapshots, execution claims, and purges; malformed lock metadata or input entries fail closed. A durable creation intent covers snapshot creation through manifest publication. Recovery after a definitively dead creator removes a verified incomplete snapshot or retains one protected by a durably published manifest. Status accounts for retained capacity and pending, expired, active, terminal, purge-pending, purged, orphaned, missing, and invalid state. To retire one exact snapshot, use the digest-bound value returned with its manifest:
+
+```bash
+./bin/gate.mjs analysis purge \
+  --project my-project \
+  --manifest MANIFEST_ID \
+  --confirm "PURGE MANIFEST_ID MANIFEST_SHA256 OFFLINE ARTIFACT" --json
+```
+
+An unclaimed current manifest transitions through `abandoned`, an unclaimed expired manifest through `expired`, and a succeeded, failed, cancelled, or blocked run through `terminal`. Queued, running, unknown, malformed, or mismatched state blocks purge. The operation removes only the bound snapshot and an empty sandbox. It retains the manifest, claim, run, purge receipt, and evidence. It is logical retention cleanup rather than secure media erasure. Stdout and stderr have per-run bounds, while their aggregate retention remains separate and has no fixed quota.
+
+The durable one-shot claim is written before launch. Success, tool failure, interruption, preflight ambiguity after claim, or a later parse failure does not make the manifest reusable. The launcher repeats the full managed-upstream reconstruction and rechecks every binding, invokes no shell, and creates fresh user, PID, network, IPC, and UTS namespaces with all capabilities dropped, a cleared environment, read-only runtime/input mounts, and ephemeral writable directories. The adapter accepts only the fixed command, hashes the mounted artifact again, and refuses to report success unless it observes loopback only, no IPv4 route, zero inherited, permitted, effective, bounding, and ambient capabilities, and `NoNewPrivs`. Stdout and stderr are each limited to 64 MiB and stored with result metadata under private evidence paths.
+
+The lane does not set CPU or memory quotas, freeze the managed REA tree against a same-UID writer, protect `GATE_HOME` from another process running as the operator, or deny Unix-socket syscalls. It supplies neither installer extraction nor a general reverse-engineering or dynamic-analysis environment. A successful run proves the recorded fixed analysis and its in-namespace observations; it does not prove a finding, an artifact's safety, or the absence of every egress mechanism.
+
+Local possession does not authorize vendor contact. A proprietary client or other proprietary artifact must be supplied lawfully by the operator and stays private under `GATE_HOME`. Embedded domains, URLs, certificate names, update paths, and service identifiers remain offline hypotheses. Do not resolve or contact them, download another artifact, use a vendor account, or test a live updater without separate written authority and an active engagement that names the exact selector and action.
+
+Continue from the local result through the [end-to-end penetration-testing workflow](pentest-workflow.md). Its `local-to-network-hypothesis` handoff requires independent ownership resolution, explicit exclusions for vendors and shared services, the smallest sufficient next observation, a new plan and receipt for target contact, and a reviewed adapter or separately confirmed active manifest. If those checks do not pass, keep the hypothesis offline and unverified.
+
 ## Active security work
 
-Create an engagement from [engagement.json](../templates/engagement.json). Drafting and local research do not authorize target contact.
+Create an engagement from [engagement.json](../templates/engagement.json). Drafting, local research, and an offline-analysis result do not authorize target contact. Use the [end-to-end workflow](pentest-workflow.md) to map prerequisites, evidence, stop conditions, and allowed handoffs before selecting a command.
 
 The active flow is:
 
@@ -164,6 +222,8 @@ The agent may prepare the revised plan automatically. It reports the delta and o
 
 An admitted tool has an official source, license record, exact version or commit, integrity record when available, supported platform, effect classification, telemetry setting, smoke test, and owner.
 
+PATH discovery is an execution candidate only when the catalog entry sets `commandIdentity.genericLaneAdmission` to `path-discovery`. A `reviewed-admission` entry records a found namesake as `identity-unverified` but withholds it as the executable and blocks the generic lane. This protects ambiguous commands such as `httpx` and prevents REA's narrow offline adapter from authorizing its broader A2 command. `tool list` uses cheap presence and matched-receipt checks; a REA `managed-receipt` result is not an integrity or readiness claim. `tool plan rea` performs full managed-upstream verification and, when ready, exposes only `offline-static-pe-resources`; generic and broad REA execution stay false.
+
 When a task needs a better tool:
 
 1. Record the capability gap.
@@ -196,6 +256,8 @@ A lesson is complete only when the related behavior, configuration, test, or doc
 
 Raw evidence stays under `GATE_HOME`. The tracked repository contains only sanitized summaries that have explicit release authority. Evidence references are stable URIs such as `private://`, `evidence://`, or `event://`.
 
+Offline artifact snapshots, their typed source paths, runtime identities, stdout, stderr, and result records follow the same private rule. Findings derived from proprietary client material remain private unless the operator has separate release authority.
+
 Never turn inability to inspect into a negative claim. State that a surface is unverified or limited, include the cause, and describe the next test that would resolve it.
 
 ## Token usage
@@ -226,7 +288,8 @@ These commands must be idempotent and documented before a profile is considered 
 - Use `gate workspace status --repo PATH` to reconcile the bounded aggregate of clone-bound, one-shot Treehouse task roots after an interruption. This reads bound state directly and never invokes Treehouse status. If it reports `operation-lock-present`, follow [Operation-lock recovery](#operation-lock-recovery); no task or Git state was inspected. Verification retains every lease. Automatic reset, return, destruction, and reuse remain disabled until Treehouse exposes a mount-safe primitive; the 511-root lifetime ceiling is recovered only with a new physical clone or future safe upstream lifecycle support. Firstmate task reconciliation, GNHF recovery, No Mistakes branch ownership, and their cross-owner bridges remain incomplete.
 - A changed PR head invalidates publication authority until the exact head passes again.
 - A changed security plan invalidates active authority until a new receipt exists.
+- An offline manifest is never recovered for a second attempt. Its claim survives success, failure, interruption, and ambiguity. Inspect the private run and evidence records, rerun `analysis capability`, and create a new snapshot and manifest after verifying the current project and artifact.
 - A generic manifest is never recovered for a second attempt. Inspect its private claim and run record; treat a missing or ambiguous terminal record as consumed. Use a newly generated manifest after rechecking current authority. `engagement stop` and revocation are durable requests, but only the live original supervisor polls and acts on them. Wall duration and process-group termination are best effort; supervisor crash containment, takeover, and escaped-daemon containment are unavailable.
-- Local engagement approvals and execution provenance share the operator-writable `GATE_HOME` with the state they describe. A process allowed to rewrite the whole root can alter receipts, manifests, claims, runs, stops, and evidence, so these records are not tamper-proof against that same-user writer. Managed-upstream integrity uses the reviewed repository locks as its anchor; writable installation receipts are evidence only.
+- Offline-analysis provenance, local engagement approvals, and active-execution provenance share the operator-writable `GATE_HOME` with the state they describe. A process allowed to rewrite the whole root can alter snapshots, receipts, manifests, claims, runs, stops, and evidence, so these records are not tamper-proof against that same-user writer. Managed-upstream integrity uses the reviewed repository locks as its anchor; writable installation receipts are evidence only.
 
 Recovery never uses an unverified reset, force push, cleanup, scope expansion, credential substitution, or silent approval.

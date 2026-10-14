@@ -640,6 +640,22 @@ export function showProject(id, options = {}) {
   return value;
 }
 
+export function projectContractBinding(id, options = {}) {
+  const paths = registryPaths(options);
+  ensureRuntime(paths);
+  const cleanId = projectId(id);
+  if (registryUnavailable(paths)) throw new Error("project registry has an active or incomplete transaction");
+  const { value, verification } = loadEntry(paths, cleanId);
+  if (registryUnavailable(paths)) throw new Error("project registry has an active or incomplete transaction");
+  if (!verification.ok) {
+    throw new Error(`project validation failed: ${verification.checks.filter((item) => !item.ok).map((item) => item.detail).join("; ")}`);
+  }
+  return {
+    id: cleanId,
+    contractSha256: canonicalDigest(canonicalText(value))
+  };
+}
+
 export function verifyProject(id, options = {}) {
   const paths = registryPaths(options);
   ensureRuntime(paths);

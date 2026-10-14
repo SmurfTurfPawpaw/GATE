@@ -100,6 +100,40 @@ const EXECUTION_UNAVAILABLE = new Set([
   "supervisor-crash-containment",
   "immutable-executable-snapshot"
 ]);
+const OFFLINE_ANALYSIS_MODES = new Set(["bubblewrap-offline"]);
+const OFFLINE_ANALYSIS_STATUSES = new Set([
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+  "cancelled",
+  "blocked",
+  "unknown"
+]);
+const OFFLINE_ANALYSIS_ENFORCED = new Set([
+  "project-contract-binding",
+  "typed-path-binding",
+  "artifact-snapshot-sha256",
+  "pinned-upstream-integrity",
+  "fixed-adapter-argv",
+  "bubblewrap-network-namespace",
+  "read-only-runtime-mounts",
+  "ephemeral-sandbox-writes",
+  "shell-disabled",
+  "cleared-environment",
+  "private-bounded-evidence",
+  "one-shot-claim",
+  "wall-duration"
+]);
+const OFFLINE_ANALYSIS_UNAVAILABLE = new Set([
+  "cpu-limit",
+  "memory-limit",
+  "immutable-managed-upstream-snapshot",
+  "same-uid-gate-home-tamper-resistance",
+  "unix-socket-system-call-denial"
+]);
+const OFFLINE_RETENTION_LOCK_STATES = new Set(["absent", "active", "stale", "invalid", "indeterminate"]);
+const OFFLINE_SNAPSHOT_STATES = new Set(["stable", "consistent", "mutation-active", "indeterminate"]);
 const ENGAGEMENT_STATUSES = new Set(["draft", "proposed", "approved", "active", "paused", "closed", "expired", "revoked"]);
 const TECHNICAL_REVIEW_STATUSES = new Set(["pending", "passed", "failed"]);
 const OPERATOR_RECEIPT_STATUSES = new Set(["pending", "approved", "revoked"]);
@@ -605,6 +639,73 @@ function summarizeExecution(value) {
   };
 }
 
+function summarizeOfflineAnalysisRun(value) {
+  const run = object(value);
+  if (!run) return null;
+  const status = safeEnum(run.status, OFFLINE_ANALYSIS_STATUSES, null);
+  const privateRunId = typeof run.runId === "string" && /^arun_[a-f0-9]{32}$/u.test(run.runId)
+    ? run.runId
+    : null;
+  if (!status || !privateRunId) return null;
+  return {
+    runId: opaqueId("run", privateRunId),
+    status,
+    isolationVerified: typeof run.isolationVerified === "boolean" ? run.isolationVerified : null
+  };
+}
+
+function summarizeOfflineRetention(value) {
+  const retention = object(value) || {};
+  const projected = {};
+  for (const field of [
+    "quotaBytes", "quotaArtifacts", "retainedBytes", "availableBytes", "retainedArtifacts", "availableArtifacts", "pendingManifests",
+    "pendingTransactions", "invalidTransactionRecords", "creatingManifests", "invalidCreationIntents",
+    "invalidClaimRecords", "invalidPurgeRecords", "invalidRunRecords", "blockedManifests",
+    "expiredManifests", "activeManifests", "terminalManifests", "unknownManifests",
+    "purgePendingManifests", "purgedManifests", "orphanedArtifacts", "orphanedBytes",
+    "missingArtifacts", "invalidEntries"
+  ]) projected[field] = nonNegativeInteger(retention[field]);
+  projected.retentionLockState = safeEnum(retention.retentionLockState, OFFLINE_RETENTION_LOCK_STATES, null);
+  projected.snapshotState = safeEnum(retention.snapshotState, OFFLINE_SNAPSHOT_STATES, null);
+  projected.overQuota = typeof retention.overQuota === "boolean" ? retention.overQuota : null;
+  projected.mutationBlocked = typeof retention.mutationBlocked === "boolean" ? retention.mutationBlocked : null;
+  return projected;
+}
+
+function summarizeOfflineAnalysis(value) {
+  const analysis = object(value) || {};
+  const capability = object(analysis.capability) || {};
+  const rawCounts = object(analysis.counts) || {};
+  const configured = typeof capability.configured === "boolean" ? capability.configured : null;
+  const mode = safeEnum(capability.mode, OFFLINE_ANALYSIS_MODES, null);
+  const enforced = executionCapabilityList(capability.enforced, OFFLINE_ANALYSIS_ENFORCED);
+  const unavailable = executionCapabilityList(capability.unavailable, OFFLINE_ANALYSIS_UNAVAILABLE);
+  const completeCapability = enforced.length === OFFLINE_ANALYSIS_ENFORCED.size &&
+    unavailable.length === OFFLINE_ANALYSIS_UNAVAILABLE.size;
+  const laneAvailable = configured === true && capability.laneAvailable === true && mode !== null && completeCapability;
+  const counts = Object.fromEntries(
+    [...OFFLINE_ANALYSIS_STATUSES].map((status) => [status, nonNegativeInteger(rawCounts[status])])
+  );
+  return {
+    configured,
+    laneAvailable,
+    mode,
+    reason: laneAvailable ? null : "unavailable",
+    runningCount: counts.running,
+    counts,
+    retention: summarizeOfflineRetention(analysis.retention),
+    enforced,
+    unavailable,
+    recent: Array.isArray(analysis.recent)
+      ? analysis.recent
+        .slice(0, 100)
+        .map(summarizeOfflineAnalysisRun)
+        .filter(Boolean)
+        .slice(0, 25)
+      : []
+  };
+}
+
 function summarizeEngagement(value, execution) {
   const engagement = object(value);
   if (!engagement) return null;
@@ -742,6 +843,7 @@ export function projectSnapshot(rawStatus, paths) {
     budget: { usedTokens: null, limitTokens: budget.limitTokens }
   };
   const execution = summarizeExecution(raw.execution);
+  const offlineAnalysis = summarizeOfflineAnalysis(raw.offlineAnalysis);
   return {
     status: {
       apiVersion: OBSERVER_API_VERSION,
@@ -754,6 +856,7 @@ export function projectSnapshot(rawStatus, paths) {
       budget,
       telemetry: { freshness, lastActivityAt, ageSeconds },
       execution,
+      offlineAnalysis,
       engagements: Array.isArray(raw.engagements)
         ? raw.engagements.map((value) => summarizeEngagement(value, execution)).filter(Boolean)
         : [],

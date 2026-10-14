@@ -8,7 +8,14 @@ import { promisify } from "node:util";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { listProjects, projectRegistryStatus, registerProject, showProject, verifyProject } from "../src/lib/projects.mjs";
+import {
+  listProjects,
+  projectContractBinding,
+  projectRegistryStatus,
+  registerProject,
+  showProject,
+  verifyProject
+} from "../src/lib/projects.mjs";
 import { runtimePaths } from "../src/lib/paths.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -83,6 +90,10 @@ test("project registry validates, stores, lists, shows, and verifies a private c
   const storedBytes = fs.readFileSync(stored);
   const event = JSON.parse(fs.readFileSync(paths.events, "utf8"));
   const contractSha256 = crypto.createHash("sha256").update(storedBytes).digest("hex");
+  assert.deepEqual(projectContractBinding("demo-project", { paths }), {
+    id: "demo-project",
+    contractSha256
+  });
   assert.equal(event.kind, "project.registered");
   assert.ok(event.evidenceRefs.some((reference) => reference.endsWith(`/${contractSha256}`)));
   if (process.platform !== "win32") {

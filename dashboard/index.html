@@ -121,6 +121,78 @@
       <p class="execution-note" id="execution-note">Every launch requires an approved, digest-bound one-shot manifest.</p>
     </section>
 
+    <section class="panel offline-analysis-overview" id="offline-analysis-panel" tabindex="-1" aria-labelledby="offline-analysis-title">
+      <header class="panel-header compact">
+        <div>
+          <p class="eyebrow">Zero-network artifact inspection</p>
+          <h2 id="offline-analysis-title">Offline analysis</h2>
+        </div>
+        <span class="source-badge" id="offline-analysis-lane">Unknown</span>
+      </header>
+      <div class="offline-analysis-body">
+        <dl class="offline-analysis-facts">
+          <div><dt>Mode</dt><dd id="offline-analysis-mode">Unknown</dd></div>
+          <div><dt>Configuration</dt><dd id="offline-analysis-configured">Unknown</dd></div>
+        </dl>
+        <section class="offline-analysis-counts" aria-labelledby="offline-analysis-counts-title">
+          <h3 id="offline-analysis-counts-title">Status counts</h3>
+          <dl>
+            <div><dt>Queued</dt><dd id="offline-analysis-queued">—</dd></div>
+            <div><dt>Running</dt><dd id="offline-analysis-running">—</dd></div>
+            <div><dt>Succeeded</dt><dd id="offline-analysis-succeeded">—</dd></div>
+            <div><dt>Failed</dt><dd id="offline-analysis-failed">—</dd></div>
+            <div><dt>Cancelled</dt><dd id="offline-analysis-cancelled">—</dd></div>
+            <div><dt>Blocked</dt><dd id="offline-analysis-blocked">—</dd></div>
+            <div><dt>Unknown</dt><dd id="offline-analysis-unknown">—</dd></div>
+          </dl>
+        </section>
+        <section class="offline-analysis-runs" aria-labelledby="offline-analysis-runs-title">
+          <header>
+            <h3 id="offline-analysis-runs-title">Recent runs</h3>
+            <span>Pseudonym, state, and isolation only</span>
+          </header>
+          <ol id="offline-analysis-runs">
+            <li class="execution-run-empty">No offline analysis records observed</li>
+          </ol>
+        </section>
+        <section class="offline-analysis-retention" aria-labelledby="offline-analysis-retention-title">
+          <header>
+            <h3 id="offline-analysis-retention-title">Retention health</h3>
+            <span class="source-badge" id="offline-analysis-retention-health">Unknown</span>
+          </header>
+          <dl>
+            <div><dt>Over quota</dt><dd id="offline-analysis-retention-over-quota">—</dd></div>
+            <div><dt>Missing artifacts</dt><dd id="offline-analysis-retention-missing">—</dd></div>
+            <div><dt>Invalid entries</dt><dd id="offline-analysis-retention-invalid">—</dd></div>
+            <div><dt>Orphaned artifacts</dt><dd id="offline-analysis-retention-orphaned">—</dd></div>
+            <div><dt>Orphaned bytes</dt><dd id="offline-analysis-retention-orphaned-bytes">—</dd></div>
+            <div><dt>Purge pending</dt><dd id="offline-analysis-retention-purge-pending">—</dd></div>
+            <div><dt>Unknown manifests</dt><dd id="offline-analysis-retention-unknown">—</dd></div>
+          </dl>
+        </section>
+        <section class="offline-analysis-controls" aria-labelledby="offline-analysis-controls-title">
+          <header>
+            <h3 id="offline-analysis-controls-title">Control health</h3>
+            <span class="source-badge" id="offline-analysis-control-health">Unknown</span>
+          </header>
+          <dl>
+            <div><dt>Mutations</dt><dd id="offline-analysis-control-mutation">—</dd></div>
+            <div><dt>Retention lock</dt><dd id="offline-analysis-control-lock">—</dd></div>
+            <div><dt>Status snapshot</dt><dd id="offline-analysis-control-snapshot">—</dd></div>
+            <div><dt>Pending transactions</dt><dd id="offline-analysis-control-pending">—</dd></div>
+            <div><dt>Invalid transactions</dt><dd id="offline-analysis-control-invalid-transactions">—</dd></div>
+            <div><dt>Creating manifests</dt><dd id="offline-analysis-control-creating">—</dd></div>
+            <div><dt>Invalid creations</dt><dd id="offline-analysis-control-invalid-creations">—</dd></div>
+            <div><dt>Invalid claims</dt><dd id="offline-analysis-control-invalid-claims">—</dd></div>
+            <div><dt>Invalid purges</dt><dd id="offline-analysis-control-invalid-purges">—</dd></div>
+            <div><dt>Invalid runs</dt><dd id="offline-analysis-control-invalid-runs">—</dd></div>
+            <div><dt>Blocked manifests</dt><dd id="offline-analysis-control-blocked-manifests">—</dd></div>
+          </dl>
+        </section>
+      </div>
+      <p class="execution-note" id="offline-analysis-note">Artifact identity, paths, evidence, output, and confirmations stay private.</p>
+    </section>
+
     <main class="workspace" id="workspace">
       <section class="panel fleet-panel" id="fleet-panel" tabindex="-1" aria-labelledby="fleet-title">
         <header class="panel-header">
@@ -252,6 +324,7 @@
           <div><dt><kbd>3</kbd></dt><dd>Focus active execution</dd></div>
           <div><dt><kbd>4</kbd></dt><dd>Focus resource posture</dd></div>
           <div><dt><kbd>5</kbd></dt><dd>Focus learning log</dd></div>
+          <div><dt><kbd>6</kbd></dt><dd>Focus offline analysis</dd></div>
           <div><dt><kbd>/</kbd></dt><dd>Filter safe activity metadata</dd></div>
           <div><dt><kbd>R</kbd></dt><dd>Refresh all endpoints</dd></div>
           <div><dt><kbd>P</kbd></dt><dd>Pause or resume live updates</dd></div>

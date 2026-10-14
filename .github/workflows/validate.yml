@@ -16,7 +16,10 @@ jobs:
   test:
     name: Node ${{ matrix.node }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
+    env:
+      GATE_HOME: ${{ runner.temp }}/gate
+      GATE_REQUIRE_OFFLINE_INTEGRATION: "1"
     strategy:
       fail-fast: false
       matrix:
@@ -31,8 +34,24 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
 
+      - name: Make the selected Node runtime read-only to the test user
+        run: |
+          node_root="$(dirname "$(dirname "$(node -p 'process.execPath')")")"
+          sudo chown -R root:root "$node_root"
+          sudo chmod -R u=rwX,go=rX "$node_root"
+
       - name: Install exact dependencies
         run: npm ci --ignore-scripts
+
+      - name: Install the offline-lane system prerequisite
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap
+
+      - name: Prepare the exact managed REA runtime
+        run: |
+          node ./bin/gate.mjs bootstrap --json
+          node ./bin/gate.mjs upstream install rea-stable --json
 
       - name: Run tests
         run: npm test

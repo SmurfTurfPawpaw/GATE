@@ -41,6 +41,38 @@ const view = {
   executionUnavailable: select("#execution-unavailable"),
   executionRuns: select("#execution-runs"),
   executionNote: select("#execution-note"),
+  offlineAnalysisLane: select("#offline-analysis-lane"),
+  offlineAnalysisMode: select("#offline-analysis-mode"),
+  offlineAnalysisConfigured: select("#offline-analysis-configured"),
+  offlineAnalysisQueued: select("#offline-analysis-queued"),
+  offlineAnalysisRunning: select("#offline-analysis-running"),
+  offlineAnalysisSucceeded: select("#offline-analysis-succeeded"),
+  offlineAnalysisFailed: select("#offline-analysis-failed"),
+  offlineAnalysisCancelled: select("#offline-analysis-cancelled"),
+  offlineAnalysisBlocked: select("#offline-analysis-blocked"),
+  offlineAnalysisUnknown: select("#offline-analysis-unknown"),
+  offlineAnalysisRuns: select("#offline-analysis-runs"),
+  offlineAnalysisRetentionHealth: select("#offline-analysis-retention-health"),
+  offlineAnalysisRetentionOverQuota: select("#offline-analysis-retention-over-quota"),
+  offlineAnalysisRetentionMissing: select("#offline-analysis-retention-missing"),
+  offlineAnalysisRetentionInvalid: select("#offline-analysis-retention-invalid"),
+  offlineAnalysisRetentionOrphaned: select("#offline-analysis-retention-orphaned"),
+  offlineAnalysisRetentionOrphanedBytes: select("#offline-analysis-retention-orphaned-bytes"),
+  offlineAnalysisRetentionPurgePending: select("#offline-analysis-retention-purge-pending"),
+  offlineAnalysisRetentionUnknown: select("#offline-analysis-retention-unknown"),
+  offlineAnalysisControlHealth: select("#offline-analysis-control-health"),
+  offlineAnalysisControlMutation: select("#offline-analysis-control-mutation"),
+  offlineAnalysisControlLock: select("#offline-analysis-control-lock"),
+  offlineAnalysisControlSnapshot: select("#offline-analysis-control-snapshot"),
+  offlineAnalysisControlPending: select("#offline-analysis-control-pending"),
+  offlineAnalysisControlInvalidTransactions: select("#offline-analysis-control-invalid-transactions"),
+  offlineAnalysisControlCreating: select("#offline-analysis-control-creating"),
+  offlineAnalysisControlInvalidCreations: select("#offline-analysis-control-invalid-creations"),
+  offlineAnalysisControlInvalidClaims: select("#offline-analysis-control-invalid-claims"),
+  offlineAnalysisControlInvalidPurges: select("#offline-analysis-control-invalid-purges"),
+  offlineAnalysisControlInvalidRuns: select("#offline-analysis-control-invalid-runs"),
+  offlineAnalysisControlBlockedManifests: select("#offline-analysis-control-blocked-manifests"),
+  offlineAnalysisNote: select("#offline-analysis-note"),
   metricRunning: select("#metric-running"),
   metricRunningDetail: select("#metric-running-detail"),
   metricWaiting: select("#metric-waiting"),
@@ -101,6 +133,19 @@ function formatTokens(value) {
 
 function fullNumber(value) {
   return Number.isFinite(value) ? new Intl.NumberFormat().format(value) : "unavailable";
+}
+
+function formatBytes(value) {
+  if (!Number.isFinite(value) || value < 0) return "unavailable";
+  const units = ["B", "KiB", "MiB", "GiB"];
+  let amount = value;
+  let unit = 0;
+  while (amount >= 1024 && unit < units.length - 1) {
+    amount /= 1024;
+    unit += 1;
+  }
+  const precision = unit === 0 || amount >= 10 ? 0 : 1;
+  return `${amount.toFixed(precision)} ${units[unit]}`;
 }
 
 function formatAge(ageMs) {
@@ -170,6 +215,120 @@ export function executionRunPresentation(run = {}) {
     status: run.status || "unknown",
     observedAt,
     result
+  };
+}
+
+export function offlineAnalysisPresentation(analysis = {}) {
+  const base = executionPresentation(analysis);
+  const retention = analysis.retention || {};
+  const lockState = ["absent", "active", "stale", "invalid", "indeterminate"].includes(retention.retentionLockState)
+    ? retention.retentionLockState
+    : null;
+  const snapshotState = ["stable", "consistent", "mutation-active", "indeterminate"].includes(retention.snapshotState)
+    ? retention.snapshotState
+    : null;
+  const faultCounts = [
+    retention.missingArtifacts,
+    retention.invalidEntries,
+    retention.orphanedArtifacts,
+    retention.orphanedBytes,
+    retention.purgePendingManifests,
+    retention.unknownManifests
+  ];
+  const faultSignalComplete = typeof retention.overQuota === "boolean" && faultCounts.every(Number.isFinite);
+  const needsAttention = retention.overQuota === true || faultCounts.some((value) => Number.isFinite(value) && value > 0);
+  const retentionState = needsAttention ? "attention" : faultSignalComplete ? "healthy" : "unknown";
+  const blockingControlCounts = [retention.invalidTransactionRecords, retention.invalidCreationIntents];
+  const scopedControlFaultCounts = [
+    retention.invalidClaimRecords,
+    retention.invalidPurgeRecords,
+    retention.invalidRunRecords,
+    retention.blockedManifests
+  ];
+  const activeControlCounts = [retention.pendingTransactions, retention.creatingManifests];
+  const allControlCounts = [...blockingControlCounts, ...scopedControlFaultCounts, ...activeControlCounts];
+  const controlSignalComplete = typeof retention.mutationBlocked === "boolean" &&
+    lockState !== null && snapshotState !== null && allControlCounts.every(Number.isFinite);
+  const controlBlocked = retention.mutationBlocked === true ||
+    ["invalid", "indeterminate"].includes(lockState) ||
+    ["mutation-active", "indeterminate"].includes(snapshotState) ||
+    blockingControlCounts.some((value) => Number.isFinite(value) && value > 0);
+  const controlNeedsAttention = lockState === "stale" ||
+    scopedControlFaultCounts.some((value) => Number.isFinite(value) && value > 0);
+  const controlActive = lockState === "active" ||
+    activeControlCounts.some((value) => Number.isFinite(value) && value > 0);
+  const controlState = controlBlocked
+    ? "blocked"
+    : controlNeedsAttention
+      ? "attention"
+      : controlActive
+        ? "active"
+        : controlSignalComplete
+          ? "healthy"
+          : "unknown";
+  const retentionLabel = Number.isFinite(retention.retainedBytes) && Number.isFinite(retention.quotaBytes)
+    ? `${formatBytes(retention.retainedBytes)} / ${formatBytes(retention.quotaBytes)} retained · ` +
+      `${Number.isFinite(retention.retainedArtifacts) ? retention.retainedArtifacts : "—"} / ` +
+      `${Number.isFinite(retention.quotaArtifacts) ? retention.quotaArtifacts : "—"} artifacts · ` +
+      `${Number.isFinite(retention.pendingManifests) ? retention.pendingManifests : "—"} pending · ` +
+      `${Number.isFinite(retention.expiredManifests) ? retention.expiredManifests : "—"} expired`
+    : "Retention unavailable";
+  return {
+    laneState: base.laneState,
+    laneLabel: base.laneLabel,
+    configuredLabel: base.configuredLabel,
+    modeLabel: base.modeLabel,
+    reasonLabel: base.reasonLabel,
+    runningLabel: base.runningLabel,
+    retentionLabel,
+    retentionState,
+    retentionStateLabel: retentionState === "healthy" ? "Healthy" : retentionState === "attention" ? "Needs attention" : "Unknown",
+    retentionOverQuotaLabel: retention.overQuota === true ? "Yes" : retention.overQuota === false ? "No" : "—",
+    retentionMissingLabel: Number.isFinite(retention.missingArtifacts) ? fullNumber(retention.missingArtifacts) : "—",
+    retentionInvalidLabel: Number.isFinite(retention.invalidEntries) ? fullNumber(retention.invalidEntries) : "—",
+    retentionOrphanedLabel: Number.isFinite(retention.orphanedArtifacts) ? fullNumber(retention.orphanedArtifacts) : "—",
+    retentionOrphanedBytesLabel: Number.isFinite(retention.orphanedBytes) ? formatBytes(retention.orphanedBytes) : "—",
+    retentionPurgePendingLabel: Number.isFinite(retention.purgePendingManifests) ? fullNumber(retention.purgePendingManifests) : "—",
+    retentionUnknownLabel: Number.isFinite(retention.unknownManifests) ? fullNumber(retention.unknownManifests) : "—",
+    controlState,
+    controlStateLabel: controlState === "blocked"
+      ? "Mutation blocked"
+      : controlState === "attention"
+        ? "Needs attention"
+        : controlState === "active"
+          ? "Controls active"
+          : controlState === "healthy"
+            ? "Controls healthy"
+            : "Unknown",
+    controlMutationLabel: controlBlocked ? "Blocked" : retention.mutationBlocked === false ? "Available" : "—",
+    controlLockLabel: lockState ? readableCapability(lockState) : "—",
+    controlSnapshotLabel: snapshotState ? readableCapability(snapshotState) : "—",
+    controlPendingLabel: Number.isFinite(retention.pendingTransactions) ? fullNumber(retention.pendingTransactions) : "—",
+    controlInvalidTransactionsLabel: Number.isFinite(retention.invalidTransactionRecords) ? fullNumber(retention.invalidTransactionRecords) : "—",
+    controlCreatingLabel: Number.isFinite(retention.creatingManifests) ? fullNumber(retention.creatingManifests) : "—",
+    controlInvalidCreationsLabel: Number.isFinite(retention.invalidCreationIntents) ? fullNumber(retention.invalidCreationIntents) : "—",
+    controlInvalidClaimsLabel: Number.isFinite(retention.invalidClaimRecords) ? fullNumber(retention.invalidClaimRecords) : "—",
+    controlInvalidPurgesLabel: Number.isFinite(retention.invalidPurgeRecords) ? fullNumber(retention.invalidPurgeRecords) : "—",
+    controlInvalidRunsLabel: Number.isFinite(retention.invalidRunRecords) ? fullNumber(retention.invalidRunRecords) : "—",
+    controlBlockedManifestsLabel: Number.isFinite(retention.blockedManifests) ? fullNumber(retention.blockedManifests) : "—"
+  };
+}
+
+export function offlineAnalysisRunPresentation(run = {}) {
+  const isolationState = run.isolationVerified === true
+    ? "verified"
+    : run.isolationVerified === false
+      ? "unverified"
+      : "pending";
+  return {
+    runId: run.runId || null,
+    status: run.status || "unknown",
+    isolationState,
+    isolationLabel: isolationState === "verified"
+      ? "Isolation verified"
+      : isolationState === "unverified"
+        ? "Isolation not verified"
+        : "Isolation pending"
   };
 }
 
@@ -437,6 +596,75 @@ function renderExecution() {
   );
 }
 
+function renderOfflineAnalysis() {
+  const analysis = state.status.offlineAnalysis;
+  const presentation = offlineAnalysisPresentation(analysis);
+  setText(view.offlineAnalysisLane, presentation.laneLabel);
+  view.offlineAnalysisLane.className = `source-badge execution-${presentation.laneState}`;
+  setText(view.offlineAnalysisMode, presentation.modeLabel);
+  setText(view.offlineAnalysisConfigured, presentation.configuredLabel);
+  const countNodes = {
+    queued: view.offlineAnalysisQueued,
+    running: view.offlineAnalysisRunning,
+    succeeded: view.offlineAnalysisSucceeded,
+    failed: view.offlineAnalysisFailed,
+    cancelled: view.offlineAnalysisCancelled,
+    blocked: view.offlineAnalysisBlocked,
+    unknown: view.offlineAnalysisUnknown
+  };
+  for (const [name, node] of Object.entries(countNodes)) {
+    const value = analysis.counts[name];
+    setText(node, Number.isFinite(value) ? String(value) : "—");
+  }
+  setText(view.offlineAnalysisRetentionHealth, presentation.retentionStateLabel);
+  view.offlineAnalysisRetentionHealth.className = `source-badge retention-${presentation.retentionState}`;
+  setText(view.offlineAnalysisRetentionOverQuota, presentation.retentionOverQuotaLabel);
+  setText(view.offlineAnalysisRetentionMissing, presentation.retentionMissingLabel);
+  setText(view.offlineAnalysisRetentionInvalid, presentation.retentionInvalidLabel);
+  setText(view.offlineAnalysisRetentionOrphaned, presentation.retentionOrphanedLabel);
+  setText(view.offlineAnalysisRetentionOrphanedBytes, presentation.retentionOrphanedBytesLabel);
+  setText(view.offlineAnalysisRetentionPurgePending, presentation.retentionPurgePendingLabel);
+  setText(view.offlineAnalysisRetentionUnknown, presentation.retentionUnknownLabel);
+  setText(view.offlineAnalysisControlHealth, presentation.controlStateLabel);
+  view.offlineAnalysisControlHealth.className = `source-badge control-${presentation.controlState}`;
+  setText(view.offlineAnalysisControlMutation, presentation.controlMutationLabel);
+  setText(view.offlineAnalysisControlLock, presentation.controlLockLabel);
+  setText(view.offlineAnalysisControlSnapshot, presentation.controlSnapshotLabel);
+  setText(view.offlineAnalysisControlPending, presentation.controlPendingLabel);
+  setText(view.offlineAnalysisControlInvalidTransactions, presentation.controlInvalidTransactionsLabel);
+  setText(view.offlineAnalysisControlCreating, presentation.controlCreatingLabel);
+  setText(view.offlineAnalysisControlInvalidCreations, presentation.controlInvalidCreationsLabel);
+  setText(view.offlineAnalysisControlInvalidClaims, presentation.controlInvalidClaimsLabel);
+  setText(view.offlineAnalysisControlInvalidPurges, presentation.controlInvalidPurgesLabel);
+  setText(view.offlineAnalysisControlInvalidRuns, presentation.controlInvalidRunsLabel);
+  setText(view.offlineAnalysisControlBlockedManifests, presentation.controlBlockedManifestsLabel);
+
+  if (!analysis.recent.length) {
+    view.offlineAnalysisRuns.replaceChildren(element("li", "execution-run-empty", "No offline analysis records observed"));
+  } else {
+    const fragment = document.createDocumentFragment();
+    for (const run of analysis.recent.slice(0, 8)) {
+      const display = offlineAnalysisRunPresentation(run);
+      const item = element("li", "offline-analysis-run");
+      const head = element("div", "offline-analysis-run-head");
+      const runId = element("code", "", shortId(display.runId));
+      runId.title = display.runId;
+      head.append(runId, element("span", `state-pill ${display.status}`, display.status));
+      item.append(
+        head,
+        element("span", `isolation-state ${display.isolationState}`, display.isolationLabel)
+      );
+      fragment.append(item);
+    }
+    view.offlineAnalysisRuns.replaceChildren(fragment);
+  }
+  setText(
+    view.offlineAnalysisNote,
+    `${presentation.retentionLabel}. ${presentation.reasonLabel ? `${presentation.reasonLabel}. ` : ""}` +
+      "Run labels are process-scoped pseudonyms. Artifact identity, paths, evidence, output, and confirmations stay private."
+  );
+}
+
 function setMeter(meter, fill, percent, label) {
   const available = Number.isFinite(percent);
   const width = available ? percent : 0;
@@ -578,6 +806,7 @@ function renderMetrics() {
 function render() {
   renderMetrics();
   renderExecution();
+  renderOfflineAnalysis();
   renderAgents();
   renderEvents();
   renderLearnings();
@@ -708,7 +937,8 @@ function handleKeyboard(event) {
     "2": "#timeline-panel",
     "3": "#execution-panel",
     "4": "#telemetry-panel",
-    "5": "#learning-panel"
+    "5": "#learning-panel",
+    "6": "#offline-analysis-panel"
   };
   if (focusTargets[event.key]) {
     event.preventDefault();

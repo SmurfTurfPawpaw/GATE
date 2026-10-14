@@ -36,6 +36,7 @@ export function runtimePaths(options = {}) {
   const home = path.resolve(options.home || gateHome(options.env));
   const repo = path.resolve(options.repo || findRepoRoot(options.cwd));
   const executions = path.join(home, "executions");
+  const offlineAnalyses = path.join(home, "offline-analysis");
   return {
     repo,
     home,
@@ -52,6 +53,15 @@ export function runtimePaths(options = {}) {
     executionRuns: path.join(executions, "runs"),
     executionStops: path.join(executions, "stops"),
     executionSandboxes: path.join(executions, "sandboxes"),
+    offlineAnalyses,
+    offlineAnalysisTransactions: path.join(offlineAnalyses, "transactions"),
+    offlineAnalysisManifests: path.join(offlineAnalyses, "manifests"),
+    offlineAnalysisCreations: path.join(offlineAnalyses, "creations"),
+    offlineAnalysisClaims: path.join(offlineAnalyses, "claims"),
+    offlineAnalysisPurges: path.join(offlineAnalyses, "purges"),
+    offlineAnalysisRuns: path.join(offlineAnalyses, "runs"),
+    offlineAnalysisInputs: path.join(offlineAnalyses, "inputs"),
+    offlineAnalysisSandboxes: path.join(offlineAnalyses, "sandboxes"),
     projects: path.join(home, "projects"),
     upstreams: path.join(home, "upstreams"),
     upstreamTools: path.join(home, "upstream-tools"),
@@ -132,6 +142,15 @@ export function ensureRuntime(paths) {
     paths.executionRuns,
     paths.executionStops,
     paths.executionSandboxes,
+    paths.offlineAnalyses,
+    paths.offlineAnalysisTransactions,
+    paths.offlineAnalysisManifests,
+    paths.offlineAnalysisCreations,
+    paths.offlineAnalysisClaims,
+    paths.offlineAnalysisPurges,
+    paths.offlineAnalysisRuns,
+    paths.offlineAnalysisInputs,
+    paths.offlineAnalysisSandboxes,
     paths.projects,
     paths.upstreams,
     paths.upstreamTools,
@@ -172,7 +191,11 @@ export function ensureRuntime(paths) {
     paths.projects,
     paths.executionManifests,
     paths.executionClaims,
-    paths.executionStops
+    paths.executionStops,
+    paths.offlineAnalysisManifests,
+    paths.offlineAnalysisCreations,
+    paths.offlineAnalysisClaims,
+    paths.offlineAnalysisPurges
   ].filter(Boolean)) {
     for (const entry of fs.readdirSync(directory)) {
       // The project writer owns these short-lived control files and project
@@ -198,6 +221,15 @@ export function ensureRuntime(paths) {
       securePrivateDirectory(path.join(paths.executionSandboxes, entry), {
         create: false,
         label: `private execution sandbox ${entry}`
+      });
+    }
+  }
+
+  if (paths.offlineAnalysisSandboxes) {
+    for (const entry of fs.readdirSync(paths.offlineAnalysisSandboxes)) {
+      securePrivateDirectory(path.join(paths.offlineAnalysisSandboxes, entry), {
+        create: false,
+        label: `private offline-analysis sandbox ${entry}`
       });
     }
   }

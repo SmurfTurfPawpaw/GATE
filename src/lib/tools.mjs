@@ -2,7 +2,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { readJson } from "./config.mjs";
+import { offlineAnalysisCapability } from "./offline-analysis.mjs";
 import { runtimePaths } from "./paths.mjs";
+import { readPrivateFileBounded } from "./private-fs.mjs";
+import { readUpstreamLock, resolveUpstreamBinary } from "./upstreams.mjs";
+
+const MAX_INSTALL_RECEIPT_BYTES = 64 * 1024;
+const noFollow = fs.constants.O_NOFOLLOW || 0;
+const nonBlocking = fs.constants.O_NONBLOCK || 0;
+const riskClassOrder = new Map(["P0", "P1", "A1", "A2", "A3"].map((value, index) => [value, index]));
 
 function currentHost() {
   if (process.platform === "win32") return "windows";
@@ -52,9 +60,317 @@ function commandAvailable(command, environment = process.env) {
   return null;
 }
 
+function repositoryEntrypoint(repo, relative) {
+  if (typeof relative !== "string" || path.isAbsolute(relative)) return null;
+  try {
+    const root = fs.realpathSync(path.resolve(repo));
+    const candidate = path.resolve(root, ...relative.split("/"));
+    if (!candidate.startsWith(`${root}${path.sep}`)) return null;
+    const stat = fs.lstatSync(candidate);
+    if (!stat.isFile() || stat.isSymbolicLink()) return null;
+    const resolved = fs.realpathSync(candidate);
+    return resolved.startsWith(`${root}${path.sep}`) ? resolved : null;
+  } catch {
+    return null;
+  }
+}
+
+function sameFile(left, right) {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+function plainOwnedDirectory(directory) {
+  const stat = fs.lstatSync(directory);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) return null;
+  if (typeof process.geteuid === "function" && stat.uid !== process.geteuid()) return null;
+  return stat;
+}
+
+function containedUpstreamRoot(paths) {
+  if (typeof paths.home !== "string" || typeof paths.upstreamTools !== "string") return null;
+  try {
+    const home = path.resolve(paths.home);
+    const root = path.resolve(paths.upstreamTools);
+    const relative = path.relative(home, root);
+    if (!relative || path.isAbsolute(relative) || relative === ".." || relative.startsWith(`..${path.sep}`)) return null;
+    if (!plainOwnedDirectory(home)) return null;
+    let current = home;
+    for (const part of relative.split(path.sep)) {
+      if (!part || part === "." || part === "..") return null;
+      current = path.join(current, part);
+      if (!plainOwnedDirectory(current)) return null;
+    }
+    const realHome = fs.realpathSync(home);
+    const realRoot = fs.realpathSync(root);
+    if (!realRoot.startsWith(`${realHome}${path.sep}`)) return null;
+    return realRoot;
+  } catch {
+    return null;
+  }
+}
+
+function managedDirectory(root, id) {
+  if (!root || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id)) return null;
+  try {
+    const directory = path.resolve(root, id);
+    if (!directory.startsWith(`${root}${path.sep}`) || !plainOwnedDirectory(directory)) return null;
+    const real = fs.realpathSync(directory);
+    return real.startsWith(`${root}${path.sep}`) ? real : null;
+  } catch {
+    return null;
+  }
+}
+
+function stableRegularFile(root, relative) {
+  if (typeof relative !== "string" || path.isAbsolute(relative)) return null;
+  const parts = relative.split("/");
+  if (!parts.length || parts.some((part) => !part || part === "." || part === "..")) return null;
+  try {
+    let parent = root;
+    for (const part of parts.slice(0, -1)) {
+      parent = path.join(parent, part);
+      if (!plainOwnedDirectory(parent)) return null;
+    }
+    const file = path.join(parent, parts.at(-1));
+    if (!file.startsWith(`${root}${path.sep}`)) return null;
+    const before = fs.lstatSync(file);
+    if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1) return null;
+    if (typeof process.geteuid === "function" && before.uid !== process.geteuid()) return null;
+    if (process.platform !== "win32" && !fs.constants.O_NOFOLLOW) return null;
+    const descriptor = fs.openSync(file, fs.constants.O_RDONLY | noFollow | nonBlocking);
+    try {
+      const opened = fs.fstatSync(descriptor);
+      if (!opened.isFile() || opened.nlink !== 1 || !sameFile(before, opened)) return null;
+      const after = fs.lstatSync(file);
+      if (!after.isFile() || after.isSymbolicLink() || after.nlink !== 1 || !sameFile(opened, after)) return null;
+      const real = fs.realpathSync(file);
+      return real.startsWith(`${root}${path.sep}`) && real === file ? file : null;
+    } finally {
+      fs.closeSync(descriptor);
+    }
+  } catch {
+    return null;
+  }
+}
+
+function receiptOnlyInstallation(adapter, lockEntry, paths) {
+  if (!lockEntry || lockEntry.install?.lane !== "npm") return null;
+  const root = containedUpstreamRoot(paths);
+  const directory = managedDirectory(root, adapter.upstreamId);
+  if (!directory) return null;
+  try {
+    const receiptFile = path.join(directory, "install.json");
+    const receipt = JSON.parse(readPrivateFileBounded(
+      receiptFile,
+      MAX_INSTALL_RECEIPT_BYTES,
+      "utf8",
+      { label: `managed upstream receipt ${adapter.upstreamId}` }
+    ));
+    if (
+      receipt.apiVersion !== "gate.upstream-install/v2" || receipt.id !== adapter.upstreamId ||
+      receipt.lane !== "npm" || receipt.package !== lockEntry.install.package ||
+      receipt.version !== lockEntry.version || receipt.integrity !== lockEntry.install.integrity ||
+      receipt.lockSha256 !== lockEntry.install.lockSha256 || !Number.isFinite(Date.parse(receipt.verifiedAt))
+    ) return null;
+    const executable = stableRegularFile(directory, adapter.upstreamEntrypoint);
+    const currentRoot = containedUpstreamRoot(paths);
+    const currentDirectory = managedDirectory(currentRoot, adapter.upstreamId);
+    if (!executable || currentRoot !== root || currentDirectory !== directory) return null;
+    return { directory, executable, verifiedAt: receipt.verifiedAt };
+  } catch {
+    return null;
+  }
+}
+
+function managedAdapterStatus(tool, paths, host, environment, options) {
+  const adapters = tool.managedAdapters || [];
+  if (!adapters.length) return [];
+  const resolver = options.resolveUpstreamBinary || resolveUpstreamBinary;
+  let lock = null;
+  try {
+    ({ lock } = (options.readUpstreamLock || readUpstreamLock)({ paths }));
+  } catch {
+    // Each adapter reports the reviewed lock as unavailable below.
+  }
+
+  return adapters.map((adapter) => {
+    const hostCompatible = adapter.supportedHosts.includes(host);
+    const entrypoint = repositoryEntrypoint(paths.repo, adapter.entrypoint);
+    const sandboxExecutable = commandAvailable(adapter.sandboxCommand, environment);
+    const lockEntry = lock?.upstreams?.find((entry) => entry.id === adapter.upstreamId) || null;
+    const receipt = receiptOnlyInstallation(adapter, lockEntry, paths);
+    let adapterCapability = { available: false, reason: "unknown-managed-adapter-mode" };
+    try {
+      if (options.resolveAdapterCapability) {
+        const observed = options.resolveAdapterCapability(adapter, { paths });
+        if (typeof observed?.available !== "boolean") throw new Error("managed adapter capability result is invalid");
+        adapterCapability = observed;
+      } else if (adapter.mode === "offline-static-pe-resources") {
+        const capability = offlineAnalysisCapability({ paths });
+        adapterCapability = { available: capability.laneAvailable, reason: capability.reason };
+      }
+    } catch (error) {
+      adapterCapability = { available: false, reason: String(error?.message || error) };
+    }
+    let resolved = null;
+    if (options.verifyManagedIntegrity === true) {
+      try {
+        const candidate = resolver(adapter.upstreamId, adapter.binary, { paths });
+        const currentReceipt = receiptOnlyInstallation(adapter, lockEntry, paths);
+        if (
+          candidate?.id !== adapter.upstreamId || candidate?.name !== adapter.binary ||
+          typeof candidate.executable !== "string" || !path.isAbsolute(candidate.executable) ||
+          !receipt || !currentReceipt || currentReceipt.directory !== receipt.directory ||
+          currentReceipt.executable !== receipt.executable || currentReceipt.verifiedAt !== receipt.verifiedAt ||
+          fs.realpathSync(candidate.directory) !== currentReceipt.directory ||
+          fs.realpathSync(candidate.executable) !== currentReceipt.executable ||
+          stableRegularFile(currentReceipt.directory, adapter.upstreamEntrypoint) !== currentReceipt.executable
+        ) throw new Error("managed executable identity mismatch");
+        resolved = { ...candidate, executable: currentReceipt.executable, directory: currentReceipt.directory };
+      } catch {
+        // A PATH namesake never substitutes for failed managed-upstream verification.
+      }
+    }
+
+    const upstreamVerified = Boolean(resolved && lockEntry && receipt);
+    const ready = Boolean(hostCompatible && entrypoint && adapterCapability.available && upstreamVerified);
+    const unavailable = [];
+    if (!hostCompatible) unavailable.push("unsupported-host");
+    if (!entrypoint) unavailable.push("fixed-adapter-unavailable");
+    if (!adapterCapability.available) unavailable.push("fixed-adapter-capability-unavailable");
+    if (!lockEntry) unavailable.push("reviewed-upstream-lock-unavailable");
+    if (!receipt) unavailable.push("managed-upstream-receipt-unavailable");
+    if (!upstreamVerified) unavailable.push("managed-upstream-integrity-unverified");
+
+    return {
+      id: adapter.id,
+      mode: adapter.mode,
+      capability: adapter.capability,
+      upstreamId: adapter.upstreamId,
+      binary: adapter.binary,
+      version: lockEntry?.version || null,
+      commit: lockEntry?.commit || null,
+      receiptPresent: Boolean(receipt),
+      receiptVerifiedAt: receipt?.verifiedAt || null,
+      integrityChecked: options.verifyManagedIntegrity === true,
+      upstreamVerified,
+      executable: upstreamVerified ? resolved.executable : null,
+      entrypoint,
+      sandboxExecutable,
+      adapterCapabilityAvailable: Boolean(adapterCapability.available),
+      adapterCapabilityReason: adapterCapability.reason || null,
+      hostCompatible,
+      ready,
+      unavailable
+    };
+  });
+}
+
+function resolvedTool(tool, paths, host, options) {
+  const environment = options.environment || process.env;
+  const commandCandidate = commandAvailable(tool.command, environment);
+  const identity = tool.commandIdentity || {
+    pathDiscovery: "command-name",
+    genericLaneAdmission: "reviewed-admission",
+    reason: "This catalog entry has no explicit reviewed PATH-discovery admission."
+  };
+  const acceptsPathDiscovery = identity.genericLaneAdmission === "path-discovery";
+  const dataDependencyAdmissionRequired = Array.isArray(tool.dataDependencies) && tool.dataDependencies.length > 0;
+  const compatible = tool.supportedHosts.includes(host);
+  const managedAdapterStatuses = managedAdapterStatus(tool, paths, host, environment, options);
+  const receiptManagedAdapter = managedAdapterStatuses.find((adapter) => adapter.receiptPresent) || null;
+  const verifiedManagedAdapter = managedAdapterStatuses.find((adapter) => adapter.upstreamVerified) || null;
+  const readyManagedAdapters = managedAdapterStatuses.filter((adapter) => adapter.ready);
+  const genericLaneEligible = Boolean(commandCandidate) && acceptsPathDiscovery && compatible &&
+    new Set(["linux", "wsl2"]).has(host);
+  const executionModes = [
+    ...(genericLaneEligible ? ["supervised-generic"] : []),
+    ...readyManagedAdapters.map((adapter) => adapter.mode)
+  ];
+  const installed = Boolean(receiptManagedAdapter || verifiedManagedAdapter || (commandCandidate && acceptsPathDiscovery));
+  const readiness = readyManagedAdapters.length
+    ? "adapter-ready"
+    : verifiedManagedAdapter
+      ? "managed-verified"
+      : receiptManagedAdapter
+        ? "managed-receipt"
+        : commandCandidate && !acceptsPathDiscovery
+          ? "identity-unverified"
+          : commandCandidate
+            ? "discovered"
+            : "candidate";
+  const executable = verifiedManagedAdapter?.executable || (acceptsPathDiscovery ? commandCandidate : null);
+  const next = genericLaneEligible
+    ? "Prepare a one-shot supervised execution manifest; launch-time hashing proves executable identity, not trusted provenance."
+    : readyManagedAdapters.length
+      ? `Use the reviewed ${readyManagedAdapters[0].mode} adapter; broader ${tool.name} capability remains unadmitted.`
+      : commandCandidate && !acceptsPathDiscovery
+        ? "Admit a pinned executable or reviewed adapter; this command name alone is not accepted as product identity."
+        : verifiedManagedAdapter
+          ? "Restore the fixed adapter host prerequisites before execution; the managed upstream alone does not grant broad execution."
+          : receiptManagedAdapter
+            ? "Run full managed-upstream integrity verification before treating the configured adapter as ready."
+            : commandCandidate
+              ? "Use a reviewed host-specific adapter; the supervised generic lane requires Linux or WSL2."
+              : "Resolve an exact artifact, integrity, license record, and smoke test through the admission workflow before use.";
+
+  return {
+    ...tool,
+    commandIdentity: identity,
+    host,
+    compatible,
+    installed,
+    executable,
+    commandCandidate,
+    readiness,
+    versionVerified: Boolean(verifiedManagedAdapter),
+    integrityVerified: Boolean(verifiedManagedAdapter),
+    knownGoodProvenance: Boolean(verifiedManagedAdapter),
+    adapterConfigured: managedAdapterStatuses.length > 0,
+    adapterReady: readyManagedAdapters.length > 0,
+    managedAdapterStatus: managedAdapterStatuses,
+    dataDependencyAdmissionRequired,
+    dataDependencyReadiness: dataDependencyAdmissionRequired ? "admission-required" : "not-declared",
+    identityAdmissionRequired: !acceptsPathDiscovery,
+    genericLaneEligible,
+    broadCapabilityReady: genericLaneEligible,
+    executionModes,
+    executionMode: executionModes[0] || null,
+    executionAvailable: executionModes.length > 0,
+    next
+  };
+}
+
 export function loadToolCatalog(options = {}) {
   const paths = options.paths || runtimePaths(options);
   return { paths, catalog: readJson(path.join(paths.repo, "catalog", "security-tools.json")) };
+}
+
+function validateToolProfile(profile, catalog, id) {
+  if (profile?.id !== id) throw new Error(`tool profile identity mismatch: ${id}`);
+  if (!riskClassOrder.has(profile.maxRiskClass)) {
+    throw new Error(`tool profile ${id} has an invalid maxRiskClass`);
+  }
+  if (!Array.isArray(profile.toolIds) || profile.toolIds.length === 0) {
+    throw new Error(`tool profile ${id} has no tools`);
+  }
+  if (new Set(profile.toolIds).size !== profile.toolIds.length) {
+    throw new Error(`tool profile ${id} contains duplicate tool ids`);
+  }
+  const toolsById = new Map(catalog.tools.map((tool) => [tool.id, tool]));
+  for (const toolId of profile.toolIds) {
+    const tool = toolsById.get(toolId);
+    if (!tool) throw new Error(`tool profile ${id} references unknown tool: ${toolId}`);
+    if (!riskClassOrder.has(tool.riskClass)) {
+      throw new Error(`tool profile ${id} references ${toolId} with an invalid riskClass`);
+    }
+    if (riskClassOrder.get(tool.riskClass) > riskClassOrder.get(profile.maxRiskClass)) {
+      throw new Error(
+        `tool profile ${id} exceeds maxRiskClass ${profile.maxRiskClass}: ${toolId} is ${tool.riskClass}`
+      );
+    }
+  }
+  return profile;
 }
 
 export function loadToolProfile(id, options = {}) {
@@ -63,37 +379,20 @@ export function loadToolProfile(id, options = {}) {
   if (!/^[a-z][a-z0-9-]*$/.test(clean)) throw new Error(`invalid profile id: ${id}`);
   const file = path.join(paths.repo, "config", "profiles", `${clean}.json`);
   if (!fs.existsSync(file)) throw new Error(`unknown tool profile: ${clean}`);
-  return readJson(file);
+  const profile = readJson(file);
+  const catalog = options.catalog || readJson(path.join(paths.repo, "catalog", "security-tools.json"));
+  return validateToolProfile(profile, catalog, clean);
 }
 
 export function toolInventory(options = {}) {
   const { paths, catalog } = loadToolCatalog(options);
-  const profile = options.profile ? loadToolProfile(options.profile, { paths }) : null;
+  const profile = options.profile ? loadToolProfile(options.profile, { paths, catalog }) : null;
   const selected = profile ? new Set(profile.toolIds) : null;
   const host = currentHost();
   const tools = catalog.tools
     .filter((tool) => !selected || selected.has(tool.id))
     .filter((tool) => !options.category || tool.category === options.category)
-    .map((tool) => {
-      const executable = commandAvailable(tool.command);
-      const compatible = tool.supportedHosts.includes(host);
-      const genericLaneEligible = Boolean(executable) && compatible && new Set(["linux", "wsl2"]).has(host);
-      return {
-        ...tool,
-        host,
-        compatible,
-        installed: Boolean(executable),
-        executable,
-        readiness: executable ? "discovered" : "candidate",
-        versionVerified: false,
-        integrityVerified: false,
-        knownGoodProvenance: false,
-        adapterReady: false,
-        genericLaneEligible,
-        executionMode: genericLaneEligible ? "supervised-generic" : null,
-        executionAvailable: genericLaneEligible
-      };
-    });
+    .map((tool) => resolvedTool(tool, paths, host, options));
   return {
     host,
     profile: profile ? { id: profile.id, description: profile.description, maxRiskClass: profile.maxRiskClass } : null,
@@ -104,40 +403,16 @@ export function toolInventory(options = {}) {
 }
 
 export function toolPlan(id, options = {}) {
-  const { catalog } = loadToolCatalog(options);
+  const { paths, catalog } = loadToolCatalog(options);
   const tool = catalog.tools.find((candidate) => candidate.id === id);
   if (!tool) throw new Error(`unknown security tool: ${id}`);
-  const host = currentHost();
-  const executable = commandAvailable(tool.command);
-  const compatible = tool.supportedHosts.includes(host);
-  const genericLaneEligible = Boolean(executable) && compatible && new Set(["linux", "wsl2"]).has(host);
+  const resolved = resolvedTool(tool, paths, currentHost(), {
+    ...options,
+    verifyManagedIntegrity: options.verifyManagedIntegrity !== false
+  });
   return {
-    id: tool.id,
-    name: tool.name,
-    installed: Boolean(executable),
-    executable,
-    readiness: executable ? "discovered" : "candidate",
-    versionVerified: false,
-    integrityVerified: false,
-    knownGoodProvenance: false,
-    adapterReady: false,
-    genericLaneEligible,
-    executionMode: genericLaneEligible ? "supervised-generic" : null,
-    executionAvailable: genericLaneEligible,
-    compatible,
-    host,
+    ...resolved,
     preferredLane: tool.installLanes[0],
-    alternateLanes: tool.installLanes.slice(1),
-    approval: tool.approval,
-    riskClass: tool.riskClass,
-    privileges: tool.privileges,
-    upstream: tool.upstream,
-    license: tool.license,
-    openSource: tool.openSource,
-    next: genericLaneEligible
-      ? "Prepare a one-shot supervised execution manifest; launch-time hashing proves executable identity, not trusted provenance."
-      : executable
-        ? "Use a reviewed host-specific adapter; the supervised generic lane requires Linux or WSL2."
-        : "Resolve an exact artifact, integrity, license record, and smoke test through the admission workflow before use."
+    alternateLanes: tool.installLanes.slice(1)
   };
 }

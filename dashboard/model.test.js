@@ -347,6 +347,226 @@ test("execution lane availability cannot become true without explicit configurat
   assert.equal(unsupported.execution.runningCount, 0);
 });
 
+test("offline analysis projection keeps only lane, counts, and opaque run isolation state", () => {
+  const enforced = [
+    "project-contract-binding", "typed-path-binding", "artifact-snapshot-sha256", "pinned-upstream-integrity",
+    "fixed-adapter-argv", "bubblewrap-network-namespace", "read-only-runtime-mounts", "ephemeral-sandbox-writes",
+    "shell-disabled", "cleared-environment", "private-bounded-evidence", "one-shot-claim", "wall-duration"
+  ];
+  const unavailable = [
+    "cpu-limit", "memory-limit", "immutable-managed-upstream-snapshot",
+    "same-uid-gate-home-tamper-resistance", "unix-socket-system-call-denial"
+  ];
+  const status = sanitizeStatusPayload({
+    offlineAnalysis: {
+      configured: true,
+      laneAvailable: true,
+      mode: "bubblewrap-offline",
+      reason: "PRIVATE_REASON_CANARY",
+      runningCount: 1,
+      counts: { queued: 2, running: 1, succeeded: 3, failed: 4, cancelled: 5, blocked: 6, unknown: 7 },
+      retention: {
+        quotaBytes: 2_147_483_648,
+        quotaArtifacts: 64,
+        retainedBytes: 512,
+        availableBytes: 2_147_483_136,
+        overQuota: false,
+        retainedArtifacts: 1,
+        availableArtifacts: 63,
+        retentionLockState: "absent",
+        snapshotState: "consistent",
+        pendingTransactions: 0,
+        invalidTransactionRecords: 0,
+        creatingManifests: 0,
+        invalidCreationIntents: 0,
+        invalidClaimRecords: 0,
+        invalidPurgeRecords: 0,
+        invalidRunRecords: 0,
+        blockedManifests: 0,
+        mutationBlocked: false,
+        pendingManifests: 1,
+        expiredManifests: 0,
+        activeManifests: 0,
+        terminalManifests: 0,
+        unknownManifests: 0,
+        purgePendingManifests: 0,
+        purgedManifests: 0,
+        orphanedArtifacts: 0,
+        orphanedBytes: 0,
+        missingArtifacts: 0,
+        invalidEntries: 0,
+        privatePath: "/private/OFFLINE_RETENTION_CANARY"
+      },
+      enforced: [...enforced, "PRIVATE_CAPABILITY_CANARY"],
+      unavailable: [...unavailable, "/private/capability"],
+      recent: [{
+        runId: `run_${"a".repeat(16)}`,
+        status: "succeeded",
+        isolationVerified: true,
+        manifestId: `manifest_${"b".repeat(16)}`,
+        projectId: `project_${"c".repeat(16)}`,
+        path: "/private/OFFLINE_PATH_CANARY.exe",
+        sha256: "OFFLINE_HASH_CANARY",
+        evidence: "OFFLINE_EVIDENCE_CANARY",
+        output: "OFFLINE_OUTPUT_CANARY",
+        confirmation: "OFFLINE_CONFIRMATION_CANARY"
+      }]
+    }
+  });
+
+  assert.deepEqual(status.offlineAnalysis, {
+    configured: true,
+    laneAvailable: true,
+    mode: "bubblewrap-offline",
+    reason: null,
+    runningCount: 1,
+    counts: { queued: 2, running: 1, succeeded: 3, failed: 4, cancelled: 5, blocked: 6, unknown: 7 },
+    retention: {
+      quotaBytes: 2_147_483_648,
+      quotaArtifacts: 64,
+      retainedBytes: 512,
+      availableBytes: 2_147_483_136,
+      overQuota: false,
+      retainedArtifacts: 1,
+      availableArtifacts: 63,
+      retentionLockState: "absent",
+      snapshotState: "consistent",
+      pendingTransactions: 0,
+      invalidTransactionRecords: 0,
+      creatingManifests: 0,
+      invalidCreationIntents: 0,
+      invalidClaimRecords: 0,
+      invalidPurgeRecords: 0,
+      invalidRunRecords: 0,
+      blockedManifests: 0,
+      mutationBlocked: false,
+      pendingManifests: 1,
+      expiredManifests: 0,
+      activeManifests: 0,
+      terminalManifests: 0,
+      unknownManifests: 0,
+      purgePendingManifests: 0,
+      purgedManifests: 0,
+      orphanedArtifacts: 0,
+      orphanedBytes: 0,
+      missingArtifacts: 0,
+      invalidEntries: 0
+    },
+    recent: [{ runId: `run_${"a".repeat(16)}`, status: "succeeded", isolationVerified: true }]
+  });
+  const serialized = JSON.stringify(status.offlineAnalysis);
+  for (const forbidden of [
+    "PRIVATE", "manifest_", "project_", "OFFLINE_PATH_CANARY", "OFFLINE_HASH_CANARY",
+    "OFFLINE_EVIDENCE_CANARY", "OFFLINE_OUTPUT_CANARY", "OFFLINE_CONFIRMATION_CANARY",
+    "OFFLINE_RETENTION_CANARY", "/private/capability"
+  ]) assert.equal(serialized.includes(forbidden), false, `projection leaked ${forbidden}`);
+});
+
+test("offline analysis availability fails closed on incomplete capability metadata", () => {
+  const projected = sanitizeStatusPayload({
+    offlineAnalysis: {
+      configured: true,
+      laneAvailable: true,
+      mode: "bubblewrap-offline",
+      reason: "unavailable",
+      counts: { running: 0 },
+      enforced: ["shell-disabled"],
+      unavailable: []
+    }
+  });
+  assert.equal(projected.offlineAnalysis.laneAvailable, false);
+  assert.equal(projected.offlineAnalysis.reason, "unavailable");
+  assert.equal(projected.offlineAnalysis.runningCount, 0);
+
+  const absent = sanitizeStatusPayload({});
+  assert.equal(absent.offlineAnalysis.configured, null);
+  assert.equal(absent.offlineAnalysis.laneAvailable, false);
+  assert.equal(absent.offlineAnalysis.runningCount, null);
+});
+
+test("offline retention projection preserves aggregate fault signals and discards private details", () => {
+  const status = sanitizeStatusPayload({
+    offlineAnalysis: {
+      retention: {
+        overQuota: true,
+        missingArtifacts: 2,
+        invalidEntries: 3,
+        orphanedArtifacts: 4,
+        orphanedBytes: 1536,
+        purgePendingManifests: 1,
+        unknownManifests: 5,
+        retentionLockState: "invalid",
+        snapshotState: "indeterminate",
+        pendingTransactions: 6,
+        invalidTransactionRecords: 7,
+        creatingManifests: 8,
+        invalidCreationIntents: 9,
+        invalidClaimRecords: 10,
+        invalidPurgeRecords: 11,
+        invalidRunRecords: 13,
+        blockedManifests: 12,
+        mutationBlocked: true,
+        privatePath: "/private/RETENTION_PATH_CANARY",
+        manifestDigest: "RETENTION_DIGEST_CANARY"
+      }
+    }
+  });
+
+  assert.deepEqual({
+    overQuota: status.offlineAnalysis.retention.overQuota,
+    missingArtifacts: status.offlineAnalysis.retention.missingArtifacts,
+    invalidEntries: status.offlineAnalysis.retention.invalidEntries,
+    orphanedArtifacts: status.offlineAnalysis.retention.orphanedArtifacts,
+    orphanedBytes: status.offlineAnalysis.retention.orphanedBytes,
+    purgePendingManifests: status.offlineAnalysis.retention.purgePendingManifests,
+    unknownManifests: status.offlineAnalysis.retention.unknownManifests,
+    retentionLockState: status.offlineAnalysis.retention.retentionLockState,
+    snapshotState: status.offlineAnalysis.retention.snapshotState,
+    pendingTransactions: status.offlineAnalysis.retention.pendingTransactions,
+    invalidTransactionRecords: status.offlineAnalysis.retention.invalidTransactionRecords,
+    creatingManifests: status.offlineAnalysis.retention.creatingManifests,
+    invalidCreationIntents: status.offlineAnalysis.retention.invalidCreationIntents,
+    invalidClaimRecords: status.offlineAnalysis.retention.invalidClaimRecords,
+    invalidPurgeRecords: status.offlineAnalysis.retention.invalidPurgeRecords,
+    invalidRunRecords: status.offlineAnalysis.retention.invalidRunRecords,
+    blockedManifests: status.offlineAnalysis.retention.blockedManifests,
+    mutationBlocked: status.offlineAnalysis.retention.mutationBlocked
+  }, {
+    overQuota: true,
+    missingArtifacts: 2,
+    invalidEntries: 3,
+    orphanedArtifacts: 4,
+    orphanedBytes: 1536,
+    purgePendingManifests: 1,
+    unknownManifests: 5,
+    retentionLockState: "invalid",
+    snapshotState: "indeterminate",
+    pendingTransactions: 6,
+    invalidTransactionRecords: 7,
+    creatingManifests: 8,
+    invalidCreationIntents: 9,
+    invalidClaimRecords: 10,
+    invalidPurgeRecords: 11,
+    invalidRunRecords: 13,
+    blockedManifests: 12,
+    mutationBlocked: true
+  });
+  const serialized = JSON.stringify(status.offlineAnalysis.retention);
+  assert.equal(serialized.includes("RETENTION_PATH_CANARY"), false);
+  assert.equal(serialized.includes("RETENTION_DIGEST_CANARY"), false);
+
+  const invalidLockText = sanitizeStatusPayload({
+    offlineAnalysis: { retention: {
+      retentionLockState: "/private/LOCK_OWNER_CANARY",
+      snapshotState: "/private/SNAPSHOT_CANARY"
+    } }
+  });
+  assert.equal(invalidLockText.offlineAnalysis.retention.retentionLockState, null);
+  assert.equal(invalidLockText.offlineAnalysis.retention.snapshotState, null);
+  assert.equal(JSON.stringify(invalidLockText).includes("LOCK_OWNER_CANARY"), false);
+  assert.equal(JSON.stringify(invalidLockText).includes("SNAPSHOT_CANARY"), false);
+});
+
 test("event limit keeps the newest records regardless of source ordering", () => {
   const events = Array.from({ length: 110 }, (_, index) => ({
     id: `evt_record_${String(index).padStart(3, "0")}`,

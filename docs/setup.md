@@ -16,6 +16,7 @@ The recommended Windows baseline is:
 - Windows 11 with current WSL2 and Ubuntu 24.04;
 - Git, GitHub CLI, and Codex CLI inside WSL;
 - Node 24.x with npm 11.x; the minimum for the GATE package is Node 22.20;
+- Bubblewrap for the fixed zero-network offline-analysis lane;
 - Python 3.12 managed by `uv` for isolated Python tools;
 - Go installed only when a pinned Go upstream requires it;
 - Docker Desktop with WSL integration when OCI tool profiles are needed;
@@ -43,28 +44,55 @@ Inside Ubuntu, install the small native base:
 
 ```bash
 sudo apt update
-sudo apt install --yes build-essential ca-certificates curl git jq tmux unzip
+sudo apt install --yes bubblewrap build-essential ca-certificates curl git jq tmux unzip xz-utils
 ```
 
-Install Node 24 from the official Node.js distribution or a version manager you already trust, then verify it:
+Install the tested official Node 24 binary under an administrator-owned path. The ownership and mode normalization matter: managed-upstream verification rejects root execution and any Node, npm file, or parent path that the normal operator can replace. These commands cover WSL on x86-64 and ARM64:
 
 ```bash
+NODE_VERSION=v24.19.0
+case "$(uname -m)" in
+  x86_64) NODE_ARCH=x64 ;;
+  aarch64|arm64) NODE_ARCH=arm64 ;;
+  *) echo "Unsupported Node architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+NODE_ARCHIVE="node-${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz"
+curl --fail --show-error --location --remote-name \
+  "https://nodejs.org/dist/${NODE_VERSION}/${NODE_ARCHIVE}"
+curl --fail --show-error --location --remote-name \
+  "https://nodejs.org/dist/${NODE_VERSION}/SHASUMS256.txt"
+grep " ${NODE_ARCHIVE}\$" SHASUMS256.txt | sha256sum --check -
+sudo install -d -m 0755 /opt/nodejs
+sudo tar -xJf "${NODE_ARCHIVE}" -C /opt/nodejs --no-same-owner
+sudo chown -R root:root "/opt/nodejs/node-${NODE_VERSION}-linux-${NODE_ARCH}"
+sudo chmod -R u=rwX,go=rX "/opt/nodejs/node-${NODE_VERSION}-linux-${NODE_ARCH}"
+sudo ln -sfn "/opt/nodejs/node-${NODE_VERSION}-linux-${NODE_ARCH}" /opt/nodejs/current
+for command_name in node npm npx corepack; do
+  sudo ln -sfn "/opt/nodejs/current/bin/${command_name}" "/usr/local/bin/${command_name}"
+done
+rm "${NODE_ARCHIVE}" SHASUMS256.txt
+hash -r
 node --version
 npm --version
+node -e 'const fs=require("node:fs"); const p=fs.realpathSync(process.execPath); if (fs.statSync(p).uid===process.geteuid() || (()=>{try{fs.accessSync(p,fs.constants.W_OK);return true}catch{return false}})()) throw Error(`Node must be administrator-owned and read-only to this account: ${p}`)'
 ```
 
-Install and authenticate the two required CLIs inside WSL:
+Do not substitute `nvm`, Volta, a user-owned extracted archive, or another user-writable Node tree for managed upstream operations. They remain fine for unrelated development in a separate shell, but GATE deliberately refuses to launch their npm implementation.
+
+Install and authenticate the two required CLIs inside WSL. Codex may remain user-scoped because it is the interactive harness rather than a GATE-verified upstream runtime:
 
 ```bash
 sudo apt install --yes gh
-npm install --global @openai/codex
+npm install --global --prefix "$HOME/.local" @openai/codex
+export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
 gh auth login
 codex login
+export GH_TOKEN="$(gh auth token)"
 gh auth status
 codex login status
 ```
 
-If Codex was installed by another supported method, keep that installation and only run the verification commands.
+If Codex was installed by another supported method, keep that installation and only run the verification commands. Export `GH_TOKEN` or `GITHUB_TOKEN` in each shell that performs a managed release install. The downloader uses a fresh GitHub CLI configuration directory, so it deliberately cannot consume credentials stored only by `gh auth login`; do not save the token in this repository.
 
 ## 2. Clone into the WSL filesystem
 
@@ -102,7 +130,7 @@ export GATE_HOME="$HOME/.local/share/gate"
 ./scripts/bootstrap.sh
 ```
 
-Keep this directory out of cloud-synced folders and Git. It contains events, registered project contracts, private learnings, engagement records, plans, evidence, managed upstream installations, and Treehouse's private state root. Project contracts can contain repository and deployment references even though general status and observer responses omit those details.
+Keep this directory out of cloud-synced folders and Git. It contains events, registered project contracts, private learnings, engagement records, plans, offline-analysis manifests and input snapshots, evidence, managed upstream installations, and Treehouse's private state root. Project contracts can contain repository and deployment references even though general status and observer responses omit those details.
 
 Keep upstream telemetry disabled in interactive shells as well as bootstrap runs. Add these values to the WSL shell profile used for GATE:
 
@@ -122,7 +150,7 @@ GATE-managed npm and verified-release upstreams can be installed into this priva
 ./scripts/bootstrap.sh --install-upstreams
 ```
 
-For npm upstreams, this verifies the committed dependency-lock digest recorded in `locks/upstreams.lock.json`, runs `npm ci` with lifecycle scripts disabled, and verifies the installed tree against a second offline reconstruction. Full integrity checks later repeat that clean reconstruction from the lock and GATE's integrity-addressed npm cache before comparing the deterministic tree digest. On supported hosts, bootstrap also downloads the locked Treehouse and No Mistakes GitHub release artifacts, rejects unsafe archive entries, and verifies the locked archive and executable SHA-256 values. It records version metadata from the reviewed lock and deliberately does not execute the freshly downloaded binary during installation. Receipts are evidence; the reviewed repository locks remain the trust anchor. The workspace CLI refuses Treehouse unless the installed executable still passes full integrity verification. Source, skill, native, GUI, and hardware tools follow their own reviewed lanes.
+For npm upstreams, this verifies the committed dependency-lock digest recorded in `locks/upstreams.lock.json`, runs `npm ci` with lifecycle scripts disabled, and verifies the installed tree against a second offline reconstruction. It launches the bundled npm CLI through the exact running Node executable in a minimal environment and hashes the complete npm package tree before and after use. Full integrity checks later repeat that clean reconstruction from the lock and GATE's integrity-addressed npm cache before comparing the deterministic tree digest. Bootstrap also downloads the locked Treehouse and No Mistakes GitHub release artifacts with a fixed GitHub CLI, fresh configuration directory, and minimal token-and-proxy environment. It reads each bounded archive once, verifies and inspects those exact bytes, and asks fixed tar to emit only the locked executable to stdout instead of unpacking the archive tree. Export `GH_TOKEN` or `GITHUB_TOKEN` before a release download; the fresh configuration deliberately does not read credentials saved only by `gh auth login`. Upstream Git, tar, GitHub CLI, Node, npm, and every component of their path chains must be inaccessible for writes by the current process. Run these operations as a normal user with OS- or administrator-owned read-only tools; root, `nvm`/Volta-style user-owned Node installations, user-writable Homebrew trees, and writable `/usr/local` tools fail closed. Native Windows cannot establish this contract and must use WSL2. On WSL, prefer the distribution's protected `/usr/bin/git`, `/usr/bin/tar`, and `/usr/bin/gh` plus the administrator-owned Node installation above. The installer records version metadata from the reviewed lock and deliberately does not execute the freshly downloaded binary during installation. Receipts are evidence; the reviewed repository locks remain the trust anchor. The workspace CLI refuses Treehouse unless the installed executable still passes full integrity verification. Source, skill, native, GUI, and hardware tools follow their own reviewed lanes.
 
 `gate upstream sync` always builds a fresh staged source clone with system and global Git configuration and templates isolated, verifies it against the locked commit, then atomically replaces the managed checkout. Full readiness compares the commit tree, index, and raw worktree bytes and rejects Git replacement mechanisms, hidden index flags, and every extra path, including ignored files and empty directories. Submodules are not initialized in v0.1 and therefore fail source readiness. Do not keep local work in a GATE-managed upstream checkout.
 
@@ -163,7 +191,7 @@ codex -C "$HOME/src/GATE" --add-dir "$GATE_HOME" \
   --sandbox workspace-write --ask-for-approval on-request --search
 ```
 
-In v0.1, any process with write access to all of `GATE_HOME` can change local engagement records, unsigned approval receipts, execution manifests, claims, stop records, run metadata, and evidence. It can therefore forge or erase local authority and execution provenance by rewriting the trust domain. Exclusive files and hashes provide workflow consistency against ordinary races and reuse; they do not protect state from its same-user owner. Managed-upstream bytes remain anchored to the reviewed repository locks rather than their writable installation receipts. Keep credential values outside this broad writable root in an OS secret store or narrowly permissioned file, and use symbolic references in GATE state.
+In v0.1, any process with write access to all of `GATE_HOME` can change project records, offline snapshots and manifests, engagement records, unsigned approval receipts, active-execution manifests, claims, stop records, run metadata, and evidence. It can therefore forge or erase local authority and execution provenance by rewriting the trust domain. Exclusive files and hashes provide workflow consistency against ordinary races and reuse; they do not protect state from its same-user owner. Managed-upstream bytes remain anchored to the reviewed repository locks rather than their writable installation receipts. Keep credential values outside this broad writable root in an OS secret store or narrowly permissioned file, and use symbolic references in GATE state.
 
 Operations that need Npcap, a debugger, a certificate store, USB, or another host capability are operator-run native operations today. Record their versions, exact commands, and bounded evidence manually. Narrow native capability providers and their event bridges are a target design; v0.1 does not supply them.
 
@@ -238,6 +266,50 @@ Never run any Treehouse command directly against a GATE root, including `treehou
 If `workspace status` returns phase `operation-lock-present`, it inspected no task or Git state. Do not decide that the lock is stale from its age or recorded PID, and do not remove it automatically; PID reuse, reboot, a missing process-start identity, and an orphan Treehouse or Git child all make that inference unsafe. Follow the exact clone-specific procedure in [Operation-lock recovery](operating-model.md#operation-lock-recovery), then rerun GATE status before any workspace mutation.
 
 Treehouse worktrees are change isolation, not a security boundary. Same-user code can mutate the clone's shared common `.git`, including hooks, configuration, objects, and refs. Use a standalone clone or OS sandbox for unknown or hostile code. The bridge does not start Firstmate, Codex, or GNHF; invoke No Mistakes; land the branch; merge, deploy, or publish; or clean retained roots.
+
+## Run a zero-network offline artifact analysis
+
+The implemented offline lane accepts one lawfully supplied Windows PE and exposes only REA's fixed PE-resource inspection. It does not execute the input or accept arbitrary REA arguments. Install the locked upstream, then check that Linux/WSL2, Bubblewrap, and the managed REA runtime can be resolved:
+
+```bash
+./bin/gate.mjs upstream install rea-stable --json
+./bin/gate.mjs analysis capability --json
+```
+
+The capability command performs cheap prerequisite-presence checks and launches `/usr/bin/true` through the real minimal Bubblewrap namespace shape. It proves that this host can create that shape at the time of the check, but deliberately avoids reconstructing or hashing the full managed REA npm tree. Register and verify the project first, then pass one exact absolute local path:
+
+```bash
+./bin/gate.mjs analysis manifest \
+  --project my-project \
+  --path "$HOME/private/client-installer.exe" \
+  --minutes 15 --json
+```
+
+The command performs the full reviewed-lock integrity reconstruction, hashes the runtime files, and copies and hashes at most 512 MiB into private owner-only storage. Review the returned artifact and project digests, fixed adapter, zero-network and zero-request limits, runtime identities, private evidence references, 15-minute manifest expiry, and enforced and unavailable controls. Supply the exact `confirmationRequired` string from that response:
+
+```bash
+./bin/gate.mjs analysis run \
+  --project my-project \
+  --manifest MANIFEST_ID \
+  --confirm "ANALYZE MANIFEST_ID MANIFEST_SHA256 OFFLINE" --json
+
+./bin/gate.mjs analysis status --json
+```
+
+Private artifact snapshots are capped at 64 files and 2 GiB in aggregate. Status reports retained capacity and pending or expired manifests. Manifest creation, execution claims, and purge use the same owner-only lock, so malformed lock or input-storage state blocks mutation. Retire an abandoned, expired, or terminal artifact with the exact purge confirmation returned by manifest creation:
+
+```bash
+./bin/gate.mjs analysis purge \
+  --project my-project \
+  --manifest MANIFEST_ID \
+  --confirm "PURGE MANIFEST_ID MANIFEST_SHA256 OFFLINE ARTIFACT" --json
+```
+
+Purge refuses active or unknown runs and removes only the digest-bound snapshot and an empty sandbox. It keeps the manifest, claim, run, purge receipt, and evidence. Evidence remains bounded per stream but does not yet have an aggregate retention quota.
+
+Every manifest is one-shot. The launcher repeats the full managed-upstream reconstruction and rechecks its project, artifact, upstream, and runtime bindings; creates fresh user, PID, network, IPC, and UTS namespaces; drops all capabilities; clears the environment; mounts the runtime and artifact read-only; and captures bounded private evidence. A successful adapter result also records only loopback, no IPv4 route, zero capabilities, and `NoNewPrivs`. CPU and memory quotas, immutable same-UID protection for the managed REA installation or `GATE_HOME`, and syscall-level denial of Unix sockets are unavailable. Follow [the offline operating contract](operating-model.md#offline-static-artifact-analysis) and the [end-to-end penetration-testing workflow](pentest-workflow.md) before promoting any result.
+
+A proprietary client or other proprietary artifact must be lawfully supplied by the operator and kept outside Git. Neither possession nor offline analysis authorizes downloading another copy, contacting the vendor, using its accounts, testing an updater, or resolving or connecting to embedded endpoints. Those observations remain private hypotheses until separately written authority and an exact active engagement cover the proposed contact.
 
 ## Run a supervised security tool
 
@@ -316,13 +388,13 @@ Install host-integrated tools from their official distribution channels. At mini
 - Sysinternals and WinDbg for Windows process, filesystem, and debugger evidence;
 - Android platform tools when a mobile engagement needs USB or ADB.
 
-The target design treats each native program as a provider: a probe records its executable path and version, and an adapter supplies explicit arguments and evidence destinations. v0.1 provides catalog metadata and filesystem-only executable discovery, but it does not verify the discovered version, integrity, or provenance. Compatible Linux/WSL2 command-line tools can use the supervised generic lane; native Windows and host-specific GUI or hardware paths still need a reviewed adapter or an operator-run step with bounded evidence. Do not add an entire installation directory to prompts or grant an agent an unrestricted shell merely because the program is installed.
+The target design treats each native program as a provider: a probe records its executable path and version, and an adapter supplies explicit arguments and evidence destinations. v0.1 provides catalog metadata and filesystem-only executable discovery, but it does not verify the discovered version, integrity, or provenance. Compatible Linux/WSL2 command-line tools can use the supervised generic lane only when the catalog permits PATH discovery for that command identity. A `reviewed-admission` entry remains `identity-unverified` and blocked even when a namesake is present. This prevents Python HTTPX from being mistaken for ProjectDiscovery httpx and keeps broad REA commands outside the fixed offline adapter. Native Windows and host-specific GUI or hardware paths still need a reviewed adapter or an operator-run step with bounded evidence. Do not add an entire installation directory to prompts or grant an agent an unrestricted shell merely because the program is installed.
 
 Kali can be added later as a named WSL distribution or pinned container image. It is a compatibility toolbox, not GATE's version source. The catalog and lock records remain authoritative for the tools an agent may select.
 
 ## Cloud environment
 
-Codex cloud is suitable for repository edits, tests, builds, static analysis, and offline evidence processing when the selected image provides the required CLIs. Run the preflight on each image rather than assuming Node, npm, GitHub CLI, Codex CLI, Python, or Docker is present. The base bootstrap and tests can use a worker-local writable `GATE_HOME` such as `/tmp/gate`.
+Codex cloud is suitable for repository edits, tests, builds, static analysis, and offline evidence processing when the selected image provides the required CLIs. Run the preflight on each image rather than assuming Node, npm, GitHub CLI, Codex CLI, Python, Bubblewrap, or Docker is present. The base bootstrap and tests can use a worker-local writable `GATE_HOME` such as `/tmp/gate`. `analysis capability` performs cheap file-presence checks and a real minimal Bubblewrap namespace launch; manifest creation and execution perform the expensive managed-REA integrity reconstruction and runtime hashing.
 
 Managed cloud workers may lack raw sockets, packet interfaces, debugger attachment, USB devices, kernel capabilities, and unrestricted target routing. In v0.1, `gate doctor --full` reports the OS, architecture, WSL detection, repository validation, presence-only results for optional executables, visible non-loopback interfaces, Linux `CAP_NET_RAW` and `CAP_NET_ADMIN`, Yama `ptrace_scope`, `/dev/bus/usb` presence, and whether the default Linux Docker socket path exists. It deliberately leaves Docker-engine reachability unprobed and does not execute optional tools. Those facts do not prove that debugger attachment, a specific capture, USB hardware, Docker, or target routing works. They also do not make generic execution egress-restricted: target-argument binding cannot prevent redirects, plug-ins, child processes, or the tool itself from contacting other systems. Probe the exact required capability before planning work and record an unavailable result when it cannot run. Live capture, interception of Windows applications, device analysis, and low-level active testing should remain on a deliberately configured laptop or lab until a narrow provider exists.
 
@@ -340,6 +412,7 @@ If bootstrap reports an authentication failure, repair it directly and rerun:
 ```bash
 gh auth login
 codex login
+export GH_TOKEN="$(gh auth token)"
 ```
 
 If the dashboard does not open from Windows, confirm it is listening inside WSL and retry the loopback address:
@@ -357,6 +430,16 @@ node ./bin/gate.mjs tool plan TOOL_ID --json
 ```
 
 Use the catalog's installation lane. Record any setup failure or compatibility workaround as a cause-to-change learning before promoting it into the shared defaults.
+
+If `analysis capability` reports Bubblewrap or `rea-stable` unavailable, install the missing system package or managed upstream and rerun capability:
+
+```bash
+sudo apt install --yes bubblewrap
+./bin/gate.mjs upstream install rea-stable --json
+./bin/gate.mjs analysis capability --json
+```
+
+If capability fails its namespace probe, the host or cloud worker does not currently support this lane. Record it as unavailable and use a deliberately configured Linux/WSL2 host; do not substitute an ordinary host REA command and describe it as zero-network. If a later manifest or execution fails after capability passed, treat the runtime as changed or the stronger integrity/binding check as failed and inspect that evidence. A consumed manifest is never retried; create a new manifest after the runtime is repaired.
 
 If a workspace command reports that Treehouse is absent or not integrity-verified, reinstall it through the managed lane and inspect status before retrying:
 

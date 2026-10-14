@@ -77,7 +77,10 @@ git -C "${REPO_ROOT}" rev-parse --show-toplevel >/dev/null 2>&1 || fail "${REPO_
 [[ -f "${REPO_ROOT}/package-lock.json" ]] || fail "package-lock.json is missing"
 [[ -f "${REPO_ROOT}/config/gate.config.json" ]] || fail "config/gate.config.json is missing"
 
-gh auth status >/dev/null 2>&1 || fail "GitHub CLI is not authenticated; run: gh auth login"
+if [[ -z "${GH_TOKEN:-}" && -z "${GITHUB_TOKEN:-}" ]]; then
+  fail 'GitHub release installation requires GH_TOKEN or GITHUB_TOKEN; after gh auth login, run: export GH_TOKEN="$(gh auth token)"'
+fi
+gh auth status >/dev/null 2>&1 || fail "the exported GitHub token is not accepted; refresh GH_TOKEN or GITHUB_TOKEN"
 codex login status >/dev/null 2>&1 || fail "Codex CLI is not authenticated; run: codex login"
 
 if [[ -n "${WSL_DISTRO_NAME:-}" ]] || grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; then
