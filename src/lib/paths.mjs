@@ -4,6 +4,22 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { securePrivateDirectory, securePrivateFile } from "./private-fs.mjs";
 
+function auditPresentEntry(file, audit, options) {
+  try {
+    audit(file, options);
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      try {
+        fs.lstatSync(file);
+      } catch (confirmation) {
+        if (confirmation.code === "ENOENT") return;
+        throw confirmation;
+      }
+    }
+    throw error;
+  }
+}
+
 const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 export function findRepoRoot() {
@@ -261,7 +277,7 @@ export function ensureRuntime(paths) {
   if (paths.toolRuntimes) {
     for (const entry of fs.readdirSync(paths.toolRuntimes)) {
       if (entry === ".staging") continue;
-      securePrivateDirectory(path.join(paths.toolRuntimes, entry), {
+      auditPresentEntry(path.join(paths.toolRuntimes, entry), securePrivateDirectory, {
         create: false,
         label: `managed tool runtime ${entry}`
       });
@@ -270,7 +286,7 @@ export function ensureRuntime(paths) {
 
   if (paths.toolArtifactCache) {
     for (const entry of fs.readdirSync(paths.toolArtifactCache)) {
-      securePrivateFile(path.join(paths.toolArtifactCache, entry), {
+      auditPresentEntry(path.join(paths.toolArtifactCache, entry), securePrivateFile, {
         allowMissing: false,
         label: `managed tool artifact ${entry}`
       });

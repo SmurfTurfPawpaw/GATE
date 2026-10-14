@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -436,6 +436,55 @@ test("stale lock reclamation excludes a competing installer at retirement", asyn
     fs.renameSync = rename;
   }
 });
+
+for (const holdMs of [750, 10_000]) {
+ test(`owner release handles serialization contention bounded to ${holdMs}ms`, async (t) => {
+  if (process.platform !== "linux") return t.skip("kernel serialization requires Linux");
+  const fixture = createFixture(t);
+  const lock = path.join(fixture.paths.toolRuntimeStaging, ".fixture-tool.mutation-lock");
+  const ready = path.join(fixture.root, "serialization-ready");
+  let contender;
+  let smokes = 0;
+  const options = {
+    paths: fixture.paths, platform, downloadArtifact: fixture.downloadArtifact,
+    runSmoke: (executable, spec) => {
+      const result = fixture.runSmoke(executable, spec);
+      if (++smokes === 2) {
+        contender = spawn(process.execPath, ["--input-type=module", "-e", `
+          import fs from 'node:fs';
+          import { spawnSync } from 'node:child_process';
+          const fd = fs.openSync(${JSON.stringify(`${lock}.serialization`)}, 'r+');
+          const locked = spawnSync('/usr/bin/flock', ['--exclusive', '--nonblock', '3'], {
+            stdio: ['ignore', 'ignore', 'inherit', fd]
+          });
+          if (locked.status !== 0) process.exit(1);
+          fs.writeFileSync(${JSON.stringify(ready)}, 'ready');
+          setTimeout(() => { fs.closeSync(fd); }, ${holdMs});
+        `], { stdio: "ignore" });
+        t.after(() => { if (contender.exitCode === null) contender.kill("SIGKILL"); });
+        const deadline = Date.now() + 5_000;
+        while (!fs.existsSync(ready) && Date.now() < deadline) {
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+        }
+        assert.equal(fs.existsSync(ready), true, "contender must hold serialization before release");
+      }
+      return result;
+    }
+  };
+  const started = Date.now();
+  if (holdMs > 2_000) {
+    await assert.rejects(installManagedTool("fixture-tool", options), /mutation is already active or indeterminate/);
+    assert.ok(Date.now() - started < 5_000, "release must time out rather than wait for the holder indefinitely");
+    assert.equal(fs.existsSync(lock), true);
+    assert.equal(verifyManagedTool("fixture-tool", options).ok, true);
+  } else {
+    assert.equal((await installManagedTool("fixture-tool", options)).ok, true);
+    assert.equal(fs.existsSync(lock), false);
+    assert.equal(verifyManagedTool("fixture-tool", options).ok, true);
+    assert.equal((await runManagedToolOperation("remove", { ...options, id: "fixture-tool" })).ok, true);
+  }
+ });
+}
 
 for (const phase of ["acquisition", "release"]) {
   test(`process death during ${phase} releases serialization for subsequent install and remove`, async (t) => {

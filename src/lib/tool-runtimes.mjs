@@ -753,7 +753,7 @@ function reclaimableMutationLock(lock) {
 function acquireMutationLock(paths, id) {
   const lock = path.join(paths.toolRuntimeStaging, `.${id}.mutation-lock`);
   const serialization = `${lock}.serialization`;
-  const serialized = (operation) => {
+  const serialized = (operation, waitForRelease = false) => {
     if (process.platform !== "linux") throw new Error("managed tool mutation serialization requires Linux/WSL2");
     const flock = trustedSystemExecutable(["/usr/bin/flock", "/bin/flock"], "flock");
     const descriptor = fs.openSync(serialization,
@@ -764,7 +764,7 @@ function acquireMutationLock(paths, id) {
           (identity.mode & 0o7777) !== 0o600) {
         throw new Error(`managed tool mutation serialization is not a private regular file: ${id}`);
       }
-      const result = spawnSync(flock, ["--exclusive", "--nonblock", "3"], {
+      const result = spawnSync(flock, ["--exclusive", ...(waitForRelease ? ["--timeout", "2"] : ["--nonblock"]), "3"], {
         stdio: ["ignore", "pipe", "pipe", descriptor],
         env: { PATH: "/usr/bin:/bin", LANG: "C", LC_ALL: "C" },
         shell: false,
@@ -847,7 +847,7 @@ function acquireMutationLock(paths, id) {
       fs.unlinkSync(path.join(lock, "owner.json"));
       fs.rmdirSync(lock);
       released = true;
-    });
+    }, true);
   };
 }
 
