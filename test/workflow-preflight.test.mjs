@@ -18,6 +18,9 @@ import { runtimePaths } from "../src/lib/paths.mjs";
 import {
   addWorkflowEvidence,
   createWorkflowInstance,
+  checkWorkflowExecution,
+  claimWorkflowExecution,
+  reserveWorkflowExecution,
   finishWorkflowPhase,
   openWorkflowLedger,
   preflightWorkflowPhase,
@@ -579,7 +582,64 @@ test("A3 and pivot preflights expose exact confirmations without persisting pros
   const projectionFile = workflowRuntimeInternals.workflowPaths(paths, workflowId).workflowProjection;
   const projection = JSON.parse(fs.readFileSync(projectionFile, "utf8"));
   const openedPivot = projection.ledger[pivotOpenResult.event.details.entryId].pivot;
+  assert.deepEqual(projection.budget.used, { maxMinutes: 20, maxRequests: 80, maxTotalTokens: 40_000 });
   assert.equal(openedPivot.admissionSha256, pivotAdmission.sha256);
   assert.equal(openedPivot.authorizationSha256, refreshedPivot.authorizationSha256);
   assert.equal(fs.existsSync(path.join(admissionDirectory, `${pivotAdmission.sha256}.json`)), true);
+  approve(root, paths, {
+    id: "second-pivot-authority", target, actions: ["exploit-stateful"], tools: ["metasploit-framework"]
+  });
+  const second = buildAdmission(root, paths, {
+    engagementId: "second-pivot-authority", workflowId, phaseId: "controlled-exploitation",
+    target, action: "exploit-stateful", toolId: "metasploit-framework", name: "second-pivot"
+  });
+  for (const [field, amount] of [["maxMinutes", 5], ["maxRequests", 321], ["maxTotalTokens", 40_001]]) {
+    const value = structuredClone(second.admission);
+    Object.assign(value.envelope, { maxMinutes: 1, maxRequests: 1, maxTotalTokens: 1, [field]: amount });
+    const candidate = writeJson(root, `second-${field}.json`, value);
+    assert.throws(() => preflightWorkflowPivot(workflowId, {
+      ...pivotInput, pivotAdmissionFile: candidate.file
+    }, { paths }), new RegExp(`workflow ${field} exceeds remaining capacity`, "u"));
+  }
+});
+
+
+test("admission expiry blocks reservation, claim, and execution despite valid engagement authority", (t) => {
+  const { root, paths } = fixture(t);
+  const workflowId = "admission-expiry";
+  const target = "127.0.0.1";
+  createWorkflowInstance(workflowId, {}, { paths });
+  completeFoundation(root, paths, workflowId);
+  approve(root, paths, { id: "expiry-authority", target, actions: ["observe"], tools: ["dnsx"] });
+  const built = buildAdmission(root, paths, {
+    engagementId: "expiry-authority", workflowId, phaseId: "active-surface-validation",
+    target, action: "observe", toolId: "dnsx", name: "expiry"
+  });
+  const expiresAt = Date.now() + 10 * 60_000;
+  built.admission.expiresAt = new Date(expiresAt).toISOString();
+  const admission = writeJson(root, "expiry-admission.json", built.admission);
+  const started = startWorkflowPhase(workflowId, {
+    phaseId: "active-surface-validation", sourcePhase: "target-and-architecture-map", admissionFile: admission.file
+  }, { paths });
+  const input = {
+    phaseAttemptId: started.projection.activePhase.attemptId,
+    manifestId: `xmf_${"1".repeat(32)}`, runId: `xrun_${"1".repeat(32)}`,
+    target, action: "observe", toolId: "dnsx", envelope: built.admission.envelope
+  };
+  const now = Date.now;
+  t.mock.method(Date, "now", () => expiresAt);
+  assert.equal(checkEngagement("expiry-authority", { target, action: "observe" }, { paths }).allowed, true);
+  assert.throws(() => reserveWorkflowExecution(workflowId, input, { paths }), /admission is not currently valid/u);
+  t.mock.method(Date, "now", now);
+  const reservation = reserveWorkflowExecution(workflowId, input, { paths });
+  const claim = { reservationId: reservation.reservationId, manifestSha256: "a".repeat(64) };
+  assert.equal(checkWorkflowExecution(workflowId, claim, { paths }).ok, true);
+  t.mock.method(Date, "now", () => expiresAt);
+  assert.throws(() => claimWorkflowExecution(workflowId, claim, { paths }), /admission is not currently valid/u);
+  assert.throws(() => checkWorkflowExecution(workflowId, claim, { paths }), /admission is not currently valid/u);
+  t.mock.method(Date, "now", now);
+  claimWorkflowExecution(workflowId, claim, { paths });
+  assert.equal(checkWorkflowExecution(workflowId, claim, { paths }).ok, true);
+  t.mock.method(Date, "now", () => expiresAt + 60_000);
+  assert.throws(() => checkWorkflowExecution(workflowId, claim, { paths }), /admission is not currently valid/u);
 });

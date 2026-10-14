@@ -452,6 +452,7 @@ function applyEntry(previous, entry, paths) {
       projection.coverage[payload.domain] = { ...structuredClone(payload), recordedAt: entry.at };
       break;
     case "ledger.opened":
+      if (payload.budget) projection.budget = structuredClone(payload.budget);
       projection.ledger[payload.entryId] = {
         ...structuredClone(payload), status: "open", openedAt: entry.at, openedEntrySha256: entry.entrySha256
       };
@@ -1195,6 +1196,11 @@ function recheckAdmission(paths, phaseRecord, { completion = false } = {}) {
   const file = path.join(paths.workflowAdmissions, `${phaseRecord.admissionSha256}.json`);
   const bytes = readPrivateFileBounded(file, 2 * 1024 * 1024, null, { label: "workflow admission" });
   if (sha256(bytes) !== phaseRecord.admissionSha256) throw new Error("workflow admission digest changed");
+  const admission = parseExternalJson(bytes, "workflow-admission.schema.json", paths, "workflow admission");
+  if (Date.now() < Date.parse(admission.issuedAt) ||
+    (Date.now() >= Date.parse(admission.expiresAt) && !(completion && phaseRecord.preauthorizedTeardown))) {
+    throw new Error("workflow admission is not currently valid");
+  }
   const check = checkEngagement(phaseRecord.authority.engagementId, {
     target: phaseRecord.target,
     action: phaseRecord.action,
@@ -1828,7 +1834,8 @@ export function openWorkflowLedger(id, input, options = {}) {
         targetSelectorSha256: normalized.targetSelectorSha256,
         beforeEvidenceSha256: normalized.beforeEvidenceSha256,
         cleanupAction: normalized.cleanupAction,
-        pivot: validated.pivot
+        pivot: validated.pivot,
+        budget: validated.admission?.budget || null
       }
     };
   });
