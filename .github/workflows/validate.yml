@@ -36,7 +36,7 @@ jobs:
       - name: Make the selected Node runtime read-only to the test user
         run: |
           node_root="$(dirname "$(dirname "$(node -p 'process.execPath')")")"
-          protected_node_root=/opt/gate-ci-node
+          protected_node_root=/usr/lib/gate-ci-node
           sudo mkdir "$protected_node_root"
           sudo cp -a "$node_root/." "$protected_node_root/"
           sudo chown -R root:root "$protected_node_root"
