@@ -262,7 +262,7 @@ Never turn inability to inspect into a negative claim. State that a surface is u
 
 ## Token usage
 
-The observer displays aggregate usage and per-session or recorded-run values when its sources provide them. Provider-reported values are exact; explicitly modeled values are estimated; missing provider data is unavailable. Complete live Codex fleet and account-quota telemetry, plus grouping by day, require a future harness adapter.
+The observer displays aggregate usage and per-session or recorded-run values when its sources provide them. See [observation and token accounting](architecture.md#observation-and-token-accounting) for source selection, aggregation, and exact, estimated, or unavailable values. Complete live Codex fleet and account-quota telemetry, plus grouping by day, require a future harness adapter.
 
 Token budgets are required declared bounds for GNHF loops and engagements. GATE does not yet orchestrate the GNHF loop. A reviewed active-tool adapter may meter tokens when it can establish that counter, while the generic lane records token measurement as unavailable and requires `UNMETERED` confirmation. A budget must never trigger a silent provider, model, account, or billing-mode change.
 
