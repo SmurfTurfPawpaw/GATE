@@ -2,9 +2,11 @@
 
 **Gateway for Agentic Tooling & Engineering** is a personal, single-operator control plane for agentic software delivery and authorized security work. GATE keeps the reusable system in a version-controlled repository while events, target details, credential references, evidence, receipts, and private learning stay under `GATE_HOME`; credential values should remain in an OS secret store or narrowly permissioned file.
 
+> **New here?** Follow [Getting started](GETTING_STARTED.md) to bootstrap GATE, install and verify the core tools, open the cockpit, and create your first map-first assessment.
+
 GATE is host-first. It is designed to run on a Windows 11 laptop through WSL2 with Codex CLI as the primary harness. Native tools remain appropriate when a GUI, the Windows certificate store, packet capture, USB, a GPU, or radio hardware needs direct host access. Containers can organize conflicting dependencies, but GATE does not treat a container, WSL2, or a Git worktree as a security boundary.
 
-> **Status: v0.1 foundation.** The checked-in policy, schemas, CLI, private project registry, project-bound zero-network PE-resource analysis, verified Treehouse lease bridge, engagement receipts, one-shot supervised generic execution, observer, token reader, upstream pins, 126-tool security catalog, seven-tool managed core runtime, and end-to-end penetration-testing map work today. Complete Firstmate, GNHF, and No Mistakes orchestration, broader reviewed per-tool adapters and runtime locks, deployment, and lab lifecycle remain integration work. See [Current limits](#current-limits).
+> **Status: v0.1 foundation.** The checked-in policy, schemas, CLI, private project registry, project-bound zero-network PE-resource analysis, verified Treehouse lease bridge, engagement receipts, one-shot supervised generic execution, two narrow managed active adapters, observer, token reader, upstream pins, 126-tool security catalog, seven-tool managed core runtime, and journaled end-to-end penetration-testing workflow work today. Complete Firstmate, GNHF, and No Mistakes orchestration, broader reviewed adapters and runtime locks, deployment, and lab lifecycle remain integration work. See [Current limits](#current-limits).
 
 ## Start on Windows 11 with WSL2
 
