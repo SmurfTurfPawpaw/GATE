@@ -61,12 +61,6 @@ export const EXECUTION_UNAVAILABLE = Object.freeze([
   "immutable-executable-snapshot"
 ]);
 
-function unavailableCapabilities(knownGoodProvenance) {
-  return knownGoodProvenance
-    ? EXECUTION_UNAVAILABLE.filter((capability) => capability !== "known-good-executable-provenance")
-    : [...EXECUTION_UNAVAILABLE];
-}
-
 function executionPaths(input) {
   const paths = input || runtimePaths();
   const executions = paths.executions || path.join(paths.home, "executions");
@@ -335,27 +329,6 @@ function closeDescriptor(descriptor) {
   }
 }
 
-function managedProvenanceFromPlan(plannedTool) {
-  if (plannedTool.managedRuntimeVerified !== true) return null;
-  const runtime = plannedTool.managedRuntime;
-  const provenance = runtime?.provenance;
-  const expectedPlatform = process.arch === "x64"
-    ? "linux-x64"
-    : process.arch === "arm64"
-      ? "linux-arm64"
-      : null;
-  if (
-    !runtime || runtime.verified !== true || runtime.state !== "verified" ||
-    runtime.executable !== plannedTool.executable || provenance?.provider !== "verified-release" ||
-    provenance.platform !== expectedPlatform || provenance.version !== runtime.version ||
-    !["lockEntrySha256", "catalogEntrySha256", "artifactSha256", "executableSha256"]
-      .every((key) => /^[a-f0-9]{64}$/u.test(provenance[key] || ""))
-  ) {
-    throw new Error("managed runtime provenance is incomplete or inconsistent");
-  }
-  return structuredClone(provenance);
-}
-
 function checkInput(operation, bounds) {
   return {
     target: operation.targetArgument,
@@ -443,16 +416,6 @@ function assertManifestInvariants(manifest, paths) {
   ) {
     throw new Error("execution manifest catalog executable binding is invalid");
   }
-  const managedProvenance = manifest.operation.tool.readiness === "managed-verified";
-  if (manifest.operation.tool.knownGoodProvenance !== managedProvenance) {
-    throw new Error("execution manifest managed provenance binding is invalid");
-  }
-  if (
-    managedProvenance !== Boolean(manifest.operation.tool.provenance) ||
-    (managedProvenance && manifest.operation.tool.provenance.executableSha256 !== manifest.operation.executable.sha256)
-  ) {
-    throw new Error("execution manifest executable provenance digest is invalid");
-  }
   const expectedEvidence = evidenceRefs(runId);
   for (const key of ["stdoutRef", "stderrRef", "resultRef"]) {
     if (manifest.runtime.evidence[key] !== expectedEvidence[key]) {
@@ -472,7 +435,7 @@ function assertManifestInvariants(manifest, paths) {
   if (!exactArray(manifest.enforcement.bestEffort, EXECUTION_BEST_EFFORT)) {
     throw new Error("execution manifest best-effort capability claims are invalid");
   }
-  if (!exactArray(manifest.enforcement.unavailable, unavailableCapabilities(managedProvenance))) {
+  if (!exactArray(manifest.enforcement.unavailable, EXECUTION_UNAVAILABLE)) {
     throw new Error("execution manifest unavailable capability claims are invalid");
   }
   const createdAt = Date.parse(manifest.metadata.createdAt);
@@ -672,16 +635,9 @@ export function createExecutionManifest(engagementId, input, options = {}) {
   ) {
     throw new Error(`tool is not eligible for supervised execution on this host: ${normalized.toolId}`);
   }
-  const managedProvenance = managedProvenanceFromPlan(plannedTool);
   const opened = openExecutable(plannedTool.executable);
   const executable = opened.value;
   closeDescriptor(opened.descriptor);
-  if (
-    managedProvenance &&
-    (executable.resolvedPath !== plannedTool.executable || executable.sha256 !== managedProvenance.executableSha256)
-  ) {
-    throw new Error("managed executable bytes do not match their reviewed provenance");
-  }
   if (normalized.targetArgIndex !== 0) {
     const firstArgument = normalized.argv[0];
     const executableTokens = new Set([
@@ -747,9 +703,8 @@ export function createExecutionManifest(engagementId, input, options = {}) {
         catalogCommand: argv0,
         host: plannedTool.host,
         riskClass: plannedTool.riskClass,
-        readiness: managedProvenance ? "managed-verified" : "discovered",
-        knownGoodProvenance: Boolean(managedProvenance),
-        provenance: managedProvenance
+        readiness: "discovered",
+        knownGoodProvenance: false
       },
       executable,
       argv0,
@@ -769,7 +724,7 @@ export function createExecutionManifest(engagementId, input, options = {}) {
     enforcement: {
       enforced: [...capability.enforced],
       bestEffort: [...capability.bestEffort],
-      unavailable: unavailableCapabilities(Boolean(managedProvenance))
+      unavailable: [...EXECUTION_UNAVAILABLE]
     },
     manifestSha256: "0".repeat(64)
   };

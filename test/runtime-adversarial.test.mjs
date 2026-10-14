@@ -8,13 +8,6 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import {
-  approveEngagement,
-  attachPlan,
-  createEngagement,
-  recordTechnicalReview
-} from "../src/lib/engagements.mjs";
-import { createExecutionManifest, executionCapability } from "../src/lib/executions.mjs";
 import { runtimePaths } from "../src/lib/paths.mjs";
 import { catalogEntrySha256, installManagedTool } from "../src/lib/tool-runtimes.mjs";
 
@@ -160,36 +153,6 @@ function noNetworkInstallFixture(t, port) {
   };
 }
 
-function approveFixtureEngagement(paths, root) {
-  const id = "runtime-digest-swap";
-  const target = "swap.example.test";
-  const action = "scan";
-  const toolId = "fixture-swap";
-  const planFile = path.join(root, "plan.md");
-  fs.writeFileSync(planFile, "# Plan\nExercise the managed executable digest boundary.\n");
-  createEngagement({
-    id,
-    targets: [target],
-    actions: [action],
-    tools: [toolId],
-    environment: "host",
-    maxMinutes: 5,
-    maxRequests: 5,
-    maxParallel: 1,
-    maxRate: 1,
-    maxTokens: 5_000,
-    allowedDestinations: ["gate-home"]
-  }, { paths });
-  const planned = attachPlan(id, planFile, { paths });
-  recordTechnicalReview(id, {
-    run: `no-mistakes/${id}`,
-    headSha: "a".repeat(40),
-    status: "passed"
-  }, { paths });
-  approveEngagement(id, { sha256: planned.plan.sha256, confirm: `APPROVE ${id}` }, { paths });
-  return { id, target, action, toolId };
-}
-
 test("managed tool CLI rejects ambiguous selectors and passthrough arguments before mutation", (t) => {
   const { home } = fixture(t, "gate-runtime-cli-boundary-");
   const attempts = [
@@ -214,7 +177,6 @@ test("managed tool CLI rejects ambiguous selectors and passthrough arguments bef
   }
   assert.equal(fs.existsSync(path.join(home, "tool-runtimes")), false);
 });
-
 test("profile verification reports every absent runtime as structured partial failure", (t) => {
   const { home } = fixture(t, "gate-runtime-cli-partial-");
   const expected = JSON.parse(fs.readFileSync(path.join(repo, "config", "profiles", "core.json"), "utf8"));
@@ -278,63 +240,3 @@ test("the default smoke supervisor cannot reach a host loopback listener", async
   assert.equal(fs.readdirSync(fixture.paths.engagements).length, 0);
 });
 
-test("manifest creation rejects an executable swapped after managed verification", (t) => {
-  const capability = executionCapability();
-  if (!capability.laneAvailable) return t.skip(`supervised execution unavailable: ${capability.reason}`);
-  if (!new Set(["x64", "arm64"]).has(process.arch)) return t.skip(`unsupported fixture architecture: ${process.arch}`);
-
-  const { root, paths } = fixture(t, "gate-runtime-digest-swap-");
-  const scope = approveFixtureEngagement(paths, root);
-  const executable = path.join(root, "fixture-swap");
-  const reviewedBytes = Buffer.from("#!/bin/sh\nexit 0\n");
-  fs.writeFileSync(executable, reviewedBytes, { mode: 0o700 });
-  const provenance = {
-    provider: "verified-release",
-    version: "1.2.3",
-    platform: process.arch === "arm64" ? "linux-arm64" : "linux-x64",
-    lockEntrySha256: "1".repeat(64),
-    catalogEntrySha256: "2".repeat(64),
-    artifactSha256: "3".repeat(64),
-    executableSha256: crypto.createHash("sha256").update(reviewedBytes).digest("hex")
-  };
-
-  const resolveTool = (id) => {
-    const replacement = `${executable}.replacement`;
-    fs.writeFileSync(replacement, "#!/bin/sh\nexit 1\n", { mode: 0o700 });
-    fs.renameSync(replacement, executable);
-    return {
-      id,
-      installed: true,
-      executable,
-      compatible: true,
-      genericLaneEligible: true,
-      executionAvailable: true,
-      host: process.env.WSL_DISTRO_NAME ? "wsl2" : "linux",
-      riskClass: "A1",
-      managedRuntimeVerified: true,
-      managedRuntime: {
-        verified: true,
-        state: "verified",
-        executable,
-        version: provenance.version,
-        provenance
-      }
-    };
-  };
-
-  assert.throws(
-    () => createExecutionManifest(scope.id, {
-      target: scope.target,
-      action: scope.action,
-      toolId: scope.toolId,
-      argv: ["{{GATE_TARGET}}"],
-      maxMinutes: 1,
-      estimatedRequests: 1,
-      maxParallel: 1,
-      maxRatePerSecond: 1,
-      maxTokens: 1_000
-    }, { paths, resolveTool }),
-    /managed executable bytes do not match their reviewed provenance/
-  );
-  assert.equal(fs.readdirSync(paths.executionManifests).length, 0);
-});

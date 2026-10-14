@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
@@ -81,32 +80,6 @@ function resolver(toolId, executable = process.execPath, riskClass = "A1") {
     executionAvailable: true,
     host: process.env.WSL_DISTRO_NAME ? "wsl2" : "linux",
     riskClass
-  });
-}
-
-function managedResolver(toolId, executable = process.execPath, riskClass = "A1") {
-  const executableSha256 = crypto.createHash("sha256").update(fs.readFileSync(executable)).digest("hex");
-  const provenance = {
-    provider: "verified-release",
-    version: "1.2.3",
-    platform: process.arch === "arm64" ? "linux-arm64" : "linux-x64",
-    lockEntrySha256: "1".repeat(64),
-    catalogEntrySha256: "2".repeat(64),
-    artifactSha256: "3".repeat(64),
-    executableSha256
-  };
-  return (id) => ({
-    ...resolver(toolId, executable, riskClass)(id),
-    managedRuntimeVerified: true,
-    knownGoodProvenance: true,
-    readiness: "managed-verified",
-    managedRuntime: {
-      verified: true,
-      state: "verified",
-      executable,
-      version: provenance.version,
-      provenance
-    }
   });
 }
 
@@ -245,56 +218,6 @@ test("fast descriptor execution cannot outrun lifecycle listeners or the one-sho
   assert.equal(fulfilled[0].value.status, "succeeded");
   assert.equal(rejected.length, 1);
   assert.match(rejected[0].reason.message, /already consumed/);
-});
-
-test("managed release provenance is bound only after engagement authorization", (t) => {
-  requireLane(t);
-  const { root, paths } = fixture(t);
-  assert.throws(
-    () => createExecutionManifest(
-      "missing-engagement",
-      {
-        target: "managed.example.test",
-        action: "scan",
-        toolId: "fixture-node",
-        argv: ["{{GATE_TARGET}}"],
-        maxMinutes: 1,
-        estimatedRequests: 1,
-        maxParallel: 1,
-        maxRatePerSecond: 1,
-        maxTokens: 1000
-      },
-      { paths, resolveTool: managedResolver("fixture-node") }
-    ),
-    /engagement does not exist/
-  );
-
-  const scope = approve(paths, root, {
-    id: "managed-provenance",
-    target: "managed.example.test",
-    toolId: "fixture-node"
-  });
-  const created = createExecutionManifest(scope.id, manifestInput(scope, ["{{GATE_TARGET}}"]), {
-    paths,
-    resolveTool: managedResolver(scope.toolId)
-  });
-  assert.equal(created.operation.tool.readiness, "managed-verified");
-  assert.equal(created.operation.tool.knownGoodProvenance, true);
-  assert.equal(created.operation.tool.provenance.executableSha256, created.operation.executable.sha256);
-  assert.equal(created.enforcement.unavailable.includes("known-good-executable-provenance"), false);
-
-  const forgedResolver = managedResolver(scope.toolId);
-  assert.throws(
-    () => createExecutionManifest(scope.id, manifestInput(scope, ["{{GATE_TARGET}}"]), {
-      paths,
-      resolveTool: (id) => {
-        const value = forgedResolver(id);
-        value.managedRuntime.provenance.executableSha256 = "0".repeat(64);
-        return value;
-      }
-    }),
-    /managed executable bytes do not match/
-  );
 });
 
 test("CLI reports a nonzero exit status when an executed tool fails", (t) => {

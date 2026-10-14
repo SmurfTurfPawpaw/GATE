@@ -408,6 +408,35 @@ test("a definitively stale mutation lock is reclaimed after its owner grace peri
   assert.equal(fs.existsSync(lock), false);
 });
 
+test("stale lock reclamation excludes a competing installer at retirement", async (t) => {
+  const fixture = createFixture(t);
+  const options = { paths: fixture.paths, platform, downloadArtifact: fixture.downloadArtifact, runSmoke: fixture.runSmoke };
+  await prefetchManagedTool("fixture-tool", options);
+  const lock = path.join(fixture.paths.toolRuntimeStaging, ".fixture-tool.mutation-lock");
+  fs.mkdirSync(lock, { mode: 0o700 });
+  const old = new Date(Date.now() - 120_000);
+  fs.utimesSync(lock, old, old);
+  const rename = fs.renameSync;
+  let competitor;
+  fs.renameSync = (source, destination) => {
+    if (source === lock && !competitor) {
+      competitor = assert.rejects(installManagedTool("fixture-tool", options), /mutation is already active/);
+    }
+    return rename(source, destination);
+  };
+  try {
+    const installed = await installManagedTool("fixture-tool", options);
+    assert.equal(installed.ok, true);
+    assert.ok(competitor);
+    await competitor;
+    assert.equal(verifyManagedTool("fixture-tool", options).ok, true);
+    assert.equal(fs.existsSync(lock), false);
+    assert.equal(fs.existsSync(`${lock}.transition`), false);
+  } finally {
+    fs.renameSync = rename;
+  }
+});
+
 test("a tampered content-addressed cache is rejected and never installed", async (t) => {
   const fixture = createFixture(t);
   await prefetchManagedTool("fixture-tool", {

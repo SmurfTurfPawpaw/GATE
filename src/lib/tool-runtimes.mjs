@@ -752,54 +752,90 @@ function reclaimableMutationLock(lock) {
 
 function acquireMutationLock(paths, id) {
   const lock = path.join(paths.toolRuntimeStaging, `.${id}.mutation-lock`);
-  let owner;
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    let created = false;
+  const transition = `${lock}.transition`;
+  const serialized = (operation) => {
     try {
-      fs.mkdirSync(lock, { mode: 0o700 });
-      created = true;
-      const identity = mutationProcessIdentity();
-      owner = {
-        apiVersion: "gate.tool-mutation/v1",
-        token: crypto.randomBytes(16).toString("hex"),
-        pid: identity?.pid || process.pid,
-        bootId: identity?.bootId || "unavailable",
-        startTimeTicks: identity?.startTimeTicks || "unavailable",
-        createdAt: new Date().toISOString()
-      };
-      writeJsonAtomic(path.join(lock, "owner.json"), owner, 0o600);
-      break;
+      fs.mkdirSync(transition, { mode: 0o700 });
     } catch (error) {
-      if (created) {
-        owner = null;
-        fs.rmSync(lock, { recursive: true, force: true });
-        throw error;
-      }
-      if (error.code !== "EEXIST") throw error;
-      if (!reclaimableMutationLock(lock)) {
-        throw new Error(`managed tool mutation is already active or indeterminate: ${id}`);
-      }
-      const stale = `${lock}.stale-${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
-      try {
-        fs.renameSync(lock, stale);
-      } catch (renameError) {
-        if (renameError.code === "ENOENT") continue;
-        throw renameError;
-      }
-      fs.rmSync(stale, { recursive: true, force: true });
+      if (error.code === "EEXIST") throw new Error(`managed tool mutation is already active or indeterminate: ${id}`);
+      throw error;
     }
-  }
+    const identity = fs.lstatSync(transition);
+    try {
+      return operation();
+    } finally {
+      const current = fs.lstatSync(transition);
+      if (current.dev !== identity.dev || current.ino !== identity.ino) {
+        throw new Error(`managed tool mutation transition ownership changed: ${id}`);
+      }
+      fs.rmdirSync(transition);
+    }
+  };
+  const assertIdentity = (identity) => {
+    const current = fs.lstatSync(lock);
+    if (current.dev !== identity.dev || current.ino !== identity.ino) {
+      throw new Error(`managed tool mutation ownership changed: ${id}`);
+    }
+  };
+  let owner;
+  let lockIdentity;
+  serialized(() => {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      let created = false;
+      try {
+        fs.mkdirSync(lock, { mode: 0o700 });
+        created = true;
+        lockIdentity = fs.lstatSync(lock);
+        const identity = mutationProcessIdentity();
+        owner = {
+          apiVersion: "gate.tool-mutation/v1",
+          token: crypto.randomBytes(16).toString("hex"),
+          pid: identity?.pid || process.pid,
+          bootId: identity?.bootId || "unavailable",
+          startTimeTicks: identity?.startTimeTicks || "unavailable",
+          createdAt: new Date().toISOString()
+        };
+        writeJsonAtomic(path.join(lock, "owner.json"), owner, 0o600);
+        break;
+      } catch (error) {
+        if (created) {
+          owner = null;
+          assertIdentity(lockIdentity);
+          fs.rmSync(lock, { recursive: true, force: true });
+          throw error;
+        }
+        if (error.code !== "EEXIST") throw error;
+        const staleIdentity = fs.lstatSync(lock);
+        if (!reclaimableMutationLock(lock)) {
+          throw new Error(`managed tool mutation is already active or indeterminate: ${id}`);
+        }
+        const stale = `${lock}.stale-${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
+        try {
+          assertIdentity(staleIdentity);
+          fs.renameSync(lock, stale);
+        } catch (renameError) {
+          if (renameError.code === "ENOENT") continue;
+          throw renameError;
+        }
+        fs.rmSync(stale, { recursive: true, force: true });
+      }
+    }
+  });
   if (!owner) throw new Error(`managed tool mutation lock could not be acquired: ${id}`);
   let released = false;
   return () => {
     if (released) return;
-    released = true;
-    const current = JSON.parse(readPrivateFileBounded(path.join(lock, "owner.json"), 16 * 1024, "utf8", {
-      label: "managed tool mutation owner"
-    }));
-    if (current.token !== owner.token) throw new Error(`managed tool mutation ownership changed: ${id}`);
-    fs.unlinkSync(path.join(lock, "owner.json"));
-    fs.rmdirSync(lock);
+    serialized(() => {
+      assertIdentity(lockIdentity);
+      const current = JSON.parse(readPrivateFileBounded(path.join(lock, "owner.json"), 16 * 1024, "utf8", {
+        label: "managed tool mutation owner"
+      }));
+      if (current.token !== owner.token) throw new Error(`managed tool mutation ownership changed: ${id}`);
+      assertIdentity(lockIdentity);
+      fs.unlinkSync(path.join(lock, "owner.json"));
+      fs.rmdirSync(lock);
+      released = true;
+    });
   };
 }
 

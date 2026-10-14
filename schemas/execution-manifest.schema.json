@@ -80,36 +80,15 @@
         "tool": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["id", "catalogCommand", "host", "riskClass", "readiness", "knownGoodProvenance", "provenance"],
+          "required": ["id", "catalogCommand", "host", "riskClass", "readiness", "knownGoodProvenance"],
           "properties": {
             "id": { "$ref": "#/$defs/toolId" },
             "catalogCommand": { "type": "string", "pattern": "^[A-Za-z0-9._+-]{1,80}$" },
             "host": { "enum": ["linux", "wsl2"] },
             "riskClass": { "enum": ["P0", "P1", "A1", "A2", "A3"] },
-            "readiness": { "enum": ["discovered", "managed-verified"] },
-            "knownGoodProvenance": { "type": "boolean" },
-            "provenance": {
-              "oneOf": [
-                { "type": "null" },
-                {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "required": [
-                    "provider", "version", "platform", "lockEntrySha256", "catalogEntrySha256",
-                    "artifactSha256", "executableSha256"
-                  ],
-                  "properties": {
-                    "provider": { "const": "verified-release" },
-                    "version": { "type": "string", "pattern": "^v?[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$", "maxLength": 80 },
-                    "platform": { "enum": ["linux-x64", "linux-arm64"] },
-                    "lockEntrySha256": { "$ref": "#/$defs/sha256" },
-                    "catalogEntrySha256": { "$ref": "#/$defs/sha256" },
-                    "artifactSha256": { "$ref": "#/$defs/sha256" },
-                    "executableSha256": { "$ref": "#/$defs/sha256" }
-                  }
-                }
-              ]
-            }
+            "readiness": { "const": "discovered" },
+            "knownGoodProvenance": { "const": false }
+
           }
         },
         "executable": {
@@ -134,39 +113,7 @@
           "maxItems": 256,
           "items": { "type": "string", "maxLength": 8192, "pattern": "^[^\\u0000]*$" }
         }
-      },
-      "allOf": [
-          {
-            "if": {
-              "properties": {
-                "tool": {
-                  "properties": { "readiness": { "const": "managed-verified" } },
-                  "required": ["readiness"]
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "tool": {
-                  "properties": {
-                    "knownGoodProvenance": { "const": true },
-                    "provenance": { "type": "object" }
-                  }
-                }
-              }
-            },
-            "else": {
-              "properties": {
-                "tool": {
-                  "properties": {
-                    "knownGoodProvenance": { "const": false },
-                    "provenance": { "type": "null" }
-                  }
-                }
-              }
-            }
-          }
-      ]
+      }
     },
     "declaredBounds": {
       "type": "object",
