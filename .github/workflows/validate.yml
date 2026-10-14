@@ -18,7 +18,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      GATE_HOME: ${{ runner.temp }}/gate
       GATE_REQUIRE_OFFLINE_INTEGRATION: "1"
     strategy:
       fail-fast: false
@@ -39,6 +38,9 @@ jobs:
           node_root="$(dirname "$(dirname "$(node -p 'process.execPath')")")"
           sudo chown -R root:root "$node_root"
           sudo chmod -R u=rwX,go=rX "$node_root"
+
+      - name: Initialize private runtime path
+        run: echo "GATE_HOME=$RUNNER_TEMP/gate" >> "$GITHUB_ENV"
 
       - name: Install exact dependencies
         run: npm ci --ignore-scripts
