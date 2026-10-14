@@ -240,7 +240,7 @@ function readyProfile() {
   value.stops.cleanup.sourceRefs = sourceRefs;
   value.reporting.requiredSections = ["Scope", "Reproduction", "Impact", "Evidence", "Limitations"];
   value.reporting.sourceRefs = sourceRefs;
-  value.modules["web-api"] = { ...decision("allowed", sourceRefs), answers: { entryPoints: ["app.example.invalid"] } };
+  value.modules["web-api"] = { ...decision("allowed", sourceRefs), answers: { entryPoints: ["app.example.invalid"], authenticationFlows: ["Researcher login"], automationRules: "Use reviewed limits." } };
   value.attestation = {
     operator: "local-operator",
     answersComplete: true,
@@ -549,4 +549,30 @@ test("normalization is pure and produces stable ids, vocabularies, and source re
   assert.deepEqual(Object.keys(normalized.techniquePolicy.actions), PROGRAM_PROFILE_ACTIONS);
   assert.deepEqual(Object.keys(normalized.coverage), PROGRAM_PROFILE_COVERAGE_DOMAINS);
   assert.deepEqual(Object.keys(normalized.stops.conditions), PROGRAM_PROFILE_STOP_CONDITIONS);
+});
+
+test("module answer types hold for individual answers, nested answers, and stored profiles", () => {
+  for (const question of PROGRAM_PROFILE_MODULE_QUESTIONS.filter((item) => item.path.includes(".answers."))) {
+    const key = question.path.split(".").at(-1);
+    const valid = question.type === "structured-list" ? ["Reviewed fixture"] : "Reviewed fixture";
+    const invalid = question.type === "structured-list" ? [null, 42, {}] : [null, 42, {}, []];
+    assert.equal(validateProgramProfileAnswers(answerEnvelope({ [question.id]: valid }), { repo }).ok, true);
+    for (const answer of invalid) {
+      const individual = validateProgramProfileAnswers(answerEnvelope({ [question.id]: answer }), { repo });
+      assert.equal(individual.ok, false, question.id);
+      const parent = PROGRAM_PROFILE_MODULE_QUESTIONS.find((item) => item.path === `modules.${question.module}`);
+      const nested = validateProgramProfileAnswers(answerEnvelope({
+        [parent.id]: { ...decision("allowed", ["program-rules"]), answers: { [key]: answer } }
+      }), { repo });
+      assert.equal(nested.ok, false, parent.id);
+      const profile = draftProfile();
+      profile.modules[question.module].answers[key] = answer;
+      const stored = validateProgramProfile(profile, { repo });
+      assert.equal(stored.ok, false, question.path);
+      assert.ok(stored.errors.some((error) => error.startsWith(question.path)));
+    }
+  }
+  const missing = readyProfile();
+  delete missing.modules["web-api"].answers.automationRules;
+  assert.equal(validateProgramProfile(missing, { repo }).ok, false);
 });

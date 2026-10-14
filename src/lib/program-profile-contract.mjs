@@ -721,11 +721,35 @@ function semanticProfileErrors(value, paths) {
   return errors;
 }
 
+function moduleAnswerErrors(moduleId, answers, required = false) {
+  const errors = [];
+  for (const question of PROGRAM_PROFILE_MODULE_QUESTIONS) {
+    const prefix = `modules.${moduleId}.answers.`;
+    if (!question.path.startsWith(prefix)) continue;
+    const key = question.path.slice(prefix.length);
+    if (!Object.hasOwn(answers, key)) {
+      if (required && question.required) errors.push(`${question.path} is required when ready`);
+      continue;
+    }
+    const answer = answers[key];
+    if (question.type === "structured-list" && !Array.isArray(answer)) {
+      errors.push(`${question.path} must be an array`);
+    } else if (question.type === "multiline" && typeof answer !== "string") {
+      errors.push(`${question.path} must be a string`);
+    }
+  }
+  return errors;
+}
+
 export function validateProgramProfile(value, options = {}) {
   const paths = options.paths || runtimePaths(options);
   const structural = validateDocument(value, "bug-bounty-program-profile.schema.json", { paths });
   if (!structural.ok) return structural;
   const errors = semanticProfileErrors(value, paths);
+  for (const moduleId of PROGRAM_PROFILE_MODULE_IDS) {
+    errors.push(...moduleAnswerErrors(moduleId, value.modules[moduleId].answers,
+      value.metadata.status === "ready-to-materialize" && value.questionnaire.applicableModules.includes(moduleId)));
+  }
   return { ok: errors.length === 0, errors };
 }
 
@@ -745,6 +769,16 @@ export function validateProgramProfileAnswers(value, options = {}) {
   ].map((question) => question.id));
   const errors = Object.keys(value.answers).filter((id) => !known.has(id)).sort()
     .map((id) => `answers contains unknown question id: ${id}`);
+  for (const question of PROGRAM_PROFILE_MODULE_QUESTIONS) {
+    if (!Object.hasOwn(value.answers, question.id)) continue;
+    const answer = value.answers[question.id];
+    const prefix = `modules.${question.module}.answers.`;
+    if (question.path.startsWith(prefix)) {
+      errors.push(...moduleAnswerErrors(question.module, { [question.path.slice(prefix.length)]: answer }));
+    } else if (answer?.answers && typeof answer.answers === "object" && !Array.isArray(answer.answers)) {
+      errors.push(...moduleAnswerErrors(question.module, answer.answers));
+    }
+  }
   return { ok: errors.length === 0, errors };
 }
 

@@ -1023,3 +1023,26 @@ test("model routing requires a current destination matching the recorded release
     assert.equal(report.routing.strategy, expected === "pass" && report.gateDecision === "pass" ? "provider-model" : "operator");
   }
 });
+
+test("provider preflight includes requested conditional actions without admitting execution", (t) => {
+  const { paths } = fixture(t);
+  const id = "conditional-provider";
+  const profile = completeProfile(id);
+  profile.techniquePolicy.actions.fuzz = sourceDecision("conditional");
+  profile.scope.assets[0].actionOverrides.fuzz = sourceDecision("conditional");
+  profile.executionPolicy.requestedAssistanceModes = ["plan"];
+  profile.executionPolicy.phases[0].actions = ["observe", "fuzz"];
+  profile.executionPolicy.phases[0].conditions = ["Use the named test account only."];
+  createProgramProfile(id, profile, { paths, now: fixedAt });
+  const provider = providerProfile({ fuzz: { plan: "deny" } });
+  provider.metadata.destination = "local";
+  const compiled = compileProgramProfile(id, { providerProfile: provider }, { paths, now: fixedAt });
+  assert.equal(compiled.providerPrediction, "incompatible");
+  const root = path.join(paths.programs, id, "compiled", compiled.compilationId);
+  const preflight = readJson(path.join(root, "model-preflight.json"));
+  assert.deepEqual(preflight.requestedActions, ["observe", "fuzz"]);
+  assert.ok(preflight.providerBlockers.some((item) => item.action === "fuzz" && item.assistanceMode === "plan"));
+  assert.equal(preflight.routing.strategy, "reviewed-adapter");
+  const context = readJson(path.join(root, "model-context.json"));
+  assert.equal(context.rules.permittedActions.includes("fuzz"), false);
+});

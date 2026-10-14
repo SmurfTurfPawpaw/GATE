@@ -1721,9 +1721,8 @@ function executionActionSlices(profile, policy = exactExecutionPolicy(profile)) 
   })));
 }
 
-function requestedExecutionActions(profile, policy = exactExecutionPolicy(profile)) {
-  const requested = new Set(executionActionSlices(profile, policy)
-    .flatMap((slice) => slice.executableAllowedActions));
+function requestedExecutionActions(profile) {
+  const requested = new Set((profile.executionPolicy?.phases || []).flatMap((phase) => phase.actions));
   return PROGRAM_PROFILE_ACTIONS.filter((action) => requested.has(action));
 }
 
