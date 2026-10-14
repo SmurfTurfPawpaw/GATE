@@ -92,11 +92,15 @@ function usageSummary(value) {
     const known = records.map((record) => record?.[key]).filter((item) => Number.isSafeInteger(item) && item >= 0);
     return known.length ? known.reduce((sum, item) => sum + item, 0) : null;
   };
-  const latest = (records) => [...records].sort((left, right) => {
-    const rightTime = Date.parse(right?.at || 0);
-    const leftTime = Date.parse(left?.at || 0);
-    return (Number.isFinite(rightTime) ? rightTime : 0) - (Number.isFinite(leftTime) ? leftTime : 0);
-  })[0];
+  const latest = (records) => records.reduce((selected, record) => {
+    if (!selected) return record;
+    const selectedTime = Date.parse(selected?.at || 0);
+    const recordTime = Date.parse(record?.at || 0);
+    return (Number.isFinite(recordTime) ? recordTime : 0) >=
+      (Number.isFinite(selectedTime) ? selectedTime : 0)
+      ? record
+      : selected;
+  }, null);
   const selected = [];
   for (const group of groups.values()) {
     if (group.delta.length) {

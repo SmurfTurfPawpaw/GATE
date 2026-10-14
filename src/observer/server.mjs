@@ -464,6 +464,13 @@ function sumKnown(records, key) {
   return values.length ? values.reduce((sum, value) => sum + value, 0) : null;
 }
 
+function latestUsageRecord(records) {
+  return records.reduce((selected, record) => {
+    if (!selected) return record;
+    return Date.parse(record.at) >= Date.parse(selected.at) ? record : selected;
+  }, null);
+}
+
 function usageSession(record) {
   return {
     id: opaqueId("session", [record.runId, record.taskId, record.agent, record.provider, record.model].join("\u0000")),
@@ -498,9 +505,8 @@ function projectRecordedUsage(records) {
   const selected = [];
   for (const group of groups.values()) {
     if (group.deltas.length) {
-      group.deltas.sort((left, right) => Date.parse(right.at) - Date.parse(left.at));
       selected.push({
-        ...group.deltas[0],
+        ...latestUsageRecord(group.deltas),
         availability: group.deltas.some((record) => record.availability === "estimated") ? "estimated" : "exact",
         inputTokens: sumKnown(group.deltas, "inputTokens"),
         cachedInputTokens: sumKnown(group.deltas, "cachedInputTokens"),
@@ -509,11 +515,9 @@ function projectRecordedUsage(records) {
         totalTokens: sumKnown(group.deltas, "totalTokens")
       });
     } else if (group.cumulative.length) {
-      group.cumulative.sort((left, right) => Date.parse(right.at) - Date.parse(left.at));
-      selected.push(group.cumulative[0]);
+      selected.push(latestUsageRecord(group.cumulative));
     } else if (group.unavailable.length) {
-      group.unavailable.sort((left, right) => Date.parse(right.at) - Date.parse(left.at));
-      selected.push(group.unavailable[0]);
+      selected.push(latestUsageRecord(group.unavailable));
     }
   }
   const available = selected.filter((record) => record.availability !== "unavailable");

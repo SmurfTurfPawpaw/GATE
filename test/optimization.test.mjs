@@ -164,6 +164,36 @@ test("agent status summary selects the latest cumulative usage per logical sessi
   assert.equal(summary.tokens.sessions, 1);
 });
 
+test("agent status summary breaks equal usage timestamps by original log order", () => {
+  const at = "2026-10-14T16:00:00.000Z";
+  const record = (id, totalTokens) => ({
+    id,
+    at,
+    runId: "run.same",
+    taskId: null,
+    agent: "codex",
+    provider: "openai",
+    model: "gpt",
+    availability: "exact",
+    measure: "cumulative",
+    inputTokens: null,
+    cachedInputTokens: null,
+    outputTokens: null,
+    reasoningTokens: null,
+    totalTokens
+  });
+  const summary = statusSummary({
+    tokens: [record("use_first", 10), record("use_second", 20)],
+    events: [],
+    learnings: [],
+    engagements: [],
+    projects: [],
+    upstreams: [],
+    toolRuntimes: { tools: [] }
+  });
+  assert.equal(summary.tokens.totals.totalTokens, 20);
+});
+
 test("tool summary is digest-bound, paged, and below 8 KiB", () => {
   const inventory = {
     host: "linux",

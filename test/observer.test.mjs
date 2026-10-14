@@ -11,6 +11,7 @@ import {
   createObserver,
   isLoopbackHost,
   projectSnapshot,
+  projectUsage,
   startObserver,
   summarizeToolRuntimes
 } from "../src/observer/server.mjs";
@@ -18,6 +19,33 @@ import {
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const paths = { repo };
 const at = "2026-10-13T12:00:00.000Z";
+
+test("observer usage breaks equal cumulative timestamps by original log order", () => {
+  const usage = (id, totalTokens) => ({
+    apiVersion: "gate.usage/v1",
+    id,
+    at,
+    runId: "run_observer",
+    taskId: null,
+    agent: "codex",
+    provider: "openai",
+    model: "gpt-6",
+    availability: "exact",
+    measure: "cumulative",
+    inputTokens: null,
+    cachedInputTokens: null,
+    outputTokens: null,
+    reasoningTokens: null,
+    totalTokens,
+    source: "gate-token-log"
+  });
+  const projected = projectUsage([
+    usage("use_observer_first", 10),
+    usage("use_observer_second", 20)
+  ]);
+  assert.equal(projected.totalTokens, 20);
+  assert.equal(projected.sessions[0].totalTokens, 20);
+});
 
 function canonicalEvent(overrides = {}) {
   return {
