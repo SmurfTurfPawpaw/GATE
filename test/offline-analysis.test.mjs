@@ -315,6 +315,26 @@ test("prelaunch validation closes descriptors on identity and directory errors",
   }
 });
 
+test("malformed snapshot storage blocks the shared mutation boundary and status", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-offline-storage-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const paths = runtimePaths({ home: root, repo });
+  offlineAnalysisStatus({ paths });
+  const malformed = path.join(paths.offlineAnalysisInputs, "malformed-name.bin");
+  fs.writeFileSync(malformed, Buffer.from([0xff]), { mode: 0o600 });
+  let called = false;
+  assert.throws(() => offlineAnalysisInternals.withRetentionLock(paths, () => {
+    called = true;
+  }), /storage contains invalid entries/u);
+  assert.equal(called, false);
+  assert.equal(offlineAnalysisStatus({ paths }).retention.mutationBlocked, true);
+  assert.deepEqual(fs.readFileSync(malformed), Buffer.from([0xff]));
+  assert.equal(fs.existsSync(path.join(paths.offlineAnalyses, ".retention.lock")), false);
+  fs.unlinkSync(malformed);
+  assert.equal(offlineAnalysisStatus({ paths }).retention.mutationBlocked, false);
+  assert.equal(offlineAnalysisInternals.withRetentionLock(paths, () => "allowed"), "allowed");
+});
+
 managedTest("retention locks recover only a definitively stale owner and fail closed otherwise", (t) => {
   const { paths } = fixture(t);
   const lock = path.join(paths.offlineAnalyses, ".retention.lock");
@@ -1283,7 +1303,7 @@ managedTest("creation intents recover pre-publication snapshots and preserve pub
   assert.equal(status.retention.invalidEntries, 0);
 });
 
-managedTest("retention status accounts for pending artifacts and enforces the fixed aggregate quota", (t) => {
+managedTest("retention status accounts for pending artifacts and enforces the fixed aggregate quota", async (t) => {
   const { root, paths } = fixture(t);
   const artifact = path.join(root, "pending.exe");
   const bytes = writeMinimalPe(artifact);
@@ -1305,11 +1325,36 @@ managedTest("retention status accounts for pending artifacts and enforces the fi
   status = offlineAnalysisStatus({ paths });
   assert.equal(status.retention.invalidEntries, 1);
   assert.equal(status.retention.retainedBytes, bytes.length + 1);
+  assert.equal(status.retention.mutationBlocked, true);
+  const manifestBytes = fs.readFileSync(manifestPath(paths, created.manifestId));
+  const evidenceBefore = fs.readdirSync(paths.evidence);
+  await assert.rejects(
+    executeOfflineAnalysisManifest("offline-project", {
+      manifestId: created.manifestId,
+      confirm: created.confirmationRequired
+    }, { paths }),
+    /storage contains invalid entries/u
+  );
+  assert.throws(
+    () => purgeOfflineAnalysisArtifact("offline-project", {
+      manifestId: created.manifestId,
+      confirm: created.purgeConfirmationRequired
+    }, { paths }),
+    /storage contains invalid entries/u
+  );
+  assert.equal(fs.existsSync(claimPath(paths, created.manifestId)), false);
+  assert.equal(fs.existsSync(purgePath(paths, created.manifestId)), false);
+  assert.deepEqual(fs.readdirSync(paths.offlineAnalysisRuns), []);
+  assert.deepEqual(fs.readdirSync(paths.evidence), evidenceBefore);
+  assert.deepEqual(fs.readFileSync(manifestPath(paths, created.manifestId)), manifestBytes);
+  assert.deepEqual(fs.readFileSync(snapshotPath(paths, created.runId)), bytes);
+  assert.deepEqual(fs.readFileSync(malformed), Buffer.from([0xff]));
   assert.throws(
     () => createOfflineAnalysisManifest("offline-project", { path: artifact, maxMinutes: 1 }, { paths }),
     /storage contains invalid entries/u
   );
   fs.rmSync(malformed);
+  assert.equal(offlineAnalysisStatus({ paths }).retention.mutationBlocked, false);
 
   fs.rmSync(snapshotPath(paths, created.runId));
   for (let index = 0; index < 4; index += 1) {

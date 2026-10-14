@@ -61,6 +61,8 @@ Add proposed lessons here only after removing sensitive context. Promotion must 
 - 2026-10-14 | Cause: Automatic staging refused the protected REA host schema edit pending operator authorization. | Change: Preserve only the operator-authorized Linux and WSL2 schema alignment and install locked dependencies for focused review verification. | Evidence: evidence://protected-path-refusal-operator-decision | Status: proposed
 - 2026-10-14 | Cause: GitHub rejected validation before creating jobs because runner.temp was referenced where the runner context was unavailable. | Change: Initialize GATE_HOME from RUNNER_TEMP inside a workflow step through GITHUB_ENV, and verify the resulting live Actions run. | Evidence: event://evt_20261014130746_390cf533 | Status: proposed
 
+- 2026-10-14 | Cause: Snapshot validation occurred only during creation, allowing execution claims and purge despite malformed storage. | Change: Scan storage strictly at the shared retention boundary after recovery and report malformed storage as mutation-blocked. | Evidence: evidence://review-R1-retention-storage | Status: proposed
+
 ## Superseded or reverted
 
 Move old entries here with the new evidence and replacement learning. Do not erase history.

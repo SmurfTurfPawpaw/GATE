@@ -454,7 +454,8 @@ function withRetentionLock(paths, action, options = {}) {
   try {
     recoverInterruptedRecordTransactions(paths);
     recoverInterruptedManifestCreations(paths);
-    return action();
+    const retained = scanRetainedArtifacts(paths, { strict: true });
+    return action(retained);
   } finally {
     try {
       const finalStat = fs.lstatSync(file);
@@ -534,14 +535,13 @@ function snapshotPath(paths, reference) {
   return path.join(paths.offlineAnalysisInputs, filename);
 }
 
-function snapshotArtifact(sourceInput, runId, paths) {
+function snapshotArtifact(sourceInput, runId, paths, retained) {
   const source = canonicalSourcePath(sourceInput);
   const before = fs.lstatSync(source, { bigint: true });
   if (!before.isFile() || before.isSymbolicLink()) throw new Error("analysis path must name a regular non-symlink file");
   if (before.size < 1n || before.size > BigInt(MAX_ARTIFACT_BYTES)) {
     throw new Error(`analysis artifact must be from 1 to ${MAX_ARTIFACT_BYTES} bytes`);
   }
-  const retained = scanRetainedArtifacts(paths, { strict: true });
   if (retained.artifacts.size + 1 > MAX_RETAINED_ARTIFACTS) {
     throw new Error(
       `offline artifact retention count quota exceeded: ${retained.artifacts.size} retained artifacts plus 1 requested artifact exceeds ${MAX_RETAINED_ARTIFACTS}`
@@ -1143,7 +1143,7 @@ export function createOfflineAnalysisManifest(projectId, input, options = {}) {
   const manifestId = randomId("amf");
   const runId = randomId("arun");
   const sandbox = path.join(paths.offlineAnalysisSandboxes, runId);
-  const transaction = withRetentionLock(paths, () => {
+  const transaction = withRetentionLock(paths, (retained) => {
     const intent = newCreationIntent(manifestId, runId, projectId);
     atomicExclusiveRecord(paths, creationFile(paths, manifestId), `${JSON.stringify(intent)}\n`, {
       encoding: "utf8",
@@ -1154,7 +1154,7 @@ export function createOfflineAnalysisManifest(projectId, input, options = {}) {
     let copied = null;
     let manifestWritten = false;
     try {
-      copied = snapshotArtifact(input.path, runId, paths);
+      copied = snapshotArtifact(input.path, runId, paths, retained);
       securePrivateDirectory(sandbox, { label: `offline analysis sandbox ${runId}` });
       const runtime = resolveRuntime(paths);
       const observed = observeRuntime(runtime);
@@ -2505,7 +2505,7 @@ function offlineArtifactRetentionStatus(
     invalidPurgeRecords,
     invalidRunRecords,
     blockedManifests,
-    mutationBlocked: creations.mutationBlocked || controls.mutationBlocked,
+    mutationBlocked: scanned.invalidEntries > 0 || creations.mutationBlocked || controls.mutationBlocked,
     pendingManifests,
     expiredManifests,
     activeManifests,
