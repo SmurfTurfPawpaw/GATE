@@ -1198,7 +1198,7 @@ function recheckAdmission(paths, phaseRecord, { completion = false } = {}) {
   const check = checkEngagement(phaseRecord.authority.engagementId, {
     target: phaseRecord.target,
     action: phaseRecord.action,
-    maxMinutes: completion ? 0 : phaseRecord.envelope.maxMinutes,
+    maxMinutes: completion ? undefined : phaseRecord.envelope.maxMinutes,
     estimatedRequests: phaseRecord.envelope.maxRequests,
     maxParallel: phaseRecord.envelope.maxParallel,
     maxRatePerSecond: phaseRecord.envelope.maxRatePerSecond,
