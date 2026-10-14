@@ -188,11 +188,11 @@ test("agent status summary preserves last occurrence order for duplicate usage I
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const paths = runtimePaths({ repo, home: path.join(root, "home") });
   fs.mkdirSync(paths.home, { recursive: true, mode: 0o700 });
-  const records = [record("use_first", 10), record("use_second", 20), record("use_first", 30)];
+  const records = [record("use_first01", 10), record("use_second", 20), record("use_first01", 30)];
   fs.writeFileSync(paths.tokens, `${records.map((value) => JSON.stringify(value)).join("\n")}\n`, { mode: 0o600 });
   const status = await buildStatus({ paths });
   assert.equal(statusSummary({ tokens: records.slice(0, 2) }).tokens.totals.totalTokens, 20);
-  assert.deepEqual(status.tokens.map((value) => value.id), ["use_second", "use_first"]);
+  assert.deepEqual(status.tokens.map((value) => value.id), ["use_second", "use_first01"]);
   assert.equal(status.tokens.length, 2);
   const summary = statusSummary(status);
   assert.equal(summary.tokens.totals.totalTokens, 30);
