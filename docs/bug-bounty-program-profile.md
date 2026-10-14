@@ -63,6 +63,8 @@ The file must follow the [answers schema](../schemas/bug-bounty-program-profile-
 
 This partial example creates a draft. Supply the remaining required answers or resume the wizard before expecting verification to report `ready: true`.
 
+Applicable module questions precede final operator attestation. Substantive edits invalidate the prior attestation; review the revised answers and attest again before compiling a ready profile. A headless amendment can include a fresh attestation only by supplying all attestation answers with a changed attestation timestamp. Answer values must match their questionnaire types, including module answers; key presence alone does not complete a module.
+
 The review step surfaces missing provenance, conflicting selectors, expired terms, unanswered conditional rules, insufficient limits, and other ambiguities. Resolve them at the source or leave them explicit. Verification reports `ready: true` only when the profile is internally consistent and complete enough for deterministic compilation; readiness is not a statement that every requested technique is permitted.
 
 `verify` exits with status 2 while review blockers remain. A structurally valid but blocked `compile` still writes the private review bundle and also exits with status 2; inspect its `blockers` and `nextSteps` instead of treating artifact creation as readiness.
@@ -110,6 +112,10 @@ chmod 600 "$HOME/private/provider-capability-profile.json"
 
 The document must satisfy the closed [provider capability schema](../schemas/provider-capability-profile.schema.json): it names all 13 action classes and all six modes (`plan`, `analyze`, `generate-command`, `execute`, `report`, and `retest`). Leave an entry as `unknown` unless evidence supports `allow` or `deny`. Replace the template identity, model, and example timestamps before use. An assessment before `effectiveAt` or at or after `expiresAt` treats the snapshot as stale; a profile with neither timestamp has unknown freshness. When both timestamps are present, `expiresAt` must be later than `effectiveAt`. These values predict provider compatibility only; they do not grant GATE authority or change the profile's scope.
 
+Provider metadata may declare `destination` as `local`, `cloud`, or `unknown`. Local routes require `gate-home`; cloud routes require `configured-cloud-model` in the profile destinations. Missing, unknown, or stale destination declarations require operator routing review. Capability prediction alone does not establish data-release compatibility.
+
+Preflight checks every action requested by a phase against every requested assistance mode, including actions whose execution remains conditional. Inspect `providerPrediction`, the `data-release` dimension, and `routing` separately from profile readiness: a compile result can be ready while provider compatibility or destination compatibility still blocks model routing. Compilation sends no packet to a provider.
+
 Recompile after changing the profile or a cited source. The change produces a new profile digest and bundle. Older bundles remain bound to their prior profile revision and must not be reused as current context.
 
 ## Bind an exact engagement before target contact
@@ -129,5 +135,3 @@ Scope expansion, an added action or destination, a removed exclusion, a higher l
 The compiled result can be complete and reproducible relative to the cited sources and operator answers. GATE cannot verify facts that the program owner has not supplied, resolve contradictory legal terms, or promise universal model acceptance. The profile therefore preserves source references, claim state, contradictions, and unknowns instead of presenting them as certainty. When a provider cannot support an admitted task, preflight should identify the missing fact or incompatible capability and route the work to an appropriate reviewed provider, local model, adapter, or operator.
 
 Target details, source metadata and recorded digests, compiled bundles, and model context remain private under `GATE_HOME`. Source bodies remain in operator-controlled private storage outside Git and are not copied into GATE in v0.1. Only reusable schemas, sanitized templates, documentation, and sanitized learning belong in Git.
-
-Provider metadata may declare `destination` as `local`, `cloud`, or `unknown`. Local routes require `gate-home`; cloud routes require `configured-cloud-model` in the profile destinations. Missing, unknown, or stale destination declarations require operator routing review. Capability prediction alone does not establish data-release compatibility.
