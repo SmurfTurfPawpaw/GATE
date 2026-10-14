@@ -37,6 +37,8 @@ No Mistakes owns the branch after handoff through review, tests, documentation, 
 
 Tests should cover meaningful contracts and failure modes. Receipt invalidation, target and exclusion matching, redaction, schema rejection, private/public storage, command invocation, cancellation, and recovery deserve direct tests. Do not add tests that only repeat implementation text.
 
+The offline-analysis integration tests need Linux/WSL2, a working Bubblewrap namespace, and the locked managed REA installation and npm cache. Follow the [runtime setup](docs/setup.md#run-a-zero-network-offline-artifact-analysis) first. Local tests skip this integration when prerequisites are unavailable; use `GATE_REQUIRE_OFFLINE_INTEGRATION=1 npm test` to make missing prerequisites fail instead. The [CI workflow](.github/workflows/validate.yml) prepares that runtime and requires the integration rather than accepting skips.
+
 ## Change schemas and policies
 
 Treat policy and schema edits as behavior changes. Include:
@@ -58,7 +60,7 @@ Upstream source remains external. Prefer a small adapter over copying or forking
 
 ## Add a security tool
 
-A catalog entry is an admission record, not an installation or authority grant. A new tool needs:
+A catalog entry describes a capability candidate; admission is a separate reviewed process described in [security tooling](docs/security-tooling.md#installation-lanes). A new tool needs:
 
 1. a concrete capability gap and comparison with current entries;
 2. canonical source, maintenance evidence, and license;
