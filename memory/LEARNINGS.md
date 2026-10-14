@@ -39,6 +39,8 @@ YYYY-MM-DD | Cause: what happened | Change: the durable behavior or configuratio
 
 ## Proposed
 
+- 2026-10-14 | Cause: Contribution guidance still denied per-tool locks after the managed core runtime introduced them. | Change: Replace the obsolete inventory claim with a pointer to the security-tooling owner for locks, verification, and invocation admission. | Evidence: CONTRIBUTING.md, docs/security-tooling.md#managed-core-runtime, locks/tool-runtimes.lock.json | Scope: repository | Status: proposed | Sensitivity: public
+
 Add proposed lessons here only after removing sensitive context. Promotion must include the behavior, policy, configuration, test, or documentation change that makes the lesson real.
 - 2026-10-14 | Cause: Managed-adapter fixtures admitted the engagement's full capacity for a one-request phase after protected closeout reserves were introduced. | Change: Bind the synthetic phase admission to the adapter's exact one-minute, one-request, one-thousand-token operation. | Evidence: evidence://test/managed-adapters.test.mjs | Status: proposed
 - 2026-10-14 | Cause: CI still compared engagement stops with the nine default stops after runtime policy began enforcing the complete thirteen-stop union. | Change: Derive the regression expectation from default and phase-specific mandatory stops and assert the thirteen-condition contract. | Evidence: evidence://github-actions-run-38632815023, evidence://test/engagements.test.mjs | Status: proposed
