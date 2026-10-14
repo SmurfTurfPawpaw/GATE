@@ -160,6 +160,10 @@
           "third-party-system-discovered",
           "rate-limit-exceeded",
           "evidence-integrity-failure",
+          "unexpected-sensitive-data",
+          "unplanned-privilege-or-persistence",
+          "defensive-control-impact",
+          "cleanup-incomplete",
           "operator-stop"
         ]
       }
