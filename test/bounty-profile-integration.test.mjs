@@ -14,6 +14,7 @@ import {
   compileProgramProfile,
   createProgramProfile,
   loadProgramProfileAnswers,
+  resumeProgramProfile,
   verifyProgramProfile
 } from "../src/lib/bounty-profiles.mjs";
 import {
@@ -822,63 +823,76 @@ test("profile inputs and private state fail closed on links and remain owner-onl
   assert.deepEqual(fs.readFileSync(outside), before);
 });
 
-test("dead process locks and interrupted profile-answer publications recover under a new lock", (t) => {
-  const { home, paths } = fixture(t);
-  const id = "state-recovery";
-  createProgramProfile(id, completeProfile(id), { paths, now: fixedAt });
-  const directory = path.join(home, "programs", id);
-  const transactionRoot = path.join(directory, ".transactions");
-  const abandonedDirectory = path.join(transactionRoot, `txn-${"a".repeat(24)}`);
-  fs.mkdirSync(abandonedDirectory, { mode: 0o700 });
-  fs.writeFileSync(path.join(abandonedDirectory, "profile.next"), "partial pre-intent state", { mode: 0o600 });
-  const transactionId = `txn-${"b".repeat(24)}`;
-  const transactionDirectory = path.join(transactionRoot, transactionId);
-  fs.mkdirSync(transactionDirectory, { mode: 0o700 });
-  const components = [
-    ["profile.next", "program-profile.json"],
-    ["answers.next", "answers.json"],
-    ["binding.next", "state-binding.json"]
-  ];
-  const next = {};
-  for (const [stageName, targetName] of components) {
-    const bytes = fs.readFileSync(path.join(directory, targetName));
-    fs.writeFileSync(path.join(transactionDirectory, stageName), bytes, { mode: 0o600 });
-    const key = stageName === "profile.next" ? "profileSha256"
-      : stageName === "answers.next" ? "answersSha256" : "bindingSha256";
-    next[key] = crypto.createHash("sha256").update(bytes).digest("hex");
-  }
-  writeJson(path.join(transactionDirectory, "intent.json"), {
-    apiVersion: "gate.dev/program-profile-state-transaction/v1",
-    kind: "ProgramProfileStateTransaction",
-    id: transactionId,
-    profileId: id,
-    revision: 1,
-    createdAt: fixedAt,
-    next
-  });
-  fs.renameSync(path.join(transactionDirectory, "profile.next"), path.join(directory, "program-profile.json"));
-  const pending = verifyProgramProfile(id, { paths, now: fixedAt });
-  assert.equal(pending.ok, false);
-  assert.match(pending.blockers[0].detail, /interrupted state transaction/u);
+for (const entrypoint of ["answers", "resume", "compile"]) {
+  test(`dead process locks and interrupted publications recover through ${entrypoint}`, (t) => {
+    const { home, paths } = fixture(t);
+    const id = "state-recovery";
+    createProgramProfile(id, completeProfile(id), { paths, now: fixedAt });
+    const directory = path.join(home, "programs", id);
+    const transactionRoot = path.join(directory, ".transactions");
+    const abandonedDirectory = path.join(transactionRoot, `txn-${"a".repeat(24)}`);
+    fs.mkdirSync(abandonedDirectory, { mode: 0o700 });
+    fs.writeFileSync(path.join(abandonedDirectory, "profile.next"), "partial pre-intent state", { mode: 0o600 });
+    const transactionId = `txn-${"b".repeat(24)}`;
+    const transactionDirectory = path.join(transactionRoot, transactionId);
+    fs.mkdirSync(transactionDirectory, { mode: 0o700 });
+    const components = [
+      ["profile.next", "program-profile.json"],
+      ["answers.next", "answers.json"],
+      ["binding.next", "state-binding.json"]
+    ];
+    const next = {};
+    for (const [stageName, targetName] of components) {
+      const bytes = fs.readFileSync(path.join(directory, targetName));
+      fs.writeFileSync(path.join(transactionDirectory, stageName), bytes, { mode: 0o600 });
+      const key = stageName === "profile.next" ? "profileSha256"
+        : stageName === "answers.next" ? "answersSha256" : "bindingSha256";
+      next[key] = crypto.createHash("sha256").update(bytes).digest("hex");
+    }
+    writeJson(path.join(transactionDirectory, "intent.json"), {
+      apiVersion: "gate.dev/program-profile-state-transaction/v1",
+      kind: "ProgramProfileStateTransaction",
+      id: transactionId,
+      profileId: id,
+      revision: 1,
+      createdAt: fixedAt,
+      next
+    });
+    fs.renameSync(path.join(transactionDirectory, "profile.next"), path.join(directory, "program-profile.json"));
+    const pending = verifyProgramProfile(id, { paths, now: fixedAt });
+    assert.equal(pending.ok, false);
+    assert.match(pending.blockers[0].detail, /interrupted state transaction/u);
 
-  writeJson(path.join(directory, ".profile.lock"), {
-    apiVersion: "gate.dev/program-profile-lock/v1",
-    pid: 2147483647,
-    bootId: "00000000-0000-0000-0000-000000000000",
-    processStartTicks: "1",
-    nonce: "c".repeat(32),
-    createdAt: fixedAt
+    writeJson(path.join(directory, ".profile.lock"), {
+      apiVersion: "gate.dev/program-profile-lock/v1",
+      pid: 2147483647,
+      bootId: "00000000-0000-0000-0000-000000000000",
+      processStartTicks: "1",
+      nonce: "c".repeat(32),
+      createdAt: fixedAt
+    });
+    const recoveryOptions = { paths, now: "2026-10-14T12:01:00.000Z" };
+    if (entrypoint === "resume") {
+      const resumed = resumeProgramProfile(id, recoveryOptions);
+      assert.equal(resumed.profile.metadata.revision, 1);
+      assert.equal(resumed.answers.metadata.programId, id);
+    } else if (entrypoint === "compile") {
+      const compiled = compileProgramProfile(id, {}, recoveryOptions);
+      assert.equal(compiled.profileReady, true);
+      assert.equal(compiled.targetContact, false);
+    } else {
+      const recovered = applyProgramProfileAnswers(id, {}, recoveryOptions);
+      assert.equal(recovered.revision, 2);
+    }
+    assert.equal(fs.existsSync(path.join(directory, ".profile.lock")), false);
+    assert.deepEqual(fs.readdirSync(transactionRoot), []);
+    const binding = readJson(path.join(directory, "state-binding.json"));
+    assert.equal(binding.revision, entrypoint === "answers" ? 2 : 1);
+    assert.equal(binding.profileSha256, crypto.createHash("sha256").update(fs.readFileSync(path.join(directory, "program-profile.json"))).digest("hex"));
+    assert.equal(binding.answersSha256, crypto.createHash("sha256").update(fs.readFileSync(path.join(directory, "answers.json"))).digest("hex"));
+    assert.equal(verifyProgramProfile(id, { paths, now: "2026-10-14T12:01:00.000Z" }).ready, true);
   });
-  const recovered = applyProgramProfileAnswers(id, {}, { paths, now: "2026-10-14T12:01:00.000Z" });
-  assert.equal(recovered.revision, 2);
-  assert.equal(fs.existsSync(path.join(directory, ".profile.lock")), false);
-  assert.deepEqual(fs.readdirSync(transactionRoot), []);
-  const binding = readJson(path.join(directory, "state-binding.json"));
-  assert.equal(binding.revision, 2);
-  assert.equal(binding.profileSha256, crypto.createHash("sha256").update(fs.readFileSync(path.join(directory, "program-profile.json"))).digest("hex"));
-  assert.equal(binding.answersSha256, crypto.createHash("sha256").update(fs.readFileSync(path.join(directory, "answers.json"))).digest("hex"));
-  assert.equal(verifyProgramProfile(id, { paths, now: "2026-10-14T12:01:00.000Z" }).ready, true);
-});
+}
 
 test("a process-and-boot-matched live profile lock is never reclaimed", (t) => {
   if (process.platform !== "linux") return t.skip("process start and boot identities use Linux procfs");
@@ -896,10 +910,11 @@ test("a process-and-boot-matched live profile lock is never reclaimed", (t) => {
     nonce: "d".repeat(32),
     createdAt: fixedAt
   });
-  assert.throws(
+  for (const action of [
     () => applyProgramProfileAnswers(id, {}, { paths, now: fixedAt }),
-    /locked by live process/u
-  );
+    () => resumeProgramProfile(id, { paths, now: fixedAt }),
+    () => compileProgramProfile(id, {}, { paths, now: fixedAt })
+  ]) assert.throws(action, /locked by live process/u);
   assert.equal(fs.existsSync(path.join(directory, ".profile.lock")), true);
 });
 

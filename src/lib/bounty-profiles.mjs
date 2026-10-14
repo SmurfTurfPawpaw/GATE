@@ -16,6 +16,7 @@ import { validateDocument } from "./schema.mjs";
 import {
   PROGRAM_PROFILE_ACTIONS,
   PROGRAM_PROFILE_COVERAGE_DOMAINS,
+  PROGRAM_PROFILE_EXECUTION_LIMITS,
   PROGRAM_PROFILE_MODULE_IDS,
   PROGRAM_PROFILE_MODULE_QUESTIONS,
   PROGRAM_PROFILE_QUESTIONS,
@@ -646,7 +647,7 @@ function suppliedAttestationIsFresh(value, overlay, suppliedEnvelope, existingEn
 }
 
 function setAtPath(value, dottedPath, replacement) {
-  const parts = Array.isArray(dottedPath) ? dottedPath : String(dottedPath).split(".").filter(Boolean);
+  const parts = dottedPath.split(".");
   if (!parts.length || parts.some((part) => part === "__proto__" || part === "prototype" || part === "constructor")) {
     throw new Error(`invalid program profile answer path: ${dottedPath}`);
   }
@@ -666,7 +667,7 @@ function overlayFromAnswerEnvelope(envelope, options = {}) {
   const entries = Object.entries(envelope.answers || {}).map(([questionId, value]) => {
     const question = questions.get(questionId);
     if (!question) throw new Error(`unknown program profile question: ${questionId}`);
-    const target = question.path || question.target || question.profilePath;
+    const target = question.path;
     if (!target) throw new Error(`program profile question has no target path: ${questionId}`);
     return { questionId, target, value };
   }).sort((left, right) => {
@@ -1366,17 +1367,19 @@ export function applyProgramProfileAnswers(id, answers, options = {}) {
 export function resumeProgramProfile(id, options = {}) {
   const cleanId = cleanProfileId(id);
   const paths = bountyPaths(options);
-  ensurePrograms(paths);
-  const stored = loadStoredProfileState(paths, cleanId);
-  const profile = stored.profile;
-  const envelope = stored.answers;
-  return {
-    profile,
-    answers: envelope,
-    nextSection: PROGRAM_PROFILE_SECTION_IDS.find((section) => profile.questionnaire.sectionStatus[section] !== "complete") || null,
-    activeSection: profile.questionnaire.activeSection,
-    summary: profileSummary(profile)
-  };
+  ensureProfileDirectory(paths, cleanId, { create: false });
+  return withProfileLock(paths, cleanId, () => {
+    const stored = loadStoredProfileState(paths, cleanId);
+    const profile = stored.profile;
+    const envelope = stored.answers;
+    return {
+      profile,
+      answers: envelope,
+      nextSection: PROGRAM_PROFILE_SECTION_IDS.find((section) => profile.questionnaire.sectionStatus[section] !== "complete") || null,
+      activeSection: profile.questionnaire.activeSection,
+      summary: profileSummary(profile)
+    };
+  });
 }
 
 function verifyProfileValue(profile, id, options = {}) {
@@ -1619,17 +1622,8 @@ function coveragePlan(profile, verification) {
   };
 }
 
-const EXECUTION_LIMIT_KEYS = Object.freeze([
-  "maxMinutes",
-  "maxRequests",
-  "maxParallel",
-  "maxRatePerSecond",
-  "maxTokens",
-  "maxSpendUsd"
-]);
-
 function effectiveLimitEnvelope(profile, asset, phase = null) {
-  return Object.fromEntries(EXECUTION_LIMIT_KEYS.map((key) => {
+  return Object.fromEntries(PROGRAM_PROFILE_EXECUTION_LIMITS.map((key) => {
     const values = [profile.limits[key], asset?.limitOverrides?.[key], phase?.limits?.[key]]
       .filter((value) => typeof value === "number" && Number.isFinite(value));
     return [key, values.length ? Math.min(...values) : null];
@@ -1698,7 +1692,7 @@ function exactExecutionPolicy(profile) {
     requestedAssistanceModes: profile.executionPolicy?.requestedAssistanceModes || [],
     globalCeilings: {
       actions: profile.techniquePolicy.actions,
-      limits: Object.fromEntries(EXECUTION_LIMIT_KEYS.map((key) => [key, profile.limits[key]]))
+      limits: Object.fromEntries(PROGRAM_PROFILE_EXECUTION_LIMITS.map((key) => [key, profile.limits[key]]))
     },
     assets,
     phases: (profile.executionPolicy?.phases || []).map((phase) => ({
@@ -2367,13 +2361,13 @@ function writeCompilation(paths, id, compilationId, artifacts) {
 export function compileProgramProfile(id, input = {}, options = {}) {
   const cleanId = cleanProfileId(id);
   const paths = bountyPaths(options);
-  ensurePrograms(paths);
+  ensureProfileDirectory(paths, cleanId, { create: false });
   const verifiedAt = new Date(options.now || Date.now()).toISOString();
   // Minute precision keeps repeated no-change compilation idempotent while
   // still recording the current assessment interval. Readiness itself uses
   // the exact verification instant above and is never rounded.
   const assessedAt = new Date(Math.floor(Date.parse(verifiedAt) / 60_000) * 60_000).toISOString();
-  const profile = loadStoredProfile(paths, cleanId);
+  const profile = withProfileLock(paths, cleanId, () => loadStoredProfile(paths, cleanId));
   const verification = verifyProfileValue(profile, cleanId, { ...options, paths, now: verifiedAt });
   if (!verification.structuralValid) throw new Error(`program profile is structurally invalid: ${verification.checks.filter((item) => !item.ok && item.name !== "compile-readiness").map((item) => item.detail).join("; ")}`);
   const provider = providerProfileInput(input.providerProfile, paths, { ...options, now: verifiedAt });

@@ -260,11 +260,7 @@ function assertUnambiguousBountyArgs(argv) {
 }
 
 function profilePathParts(value) {
-  const parts = Array.isArray(value)
-    ? value
-    : String(value || "").startsWith("/")
-      ? String(value).slice(1).split("/").map((part) => part.replaceAll("~1", "/").replaceAll("~0", "~"))
-      : String(value || "").split(".");
+  const parts = value.split(".");
   if (!parts.length || parts.some((part) => !part || new Set(["__proto__", "prototype", "constructor"]).has(part))) {
     throw new Error(`invalid program-profile question path: ${String(value)}`);
   }
@@ -280,12 +276,6 @@ function profileValueAt(value, fieldPath) {
   return current;
 }
 
-function programProfileFrom(value) {
-  if (value?.profile && typeof value.profile === "object") return value.profile;
-  if (value?.document && typeof value.document === "object") return value.document;
-  return value;
-}
-
 function questionApplies(question, profile) {
   if (!question.condition) return true;
   const actual = profileValueAt(profile, question.condition.path);
@@ -296,13 +286,6 @@ function questionApplies(question, profile) {
       : typeof actual === "string" && actual.includes(question.condition.includes);
   }
   return false;
-}
-
-function questionChoiceValues(question) {
-  return (question.choices || []).map((choice) => {
-    if (choice && typeof choice === "object") return String(choice.value ?? choice.id);
-    return String(choice);
-  });
 }
 
 function parseQuestionAnswer(question, raw) {
@@ -324,7 +307,7 @@ function parseQuestionAnswer(question, raw) {
     return numeric;
   }
   if (question.type === "enum") {
-    const choices = questionChoiceValues(question);
+    const choices = (question.choices || []);
     if (choices.length && !choices.includes(value)) throw new Error(`choose one of: ${choices.join(", ")}`);
     return value;
   }
@@ -335,7 +318,7 @@ function parseQuestionAnswer(question, raw) {
     if (!Array.isArray(values) || values.some((item) => typeof item !== "string")) {
       throw new Error("enter a comma-separated list or JSON string array");
     }
-    const choices = questionChoiceValues(question);
+    const choices = (question.choices || []);
     const unsupported = choices.length ? values.filter((item) => !choices.includes(item)) : [];
     if (unsupported.length) throw new Error(`unsupported choice: ${unsupported.join(", ")}`);
     return values;
@@ -417,10 +400,9 @@ async function runProgramProfileQuestionnaire(id, mode, options = {}) {
   }
   const paths = options.paths;
   if (mode === "create") createProgramProfile(id, newProgramProfileAnswers(id), { paths });
-  else resumeProgramProfile(id, { paths });
 
   let resumed = resumeProgramProfile(id, { paths });
-  let profile = programProfileFrom(resumed);
+  let profile = resumed.profile;
   let answers = resumed.answers || newProgramProfileAnswers(id);
   const questions = PROGRAM_PROFILE_QUESTIONS;
   let index = questions.findIndex((question) =>
@@ -458,7 +440,7 @@ async function runProgramProfileQuestionnaire(id, mode, options = {}) {
         continue;
       }
       const section = questionSection(question);
-      const choices = questionChoiceValues(question);
+      const choices = (question.choices || []);
       const current = profileValueAt(profile, question.path);
       const currentHint = current === undefined || question.sensitive
         ? ""
@@ -523,7 +505,7 @@ async function runProgramProfileQuestionnaire(id, mode, options = {}) {
         continue;
       }
       resumed = resumeProgramProfile(id, { paths });
-      profile = programProfileFrom(resumed);
+      profile = resumed.profile;
       answers = resumed.answers || updatedAnswers;
       terminalOutput.write(`Saved ${question.id}.\n`);
       index += 1;
