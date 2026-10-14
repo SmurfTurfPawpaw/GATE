@@ -44,6 +44,16 @@ test("raw command surfaces fail closed before spawning passthrough commands", (t
     },
     {
       args: [
+        "engagement", "adapter-manifest", "demo", "--adapter", "dnsx-domain-observe",
+        "--workflow", "demo-workflow", "--phase-attempt", `wpa_${"a".repeat(32)}`,
+        "--target", "fixture.example", "--minutes", "1", "--requests", "1",
+        "--parallel", "1", "--rate", "1", "--tokens", "1000", "--timeout-seconds", "5",
+        "--record-type", "A", "--resolver", "127.0.0.1:5353", "--", "-unsafe"
+      ],
+      message: /adapter-manifest does not accept raw command arguments/
+    },
+    {
+      args: [
         "engagement", "manifest", "demo", "--target", "example.test", "--action", "scan",
         "--workflow", "demo-workflow", "--phase-attempt", `wpa_${"a".repeat(32)}`,
         "--tool", "nmap", "--requests", "1", "--parallel", "1", "--rate", "1",
@@ -59,6 +69,20 @@ test("raw command surfaces fail closed before spawning passthrough commands", (t
     assert.match(result.stderr, attempt.message);
     assert.equal(fs.existsSync(marker), false);
   }
+});
+
+test("managed adapter manifest dispatch is reachable at the engagement command level", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-cli-adapter-dispatch-"));
+  const home = path.join(root, "home");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const result = invoke([
+    "engagement", "adapter-manifest", "demo", "--adapter", "unsupported-adapter"
+  ], home);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /unknown managed target-contact adapter: unsupported-adapter/u);
+  assert.doesNotMatch(result.stderr, /id is not defined|unknown engagement action/u);
 });
 
 test("engagement creation rejects caller-supplied authorization evidence references", (t) => {

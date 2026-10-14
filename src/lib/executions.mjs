@@ -5,6 +5,12 @@ import { spawn } from "node:child_process";
 
 import { checkEngagement } from "./engagements.mjs";
 import { recordEvent } from "./events.mjs";
+import {
+  assertManagedAdapterManifest,
+  prepareManagedAdapterInvocation,
+  reverifyManagedAdapterManifest,
+  validateManagedAdapterOutput
+} from "./managed-adapters.mjs";
 import { ensureRuntime, runtimePaths } from "./paths.mjs";
 import {
   openPrivateFileExclusive,
@@ -21,6 +27,7 @@ import {
   claimWorkflowExecution,
   completeWorkflowExecution,
   reserveWorkflowExecution,
+  workflowRuntimeInternals,
   workflowStatus
 } from "./workflow-runtime.mjs";
 
@@ -67,6 +74,53 @@ export const EXECUTION_UNAVAILABLE = Object.freeze([
   "tool-artifact-inventory",
   "known-good-executable-provenance",
   "argv-action-semantics-validation",
+  "supervisor-crash-containment",
+  "immutable-executable-snapshot"
+]);
+
+export const MANAGED_EXECUTION_ENFORCED = Object.freeze([
+  "engagement-binding",
+  "workflow-phase-binding",
+  "workflow-reservation",
+  "target-argument-binding",
+  "declared-action-label-binding",
+  "tool-allowlist",
+  "exact-argv",
+  "shell-disabled",
+  "executable-descriptor-observed-sha256",
+  "minimal-environment",
+  "private-stdout-stderr",
+  "one-shot-claim",
+  "declared-bounds-within-receipt",
+  "reviewed-adapter-registry",
+  "adapter-operation-schema",
+  "argv-action-semantics-validation",
+  "managed-runtime-lock",
+  "current-managed-executable",
+  "zero-egress-smoke-before-launch",
+  "discovered-target-expansion-disabled",
+  "current-workflow-journal-head"
+]);
+
+export const MANAGED_EXECUTION_BEST_EFFORT = Object.freeze([
+  "authorization-revocation-polling",
+  "wall-duration",
+  "process-group-termination",
+  "tool-request-bound",
+  "tool-rate-limit",
+  "tool-concurrency-limit",
+  "workflow-stop-polling"
+]);
+
+export const MANAGED_EXECUTION_UNAVAILABLE = Object.freeze([
+  "egress-target-restriction",
+  "request-count-measurement",
+  "request-rate-measurement",
+  "tool-concurrency-measurement",
+  "token-measurement",
+  "daemon-escape-containment",
+  "filesystem-isolation",
+  "credential-broker",
   "supervisor-crash-containment",
   "immutable-executable-snapshot"
 ]);
@@ -442,7 +496,16 @@ function exactArray(value, expected) {
 
 function assertManifestInvariants(manifest, paths) {
   const runId = manifest.metadata.runId;
-  if (manifest.operation.argv[manifest.operation.targetArgIndex] !== manifest.operation.targetArgument) {
+  const managed = manifest.operation.adapter !== null;
+  if (
+    workflowRuntimeInternals.canonicalDigest(
+      manifest.workflow.effectiveStops,
+      "gate.workflow.effective-stops.v1"
+    ) !== manifest.workflow.effectiveStopsSha256
+  ) {
+    throw new Error("execution manifest effective stop binding is invalid");
+  }
+  if (!managed && manifest.operation.argv[manifest.operation.targetArgIndex] !== manifest.operation.targetArgument) {
     throw new Error("execution manifest target argument binding is invalid");
   }
   if (manifest.operation.targetSelector.value !== manifest.operation.targetArgument) {
@@ -470,15 +533,26 @@ function assertManifestInvariants(manifest, paths) {
   if (canonicalDigest(manifest.runtime.environment) !== canonicalDigest(expectedEnvironment)) {
     throw new Error("execution manifest minimal environment binding is invalid");
   }
-  if (!exactArray(manifest.enforcement.enforced, EXECUTION_ENFORCED)) {
+  if (manifest.runtime.mode !== (managed ? "reviewed-managed-adapter" : "supervised-generic")) {
+    throw new Error("execution manifest runtime lane binding is invalid");
+  }
+  if (manifest.operation.tool.readiness !== (managed ? "verified-managed" : "discovered") ||
+      manifest.operation.tool.knownGoodProvenance !== managed) {
+    throw new Error("execution manifest tool provenance claim is invalid");
+  }
+  const expectedEnforced = managed ? MANAGED_EXECUTION_ENFORCED : EXECUTION_ENFORCED;
+  const expectedBestEffort = managed ? MANAGED_EXECUTION_BEST_EFFORT : EXECUTION_BEST_EFFORT;
+  const expectedUnavailable = managed ? MANAGED_EXECUTION_UNAVAILABLE : EXECUTION_UNAVAILABLE;
+  if (!exactArray(manifest.enforcement.enforced, expectedEnforced)) {
     throw new Error("execution manifest enforced capability claims are invalid");
   }
-  if (!exactArray(manifest.enforcement.bestEffort, EXECUTION_BEST_EFFORT)) {
+  if (!exactArray(manifest.enforcement.bestEffort, expectedBestEffort)) {
     throw new Error("execution manifest best-effort capability claims are invalid");
   }
-  if (!exactArray(manifest.enforcement.unavailable, EXECUTION_UNAVAILABLE)) {
+  if (!exactArray(manifest.enforcement.unavailable, expectedUnavailable)) {
     throw new Error("execution manifest unavailable capability claims are invalid");
   }
+  if (managed) assertManagedAdapterManifest(manifest, { paths });
   const createdAt = Date.parse(manifest.metadata.createdAt);
   const expiresAt = Date.parse(manifest.metadata.expiresAt);
   const authorizationEnd = Date.parse(manifest.engagement.authorizationValidUntil);
@@ -518,7 +592,11 @@ function assertRunInvariants(run) {
     throw new Error("cancelled execution run reason is invalid");
   }
   if (run.status === "blocked" && (
-    run.startedAt || run.process || !new Set([null, "workflow-claim-failed"]).has(run.terminationReason)
+    run.startedAt || run.process || !new Set([
+      null,
+      "workflow-claim-failed",
+      "managed-runtime-invalidated"
+    ]).has(run.terminationReason)
   )) {
     throw new Error("blocked execution run lifecycle is invalid");
   }
@@ -675,8 +753,25 @@ function evidencePath(paths, reference) {
 export function createExecutionManifest(engagementId, input, options = {}) {
   const paths = executionPaths(options.paths || runtimePaths(options));
   ensureRuntime(paths);
+  return createPreparedExecutionManifest(
+    engagementId,
+    normalizeManifestInput(input),
+    { ...options, paths },
+    null
+  );
+}
+
+export function createManagedExecutionManifest(engagementId, input, options = {}) {
+  const paths = executionPaths(options.paths || runtimePaths(options));
+  ensureRuntime(paths);
+  const prepared = prepareManagedAdapterInvocation(input, { ...options, paths });
+  return createPreparedExecutionManifest(engagementId, prepared.normalized, { ...options, paths }, prepared);
+}
+
+function createPreparedExecutionManifest(engagementId, normalized, options, managedContext) {
+  const paths = options.paths;
   const capability = requireCapability();
-  const normalized = normalizeManifestInput(input);
+  const managed = Boolean(managedContext);
   const check = checkEngagement(engagementId, {
     target: normalized.target,
     action: normalized.action,
@@ -686,20 +781,35 @@ export function createExecutionManifest(engagementId, input, options = {}) {
   if (normalized.target !== binding.target.value) {
     throw new Error(`execution target must use its canonical approved form exactly: ${binding.target.value}`);
   }
-  const resolveTool = options.resolveTool || ((id) => toolPlan(id, { paths }));
-  const plannedTool = resolveTool(normalized.toolId);
-  if (
-    !plannedTool || plannedTool.id !== normalized.toolId || plannedTool.installed !== true ||
-    plannedTool.compatible !== true || plannedTool.genericLaneEligible !== true ||
-    plannedTool.executionAvailable !== true || typeof plannedTool.executable !== "string" ||
-    !new Set(["P0", "P1", "A1", "A2", "A3"]).has(plannedTool.riskClass)
-  ) {
-    throw new Error(`tool is not eligible for supervised execution on this host: ${normalized.toolId}`);
+  if (managed && binding.target.type !== managedContext.adapter.selectorType) {
+    throw new Error(`managed adapter requires an exact ${managedContext.adapter.selectorType} engagement selector`);
+  }
+  const plannedTool = managed
+    ? {
+        id: managedContext.adapter.tool.id,
+        installed: true,
+        compatible: true,
+        executionAvailable: true,
+        executable: managedContext.verifiedRuntime.verified.executable,
+        host: managedContext.verifiedRuntime.platform.host,
+        riskClass: managedContext.adapter.tool.riskClass
+      }
+    : (options.resolveTool || ((id) => toolPlan(id, { paths })))(normalized.toolId);
+  const eligible = plannedTool && plannedTool.id === normalized.toolId && plannedTool.installed === true &&
+    plannedTool.compatible === true && plannedTool.executionAvailable === true &&
+    typeof plannedTool.executable === "string" &&
+    new Set(["P0", "P1", "A1", "A2", "A3"]).has(plannedTool.riskClass) &&
+    (managed || plannedTool.genericLaneEligible === true);
+  if (!eligible) {
+    throw new Error(`tool is not eligible for ${managed ? "managed-adapter" : "supervised"} execution on this host: ${normalized.toolId}`);
   }
   const opened = openExecutable(plannedTool.executable);
   const executable = opened.value;
   closeDescriptor(opened.descriptor);
-  if (normalized.targetArgIndex !== 0) {
+  if (managed && executable.sha256 !== managedContext.binding.runtime.executableSha256) {
+    throw new Error("managed adapter executable bytes differ from the reviewed runtime lock");
+  }
+  if (!managed && normalized.targetArgIndex !== 0) {
     const firstArgument = normalized.argv[0];
     const executableTokens = new Set([
       plannedTool.executable,
@@ -742,6 +852,21 @@ export function createExecutionManifest(engagementId, input, options = {}) {
   }, { paths });
   let manifestPersisted = false;
   try {
+    const workflowCheck = checkWorkflowExecution(workflow.instanceId, {
+      reservationId: workflow.reservationId,
+      phaseAttemptId: workflow.phaseAttemptId,
+      executionEpochSha256: workflow.executionEpochSha256,
+      manifestId,
+      target: normalized.target,
+      action: normalized.action,
+      toolId: normalized.toolId
+    }, { paths });
+    if (workflowCheck?.effectClass === "A3") {
+      throw new Error(`the ${managed ? "managed adapter" : "supervised generic"} execution lane does not admit A3 workflow phases`);
+    }
+    if (managed && !managedContext.adapter.allowedPhases.includes(workflowCheck.phaseId)) {
+      throw new Error(`managed adapter does not admit workflow phase ${workflowCheck.phaseId}`);
+    }
     const { uid, gid } = currentIds();
     const { environment } = executionEnvironment(paths, runId, executable.resolvedPath);
     const evidence = evidenceRefs(runId);
@@ -766,7 +891,14 @@ export function createExecutionManifest(engagementId, input, options = {}) {
         phaseId: workflow.phaseId,
         phaseAttemptId: workflow.phaseAttemptId,
         reservationId: workflow.reservationId,
-        executionEpochSha256: workflow.executionEpochSha256
+        executionEpochSha256: workflow.executionEpochSha256,
+        journalHeadSha256: workflowCheck.journalHeadSha256,
+        definitionSha256: workflowCheck.definitionSha256,
+        admissionSha256: workflowCheck.admissionSha256,
+        toolMappingSha256: workflowCheck.toolMappingSha256,
+        authorityReceiptSha256: workflowCheck.authorityReceiptSha256,
+        effectiveStops: [...workflowCheck.effectiveStops],
+        effectiveStopsSha256: workflowCheck.effectiveStopsSha256
       },
       operation: {
         targetArgument: normalized.target,
@@ -778,16 +910,17 @@ export function createExecutionManifest(engagementId, input, options = {}) {
           catalogCommand: argv0,
           host: plannedTool.host,
           riskClass: plannedTool.riskClass,
-          readiness: "discovered",
-          knownGoodProvenance: false
+          readiness: managed ? "verified-managed" : "discovered",
+          knownGoodProvenance: managed
         },
         executable,
         argv0,
-        argv: normalized.argv
+        argv: normalized.argv,
+        adapter: managed ? structuredClone(managedContext.binding) : null
       },
       declaredBounds: normalized.declaredBounds,
       runtime: {
-        mode: "supervised-generic",
+        mode: managed ? "reviewed-managed-adapter" : "supervised-generic",
         platform: "linux",
         uid,
         gid,
@@ -797,25 +930,23 @@ export function createExecutionManifest(engagementId, input, options = {}) {
         maxEvidenceBytesPerStream
       },
       enforcement: {
-        enforced: [...capability.enforced],
-        bestEffort: [...capability.bestEffort],
-        unavailable: [...EXECUTION_UNAVAILABLE]
+        enforced: [...(managed ? MANAGED_EXECUTION_ENFORCED : capability.enforced)],
+        bestEffort: [...(managed ? MANAGED_EXECUTION_BEST_EFFORT : capability.bestEffort)],
+        unavailable: [...(managed ? MANAGED_EXECUTION_UNAVAILABLE : EXECUTION_UNAVAILABLE)]
       },
       manifestSha256: "0".repeat(64)
     };
     manifest.manifestSha256 = manifestDigest(manifest);
-    const workflowCheck = checkWorkflowExecution(workflow.instanceId, {
+    checkWorkflowExecution(workflow.instanceId, {
       reservationId: workflow.reservationId,
       phaseAttemptId: workflow.phaseAttemptId,
       executionEpochSha256: workflow.executionEpochSha256,
       manifestId,
+      expectedJournalHeadSha256: manifest.workflow.journalHeadSha256,
       target: normalized.target,
       action: normalized.action,
       toolId: normalized.toolId
     }, { paths });
-    if (workflowCheck?.effectClass === "A3") {
-      throw new Error("the supervised generic execution lane does not admit A3 workflow phases");
-    }
     assertValidDocument(manifest, "execution-manifest.schema.json", { paths });
     assertManifestInvariants(manifest, paths);
     writePrivateFileExclusive(manifestFile(paths, manifestId), `${JSON.stringify(manifest, null, 2)}\n`, {
@@ -905,13 +1036,7 @@ function newRun(manifest) {
     manifestId: manifest.metadata.id,
     manifestSha256: manifest.manifestSha256,
     engagementId: manifest.engagement.id,
-    workflow: {
-      instanceId: manifest.workflow.instanceId,
-      phaseId: manifest.workflow.phaseId,
-      phaseAttemptId: manifest.workflow.phaseAttemptId,
-      reservationId: manifest.workflow.reservationId,
-      executionEpochSha256: manifest.workflow.executionEpochSha256
-    },
+    workflow: executionRunWorkflowBinding(manifest),
     status: "queued",
     createdAt: new Date().toISOString(),
     startedAt: null,
@@ -927,6 +1052,16 @@ function newRun(manifest) {
       resultAvailable: false,
       sandboxRef: manifest.runtime.sandboxRef
     }
+  };
+}
+
+function executionRunWorkflowBinding(manifest) {
+  return {
+    instanceId: manifest.workflow.instanceId,
+    phaseId: manifest.workflow.phaseId,
+    phaseAttemptId: manifest.workflow.phaseAttemptId,
+    reservationId: manifest.workflow.reservationId,
+    executionEpochSha256: manifest.workflow.executionEpochSha256
   };
 }
 
@@ -947,13 +1082,7 @@ function durableClaim(paths, manifest, run) {
     runId: manifest.metadata.runId,
     manifestSha256: manifest.manifestSha256,
     engagementId: manifest.engagement.id,
-    workflow: {
-      instanceId: manifest.workflow.instanceId,
-      phaseId: manifest.workflow.phaseId,
-      phaseAttemptId: manifest.workflow.phaseAttemptId,
-      reservationId: manifest.workflow.reservationId,
-      executionEpochSha256: manifest.workflow.executionEpochSha256
-    },
+    workflow: { ...manifest.workflow },
     claimedAt: new Date().toISOString(),
     createdAt: run.createdAt,
     supervisor: run.supervisor
@@ -982,21 +1111,22 @@ function completeWorkflowRun(manifest, run, resultSha256, paths) {
   }, { paths });
 }
 
-function workflowClaimInput(manifest) {
+function workflowClaimInput(manifest, expectedJournalHeadSha256 = undefined) {
   return {
     reservationId: manifest.workflow.reservationId,
     phaseAttemptId: manifest.workflow.phaseAttemptId,
     executionEpochSha256: manifest.workflow.executionEpochSha256,
     manifestId: manifest.metadata.id,
     manifestSha256: manifest.manifestSha256,
-    runId: manifest.metadata.runId
+    runId: manifest.metadata.runId,
+    ...(expectedJournalHeadSha256 ? { expectedJournalHeadSha256 } : {})
   };
 }
 
-function claimWorkflowRun(manifest, paths) {
+function claimWorkflowRun(manifest, paths, expectedJournalHeadSha256 = undefined) {
   return claimWorkflowExecution(
     manifest.workflow.instanceId,
-    workflowClaimInput(manifest),
+    workflowClaimInput(manifest, expectedJournalHeadSha256),
     { paths }
   );
 }
@@ -1039,22 +1169,32 @@ function bindingStillMatches(manifest, paths, options = {}) {
     phaseAttemptId: manifest.workflow.phaseAttemptId,
     executionEpochSha256: manifest.workflow.executionEpochSha256,
     manifestId: manifest.metadata.id,
+    definitionSha256: manifest.workflow.definitionSha256,
+    admissionSha256: manifest.workflow.admissionSha256,
+    toolMappingSha256: manifest.workflow.toolMappingSha256,
+    authorityReceiptSha256: manifest.workflow.authorityReceiptSha256,
+    effectiveStopsSha256: manifest.workflow.effectiveStopsSha256,
     target: manifest.operation.targetArgument,
     action: manifest.operation.action,
     toolId: manifest.operation.tool.id
   };
+  if (options.expectedWorkflowJournalHeadSha256) {
+    workflowInput.expectedJournalHeadSha256 = options.expectedWorkflowJournalHeadSha256;
+  }
   if (options.includeManifestDigest !== false) workflowInput.manifestSha256 = manifest.manifestSha256;
   const workflow = checkWorkflowExecution(manifest.workflow.instanceId, workflowInput, { paths });
   if (workflow?.effectClass === "A3") {
     throw new Error("the supervised generic execution lane does not admit A3 workflow phases");
   }
+  if (manifest.operation.adapter) assertManagedAdapterManifest(manifest, { paths });
+  return workflow;
 }
 
 function launchAuthorityError(message, terminationReason) {
   return Object.assign(new Error(message), { terminationReason });
 }
 
-function assertLaunchAuthority(manifest, paths, deadline = null) {
+function assertLaunchAuthority(manifest, paths, deadline = null, expectedWorkflowJournalHeadSha256 = undefined) {
   if (deadline !== null && Date.now() >= deadline) {
     throw launchAuthorityError("execution duration limit elapsed before launch", "duration-limit");
   }
@@ -1068,7 +1208,7 @@ function assertLaunchAuthority(manifest, paths, deadline = null) {
     throw launchAuthorityError("execution was stopped before launch", "operator-stop");
   }
   try {
-    bindingStillMatches(manifest, paths);
+    bindingStillMatches(manifest, paths, { expectedWorkflowJournalHeadSha256 });
   } catch (error) {
     throw launchAuthorityError(error.message, "engagement-invalidated");
   }
@@ -1147,7 +1287,10 @@ async function waitForTerminatedGroup(identity, forceKillAt, pollIntervalMs) {
 }
 
 function terminalStatus(reason, exitCode, signal) {
-  if (new Set(["evidence-limit", "evidence-write-failure", "spawn-failure"]).has(reason)) return "failed";
+  if (new Set([
+    "evidence-limit", "evidence-write-failure", "spawn-failure", "managed-runtime-invalidated",
+    "indeterminate-output", "output-validation-failed"
+  ]).has(reason)) return "failed";
   if (reason && reason !== "completed") return "cancelled";
   return exitCode === 0 && signal === null ? "succeeded" : "failed";
 }
@@ -1233,11 +1376,20 @@ export async function executeExecutionManifest(engagementId, input, options = {}
   }
   const { uid, gid } = currentIds();
   if (uid !== manifest.runtime.uid || gid !== manifest.runtime.gid) throw new Error("execution user changed after manifest creation");
-  bindingStillMatches(manifest, paths, { includeManifestDigest: false });
+  if (fs.existsSync(claimFile(paths, manifest.metadata.id))) {
+    readClaim(paths, manifest.metadata.id);
+    throw new Error(`execution manifest was already consumed: ${manifest.metadata.id}`);
+  }
+  bindingStillMatches(manifest, paths, {
+    includeManifestDigest: false,
+    expectedWorkflowJournalHeadSha256: manifest.workflow.journalHeadSha256
+  });
   let run = newRun(manifest);
   durableClaim(paths, manifest, run);
+  let claimedWorkflowJournalHeadSha256;
   try {
-    claimWorkflowRun(manifest, paths);
+    const claimed = claimWorkflowRun(manifest, paths, manifest.workflow.journalHeadSha256);
+    claimedWorkflowJournalHeadSha256 = claimed.projection.journalHeadSha256;
   } catch (error) {
     // The generic one-shot claim is already durable. Persist a terminal local
     // record before releasing or completing its workflow reservation so this
@@ -1362,20 +1514,32 @@ export async function executeExecutionManifest(engagementId, input, options = {}
     // status reconciliation if the supervisor crashes between these writes.
     writeRun(paths, run);
     executionEvent(manifest, "execution.queued", "queued", "A supervised execution was claimed for bound pre-launch checks.", { paths });
-    try { assertLaunchAuthority(manifest, paths, deadline); } catch (error) {
+    try { assertLaunchAuthority(manifest, paths, deadline, claimedWorkflowJournalHeadSha256); } catch (error) {
       terminationReason = error.terminationReason || "engagement-invalidated";
       throw error;
     }
+    if (manifest.operation.adapter) {
+      try {
+        reverifyManagedAdapterManifest(manifest, {
+          paths,
+          verifyManagedTool: options.verifyManagedTool,
+          runManagedSmoke: options.runManagedSmoke
+        });
+      } catch (error) {
+        terminationReason = "managed-runtime-invalidated";
+        throw launchAuthorityError(error.message, "managed-runtime-invalidated");
+      }
+    }
     const opened = openExecutable(manifest.operation.executable.resolvedPath, manifest.operation.executable);
     executableDescriptor = opened.descriptor;
-    try { assertLaunchAuthority(manifest, paths, deadline); } catch (error) {
+    try { assertLaunchAuthority(manifest, paths, deadline, claimedWorkflowJournalHeadSha256); } catch (error) {
       terminationReason = error.terminationReason || "engagement-invalidated";
       throw error;
     }
     stdoutDescriptor = openPrivateFileExclusive(stdoutPath, { label: `execution stdout ${manifest.metadata.runId}` });
     stderrDescriptor = openPrivateFileExclusive(stderrPath, { label: `execution stderr ${manifest.metadata.runId}` });
 
-    try { assertLaunchAuthority(manifest, paths, deadline); } catch (error) {
+    try { assertLaunchAuthority(manifest, paths, deadline, claimedWorkflowJournalHeadSha256); } catch (error) {
       terminationReason = error.terminationReason || "engagement-invalidated";
       throw error;
     }
@@ -1444,7 +1608,10 @@ export async function executeExecutionManifest(engagementId, input, options = {}
         if (fs.existsSync(stopFile(paths, manifest.metadata.runId))) startStopping("operator-stop");
         else if (Date.now() >= Date.parse(manifest.engagement.authorizationValidUntil)) startStopping("authorization-expired");
         else if (Date.now() >= deadline) startStopping("duration-limit");
-        else bindingStillMatches(manifest, paths, { includeBounds: false });
+        else bindingStillMatches(manifest, paths, {
+          includeBounds: false,
+          expectedWorkflowJournalHeadSha256: claimedWorkflowJournalHeadSha256
+        });
       } catch {
         startStopping("engagement-invalidated");
       }
@@ -1475,6 +1642,21 @@ export async function executeExecutionManifest(engagementId, input, options = {}
     closeDescriptor(stderrDescriptor);
     stdoutDescriptor = null;
     stderrDescriptor = null;
+    let adapterOutput = null;
+    if (manifest.operation.adapter && terminationReason === "completed" && closed.code === 0 && closed.signal === null) {
+      try {
+        const stdoutBytes = readPrivateFileBounded(
+          stdoutPath,
+          manifest.runtime.maxEvidenceBytesPerStream,
+          null,
+          { label: `managed execution stdout ${manifest.metadata.runId}` }
+        );
+        adapterOutput = validateManagedAdapterOutput(manifest, stdoutBytes, { paths });
+      } catch {
+        adapterOutput = { ok: false, status: "invalid", reason: "output-validation-failed", records: 0 };
+      }
+      if (!adapterOutput.ok) terminationReason = adapterOutput.reason;
+    }
     const finishedAt = new Date();
     run.status = terminalStatus(terminationReason, closed.code, closed.signal);
     run.finishedAt = finishedAt.toISOString();
@@ -1500,7 +1682,8 @@ export async function executeExecutionManifest(engagementId, input, options = {}
       result: run.result,
       stdout: run.evidence.stdout,
       stderr: run.evidence.stderr,
-      enforcement: manifest.enforcement
+      enforcement: manifest.enforcement,
+      ...(adapterOutput ? { adapterOutput } : {})
     };
     try {
       const serializedResult = `${JSON.stringify(resultEvidence, null, 2)}\n`;
@@ -1541,7 +1724,8 @@ export async function executeExecutionManifest(engagementId, input, options = {}
       exitCode: run.result.exitCode,
       signal: run.result.signal,
       terminationReason: run.terminationReason,
-      evidence: run.evidence
+      evidence: run.evidence,
+      ...(adapterOutput ? { adapterOutput } : {})
     };
   } catch (error) {
     if (pollTimer) clearInterval(pollTimer);
@@ -1599,7 +1783,7 @@ export async function executeExecutionManifest(engagementId, input, options = {}
       run.terminationReason = supervisionLost
         ? "supervision-lost"
         : launchWasBlocked
-          ? null
+          ? (terminationReason === "managed-runtime-invalidated" ? terminationReason : null)
           : terminationReason || "spawn-failure";
       if (childResult) {
         run.result.exitCode = Number.isInteger(childResult.code) ? childResult.code : null;
@@ -1653,7 +1837,7 @@ function assertRunManifestBinding(run, manifest) {
   if (
     run.runId !== manifest.metadata.runId || run.manifestId !== manifest.metadata.id ||
     run.manifestSha256 !== manifest.manifestSha256 || run.engagementId !== manifest.engagement.id ||
-    canonicalDigest(run.workflow) !== canonicalDigest(manifest.workflow)
+    canonicalDigest(run.workflow) !== canonicalDigest(executionRunWorkflowBinding(manifest))
   ) {
     throw new Error("execution run does not match its manifest binding");
   }

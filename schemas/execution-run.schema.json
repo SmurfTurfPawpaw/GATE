@@ -44,7 +44,8 @@
       "enum": [
         null, "completed", "operator-stop", "engagement-invalidated", "authorization-expired",
         "duration-limit", "evidence-limit", "evidence-write-failure", "spawn-failure", "supervisor-signal",
-        "process-group-remained", "supervision-lost", "workflow-claim-failed"
+        "process-group-remained", "supervision-lost", "workflow-claim-failed", "managed-runtime-invalidated",
+        "indeterminate-output", "output-validation-failed"
       ]
     },
     "result": {

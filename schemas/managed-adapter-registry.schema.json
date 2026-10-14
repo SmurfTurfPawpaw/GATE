@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/managed-adapter-registry.schema.json",
+  "title": "GATE reviewed managed target-contact adapter registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "apiVersion", "kind", "adapters"],
+  "properties": {
+    "$schema": { "type": "string", "minLength": 1 },
+    "apiVersion": { "const": "gate.managed-adapters/v1" },
+    "kind": { "const": "ManagedTargetContactAdapterRegistry" },
+    "adapters": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/adapter" }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "adapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "version", "tool", "selectorType", "action", "effectClass", "allowedPhases",
+        "operation", "compiler", "limits", "allowedFeatures", "forbiddenFeatures"
+      ],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "minLength": 2, "maxLength": 80 },
+        "version": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+        "tool": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "version", "riskClass", "lockEntrySha256", "catalogEntrySha256", "executableSha256"],
+          "properties": {
+            "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+            "version": { "type": "string", "pattern": "^[0-9]+(?:\\.[0-9]+){2}$" },
+            "riskClass": { "const": "A1" },
+            "lockEntrySha256": { "$ref": "#/$defs/sha256" },
+            "catalogEntrySha256": { "$ref": "#/$defs/sha256" },
+            "executableSha256": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["linux-x64", "linux-arm64"],
+              "properties": {
+                "linux-x64": { "$ref": "#/$defs/sha256" },
+                "linux-arm64": { "$ref": "#/$defs/sha256" }
+              }
+            }
+          }
+        },
+        "selectorType": { "enum": ["domain", "url"] },
+        "action": { "const": "observe" },
+        "effectClass": { "const": "A1" },
+        "allowedPhases": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,79}$" }
+        },
+        "operation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "schemaVersion"],
+          "properties": {
+            "kind": { "enum": ["dns-query", "http-get"] },
+            "schemaVersion": { "const": 1 }
+          }
+        },
+        "compiler": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "source", "sourceSha256"],
+          "properties": {
+            "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+            "source": { "type": "string", "pattern": "^src/adapters/[a-z0-9-]+\\.mjs$" },
+            "sourceSha256": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["maxMinutes", "maxRequests", "maxParallel", "maxRatePerSecond", "maxTimeoutSeconds", "maxEvidenceBytes"],
+          "properties": {
+            "maxMinutes": { "type": "integer", "minimum": 1, "maximum": 5 },
+            "maxRequests": { "const": 1 },
+            "maxParallel": { "const": 1 },
+            "maxRatePerSecond": { "type": "integer", "minimum": 1, "maximum": 2 },
+            "maxTimeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 15 },
+            "maxEvidenceBytes": { "type": "integer", "minimum": 2097152, "maximum": 67108864 }
+          }
+        },
+        "allowedFeatures": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" }
+        },
+        "forbiddenFeatures": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" }
+        }
+      }
+    }
+  }
+}

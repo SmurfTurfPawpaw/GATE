@@ -63,13 +63,27 @@
     "workflow": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["instanceId", "phaseId", "phaseAttemptId", "reservationId", "executionEpochSha256"],
+      "required": [
+        "instanceId", "phaseId", "phaseAttemptId", "reservationId", "executionEpochSha256",
+        "journalHeadSha256", "definitionSha256", "admissionSha256", "toolMappingSha256",
+        "authorityReceiptSha256", "effectiveStops", "effectiveStopsSha256"
+      ],
       "properties": {
         "instanceId": { "$ref": "#/$defs/id" },
         "phaseId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,79}$" },
         "phaseAttemptId": { "type": "string", "pattern": "^wpa_[a-f0-9]{32}$" },
         "reservationId": { "type": "string", "pattern": "^wxr_[a-f0-9]{32}$" },
-        "executionEpochSha256": { "$ref": "#/$defs/sha256" }
+        "executionEpochSha256": { "$ref": "#/$defs/sha256" },
+        "journalHeadSha256": { "$ref": "#/$defs/sha256" },
+        "definitionSha256": { "$ref": "#/$defs/sha256" },
+        "admissionSha256": { "$ref": "#/$defs/sha256" },
+        "toolMappingSha256": { "$ref": "#/$defs/sha256" },
+        "authorityReceiptSha256": { "$ref": "#/$defs/sha256" },
+        "effectiveStops": {
+          "type": "array", "minItems": 1, "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,79}$" }
+        },
+        "effectiveStopsSha256": { "$ref": "#/$defs/sha256" }
       }
     },
     "operation": {
@@ -83,7 +97,8 @@
         "tool",
         "executable",
         "argv0",
-        "argv"
+        "argv",
+        "adapter"
       ],
       "properties": {
         "targetArgument": { "type": "string", "minLength": 1, "maxLength": 1000, "pattern": "^[^\\u0000\\r\\n]+$" },
@@ -99,8 +114,8 @@
             "catalogCommand": { "type": "string", "pattern": "^[A-Za-z0-9._+-]{1,80}$" },
             "host": { "enum": ["linux", "wsl2"] },
             "riskClass": { "enum": ["P0", "P1", "A1", "A2", "A3"] },
-            "readiness": { "const": "discovered" },
-            "knownGoodProvenance": { "const": false }
+            "readiness": { "enum": ["discovered", "verified-managed"] },
+            "knownGoodProvenance": { "type": "boolean" }
 
           }
         },
@@ -125,6 +140,12 @@
           "minItems": 1,
           "maxItems": 256,
           "items": { "type": "string", "maxLength": 8192, "pattern": "^[^\\u0000]*$" }
+        },
+        "adapter": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/managedAdapterBinding" }
+          ]
         }
       }
     },
@@ -146,7 +167,7 @@
       "additionalProperties": false,
       "required": ["mode", "platform", "uid", "gid", "environment", "sandboxRef", "evidence", "maxEvidenceBytesPerStream"],
       "properties": {
-        "mode": { "const": "supervised-generic" },
+        "mode": { "enum": ["supervised-generic", "reviewed-managed-adapter"] },
         "platform": { "const": "linux" },
         "uid": { "type": "integer", "minimum": 0 },
         "gid": { "type": "integer", "minimum": 0 },
@@ -218,14 +239,22 @@
         "enum": [
           "engagement-binding", "workflow-phase-binding", "workflow-reservation", "target-argument-binding", "declared-action-label-binding", "tool-allowlist", "exact-argv",
           "shell-disabled", "executable-descriptor-observed-sha256", "minimal-environment", "private-stdout-stderr",
-          "one-shot-claim", "declared-bounds-within-receipt"
+          "one-shot-claim", "declared-bounds-within-receipt", "reviewed-adapter-registry",
+          "adapter-operation-schema", "argv-action-semantics-validation", "managed-runtime-lock",
+          "current-managed-executable", "zero-egress-smoke-before-launch", "discovered-target-expansion-disabled",
+          "current-workflow-journal-head"
         ]
       }
     },
     "bestEffortList": {
       "type": "array",
       "uniqueItems": true,
-      "items": { "enum": ["authorization-revocation-polling", "wall-duration", "process-group-termination"] }
+      "items": {
+        "enum": [
+          "authorization-revocation-polling", "wall-duration", "process-group-termination",
+          "tool-request-bound", "tool-rate-limit", "tool-concurrency-limit", "workflow-stop-polling"
+        ]
+      }
     },
     "unavailableList": {
       "type": "array",
@@ -237,6 +266,92 @@
           "filesystem-isolation", "credential-broker", "tool-artifact-inventory", "known-good-executable-provenance",
           "argv-action-semantics-validation", "supervisor-crash-containment", "immutable-executable-snapshot"
         ]
+      }
+    },
+    "managedAdapterBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "version", "registrySha256", "entrySha256", "compiler", "selectorType", "action",
+        "effectClass", "allowedPhases", "operation", "operationSha256", "argvSha256", "runtime",
+        "controls", "allowedFeatures", "forbiddenFeatures"
+      ],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+        "version": { "type": "integer", "minimum": 1 },
+        "registrySha256": { "$ref": "#/$defs/sha256" },
+        "entrySha256": { "$ref": "#/$defs/sha256" },
+        "compiler": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "source", "sourceSha256"],
+          "properties": {
+            "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+            "source": { "type": "string", "pattern": "^src/adapters/[a-z0-9-]+\\.mjs$" },
+            "sourceSha256": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        "selectorType": { "enum": ["domain", "url"] },
+        "action": { "const": "observe" },
+        "effectClass": { "const": "A1" },
+        "allowedPhases": {
+          "type": "array", "minItems": 1, "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,79}$" }
+        },
+        "operation": {
+          "oneOf": [
+            {
+              "type": "object", "additionalProperties": false,
+              "required": ["kind", "recordType", "resolver", "timeoutSeconds"],
+              "properties": {
+                "kind": { "const": "dns-query" },
+                "recordType": { "const": "A" },
+                "resolver": { "type": "string", "minLength": 3, "maxLength": 80, "pattern": "^[^\\u0000\\r\\n,\\s]+$" },
+                "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 15 }
+              }
+            },
+            {
+              "type": "object", "additionalProperties": false,
+              "required": ["kind", "method", "allowedIp", "timeoutSeconds", "maxResponseBytes"],
+              "properties": {
+                "kind": { "const": "http-get" },
+                "method": { "const": "GET" },
+                "allowedIp": { "type": "string", "minLength": 2, "maxLength": 45, "pattern": "^[0-9A-Fa-f:.]+$" },
+                "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 15 },
+                "maxResponseBytes": { "type": "integer", "minimum": 1024, "maximum": 1048576 }
+              }
+            }
+          ]
+        },
+        "operationSha256": { "$ref": "#/$defs/sha256" },
+        "argvSha256": { "$ref": "#/$defs/sha256" },
+        "runtime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["provider", "version", "platform", "lockEntrySha256", "catalogEntrySha256", "artifactSha256", "executableSha256"],
+          "properties": {
+            "provider": { "const": "verified-release" },
+            "version": { "type": "string", "minLength": 1 },
+            "platform": { "enum": ["linux-x64", "linux-arm64"] },
+            "lockEntrySha256": { "$ref": "#/$defs/sha256" },
+            "catalogEntrySha256": { "$ref": "#/$defs/sha256" },
+            "artifactSha256": { "$ref": "#/$defs/sha256" },
+            "executableSha256": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        "controls": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "type": ["boolean", "string", "integer", "number", "array"] }
+        },
+        "allowedFeatures": {
+          "type": "array", "minItems": 1, "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" }
+        },
+        "forbiddenFeatures": {
+          "type": "array", "minItems": 1, "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" }
+        }
       }
     }
   }

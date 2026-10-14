@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { readJson } from "./config.mjs";
+import { loadManagedAdapterRegistry } from "./managed-adapters.mjs";
 import { offlineAnalysisCapability } from "./offline-analysis.mjs";
 import { runtimePaths } from "./paths.mjs";
 import { readPrivateFileBounded } from "./private-fs.mjs";
@@ -272,6 +273,35 @@ function managedAdapterStatus(tool, paths, host, environment, options) {
   });
 }
 
+function reviewedTargetContactAdapterStatus(tool, host, managedRuntimeVerified, options) {
+  const adapters = options.targetContactAdapters?.filter((adapter) => adapter.tool.id === tool.id) || [];
+  return adapters.map((adapter) => {
+    const hostCompatible = new Set(["linux", "wsl2"]).has(host);
+    const ready = Boolean(hostCompatible && managedRuntimeVerified);
+    return {
+      id: adapter.id,
+      mode: "reviewed-managed-adapter",
+      capability: "managed-target-contact",
+      version: adapter.version,
+      toolVersion: adapter.tool.version,
+      selectorType: adapter.selectorType,
+      action: adapter.action,
+      effectClass: adapter.effectClass,
+      allowedPhases: [...adapter.allowedPhases],
+      registrySha256: options.targetContactAdapterRegistrySha256,
+      integrityChecked: managedRuntimeVerified,
+      upstreamVerified: managedRuntimeVerified,
+      executable: managedRuntimeVerified ? options.managedRuntimeExecutable : null,
+      hostCompatible,
+      ready,
+      unavailable: [
+        ...(!hostCompatible ? ["unsupported-host"] : []),
+        ...(!managedRuntimeVerified ? ["managed-runtime-integrity-unverified"] : [])
+      ]
+    };
+  });
+}
+
 function resolvedTool(tool, paths, host, options) {
   const environment = options.environment || process.env;
   const commandCandidate = commandAvailable(tool.command, environment);
@@ -306,22 +336,25 @@ function resolvedTool(tool, paths, host, options) {
   }
   const managedRuntimeVerified = Boolean(managedRuntime?.verified && managedRuntime?.executable);
   const privilegeAdapterRequired = tool.privileges.some((value) => value !== "user");
-  // A reviewed release establishes byte identity. It does not establish that a
-  // catalog command is safe for every workflow phase, action, or argv shape.
-  // Managed runtimes therefore remain invocation candidates until a reviewed
-  // phase-specific adapter/admission binds those semantics.
-  const managedRuntimeAdmissionRequired = managedRuntimeVerified;
-  const managedAdapterStatuses = managedAdapterStatus(tool, paths, host, environment, options);
+  // A reviewed release establishes byte identity. It becomes invocable only
+  // for operations exposed by a digest-bound phase-specific adapter.
+  const upstreamAdapterStatuses = managedAdapterStatus(tool, paths, host, environment, options);
+  const targetContactAdapterStatuses = reviewedTargetContactAdapterStatus(tool, host, managedRuntimeVerified, {
+    ...options,
+    managedRuntimeExecutable: managedRuntime?.executable || null
+  });
+  const managedAdapterStatuses = [...upstreamAdapterStatuses, ...targetContactAdapterStatuses];
   const receiptManagedAdapter = managedAdapterStatuses.find((adapter) => adapter.receiptPresent) || null;
   const verifiedManagedAdapter = managedAdapterStatuses.find((adapter) => adapter.upstreamVerified) || null;
   const readyManagedAdapters = managedAdapterStatuses.filter((adapter) => adapter.ready);
+  const managedRuntimeAdmissionRequired = managedRuntimeVerified && targetContactAdapterStatuses.every((adapter) => !adapter.ready);
   const pathGenericLaneEligible = Boolean(commandCandidate) && acceptsPathDiscovery && compatible &&
     new Set(["linux", "wsl2"]).has(host);
   const genericLaneEligible = !managedRuntimeVerified && pathGenericLaneEligible;
-  const executionModes = [
+  const executionModes = [...new Set([
     ...(genericLaneEligible ? ["supervised-generic"] : []),
     ...readyManagedAdapters.map((adapter) => adapter.mode)
-  ];
+  ])];
   const installed = Boolean(
     managedRuntime?.installed || receiptManagedAdapter || verifiedManagedAdapter || (commandCandidate && acceptsPathDiscovery)
   );
@@ -351,6 +384,8 @@ function resolvedTool(tool, paths, host, options) {
       ? "Admit the reviewed data dependencies before creating an execution manifest."
       : managedRuntimeVerified && privilegeAdapterRequired
         ? "Use a reviewed privilege-aware adapter before creating an execution manifest."
+        : targetContactAdapterStatuses.some((adapter) => adapter.ready)
+          ? `Use the reviewed ${targetContactAdapterStatuses.find((adapter) => adapter.ready).id} manifest; broader ${tool.name} capability remains unadmitted.`
         : managedRuntimeAdmissionRequired
           ? "Add a reviewed workflow-phase adapter that binds action and argv semantics before creating an execution manifest."
         : genericLaneEligible
@@ -402,6 +437,21 @@ function resolvedTool(tool, paths, host, options) {
     installationGrantsAuthority: false,
     next
   };
+}
+
+function targetContactRegistry(options, paths) {
+  if (options.targetContactAdapters) {
+    return {
+      adapters: options.targetContactAdapters,
+      registrySha256: options.targetContactAdapterRegistrySha256 || null
+    };
+  }
+  try {
+    const loaded = loadManagedAdapterRegistry({ paths });
+    return { adapters: [...loaded.adapters.values()], registrySha256: loaded.registrySha256 };
+  } catch {
+    return { adapters: [], registrySha256: null };
+  }
 }
 
 export function loadToolCatalog(options = {}) {
@@ -460,10 +510,16 @@ export function toolInventory(options = {}) {
     // Inventory remains available when the optional runtime lock is invalid;
     // repository validation and tool plan surface the lock error explicitly.
   }
+  const targetAdapters = targetContactRegistry(options, paths);
   const tools = catalog.tools
     .filter((tool) => !selected || selected.has(tool.id))
     .filter((tool) => !options.category || tool.category === options.category)
-    .map((tool) => resolvedTool(tool, paths, host, { ...options, runtimeEntries }));
+    .map((tool) => resolvedTool(tool, paths, host, {
+      ...options,
+      runtimeEntries,
+      targetContactAdapters: targetAdapters.adapters,
+      targetContactAdapterRegistrySha256: targetAdapters.registrySha256
+    }));
   return {
     host,
     profile: profile ? { id: profile.id, description: profile.description, maxRiskClass: profile.maxRiskClass } : null,
@@ -491,9 +547,12 @@ export function toolShow(id, options = {}) {
     // Validation and plan expose the exact lock failure. This read-only detail
     // path stays available but cannot become execution-ready.
   }
+  const targetAdapters = targetContactRegistry(options, paths);
   return resolvedTool(tool, paths, currentHost(), {
     ...options,
     runtimeEntries,
+    targetContactAdapters: targetAdapters.adapters,
+    targetContactAdapterRegistrySha256: targetAdapters.registrySha256,
     verifyManagedIntegrity: false
   });
 }
@@ -509,9 +568,12 @@ export function toolPlan(id, options = {}) {
   } catch {
     // managedToolPlan below returns the exact invalid-lock diagnostic.
   }
+  const targetAdapters = targetContactRegistry(options, paths);
   const resolved = resolvedTool(tool, paths, currentHost(), {
     ...options,
     runtimeEntries,
+    targetContactAdapters: targetAdapters.adapters,
+    targetContactAdapterRegistrySha256: targetAdapters.registrySha256,
     verifyManagedIntegrity: options.verifyManagedIntegrity !== false
   });
   let runtimePlan = null;

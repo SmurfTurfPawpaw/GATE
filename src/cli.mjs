@@ -16,6 +16,7 @@ import {
 } from "./lib/engagements.mjs";
 import {
   createExecutionManifest,
+  createManagedExecutionManifest,
   executeExecutionManifest,
   reconcileExecution,
   requestEngagementStops,
@@ -109,6 +110,9 @@ Engagements
   engagement check ID --target TARGET --action ACTION
   engagement manifest ID --workflow ID --phase-attempt ID --target TARGET --action ACTION --tool TOOL --minutes N
                          --requests N --parallel N --rate N --tokens N [--evidence-bytes N] -- ARGV...
+  engagement adapter-manifest ID --adapter dnsx-domain-observe|httpx-url-observe --workflow ID
+                         --phase-attempt ID --target TARGET --minutes N --requests 1 --parallel 1 --rate 1
+                         --tokens N [adapter operation flags]
   engagement exec ID --manifest ID --confirm "EXECUTE ID SHA256 UNMETERED"
   engagement reconcile ID --manifest ID --confirm "RECONCILE EXECUTION ID SHA256"
   engagement stop ID --run RUN
@@ -672,6 +676,48 @@ export async function main(argv) {
         ),
         json
       );
+    }
+    if (action === "adapter-manifest") {
+      if (parsed.passthrough.length > 0) throw new Error("adapter-manifest does not accept raw command arguments");
+      const adapterId = requiredFlag(parsed.flags, "adapter");
+      const common = [
+        "adapter", "workflow", "phase-attempt", "target", "minutes", "requests", "parallel", "rate",
+        "tokens", "evidence-bytes", "timeout-seconds", "json"
+      ];
+      let operation;
+      if (adapterId === "dnsx-domain-observe") {
+        assertFlags(parsed.flags, [...common, "record-type", "resolver"]);
+        operation = {
+          kind: "dns-query",
+          recordType: requiredFlag(parsed.flags, "record-type"),
+          resolver: requiredFlag(parsed.flags, "resolver"),
+          timeoutSeconds: Number(requiredFlag(parsed.flags, "timeout-seconds"))
+        };
+      } else if (adapterId === "httpx-url-observe") {
+        assertFlags(parsed.flags, [...common, "method", "allowed-ip", "max-response-bytes"]);
+        operation = {
+          kind: "http-get",
+          method: requiredFlag(parsed.flags, "method"),
+          allowedIp: requiredFlag(parsed.flags, "allowed-ip"),
+          timeoutSeconds: Number(requiredFlag(parsed.flags, "timeout-seconds")),
+          maxResponseBytes: Number(requiredFlag(parsed.flags, "max-response-bytes"))
+        };
+      } else {
+        throw new Error(`unknown managed target-contact adapter: ${adapterId}`);
+      }
+      return output(createManagedExecutionManifest(id, {
+        adapterId,
+        workflowId: requiredFlag(parsed.flags, "workflow"),
+        phaseAttemptId: requiredFlag(parsed.flags, "phase-attempt"),
+        target: requiredFlag(parsed.flags, "target"),
+        operation,
+        maxMinutes: requiredFlag(parsed.flags, "minutes"),
+        estimatedRequests: requiredFlag(parsed.flags, "requests"),
+        maxParallel: requiredFlag(parsed.flags, "parallel"),
+        maxRatePerSecond: requiredFlag(parsed.flags, "rate"),
+        maxTokens: requiredFlag(parsed.flags, "tokens"),
+        maxEvidenceBytes: optionalValueFlag(parsed.flags, "evidence-bytes")
+      }, { paths }), json);
     }
     if (action === "exec") {
       assertFlags(parsed.flags, ["manifest", "confirm", "json"]);

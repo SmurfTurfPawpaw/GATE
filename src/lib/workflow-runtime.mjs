@@ -2109,6 +2109,14 @@ export function claimWorkflowExecution(id, input, options = {}) {
   if (!SHA256_PATTERN.test(String(input.manifestSha256 || ""))) throw new Error("workflow execution manifest digest is invalid");
   return mutate(id, intentOptions(options, "execution.claim", input), (projection, entries, paths) => {
     assertDirectMutationAllowed(projection, "claim execution");
+    if (input.expectedJournalHeadSha256 !== undefined) {
+      if (!SHA256_PATTERN.test(String(input.expectedJournalHeadSha256))) {
+        throw new Error("expected workflow journal head digest is invalid");
+      }
+      if (projection.journalHeadSha256 !== input.expectedJournalHeadSha256) {
+        throw new Error("workflow journal head changed after manifest creation");
+      }
+    }
     const reservation = projection.executionReservations[reservationId];
     if (!reservation || reservation.status !== "reserved") throw new Error("workflow execution reservation is not available to claim");
     assertReservationBinding(reservation, input);
@@ -2139,6 +2147,17 @@ export function checkWorkflowExecution(id, input, options = {}) {
   let primaryError = null;
   try {
     const loaded = loadProjection(paths);
+    if (loaded.projection.status !== "open") {
+      throw new Error(`workflow status ${loaded.projection.status} cannot authorize execution`);
+    }
+    if (input.expectedJournalHeadSha256 !== undefined) {
+      if (!SHA256_PATTERN.test(String(input.expectedJournalHeadSha256))) {
+        throw new Error("expected workflow journal head digest is invalid");
+      }
+      if (loaded.projection.journalHeadSha256 !== input.expectedJournalHeadSha256) {
+        throw new Error("workflow journal head changed after manifest creation or claim");
+      }
+    }
     const reservation = loaded.projection.executionReservations[String(input.reservationId || "")];
     if (reservation && ["completed", "failed", "cancelled", "blocked", "unknown"].includes(reservation.status)) {
       assertReservationBinding(reservation, input);
@@ -2155,6 +2174,20 @@ export function checkWorkflowExecution(id, input, options = {}) {
     if (input.target && sha256(Buffer.from(input.target)) !== reservation.targetSha256) throw new Error("workflow execution target changed");
     if (input.action && input.action !== reservation.action) throw new Error("workflow execution action changed");
     if (input.toolId && input.toolId !== reservation.toolId) throw new Error("workflow execution tool changed");
+    for (const [field, actual] of [
+      ["definitionSha256", loaded.projection.definition.sha256],
+      ["admissionSha256", reservation.admissionSha256],
+      ["toolMappingSha256", reservation.toolMappingSha256],
+      ["authorityReceiptSha256", reservation.authorityReceiptSha256]
+    ]) {
+      if (input[field] !== undefined && input[field] !== actual) {
+        throw new Error(`workflow execution ${field} binding changed`);
+      }
+    }
+    const effectiveStopsSha256 = canonicalDigest(active.effectiveStops, "gate.workflow.effective-stops.v1");
+    if (input.effectiveStopsSha256 !== undefined && input.effectiveStopsSha256 !== effectiveStopsSha256) {
+      throw new Error("workflow execution effective stop binding changed");
+    }
     recheckAdmission(paths, active);
     return {
       ok: true,
@@ -2163,9 +2196,15 @@ export function checkWorkflowExecution(id, input, options = {}) {
       phaseAttemptId: reservation.phaseAttemptId,
       reservationId: reservation.reservationId,
       executionEpochSha256: reservation.executionEpochSha256,
+      journalHeadSha256: loaded.projection.journalHeadSha256,
+      definitionSha256: loaded.projection.definition.sha256,
+      admissionSha256: reservation.admissionSha256,
+      toolMappingSha256: reservation.toolMappingSha256,
+      authorityReceiptSha256: reservation.authorityReceiptSha256,
+      effectiveStops: [...active.effectiveStops],
+      effectiveStopsSha256,
       effectClass: active.effectClass,
-      envelope: structuredClone(reservation.envelope),
-      authorityReceiptSha256: reservation.authorityReceiptSha256
+      envelope: structuredClone(reservation.envelope)
     };
   } catch (error) {
     primaryError = error;
