@@ -489,7 +489,8 @@
                     },
                     "supportedHosts": {
                       "const": [
-                        "linux"
+                        "linux",
+                        "wsl2"
                       ]
                     }
                   },
