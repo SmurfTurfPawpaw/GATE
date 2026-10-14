@@ -32,6 +32,10 @@ const LEARNING_STATUSES = new Set(["proposed", "active", "superseded", "reverted
 const LEARNING_SENSITIVITIES = new Set(["public", "private"]);
 const USAGE_AVAILABILITY = new Set(["exact", "estimated", "unavailable"]);
 const UPSTREAM_INTEGRITY = new Set(["verified", "receipt-only", "commit-only", "invalid", "not-installed"]);
+const PROJECT_STATUSES = new Set(["ready", "invalid"]);
+const PROJECT_PROVIDERS = new Set(["github", "gitlab", "forgejo", "gitea", "local"]);
+const PROJECT_ENVIRONMENTS = new Set(["host", "rootless-container", "container", "vm", "remote-lab"]);
+const PROJECT_DELIVERY_MODES = new Set(["no-mistakes", "direct-pr", "local-only"]);
 const OBSERVER_API_VERSION = "gate.observer/v1";
 const MAX_STATIC_ASSET_BYTES = 1_048_576;
 // Pseudonyms only need to be stable for one observer process. A random HMAC
@@ -505,6 +509,26 @@ function summarizeUpstream(value) {
   };
 }
 
+function summarizeProject(value) {
+  const project = object(value);
+  const status = safeEnum(project?.status, PROJECT_STATUSES, null);
+  // Invalid registry entries can contain any filesystem-valid name. Hash the
+  // raw nonempty name so corrupt entries remain visible without exposing it.
+  const privateId = status === "invalid" && typeof project?.registryEntry === "string" && project.registryEntry
+    ? project.registryEntry
+    : boundedString(project?.id, 128);
+  if (!privateId || !status) return null;
+  return {
+    id: opaqueId("project", privateId),
+    status,
+    provider: safeEnum(project.provider, PROJECT_PROVIDERS, null),
+    environment: safeEnum(project.environment, PROJECT_ENVIRONMENTS, null),
+    deliveryMode: safeEnum(project.deliveryMode, PROJECT_DELIVERY_MODES, null),
+    deploymentEnabled: typeof project.deploymentEnabled === "boolean" ? project.deploymentEnabled : null,
+    activeTestingEnabled: typeof project.activeTestingEnabled === "boolean" ? project.activeTestingEnabled : null
+  };
+}
+
 function configuredBudget(paths) {
   try {
     const config = JSON.parse(fs.readFileSync(path.join(paths.repo, "config", "gate.config.json"), "utf8"));
@@ -586,6 +610,7 @@ export function projectSnapshot(rawStatus, paths) {
       budget,
       telemetry: { freshness, lastActivityAt, ageSeconds },
       engagements: Array.isArray(raw.engagements) ? raw.engagements.map(summarizeEngagement).filter(Boolean) : [],
+      projects: Array.isArray(raw.projects) ? raw.projects.map(summarizeProject).filter(Boolean) : [],
       upstreams: Array.isArray(raw.upstreams) ? raw.upstreams.map(summarizeUpstream).filter(Boolean) : []
     },
     events: { apiVersion: OBSERVER_API_VERSION, at: generatedAt, events: events.map(publicEvent) },

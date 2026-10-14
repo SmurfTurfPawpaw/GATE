@@ -192,11 +192,48 @@ export function readPrivateFile(file, encoding = null, options = {}) {
   }
 }
 
+/** Read a stable private file with an explicit byte ceiling. */
+export function readPrivateFileBounded(file, maximumBytes, encoding = null, options = {}) {
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 0) {
+    throw new Error("maximum private file size must be a non-negative safe integer");
+  }
+  const resolved = path.resolve(file);
+  const label = options.label || `private file ${resolved}`;
+  const descriptor = openPrivateFile(resolved, { operation: "read", label });
+  try {
+    const before = fs.fstatSync(descriptor);
+    if (before.size > maximumBytes) throw new Error(`${label} exceeds the ${maximumBytes}-byte limit`);
+    const chunks = [];
+    let total = 0;
+    while (total <= maximumBytes) {
+      const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, maximumBytes + 1 - total));
+      const bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      chunks.push(buffer.subarray(0, bytesRead));
+      total += bytesRead;
+    }
+    if (total > maximumBytes) throw new Error(`${label} exceeds the ${maximumBytes}-byte limit`);
+    const after = fs.fstatSync(descriptor);
+    if (
+      !sameFile(before, after) || before.size !== after.size ||
+      before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || total !== after.size
+    ) {
+      throw new Error(`${label} changed while it was being read`);
+    }
+    verifyPathStillNames(resolved, after, assertFileStat, label);
+    const content = Buffer.concat(chunks, total);
+    return encoding === null ? content : content.toString(encoding);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
 export function appendPrivateFile(file, content, options = {}) {
   securePrivateDirectory(path.dirname(file), { create: false, label: `parent directory for ${file}` });
   const descriptor = openPrivateFile(file, { operation: "append", create: true, label: options.label });
   try {
     fs.writeFileSync(descriptor, content, options.encoding || "utf8");
+    if (options.sync === true) fs.fsyncSync(descriptor);
   } finally {
     fs.closeSync(descriptor);
   }

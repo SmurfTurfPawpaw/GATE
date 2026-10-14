@@ -4,7 +4,7 @@
 
 GATE is host-first. It is designed to run on a Windows 11 laptop through WSL2 with Codex CLI as the primary harness. Native tools remain appropriate when a GUI, the Windows certificate store, packet capture, USB, a GPU, or radio hardware needs direct host access. Containers can organize conflicting dependencies, but GATE does not treat a container, WSL2, or a Git worktree as a security boundary.
 
-> **Status: v0.1 foundation.** The checked-in policy, schemas, CLI, engagement receipts, observer, token reader, upstream pins, and security-tool catalog work today. The complete Firstmate/Treehouse/No Mistakes publication pipeline, background service management, scope-aware adapters for every security tool, automatic tool installation, deployment, and lab lifecycle remain integration work. See [Current limits](#current-limits).
+> **Status: v0.1 foundation.** The checked-in policy, schemas, CLI, private project registry, verified Treehouse lease bridge, engagement receipts, observer, token reader, upstream pins, and security-tool catalog work today. Complete Firstmate, GNHF, and No Mistakes orchestration, background service management, scope-aware adapters for every security tool, automatic catalog-tool installation, deployment, and lab lifecycle remain integration work. See [Current limits](#current-limits).
 
 ## Start on Windows 11 with WSL2
 
@@ -50,7 +50,7 @@ GATE composes upstream projects at exact commits rather than merging their sourc
 | Component | Role |
 | --- | --- |
 | **Firstmate** | Intake, supervision, dispatch, and the operator decision inbox |
-| **Treehouse** | Exclusive development workspace leases and their lifecycle |
+| **Treehouse** | Exclusive development workspace allocation and durable leases |
 | **Codex CLI** | Primary implementation and investigation harness |
 | **GNHF** | Optional bounded iteration inside one fresh Treehouse lease |
 | **No Mistakes** | Immutable handoff, review, tests, documentation, lint, push, PR, and CI |
@@ -63,6 +63,62 @@ GATE composes upstream projects at exact commits rather than merging their sourc
 | **Observer** | Read-only activity, gate, learning, upstream, and token views |
 
 The full ownership and recovery model is in [docs/architecture.md](docs/architecture.md) and [docs/operating-model.md](docs/operating-model.md). Exact upstream commits, versions, and artifact integrity values live in [locks/upstreams.lock.json](locks/upstreams.lock.json); committed npm dependency trees live under [locks/npm](locks/npm).
+
+### Register a private project
+
+Copy the contract template to a private working directory, edit every placeholder, then register it. Registration validates the schema, repository identity, default branch, and named execution and security profiles before storing a canonical owner-only copy at `GATE_HOME/projects/PROJECT_ID.json`:
+
+```bash
+mkdir -p "$HOME/.config/gate/projects"
+cp templates/project.json "$HOME/.config/gate/projects/my-project.json"
+# Edit the private copy, including metadata.id and repository.url.
+
+./bin/gate.mjs project register \
+  --file "$HOME/.config/gate/projects/my-project.json" --json
+./bin/gate.mjs project verify my-project --json
+./bin/gate.mjs project list --json
+./bin/gate.mjs project show my-project --json
+```
+
+Registering the same canonical contract again is idempotent. A different contract with the same ID, or a second project that resolves to the same repository identity, is rejected. Local `file://` repositories are stored at their physical realpath and fail later verification if a moved or replaced alias resolves elsewhere. A contract-write failure rolls back the exact new file when that can be proved safe. An audit append, flush, or close error is ambiguous because the event may already be durable, so GATE preserves the contract and its nonce-and-digest-bound `.registry.pending` marker for reconciliation. An abrupt interruption can leave the same fail-closed state. While a lock or pending marker exists, full reads fail or report invalid/degraded registry state. Never delete either control blindly; follow the evidence-based recovery procedure in [docs/operating-model.md](docs/operating-model.md#private-project-contracts). `list`, healthy `status`, and the observer expose bounded summaries without repository URLs or deployment destinations; the observer also replaces the private project ID with a process-local pseudonym. `show` deliberately returns the complete private contract, so treat its terminal output accordingly. v0.1 has no project update or delete command, and registration does not clone a repository or make the contract an authorization grant.
+
+### Lease and verify a Treehouse workspace
+
+The workspace bridge runs only on Linux or WSL2. Install the locked Treehouse 3.1.3 release once, then use GATE for lease state. Every operation revalidates the managed executable against the repository lock and refuses an absent, modified, or receipt-only installation:
+
+```bash
+./bin/gate.mjs upstream install treehouse --json
+./bin/gate.mjs workspace status --repo "$HOME/src/my-project" --json
+
+./bin/gate.mjs workspace lease \
+  --repo "$HOME/src/my-project" \
+  --task issue-123 \
+  --branch gate/issue-123 \
+  --base main --json
+```
+
+Lease acquisition is the only path that invokes Treehouse. GATE calls the verified binary as `treehouse get --lease --json --no-fetch --branch BRANCH --lease-holder HOLDER [--base BASE]`; omitting `--base` leaves base selection to the repository's Treehouse configuration. GATE never invokes Treehouse `status`, `return`, `destroy`, `prune`, or `enter`. It also disables lazy fetches and Git transports, uses a fixed trusted system Git, and gives each subprocess a minimal environment with an empty private home and temporary directory. The bridge has no credential, proxy, SSH-agent, or network broker. Fetch or update every required ref through a separate reviewed workflow before running the offline lease command.
+
+GATE binds private Treehouse state to the physical clone and allocates a fresh task-ID-hashed root for each lease. A task ID is one-shot: its root is never reused, even after failure, so retry with a new task ID. Each physical clone can consume at most 511 retained task roots over its lifetime. When that limit is reached, use a new physical clone or wait for a future mount-safe upstream lifecycle primitive; do not delete old roots to make room. Before and after lease acquisition, GATE accepts only a narrow reviewed set of shared repository-local and per-worktree Git configuration keys and validates their values; every unreviewed key fails closed. This excludes includes, credential/SSH/proxy helpers, filters, diff/merge drivers, editors, pagers, external protocols, repository redirection, and weakened stat handling. Git LFS repositories remain blocked until their command-capable filters have a reviewed adapter.
+
+`workspace status` does not run Treehouse. It stable-reads every clone and task binding, the exact version-4 state with one healthy lease, and the exact 32-byte owner-only state key. It authenticates the seed inventory with its HMAC, then requires the raw state-file and key SHA-256 digests to match the immutable completed GATE binding. The HMAC authenticates only the seed inventory; lease identity also depends on the trusted `get` receipt and the immutable raw-file digests. Treehouse 3.1.3 status recovery can move user files, which is why neither GATE nor the operator may use it for inspection.
+
+Before `get`, GATE durably publishes a `pending` binding. After Treehouse returns, GATE checks the returned base, path, lease ID, holder, timestamp, requested branch, exact state, in-progress Git state, submodules, nested metadata, indexes, objects, and controlled checkout. It then writes the durable `workspace.leased` event and atomically replaces `pending` with a `complete` binding containing the event receipt and immutable state/key digests, followed by another state read. An interruption leaves the root retained and status reports it as unverified for manual reconciliation. Keep the returned workspace path, lease ID, and task ID, and work only in that path.
+
+After the workspace commit has landed, stop its processes and verify the exact lease. `--repo` must name the main worktree, and `--landed-ref` must be the branch currently checked out there:
+
+```bash
+./bin/gate.mjs workspace verify \
+  --repo "$HOME/src/my-project" \
+  --path WORKSPACE_PATH \
+  --task issue-123 \
+  --lease 0123456789abcdef0123456789abcdef \
+  --landed-ref main --json
+```
+
+`workspace verify` is nonmutating. It rechecks the lease identity, common Git state, real indexes, full object integrity, zero unreachable objects, process state, and exact filesystem bytes, then proves that the workspace's current `HEAD` is locally reachable from the branch checked out in the main worktree. Ignored cache paths may remain in the main worktree; extras or ignored paths in the leased workspace fail verification. This is local reachability evidence only, not proof of a provider push, No Mistakes completion, or publication. The command emits `workspace.verified` and deliberately retains the durable lease.
+
+Automatic Treehouse return, reset, destroy, and slot reuse are disabled. Reproduced bind-mount races in Treehouse 3.1.3 can make those destructive operations alter or delete host data, and the upstream release has no safe cleanup primitive. Never run any Treehouse command directly against a GATE root, including `treehouse status`; use GATE's workspace commands and the ordered recovery procedure in [the operating model](docs/operating-model.md#operation-lock-recovery). Retained task roots consume disk until a mount-safe upstream operation exists. Treehouse is change isolation, not a boundary for same-user code: a task can still mutate the clone's shared common `.git`, including refs, hooks, and configuration. Use a standalone clone or an OS sandbox for unknown or hostile code.
 
 ### Preflight an exact reviewed head
 
@@ -197,7 +253,7 @@ Public learnings append one machine-readable line to `memory/learnings.jsonl` an
   --cause "SANITIZED_CAUSE" --change "SPECIFIC_CHANGE"
 ```
 
-Public project-scoped learning fails closed until GATE has a project registry and destination. Record it with `--private --scope project` in the meantime; repository-scoped sanitized learning continues to use the reviewed public ledger.
+Public project-scoped learning still fails closed because no public project-promotion destination is configured. The private registry does not make project details releasable. Record project learning with `--private --scope project` in the meantime; repository-scoped sanitized learning continues to use the reviewed public ledger.
 
 A learning is complete only when the behavior, policy, configuration, test, or documentation actually changes. Repository-level promotion goes through No Mistakes, and new evidence supersedes or reverts earlier guidance without erasing history. Target or tool output is untrusted data: it may suggest a learning, but it cannot directly alter memory, policy, authorization, or publication rights.
 
@@ -242,16 +298,18 @@ This is a project-scoped install. Do not add `--global`; review and pin the GATE
 
 The v0.1 boundary is intentionally explicit:
 
-- Firstmate, Treehouse, GNHF, No Mistakes, REA, Lavish, AXI, and Skills CLI are pinned composition points; the GATE CLI does not yet orchestrate their complete lifecycle.
+- GATE implements the Linux/WSL2 Treehouse `lease`, aggregate `status`, and nonmutating `verify` bridge. Firstmate intake/dispatch, Codex launch, bounded GNHF execution, No Mistakes handoff, and the complete cross-owner lifecycle are not orchestrated.
 - The CLI records a No Mistakes review result but does not invoke No Mistakes or cryptographically verify an external attestation. An operator or trusted adapter must provide truthful run data.
 - Operator approval receipts are digest-checked local files, not signed identities or remotely attested approvals. Their provenance relies on the single-operator process and filesystem permissions around `GATE_HOME`. This limitation applies to engagement authority; managed-upstream byte integrity is independently anchored to reviewed repository locks.
-- GitHub exact-head PR and required-check preflight is implemented read-only. Merge, deploy, and publish remain blocked until a trusted adapter can verify an external No Mistakes attestation for the exact head and enforce project policy. The project registry, `status --watch`, `down`, and the documented `gate lab` lifecycle are also not implemented yet.
+- GitHub exact-head PR and required-check preflight is implemented read-only. Merge, deploy, and publish remain blocked until a trusted adapter can verify an external No Mistakes attestation for the exact head and enforce project policy. `status --watch`, `down`, and the documented `gate lab` lifecycle are not implemented yet.
+- The private project registry validates, deduplicates, stores, lists, shows, and verifies contracts. It does not update or delete them, select a project implicitly, clone repositories, bind workspace commands to a registered contract, or enforce registered delivery and deployment fields in publication adapters.
+- The Treehouse bridge requires the exact integrity-verified 3.1.3 release, fixed system Git, local refs, and clone-bound one-shot task roots. It invokes only `get` for acquisition; status and verification read bound state directly, and GATE never invokes Treehouse `status`, `return`, or `destroy`. It has no credential/proxy/SSH/network broker, rejects unsafe local Git state including Git LFS filters and submodules, and accepts only the main worktree's checked-out branch as local proof of landing. Verification retains every lease; automatic return, reset, destruction, reuse, and mount-safe cleanup are unavailable. The lifetime limit is 511 retained task roots per physical clone, after which work continues from a new physical clone or waits for future safe upstream lifecycle support. Worktrees do not isolate same-user access to the shared common `.git`, processes, credentials, the kernel, or the host filesystem.
 - The 122-tool catalog is declarative. GATE detects executables and produces admission plans, but it does not automatically install the catalog.
 - v0.1 has no per-tool artifact lock or admission-record store. Catalog entries are capability metadata; they are not executable admissions until a reviewed adapter and immutable lock record exist.
 - Engagement creation, review recording, local receipt validation, and exact target/action checks are implemented. Arbitrary active execution is disabled until reviewed scope-aware adapters can validate tool arguments, enforce actual limits and stop conditions, terminate process groups, and preserve evidence.
 - Raw `gate run` and `gate upstream exec` command launchers are disabled. Run ordinary local development commands directly; target contact requires a reviewed scope-aware adapter.
 - Engagement completion fields are validated as data, but `engagement close` does not enforce coverage or completion tests; closing is administrative.
-- Repository configuration and policy files are schema-validated contracts. The broker, publication adapter, observer, learning path, and upstream manager enforce only the fields they explicitly load; v0.1 has no general policy engine that applies every declared provider, lease, limit, data, or lifecycle rule at runtime.
+- Repository configuration and policy files are schema-validated contracts. The project registry, Treehouse bridge, broker, publication adapter, observer, learning path, and upstream manager enforce only the fields they explicitly load; v0.1 has no general policy engine that applies every declared provider, limit, data, or lifecycle rule at runtime.
 - `gate up` is a foreground loopback server; service installation and boot-time startup are pending.
 - Token totals depend on fields present in local Codex session logs. The v0.1 scanner must read those file bytes even though it parses only usage records and never returns prompt bodies; a direct harness telemetry adapter is future work. Account quota and billing data are outside this reader.
 - WSL2 cannot provide every native capture, monitor-mode, packet-injection, USB-radio, GPU, or GUI path. `gate doctor` reports host facts; native Linux or Windows tooling may still be required.

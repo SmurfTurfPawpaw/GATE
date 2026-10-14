@@ -3,7 +3,7 @@
   "apiVersion": "gate.dev/catalog/v1",
   "kind": "SecurityToolCatalog",
   "policy": {
-    "availabilityMeans": "discoverable-and-reproducibly-installable",
+    "availabilityMeans": "candidate-metadata-for-reviewed-admission",
     "defaultInstallMode": "on-demand",
     "pinRequired": true,
     "checksumRequiredWhenPublished": true,

@@ -182,7 +182,7 @@ export function addLearning(input, options = {}) {
   }
   if (scope === "project" && sensitivity === "public") {
     throw new Error(
-      "public project learning has no configured registry or destination; use --private --scope project"
+      "public project learning has no configured promotion destination; use --private --scope project"
     );
   }
   const status = input.status || (sensitivity === "private" ? "active" : "proposed");

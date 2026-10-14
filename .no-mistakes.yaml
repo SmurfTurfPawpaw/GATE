@@ -1,0 +1,49 @@
+agent: codex
+
+commands:
+  prepare: "npm ci --ignore-scripts"
+  test: "npm test"
+  lint: "npm run check"
+
+document:
+  instructions: |
+    README.md states the current product boundary. docs/ owns detailed setup,
+    architecture, operating, and security-tool guidance. Keep roadmap behavior
+    explicitly separate from commands and guarantees that work today.
+
+review:
+  conversation: true
+  path_instructions:
+    - path: "src/lib/**"
+      instructions: |
+        Treat private filesystem state, external process invocation, repository
+        identity, authorization, and integrity checks as security boundaries.
+    - path: "src/observer/**"
+      instructions: |
+        Reject private-data disclosure and preserve loopback-only, read-only behavior.
+
+protected_paths:
+  - ".no-mistakes.yaml"
+  - ".github/**"
+  - "AGENTS.md"
+  - "SECURITY.md"
+  - "package.json"
+  - "package-lock.json"
+  - "locks/**"
+  - "policies/**"
+  - "schemas/**"
+
+pr:
+  base_branch: main
+  publish_intent: false
+
+ci:
+  rerun_transient: 1
+  revalidate_repairs: true
+  review_bot_comments: always
+  rebase_behind: true
+  carry_review_on_replay: false
+
+providers:
+  github:
+    draft_pull_requests: false

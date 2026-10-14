@@ -6,7 +6,7 @@ These instructions apply to the entire GATE repository. More specific `AGENTS.md
 
 Before making a persistent change, read the relevant files under `config/`, `policies/`, `schemas/`, and `docs/`. Machine-readable policy is the normative contract. Missing, unreadable, unknown, expired, or digest-mismatched state must fail closed.
 
-Do not assume schema validation means every policy field is dynamically enforced. In v0.1, the engagement broker, publication adapter, observer, learning path, and upstream manager load and enforce defined subsets; provider selection, workspace leases, complete data-flow policy, lifecycle bridges, and many per-tool controls remain procedural or planned. Apply those contracts during agent work and describe the runtime boundary accurately.
+Do not assume schema validation means every policy field is dynamically enforced. In v0.1, the project registry, narrow Treehouse lease bridge, engagement broker, publication adapter, observer, learning path, and upstream manager load and enforce defined subsets; cross-component provider selection, complete data-flow policy, lifecycle bridges, and many per-tool controls remain procedural or planned. Apply those contracts during agent work and describe the runtime boundary accurately.
 
 Do not claim that a command, integration, review, deployment, publication, or security operation succeeded without direct evidence. Distinguish `observed`, `inferred`, and `unverified`. Describe limitations and the next test that would resolve them.
 

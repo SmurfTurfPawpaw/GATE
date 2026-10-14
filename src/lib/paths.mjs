@@ -8,9 +8,9 @@ const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".
 
 export function findRepoRoot() {
   // Executable assets, policies, schemas, and locks are always loaded from the
-  // installed GATE package. Destination projects become explicit inputs in a
-  // future registry; cwd must never be able to replace same-origin dashboard
-  // code or authority contracts.
+  // installed GATE package. Registered destination projects remain explicit
+  // inputs; cwd must never replace same-origin dashboard code or authority
+  // contracts.
   return sourceRoot;
 }
 
@@ -45,6 +45,7 @@ export function runtimePaths(options = {}) {
     authorizations: path.join(home, "authorizations"),
     plans: path.join(home, "plans"),
     evidence: path.join(home, "evidence"),
+    projects: path.join(home, "projects"),
     upstreams: path.join(home, "upstreams"),
     upstreamTools: path.join(home, "upstream-tools"),
     privateLearnings: path.join(home, "memory", "private", "learnings.jsonl"),
@@ -118,6 +119,7 @@ export function ensureRuntime(paths) {
     paths.authorizations,
     paths.plans,
     paths.evidence,
+    paths.projects,
     paths.upstreams,
     paths.upstreamTools,
     path.join(home, "cache"),
@@ -150,8 +152,12 @@ export function ensureRuntime(paths) {
   // These roots contain only GATE state files. Auditing their existing direct
   // children makes bootstrap fail before a planted link can be read or
   // appended, and remediates legacy 0644/0666 state to 0600.
-  for (const directory of [paths.engagements, paths.authorizations, paths.plans, paths.evidence].filter(Boolean)) {
+  for (const directory of [paths.engagements, paths.authorizations, paths.plans, paths.evidence, paths.projects].filter(Boolean)) {
     for (const entry of fs.readdirSync(directory)) {
+      // The project writer owns these short-lived control files and project
+      // readers validate them without following links. Skipping them here
+      // prevents status/bootstrap calls from racing their unlink after readdir.
+      if (directory === paths.projects && new Set([".registry.lock", ".registry.pending"]).has(entry)) continue;
       securePrivateFile(path.join(directory, entry), { allowMissing: false, label: `private runtime entry ${entry}` });
     }
   }

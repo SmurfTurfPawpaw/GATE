@@ -17,10 +17,12 @@ import { recordEvent } from "./lib/events.mjs";
 import { addLearning } from "./lib/learnings.mjs";
 import { ensureRuntime, runtimePaths } from "./lib/paths.mjs";
 import { checkPublication, publishPullRequest } from "./lib/publication.mjs";
+import { listProjects, registerProject, showProject, verifyProject } from "./lib/projects.mjs";
 import { buildStatus } from "./lib/status.mjs";
 import { toolInventory, toolPlan } from "./lib/tools.mjs";
 import { installUpstream, syncUpstream, upstreamStatus } from "./lib/upstreams.mjs";
 import { validateRepository } from "./lib/validation.mjs";
+import { leaseWorkspace, verifyWorkspace, workspaceStatus } from "./lib/workspaces.mjs";
 
 const help = `GATE — Gateway for Agentic Tooling & Engineering
 
@@ -38,6 +40,19 @@ Operations
   event <kind> --summary TEXT       Append a sanitized activity event
   learn --cause TEXT --change TEXT [--private] [--scope session|project|repository]
                                     Record one cause → change learning candidate
+
+Projects
+  project register --file PATH      Register a private validated project contract
+  project list                      List registered project summaries
+  project show ID                   Show one registered project contract
+  project verify ID                 Verify one registered project contract
+
+Workspaces
+  workspace lease --repo PATH --task ID --branch REF [--base REF]
+                                    Acquire a verified Treehouse lease
+  workspace status --repo PATH      Inspect Treehouse workspace state
+  workspace verify --repo PATH --path PATH --task ID --lease ID --landed-ref REF
+                                    Verify landing and retain the durable lease
 
 Engagements
   engagement new ID --targets CSV --actions CSV
@@ -199,6 +214,68 @@ export async function main(argv) {
       port: Number(parsed.flags.port || 4173)
     });
     return;
+  }
+
+  if (command === "project") {
+    const [action = "list", id] = parsed.positional;
+    if (action === "register") {
+      assertPositionals(parsed.positional, 1, "gate project register --file PATH");
+      assertFlags(parsed.flags, ["file", "json"]);
+      return output(registerProject(requiredFlag(parsed.flags, "file"), { paths }), json);
+    }
+    if (action === "list") {
+      assertPositionals(parsed.positional, 1, "gate project list");
+      assertFlags(parsed.flags, ["json"]);
+      return output(listProjects({ paths }), json);
+    }
+    if (action === "show") {
+      assertPositionals(parsed.positional, 2, "gate project show ID");
+      assertFlags(parsed.flags, ["json"]);
+      if (!id) throw new Error("project id is required");
+      return output(showProject(id, { paths }), json);
+    }
+    if (action === "verify") {
+      assertPositionals(parsed.positional, 2, "gate project verify ID");
+      assertFlags(parsed.flags, ["json"]);
+      if (!id) throw new Error("project id is required");
+      const verification = verifyProject(id, { paths });
+      output(verification, json);
+      if (!verification.ok) process.exitCode = 2;
+      return;
+    }
+    throw new Error(`unknown project action: ${action}`);
+  }
+
+  if (command === "workspace") {
+    const [action] = parsed.positional;
+    if (!action) throw new Error("workspace action is required");
+    assertPositionals(parsed.positional, 1, "gate workspace ACTION [options]");
+    if (action === "lease") {
+      assertFlags(parsed.flags, ["repo", "task", "branch", "base", "json"]);
+      return output(leaseWorkspace({
+        repository: requiredFlag(parsed.flags, "repo"),
+        taskId: requiredFlag(parsed.flags, "task"),
+        branch: requiredFlag(parsed.flags, "branch"),
+        baseBranch: typeof parsed.flags.base === "string" ? parsed.flags.base : undefined
+      }, { paths }), json);
+    }
+    if (action === "status") {
+      assertFlags(parsed.flags, ["repo", "json"]);
+      return output(workspaceStatus({
+        repository: requiredFlag(parsed.flags, "repo")
+      }, { paths }), json);
+    }
+    if (action === "verify") {
+      assertFlags(parsed.flags, ["repo", "path", "task", "lease", "landed-ref", "json"]);
+      return output(verifyWorkspace({
+        repository: requiredFlag(parsed.flags, "repo"),
+        path: requiredFlag(parsed.flags, "path"),
+        taskId: requiredFlag(parsed.flags, "task"),
+        leaseId: requiredFlag(parsed.flags, "lease"),
+        landedRef: requiredFlag(parsed.flags, "landed-ref")
+      }, { paths }), json);
+    }
+    throw new Error(`unknown workspace action: ${action}`);
   }
 
   if (command === "event") {

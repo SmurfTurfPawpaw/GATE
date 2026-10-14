@@ -94,6 +94,21 @@ function statusFixture(overrides = {}) {
         limits: { maxTokens: 25000 }
       }
     ],
+    projects: [
+      {
+        id: "project_CUSTOMER_PROJECT_CANARY",
+        status: "ready",
+        provider: "github",
+        executionProfile: "CLIENT_EXECUTION_PROFILE_CANARY",
+        environment: "host",
+        deliveryMode: "no-mistakes",
+        deploymentEnabled: false,
+        securityProfile: "CLIENT_SECURITY_PROFILE_CANARY",
+        activeTestingEnabled: true,
+        repositoryUrl: "https://github.com/CLIENT_OWNER_CANARY/CLIENT_REPOSITORY_CANARY",
+        displayName: "CLIENT_DISPLAY_NAME_CANARY"
+      }
+    ],
     upstreams: [],
     tokens: {
       availability: "exact",
@@ -226,6 +241,12 @@ test("observer endpoints coalesce status reads and expose metadata-only projecti
   assert.equal(status.engagements[0].preflightOnly, true);
   assert.equal(status.engagements[0].executionAvailable, false);
   assert.equal(status.engagements[0].attestation.operatorProvenance, "local-unverified");
+  assert.match(status.projects[0].id, /^project_[a-f0-9]{16}$/);
+  assert.equal(status.projects[0].status, "ready");
+  assert.equal(status.projects[0].provider, "github");
+  assert.equal(status.projects[0].environment, "host");
+  assert.equal(status.projects[0].deliveryMode, "no-mistakes");
+  assert.equal(status.projects[0].activeTestingEnabled, true);
 
   assert.equal(events.apiVersion, "gate.observer/v1");
   assert.deepEqual(events.events[0].effect, { class: "network-probe" });
@@ -256,6 +277,12 @@ test("observer endpoints coalesce status reads and expose metadata-only projecti
     "learning-evidence-canary",
     "private-canary.json",
     "CUSTOMER_CANARY",
+    "CUSTOMER_PROJECT_CANARY",
+    "CLIENT_EXECUTION_PROFILE_CANARY",
+    "CLIENT_SECURITY_PROFILE_CANARY",
+    "CLIENT_OWNER_CANARY",
+    "CLIENT_REPOSITORY_CANARY",
+    "CLIENT_DISPLAY_NAME_CANARY",
     "REPOSITORY_CANARY",
     "GATE_HOME_CANARY"
   ]) {
@@ -293,6 +320,18 @@ test("missing token telemetry remains unavailable instead of becoming zero", () 
   }
   assert.equal(projected.status.usage.context.usedTokens, null);
   assert.equal(projected.status.usage.budget.usedTokens, null);
+});
+
+test("observer retains an opaque invalid project for filesystem-valid corrupt names", () => {
+  const corruptName = `${"x".repeat(180)}\rprivate`;
+  const projected = projectSnapshot(statusFixture({
+    projects: [{ id: null, registryEntry: corruptName, status: "invalid" }]
+  }), paths);
+
+  assert.equal(projected.status.projects.length, 1);
+  assert.match(projected.status.projects[0].id, /^project_[a-f0-9]{16}$/);
+  assert.equal(projected.status.projects[0].status, "invalid");
+  assert.equal(JSON.stringify(projected).includes(corruptName), false);
 });
 
 test("observer preserves canonical forge and publication effects", () => {

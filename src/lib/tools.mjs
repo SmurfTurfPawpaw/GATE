@@ -81,7 +81,12 @@ export function toolInventory(options = {}) {
         host,
         compatible: tool.supportedHosts.includes(host),
         installed: Boolean(executable),
-        executable
+        executable,
+        readiness: executable ? "discovered" : "candidate",
+        versionVerified: false,
+        integrityVerified: false,
+        adapterReady: false,
+        executionAvailable: false
       };
     });
   return {
@@ -104,6 +109,11 @@ export function toolPlan(id, options = {}) {
     name: tool.name,
     installed: Boolean(executable),
     executable,
+    readiness: executable ? "discovered" : "candidate",
+    versionVerified: false,
+    integrityVerified: false,
+    adapterReady: false,
+    executionAvailable: false,
     compatible: tool.supportedHosts.includes(host),
     host,
     preferredLane: tool.installLanes[0],
