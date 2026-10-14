@@ -150,18 +150,14 @@ GATE has one narrow implemented offline adapter for a supplied Windows PE file. 
 ./bin/gate.mjs analysis capability --json
 ```
 
-`analysis capability` uses cheap presence checks for Linux, Node, the fixed adapter, the expected managed REA entrypoint, and Bubblewrap, then runs `/usr/bin/true` through the actual minimal Bubblewrap namespace shape. It proves that the prerequisite files are present and that this host can launch that namespace shape at the time of the check. It deliberately does not reconstruct or hash the full managed REA npm tree. Manifest creation performs the full reviewed-lock integrity reconstruction and observes the runtime file hashes and identities. It then snapshots one exact absolute regular-file path into owner-only private state. It preserves spaces and commas in the path, rejects a symlink or non-file at that path, limits the input to 512 MiB, hashes the copied bytes, and binds the snapshot to the current canonical project contract and observed runtime identities:
+Capability checks prerequisite presence and launches a minimal Bubblewrap namespace; it does not verify the full managed REA tree. Register a private project, then create and review a manifest for one exact absolute regular-file path:
 
 ```bash
 ./bin/gate.mjs analysis manifest \
   --project my-project \
   --path "$HOME/private/client-installer.exe" \
   --minutes 15 --json
-```
 
-Review the returned project-contract digest, artifact digest and size, fixed adapter and arguments, `networkPolicy: none`, zero requests, zero request rate, parallelism one, zero model tokens, runtime identities, evidence destinations, expiry, and enforced and unavailable controls. The manifest is digest-bound, expires after 15 minutes, and can be claimed once. Run it with the exact returned `confirmationRequired` value:
-
-```bash
 ./bin/gate.mjs analysis run \
   --project my-project \
   --manifest MANIFEST_ID \
@@ -170,20 +166,7 @@ Review the returned project-contract digest, artifact digest and size, fixed ada
 ./bin/gate.mjs analysis status --json
 ```
 
-Artifact snapshots have a fixed aggregate ceiling of 64 files and 2 GiB of logical bytes. Manifest creation is serialized with execution claims and purges, and fails closed when either ceiling is full or an input-storage entry is malformed. A durable creation intent covers the interval from snapshot creation through manifest publication; recovery removes only a verified incomplete snapshot and keeps one protected by a durably published manifest. `analysis status` reports retained bytes and files plus pending, expired, active, terminal, purge-pending, purged, orphaned, missing, and invalid state. Purge one exact manifest-bound snapshot with the returned `purgeConfirmationRequired` value:
-
-```bash
-./bin/gate.mjs analysis purge \
-  --project my-project \
-  --manifest MANIFEST_ID \
-  --confirm "PURGE MANIFEST_ID MANIFEST_SHA256 OFFLINE ARTIFACT" --json
-```
-
-Purge records an `abandoned` transition for a current unclaimed manifest, `expired` for an expired unclaimed manifest, or `terminal` after a succeeded, failed, cancelled, or blocked run. It refuses queued, running, unknown, malformed, or mismatched state. The digest-bound purge removes only the private snapshot and an empty per-run sandbox; the manifest, claim, run, purge receipt, and evidence remain for review. This is logical retention cleanup, not secure media erasure. Evidence streams are bounded per run, but their aggregate retention has no repository-wide quota yet and requires separate operator management.
-
-Before execution, the launcher repeats the full reviewed-lock reconstruction and rechecks the project digest, artifact snapshot, upstream lock, and observed Bubblewrap, Node, adapter, and REA-entrypoint identities. It invokes a fixed argument array without a shell inside fresh user, PID, network, IPC, and UTS namespaces, requests a cgroup namespace where supported, drops every capability, clears the environment, mounts runtime inputs read-only, and supplies private temporary paths inside the namespace. Stdout and stderr are capped at 64 MiB each and remain private under `GATE_HOME`. A run reports `isolationVerified: true` only when the adapter also observes loopback as the sole interface, no IPv4 routes, zero inherited/permitted/effective/bounding/ambient capabilities, and `NoNewPrivs`.
-
-This is a fixed zero-network execution shape with stated limits. CPU and memory quotas, an immutable snapshot of the managed REA installation against same-UID mutation, protection from another same-UID writer to `GATE_HOME`, and syscall-level denial of Unix sockets are unavailable. The adapter performs only PE-resource inspection; it is not yet a general installer extractor, signature verifier, disassembler, decompiler, malware sandbox, Wine runner, or Windows VM.
+Use the exact returned confirmation after reviewing the complete manifest. The [offline-analysis operating procedure](docs/operating-model.md#offline-static-artifact-analysis) owns the integrity checks, bindings, isolation guarantees and unavailable controls, evidence limits, snapshot quotas, crash recovery, and digest-bound purge procedure. This adapter supplies PE-resource inspection, rather than a general reverse-engineering or dynamic-analysis environment.
 
 Possession of a local file authorizes neither network access nor testing of its publisher. A proprietary client or other proprietary artifact must be lawfully supplied by the operator and remains private under `GATE_HOME`. Strings, hostnames, URLs, certificate names, and update endpoints found in it are offline hypotheses. GATE must not resolve, browse, scan, authenticate to, intercept, or otherwise contact those systems until separate written authority and an exact active engagement cover the selector and action.
 
