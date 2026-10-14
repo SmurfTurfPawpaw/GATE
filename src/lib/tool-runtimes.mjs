@@ -752,23 +752,35 @@ function reclaimableMutationLock(lock) {
 
 function acquireMutationLock(paths, id) {
   const lock = path.join(paths.toolRuntimeStaging, `.${id}.mutation-lock`);
-  const transition = `${lock}.transition`;
+  const serialization = `${lock}.serialization`;
   const serialized = (operation) => {
+    if (process.platform !== "linux") throw new Error("managed tool mutation serialization requires Linux/WSL2");
+    const flock = trustedSystemExecutable(["/usr/bin/flock", "/bin/flock"], "flock");
+    const descriptor = fs.openSync(serialization,
+      fs.constants.O_CREAT | fs.constants.O_RDWR | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK, 0o600);
     try {
-      fs.mkdirSync(transition, { mode: 0o700 });
-    } catch (error) {
-      if (error.code === "EEXIST") throw new Error(`managed tool mutation is already active or indeterminate: ${id}`);
-      throw error;
-    }
-    const identity = fs.lstatSync(transition);
-    try {
+      const identity = fs.fstatSync(descriptor);
+      if (!identity.isFile() || identity.nlink !== 1 || identity.uid !== process.geteuid() ||
+          (identity.mode & 0o7777) !== 0o600) {
+        throw new Error(`managed tool mutation serialization is not a private regular file: ${id}`);
+      }
+      const result = spawnSync(flock, ["--exclusive", "--nonblock", "3"], {
+        stdio: ["ignore", "pipe", "pipe", descriptor],
+        env: { PATH: "/usr/bin:/bin", LANG: "C", LC_ALL: "C" },
+        shell: false,
+        timeout: 5_000,
+        maxBuffer: 16 * 1024
+      });
+      if (result.error || result.status !== 0) {
+        throw new Error(`managed tool mutation is already active or indeterminate: ${id}`);
+      }
+      const current = fs.lstatSync(serialization);
+      if (current.dev !== identity.dev || current.ino !== identity.ino) {
+        throw new Error(`managed tool mutation serialization ownership changed: ${id}`);
+      }
       return operation();
     } finally {
-      const current = fs.lstatSync(transition);
-      if (current.dev !== identity.dev || current.ino !== identity.ino) {
-        throw new Error(`managed tool mutation transition ownership changed: ${id}`);
-      }
-      fs.rmdirSync(transition);
+      fs.closeSync(descriptor);
     }
   };
   const assertIdentity = (identity) => {

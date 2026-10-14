@@ -431,11 +431,51 @@ test("stale lock reclamation excludes a competing installer at retirement", asyn
     await competitor;
     assert.equal(verifyManagedTool("fixture-tool", options).ok, true);
     assert.equal(fs.existsSync(lock), false);
-    assert.equal(fs.existsSync(`${lock}.transition`), false);
+    assert.equal(fs.statSync(`${lock}.serialization`).isFile(), true);
   } finally {
     fs.renameSync = rename;
   }
 });
+
+for (const phase of ["acquisition", "release"]) {
+  test(`process death during ${phase} releases serialization for subsequent install and remove`, async (t) => {
+    if (process.platform !== "linux") return t.skip("kernel serialization requires Linux");
+    const fixture = createFixture(t);
+    const options = { paths: fixture.paths, platform, downloadArtifact: fixture.downloadArtifact, runSmoke: fixture.runSmoke };
+    await prefetchManagedTool("fixture-tool", options);
+    const lock = path.join(fixture.paths.toolRuntimeStaging, ".fixture-tool.mutation-lock");
+    const moduleUrl = new URL("../src/lib/tool-runtimes.mjs", import.meta.url).href;
+    const child = spawnSync(process.execPath, ["--input-type=module", "-e", `
+      import fs from 'node:fs';
+      import { installManagedTool } from ${JSON.stringify(moduleUrl)};
+      const lock = ${JSON.stringify(lock)};
+      const phase = ${JSON.stringify(phase)};
+      const mkdir = fs.mkdirSync;
+      const unlink = fs.unlinkSync;
+      fs.mkdirSync = (file, options) => {
+        const result = mkdir(file, options);
+        if (phase === 'acquisition' && file === lock) process.kill(process.pid, 'SIGKILL');
+        return result;
+      };
+      fs.unlinkSync = (file) => {
+        if (phase === 'release' && file === lock + '/owner.json') process.kill(process.pid, 'SIGKILL');
+        return unlink(file);
+      };
+      await installManagedTool('fixture-tool', {
+        paths: ${JSON.stringify(fixture.paths)}, platform: ${JSON.stringify(platform)},
+        runSmoke: () => ({ exitCode: 0, output: Buffer.from('fixture 1.2.3' + String.fromCharCode(10)) })
+      });
+    `], { timeout: 10_000, encoding: "utf8" });
+    assert.equal(child.signal, "SIGKILL", child.stderr);
+    const old = new Date(Date.now() - 120_000);
+    if (phase === "acquisition") fs.utimesSync(lock, old, old);
+    assert.equal((await installManagedTool("fixture-tool", options)).ok, true);
+    assert.equal(verifyManagedTool("fixture-tool", options).ok, true);
+    const removed = await runManagedToolOperation("remove", { ...options, id: "fixture-tool" });
+    assert.equal(removed.ok, true);
+    assert.equal(fs.existsSync(path.join(fixture.paths.toolRuntimes, "fixture-tool")), false);
+  });
+}
 
 test("a tampered content-addressed cache is rejected and never installed", async (t) => {
   const fixture = createFixture(t);
