@@ -8,7 +8,7 @@ function auditPresentEntry(file, audit, options) {
   try {
     audit(file, options);
   } catch (error) {
-    if (error.code === "ENOENT") {
+    if ((error.code || error.cause?.code) === "ENOENT") {
       try {
         fs.lstatSync(file);
       } catch (confirmation) {

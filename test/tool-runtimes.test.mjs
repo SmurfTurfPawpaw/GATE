@@ -197,6 +197,7 @@ function createFixture(t, options = {}) {
 }
 
 test("managed install binds reviewed bytes, uses a private receipt, and grants no target authority", async (t) => {
+  if (process.platform !== "linux") return t.skip("kernel mutation serialization requires Linux/WSL2");
   const fixture = createFixture(t);
   const installed = await installManagedTool("fixture-tool", {
     paths: fixture.paths,
@@ -255,6 +256,7 @@ test("a PATH namesake cannot replace a verified managed executable", async (t) =
 });
 
 test("forged receipts and executable drift never admit a runtime", async (t) => {
+  if (process.platform !== "linux") return t.skip("kernel mutation serialization requires Linux/WSL2");
   const fixture = createFixture(t);
   await installManagedTool("fixture-tool", {
     paths: fixture.paths,
@@ -296,6 +298,7 @@ test("forged receipts and executable drift never admit a runtime", async (t) => 
 });
 
 test("catalog and lock drift invalidate readiness", async (t) => {
+  if (process.platform !== "linux") return t.skip("kernel mutation serialization requires Linux/WSL2");
   const fixture = createFixture(t);
   await installManagedTool("fixture-tool", {
     paths: fixture.paths,
@@ -315,6 +318,7 @@ test("catalog and lock drift invalidate readiness", async (t) => {
 });
 
 test("failed smoke and failed prepublication work preserve the previous install", async (t) => {
+  if (process.platform !== "linux") return t.skip("kernel mutation serialization requires Linux/WSL2");
   const fixture = createFixture(t);
   await installManagedTool("fixture-tool", {
     paths: fixture.paths,
@@ -366,6 +370,7 @@ test("failed smoke and failed prepublication work preserve the previous install"
 });
 
 test("an active mutation lock blocks overlapping installs", async (t) => {
+  if (process.platform !== "linux") return t.skip("kernel mutation serialization requires Linux/WSL2");
   const fixture = createFixture(t);
   await prefetchManagedTool("fixture-tool", {
     paths: fixture.paths,
@@ -388,6 +393,7 @@ test("an active mutation lock blocks overlapping installs", async (t) => {
 });
 
 test("a definitively stale mutation lock is reclaimed after its owner grace period", async (t) => {
+  if (process.platform !== "linux") return t.skip("kernel mutation serialization requires Linux/WSL2");
   const fixture = createFixture(t);
   await prefetchManagedTool("fixture-tool", {
     paths: fixture.paths,
@@ -409,6 +415,7 @@ test("a definitively stale mutation lock is reclaimed after its owner grace peri
 });
 
 test("stale lock reclamation excludes a competing installer at retirement", async (t) => {
+  if (process.platform !== "linux") return t.skip("kernel mutation serialization requires Linux/WSL2");
   const fixture = createFixture(t);
   const options = { paths: fixture.paths, platform, downloadArtifact: fixture.downloadArtifact, runSmoke: fixture.runSmoke };
   await prefetchManagedTool("fixture-tool", options);
@@ -527,6 +534,7 @@ for (const phase of ["acquisition", "release"]) {
 }
 
 test("a tampered content-addressed cache is rejected and never installed", async (t) => {
+  if (process.platform !== "linux") return t.skip("kernel mutation serialization requires Linux/WSL2");
   const fixture = createFixture(t);
   await prefetchManagedTool("fixture-tool", {
     paths: fixture.paths,
@@ -548,6 +556,7 @@ test("a tampered content-addressed cache is rejected and never installed", async
 });
 
 test("archives with extra files or links are rejected before publication", async (t) => {
+  if (process.platform !== "linux") return t.skip("kernel mutation serialization requires Linux/WSL2");
   const extra = createFixture(t, {
     files: {
       fixture: Buffer.from("#!/bin/sh\nprintf 'fixture 1.2.3\\n'\n"),
@@ -583,6 +592,7 @@ test("archives with extra files or links are rejected before publication", async
 });
 
 test("ZIP releases use exact central-directory paths and reject symbolic links", async (t) => {
+  if (process.platform !== "linux") return t.skip("kernel mutation serialization requires Linux/WSL2");
   const fixture = createFixture(t, { archiveFormat: "zip" });
   const installed = await installManagedTool("fixture-tool", {
     paths: fixture.paths,
@@ -723,4 +733,14 @@ test("tool plan exposes exact install effects without granting authority", (t) =
   assert.equal(macPlan.installSupported, false);
   assert.ok(macPlan.unresolved.includes("zero-egress-smoke-sandbox-unavailable"));
   assert.match(macPlan.nextAction, /prefetch/);
+});
+
+test("prefetch rejects tampered cached bytes without requiring mutation serialization", async (t) => {
+  const fixture = createFixture(t);
+  const options = { paths: fixture.paths, platform, downloadArtifact: fixture.downloadArtifact };
+  assert.equal((await prefetchManagedTool("fixture-tool", options)).ok, true);
+  const cached = path.join(fixture.paths.toolArtifactCache, fixture.entry.artifacts[0].sha256);
+  fs.appendFileSync(cached, "tampered");
+  await assert.rejects(prefetchManagedTool("fixture-tool", options), /artifact size mismatch/);
+  assert.equal(fs.existsSync(path.join(fixture.paths.toolRuntimes, "fixture-tool")), false);
 });

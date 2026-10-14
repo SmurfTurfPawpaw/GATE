@@ -272,3 +272,46 @@ for (const kind of ["runtime", "artifact"]) {
     assert.throws(() => ensureRuntime(paths), /symbolic link/);
   });
 }
+
+for (const kind of ["runtime", "artifact"]) {
+  for (const stage of ["open", "final identity check"]) {
+    test(`${kind} audit tolerates confirmed disappearance during ${stage}`, {
+      skip: process.platform === "win32" && "directory descriptor audit requires POSIX"
+    }, (t) => {
+      const { paths } = fixture(t);
+      ensureRuntime(paths);
+      const directory = kind === "runtime" ? paths.toolRuntimes : paths.toolArtifactCache;
+      const entry = path.join(directory, "retiring-entry");
+      if (kind === "runtime") fs.mkdirSync(entry, { mode: 0o700 });
+      else fs.writeFileSync(entry, "fixture", { mode: 0o600 });
+      const open = fs.openSync;
+      const lstat = fs.lstatSync;
+      let opened = false;
+      let retired = false;
+      fs.openSync = (file, ...args) => {
+        if (file === entry && stage === "open") {
+          fs.rmSync(entry, { recursive: true });
+          retired = true;
+        }
+        const descriptor = open(file, ...args);
+        if (file === entry) opened = true;
+        return descriptor;
+      };
+      fs.lstatSync = (file, ...args) => {
+        if (file === entry && stage === "final identity check" && opened && !retired) {
+          retired = true;
+          fs.rmSync(entry, { recursive: true });
+        }
+        return lstat(file, ...args);
+      };
+      try {
+        assert.doesNotThrow(() => ensureRuntime(paths));
+        assert.equal(retired, true, "the audit must reach the raced boundary");
+        assert.equal(fs.existsSync(entry), false);
+      } finally {
+        fs.openSync = open;
+        fs.lstatSync = lstat;
+      }
+    });
+  }
+}
