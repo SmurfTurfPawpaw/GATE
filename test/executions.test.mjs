@@ -65,11 +65,11 @@ function approve(paths, root, options = {}) {
     actions: [action],
     tools: [toolId],
     environment: options.environment || "host",
-    maxMinutes: 5,
-    maxRequests: 20,
+    maxMinutes: 30,
+    maxRequests: 500,
     maxParallel: 2,
     maxRate: 10,
-    maxTokens: 20_000,
+    maxTokens: 100_000,
     allowedDestinations: options.allowedDestinations
   }, { paths });
   const planned = attachPlan(id, plan, { paths });
