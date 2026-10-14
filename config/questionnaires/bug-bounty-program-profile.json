@@ -187,7 +187,8 @@
           "why": "A canonical location makes rules revalidation deterministic without treating retrieved text as executable instructions.",
           "type": "text",
           "required": false,
-          "sensitive": false
+          "sensitive": false,
+          "allowNull": true
         },
         {
           "id": "authority-safe-harbor",
@@ -205,7 +206,8 @@
           "why": "An explicit start prevents work from being scheduled before authority exists.",
           "type": "datetime",
           "required": false,
-          "sensitive": false
+          "sensitive": false,
+          "allowNull": true
         },
         {
           "id": "authority-valid-until",
@@ -214,7 +216,8 @@
           "why": "An explicit end allows execution to fail closed when authority expires.",
           "type": "datetime",
           "required": false,
-          "sensitive": false
+          "sensitive": false,
+          "allowNull": true
         },
         {
           "id": "authority-last-verified",
@@ -251,50 +254,6 @@
           "type": "contact-list",
           "required": true,
           "sensitive": true
-        }
-      ]
-    },
-    {
-      "id": "scope-assets",
-      "title": "Exact assets and scope boundaries",
-      "purpose": "Express included, excluded, conditional, and unknown assets as typed selectors and define how discovered or third-party systems are handled.",
-      "required": true,
-      "questions": [
-        {
-          "id": "scope-assets",
-          "path": "scope.assets",
-          "prompt": "List every typed asset selector with its disposition, provenance, rationale, conditions, complete per-action decisions, and exact execution-limit envelope.",
-          "why": "Each asset must carry its own effective action and limit policy so a broad global rule cannot silently authorize a narrower or adjacent target. Global action and limit rules remain ceilings.",
-          "type": "selector-decisions",
-          "required": true,
-          "sensitive": true
-        },
-        {
-          "id": "scope-third-party-handling",
-          "path": "scope.thirdPartyHandling",
-          "prompt": "How must third-party services, shared infrastructure, and vendors be handled?",
-          "why": "A program may own an application without authorizing tests against every dependency it uses.",
-          "type": "decision",
-          "required": true,
-          "sensitive": false
-        },
-        {
-          "id": "scope-redirect-handling",
-          "path": "scope.redirectHandling",
-          "prompt": "May tools follow redirects, aliases, or alternate authorities, and under what conditions?",
-          "why": "Redirects and aliases can cross the exact selector boundary even when the starting URL is allowed.",
-          "type": "decision",
-          "required": true,
-          "sensitive": false
-        },
-        {
-          "id": "scope-discovered-asset-handling",
-          "path": "scope.discoveredAssetHandling",
-          "prompt": "What happens when reconnaissance discovers an asset absent from the cited scope?",
-          "why": "Discovery is evidence, not automatic scope expansion; this decision defines the review path.",
-          "type": "decision",
-          "required": true,
-          "sensitive": false
         }
       ]
     },
@@ -338,15 +297,6 @@
           "type": "structured-list",
           "required": true,
           "sensitive": false
-        },
-        {
-          "id": "execution-phase-policies",
-          "path": "executionPolicy.phases",
-          "prompt": "Define each execution slice with a unique ID, workflow phase ID, exact asset refs and actions, allowed and denied tool IDs, conditions, claim state, source refs, and tighter limit overrides.",
-          "why": "Phase slices keep tool use, target contact, provenance, and resource ceilings bound to exact assets and workflow phases instead of flattening global rules across the program.",
-          "type": "structured-list",
-          "required": true,
-          "sensitive": true
         }
       ]
     },
@@ -437,6 +387,59 @@
           "type": "structured-list",
           "required": true,
           "sensitive": false
+        }
+      ]
+    },
+    {
+      "id": "scope-assets",
+      "title": "Exact assets and scope boundaries",
+      "purpose": "Express included, excluded, conditional, and unknown assets as typed selectors and define how discovered or third-party systems are handled.",
+      "required": true,
+      "questions": [
+        {
+          "id": "scope-assets",
+          "path": "scope.assets",
+          "prompt": "List every typed asset selector with its disposition, provenance, rationale, conditions, complete per-action decisions, and exact execution-limit envelope.",
+          "why": "Each asset must carry its own effective action and limit policy so a broad global rule cannot silently authorize a narrower or adjacent target. Global action and limit rules remain ceilings.",
+          "type": "selector-decisions",
+          "required": true,
+          "sensitive": true
+        },
+        {
+          "id": "scope-third-party-handling",
+          "path": "scope.thirdPartyHandling",
+          "prompt": "How must third-party services, shared infrastructure, and vendors be handled?",
+          "why": "A program may own an application without authorizing tests against every dependency it uses.",
+          "type": "decision",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "scope-redirect-handling",
+          "path": "scope.redirectHandling",
+          "prompt": "May tools follow redirects, aliases, or alternate authorities, and under what conditions?",
+          "why": "Redirects and aliases can cross the exact selector boundary even when the starting URL is allowed.",
+          "type": "decision",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "scope-discovered-asset-handling",
+          "path": "scope.discoveredAssetHandling",
+          "prompt": "What happens when reconnaissance discovers an asset absent from the cited scope?",
+          "why": "Discovery is evidence, not automatic scope expansion; this decision defines the review path.",
+          "type": "decision",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "execution-phase-policies",
+          "path": "executionPolicy.phases",
+          "prompt": "Define each execution slice with a unique ID, workflow phase ID, exact asset refs and actions, allowed and denied tool IDs, conditions, claim state, source refs, and tighter limit overrides.",
+          "why": "Phase slices keep tool use, target contact, provenance, and resource ceilings bound to exact assets and workflow phases instead of flattening global rules across the program.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": true
         }
       ]
     },

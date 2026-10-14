@@ -157,7 +157,7 @@ test("interactive numeric questions can record an explicit allowed null", { time
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  ["edit limits-max-spend\n", "null\n", "quit\n"].forEach((response, index) => {
+  ["edit limits-max-spend\n", "null\n", "edit authority-program-url\n", "null\n", "edit authority-valid-from\n", "null\n", "edit authority-valid-until\n", "null\n", "quit\n"].forEach((response, index) => {
     timers.push(setTimeout(() => input.write(response), 40 * (index + 1)));
   });
   await cliInternals.runProgramProfileQuestionnaire("null-spend-profile", "create", {
@@ -171,7 +171,9 @@ test("interactive numeric questions can record an explicit allowed null", { time
 
   const envelope = JSON.parse(fs.readFileSync(path.join(home, "programs", "null-spend-profile", "answers.json"), "utf8"));
   assert.equal(Object.hasOwn(envelope.answers, "limits-max-spend"), true);
-  assert.equal(envelope.answers["limits-max-spend"], null);
+  for (const id of ["limits-max-spend", "authority-program-url", "authority-valid-from", "authority-valid-until"]) {
+    assert.equal(envelope.answers[id], null);
+  }
 });
 
 test("resume opens the missing required attestation instead of restarting at question one", { timeout: 5000 }, async (t) => {

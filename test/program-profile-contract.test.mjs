@@ -17,7 +17,6 @@ import {
   PROGRAM_PROFILE_SECTION_IDS,
   PROGRAM_PROFILE_SECTIONS,
   PROGRAM_PROFILE_STOP_CONDITIONS,
-  applyProgramProfileAnswers,
   assertValidProgramProfile,
   loadProgramProfileQuestionnaire,
   normalizeProgramProfile,
@@ -502,38 +501,16 @@ test("ready supporting claims retain their own provenance", () => {
   assert.ok(validation.errors.some((error) => error.includes("/authorization/contacts/0 requires sourceRefs")));
 });
 
-test("headless answers accept known question ids, reject unknown ids, and apply without mutation", () => {
-  const profile = draftProfile();
+test("headless answers accept known question ids and reject unknown ids", () => {
   const envelope = answerEnvelope({
     "identity-objective": "Validate authorization and tenant isolation with source-backed coverage.",
     "coverage-applicable-modules": ["web-api"]
   });
   assert.deepEqual(validateProgramProfileAnswers(envelope, { repo }).errors, []);
-  const applied = applyProgramProfileAnswers(profile, envelope, { repo });
-  assert.equal(profile.identity.objective, "Operator input required.");
-  assert.equal(applied.identity.objective, "Validate authorization and tenant isolation with source-backed coverage.");
-  assert.deepEqual(applied.questionnaire.applicableModules, ["web-api"]);
-
   const unknown = answerEnvelope({ "invented-question": true });
   const validation = validateProgramProfileAnswers(unknown, { repo });
   assert.equal(validation.ok, false);
   assert.deepEqual(validation.errors, ["answers contains unknown question id: invented-question"]);
-});
-
-test("malformed structured phase answers reach schema validation without normalization exceptions", () => {
-  let applied;
-  assert.doesNotThrow(() => {
-    applied = applyProgramProfileAnswers(
-      draftProfile(),
-      answerEnvelope({ "execution-phase-policies": [{}, {}] }),
-      { repo }
-    );
-  });
-  const validation = validateProgramProfile(applied, { repo });
-  assert.equal(validation.ok, false);
-  assert.ok(validation.errors.some((error) =>
-    error.includes("/executionPolicy/phases/0 must have required property 'id'")
-  ));
 });
 
 test("normalization is pure and produces stable ids, vocabularies, and source references", () => {

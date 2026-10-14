@@ -1905,12 +1905,17 @@ function compatibilityReport(profile, verification, packet, provider) {
   const totalReservedTokens = estimatedTokens + reservedOutputTokens;
   const contextWithinBudget = totalReservedTokens <= tokenEnvelope.effectiveMaxTokens;
   const requestedAssistanceModes = profile.executionPolicy?.requestedAssistanceModes || [];
+  const destination = provider?.value.metadata.destination || "unknown";
+  const destinationStatus = destination === "unknown" || provider?.freshness !== "current"
+    ? "unknown"
+    : profile.dataEvidence.allowedDestinations.includes(destination === "local" ? "gate-home" : "configured-cloud-model")
+      ? "pass" : "block";
   const dimensions = [
     { id: "profile-schema", status: verification.structuralValid ? "pass" : "block" },
     { id: "authorization-binding", status: verification.blockers.some((item) => item.code.startsWith("authorization") || item.code === "program-url-missing") ? "block" : "pass" },
     { id: "scope-match", status: verification.blockers.some((item) => item.code.startsWith("scope")) ? "block" : "pass" },
     { id: "technique-policy", status: verification.blockers.some((item) => item.code.startsWith("action") || item.code.startsWith("technique") || item.code === "no-allowed-actions") ? "block" : "pass" },
-    { id: "data-release", status: profile.dataEvidence.allowedDestinations.length ? "pass" : "block" },
+    { id: "data-release", status: destinationStatus },
     { id: "provider-capability", status: "unknown" },
     { id: "context-budget", status: contextWithinBudget ? "pass" : "block" }
   ];
@@ -1954,6 +1959,7 @@ function compatibilityReport(profile, verification, packet, provider) {
     provider: provider ? {
       id: provider.value.metadata.id,
       model: provider.value.metadata.model || null,
+      destination,
       policyProfileSha256: provider.sha256,
       policyEffectiveAt: provider.value.metadata.effectiveAt || null,
       policyExpiresAt: provider.value.metadata.expiresAt || null,
@@ -1973,7 +1979,7 @@ function compatibilityReport(profile, verification, packet, provider) {
       estimation: "estimated"
     },
     routing: {
-      strategy: !verification.ready || !contextWithinBudget
+      strategy: !verification.ready || !contextWithinBudget || destinationStatus !== "pass"
         ? "operator"
         : providerPrediction === "compatible" ? "provider-model"
           : providerPrediction === "incompatible" ? "reviewed-adapter"
@@ -1981,6 +1987,7 @@ function compatibilityReport(profile, verification, packet, provider) {
       reason: !verification.ready
         ? "Resolve the listed GATE profile blockers before selecting an execution route."
         : !contextWithinBudget ? "Reduce the context packet or raise the reviewed profile token ceiling before model routing."
+        : destinationStatus !== "pass" ? "Review provider destination metadata and recorded data destinations before model routing."
         : providerPrediction === "compatible" ? "The supplied provider profile permits every compiled action and assistance mode."
           : providerPrediction === "incompatible" ? "Use an admitted reviewed adapter or a compatible local route for denied capabilities."
             : "Provider support is incomplete or no provider profile was supplied; make one truthful capability request without disguising intent."

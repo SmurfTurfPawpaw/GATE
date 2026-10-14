@@ -93,9 +93,9 @@ export const PROGRAM_PROFILE_COVERAGE_DOMAINS = Object.freeze([
 export const PROGRAM_PROFILE_SECTION_IDS = Object.freeze([
   "identity-objectives",
   "authority-sources",
-  "scope-assets",
   "actions-techniques",
   "limits-schedule",
+  "scope-assets",
   "accounts-identities",
   "architecture-data-flows",
   "workflow-coverage",
@@ -203,7 +203,7 @@ function semanticQuestionnaireErrors(value) {
       id: "execution-phase-policies",
       path: "executionPolicy.phases",
       type: "structured-list",
-      section: "actions-techniques"
+      section: "scope-assets"
     },
     {
       id: "limits-max-spend",
@@ -834,48 +834,4 @@ export function normalizeProgramProfile(value) {
   }
   if (result.modules) result.modules = orderedMatrix(result.modules, PROGRAM_PROFILE_MODULE_IDS);
   return result;
-}
-
-function mergeValues(base, overlay) {
-  if (Array.isArray(overlay) || !overlay || typeof overlay !== "object") return structuredClone(overlay);
-  const result = base && typeof base === "object" && !Array.isArray(base) ? structuredClone(base) : {};
-  for (const [key, child] of Object.entries(overlay)) {
-    if (["__proto__", "prototype", "constructor"].includes(key)) throw new Error("unsafe program profile answer key");
-    result[key] = mergeValues(result[key], child);
-  }
-  return result;
-}
-
-function applyAtPath(value, dottedPath, answer) {
-  const parts = dottedPath.split(".");
-  if (!parts.length || parts.some((part) => !part || ["__proto__", "prototype", "constructor"].includes(part))) {
-    throw new Error(`invalid program profile answer path: ${dottedPath}`);
-  }
-  let cursor = value;
-  for (const part of parts.slice(0, -1)) {
-    const child = cursor[part];
-    cursor[part] = child && typeof child === "object" && !Array.isArray(child) ? child : {};
-    cursor = cursor[part];
-  }
-  const leaf = parts.at(-1);
-  cursor[leaf] = mergeValues(cursor[leaf], answer);
-}
-
-export function applyProgramProfileAnswers(profile, envelope, options = {}) {
-  const validation = validateProgramProfileAnswers(envelope, options);
-  if (!validation.ok) throw new Error(`program profile answers validation failed: ${validation.errors.join("; ")}`);
-  if (profile?.metadata?.id !== envelope.metadata.programId) {
-    throw new Error("program profile answer envelope does not match the profile id");
-  }
-  const result = structuredClone(profile);
-  const allQuestions = [...new Map([
-    ...PROGRAM_PROFILE_QUESTIONS,
-    ...PROGRAM_PROFILE_MODULE_QUESTIONS
-  ].map((question) => [question.id, question])).values()];
-  const questions = new Map(allQuestions.map((question) => [question.id, question]));
-  for (const question of allQuestions) {
-    if (!Object.hasOwn(envelope.answers, question.id)) continue;
-    applyAtPath(result, questions.get(question.id).path, envelope.answers[question.id]);
-  }
-  return normalizeProgramProfile(result);
 }

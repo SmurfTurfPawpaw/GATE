@@ -6,7 +6,8 @@
     "id": "replace-provider",
     "model": "replace-model",
     "effectiveAt": "2026-10-14T00:00:00Z",
-    "expiresAt": "2027-10-14T00:00:00Z"
+    "expiresAt": "2027-10-14T00:00:00Z",
+    "destination": "unknown"
   },
   "capabilities": {
     "observe": {

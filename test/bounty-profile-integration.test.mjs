@@ -965,3 +965,46 @@ test("imported source text is inert and target details do not cross events or ob
     assert.equal(publicBytes.includes(canary), false, `observer exposed ${canary}`);
   }
 });
+
+ test("questionnaire order accepts each source-backed policy through production answer application", (t) => {
+  const { paths } = fixture(t);
+  const id = "ordered-policy";
+  createProgramProfile(id, {}, { paths, now: fixedAt });
+  const envelope = answerEnvelope(id, completeProfile(id));
+  for (const question of PROGRAM_PROFILE_QUESTIONS) {
+    if (question.id.startsWith("attestation-")) continue;
+    const single = structuredClone(envelope);
+    single.answers = { [question.id]: envelope.answers[question.id] };
+    applyProgramProfileAnswers(id, single, { paths, now: fixedAt });
+  }
+  const stored = readJson(path.join(paths.programs, id, "program-profile.json"));
+  assert.equal(stored.identity.objective, completeProfile(id).identity.objective);
+  const invalid = structuredClone(envelope);
+  invalid.answers = { "execution-phase-policies": [{}, {}] };
+  assert.throws(() => applyProgramProfileAnswers(id, invalid, { paths, now: fixedAt }), /required property 'id'/u);
+  assert.deepEqual(readJson(path.join(paths.programs, id, "program-profile.json")), stored);
+});
+
+test("model routing requires a current destination matching the recorded release", (t) => {
+  const { paths } = fixture(t);
+  let index = 0;
+  for (const [destination, destinations, expected] of [
+    [undefined, ["gate-home"], "unknown"],
+    ["unknown", ["gate-home"], "unknown"],
+    ["cloud", ["gate-home"], "block"],
+    ["local", ["gate-home"], "pass"],
+    ["local", ["configured-cloud-model"], "block"],
+    ["cloud", ["configured-cloud-model"], "pass"]
+  ]) {
+    const id = `destination-policy-${index++}`;
+    const profile = completeProfile(id);
+    profile.dataEvidence.allowedDestinations = destinations;
+    createProgramProfile(id, profile, { paths, now: fixedAt });
+    const provider = providerProfile();
+    if (destination !== undefined) provider.metadata.destination = destination;
+    const compilation = compileProgramProfile(id, { providerProfile: provider }, { paths, now: fixedAt });
+    const report = readJson(path.join(paths.programs, id, "compiled", compilation.compilationId, "model-preflight.json"));
+    assert.equal(report.dimensions.find((item) => item.id === "data-release").status, expected);
+    assert.equal(report.routing.strategy, expected === "pass" && report.gateDecision === "pass" ? "provider-model" : "operator");
+  }
+});
