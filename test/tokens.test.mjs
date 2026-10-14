@@ -149,6 +149,109 @@ test("same-inode truncate, rewrite, and regrow cannot reuse exact cached usage",
   assert.equal(result.totals.totalTokens, 4);
 });
 
+test("a tail-truncated cache requires an unchanged EOF witness before incremental reuse", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-tokens-tail-witness-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, "session.jsonl");
+  const maximumBytes = 8 * 1024;
+  const event = (total, at) => `${JSON.stringify({
+    timestamp: at,
+    payload: { type: "token_count", info: { total_token_usage: { total_tokens: total } } }
+  })}\n`;
+  const notice = (marker) => `${JSON.stringify({
+    type: "notice",
+    message: `${marker}-${"x".repeat(320)}`
+  })}\n`;
+  const initial = `${notice("old").repeat(40)}${event(111, "2026-10-14T10:00:00.000Z")}`;
+  assert.ok(Buffer.byteLength(initial) > maximumBytes);
+  fs.writeFileSync(file, initial);
+  const inode = fs.statSync(file).ino;
+
+  const cached = await scanCodexUsage({ roots: [root], maximumBytes, maximumBytesPerFile: maximumBytes });
+  assert.equal(cached.availability, "estimated");
+  assert.equal(cached.tailTruncatedFiles, 1);
+  assert.equal(cached.totals.totalTokens, 111);
+
+  let rewritten = notice("replacement").repeat(40);
+  while (Buffer.byteLength(rewritten) <= Buffer.byteLength(initial)) rewritten += notice("replacement");
+  assert.ok(Buffer.byteLength(rewritten) - Buffer.byteLength(initial) < maximumBytes / 2);
+  fs.writeFileSync(file, rewritten);
+  assert.equal(fs.statSync(file).ino, inode);
+
+  const result = await scanCodexUsage({ roots: [root], maximumBytes, maximumBytesPerFile: maximumBytes });
+  assert.equal(result.cacheHits, 0);
+  assert.equal(result.incrementalFiles, 0);
+  assert.equal(result.tailTruncatedFiles, 1);
+  assert.equal(result.partial, true);
+  assert.equal(result.availability, "unavailable");
+  assert.equal(result.totals.totalTokens, null);
+  assert.ok(result.bytesRead <= maximumBytes);
+});
+
+test("a matching EOF witness permits an estimated truncated-tail append", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-tokens-tail-append-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, "session.jsonl");
+  const maximumBytes = 8 * 1024;
+  const event = (total, at) => `${JSON.stringify({
+    timestamp: at,
+    payload: { type: "token_count", info: { total_token_usage: { total_tokens: total } } }
+  })}\n`;
+  const padding = `${JSON.stringify({ type: "notice", message: "x".repeat(320) })}\n`.repeat(40);
+  fs.writeFileSync(file, `${padding}${event(111, "2026-10-14T10:00:00.000Z")}`);
+  const first = await scanCodexUsage({ roots: [root], maximumBytes, maximumBytesPerFile: maximumBytes });
+  assert.equal(first.availability, "estimated");
+  assert.equal(first.totals.totalTokens, 111);
+
+  fs.appendFileSync(file, event(222, "2026-10-14T10:01:00.000Z"));
+  const appended = await scanCodexUsage({ roots: [root], maximumBytes, maximumBytesPerFile: maximumBytes });
+  assert.equal(appended.incrementalFiles, 1);
+  assert.equal(appended.tailTruncatedFiles, 1);
+  assert.equal(appended.availability, "estimated");
+  assert.equal(appended.totals.totalTokens, 222);
+  assert.ok(appended.bytesRead > Buffer.byteLength(event(222, "2026-10-14T10:01:00.000Z")));
+  assert.ok(appended.bytesRead <= maximumBytes);
+});
+
+test("a preserved EOF witness cannot seed stale usage from a rewritten cached tail", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-tokens-tail-preserved-witness-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, "session.jsonl");
+  const maximumBytes = 8 * 1024;
+  const event = `${JSON.stringify({
+    timestamp: "2026-10-14T10:00:00.000Z",
+    payload: { type: "token_count", info: { total_token_usage: { total_tokens: 111 } } }
+  })}\n`;
+  const notice = (marker) => `${JSON.stringify({
+    type: "notice",
+    message: `${marker}-${"x".repeat(320)}`
+  })}\n`;
+  const stableSuffix = notice("stable-suffix").repeat(12);
+  assert.ok(Buffer.byteLength(stableSuffix) > 4 * 1024);
+  const initial = `${notice("old-prefix").repeat(20)}${event}${stableSuffix}`;
+  fs.writeFileSync(file, initial);
+  const initialStat = fs.statSync(file);
+
+  const cached = await scanCodexUsage({ roots: [root], maximumBytes, maximumBytesPerFile: maximumBytes });
+  assert.equal(cached.availability, "estimated");
+  assert.equal(cached.totals.totalTokens, 111);
+
+  const initialBytes = fs.readFileSync(file);
+  const preservedSuffix = initialBytes.subarray(initialBytes.length - 4 * 1024);
+  const replacementPrefix = Buffer.alloc(initialBytes.length - preservedSuffix.length, 0x79);
+  const growth = Buffer.from(notice("growth-without-usage"));
+  fs.writeFileSync(file, Buffer.concat([replacementPrefix, preservedSuffix, growth]));
+  assert.equal(fs.statSync(file).ino, initialStat.ino);
+
+  const result = await scanCodexUsage({ roots: [root], maximumBytes, maximumBytesPerFile: maximumBytes });
+  assert.equal(result.cacheHits, 0);
+  assert.equal(result.incrementalFiles, 0);
+  assert.equal(result.tailTruncatedFiles, 1);
+  assert.equal(result.availability, "unavailable");
+  assert.equal(result.totals.totalTokens, null);
+  assert.ok(result.bytesRead <= maximumBytes);
+});
+
 test("latest usage follows JSONL chronology across incomparable partial counters", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-tokens-chronology-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

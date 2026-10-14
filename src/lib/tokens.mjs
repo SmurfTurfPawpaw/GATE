@@ -8,6 +8,7 @@ const TOKEN_KEYS = ["inputTokens", "cachedInputTokens", "outputTokens", "reasoni
 const usageTailCache = new Map();
 const MAX_USAGE_CACHE_ENTRIES = 1_000;
 const MAX_CACHED_TRAILING_BYTES = 32 * 1024;
+const MAX_USAGE_APPEND_WITNESS_BYTES = 4 * 1024;
 const DEFAULT_LIMITS = Object.freeze({
   maximumFiles: 500,
   maximumDiscoveredFiles: 5_000,
@@ -146,7 +147,26 @@ async function readRange(handle, start, length) {
     if (result.bytesRead === 0) break;
     bytesRead += result.bytesRead;
   }
-  return { bytesRead, text: buffer.subarray(0, bytesRead).toString("utf8") };
+  const bytes = buffer.subarray(0, bytesRead);
+  return { bytesRead, buffer: bytes, text: bytes.toString("utf8") };
+}
+
+function suffixWitness(buffer, endOffset) {
+  const length = Math.min(buffer.length, MAX_USAGE_APPEND_WITNESS_BYTES);
+  if (length < 1) return null;
+  const bytes = buffer.subarray(buffer.length - length);
+  return {
+    start: endOffset - length,
+    length,
+    sha256: crypto.createHash("sha256").update(bytes).digest("hex")
+  };
+}
+
+function validSuffixWitness(value, fileSize) {
+  return value && Number.isSafeInteger(value.start) && value.start >= 0 &&
+    Number.isSafeInteger(value.length) && value.length > 0 &&
+    value.length <= MAX_USAGE_APPEND_WITNESS_BYTES && value.start + value.length === fileSize &&
+    typeof value.sha256 === "string" && /^[a-f0-9]{64}$/u.test(value.sha256);
 }
 
 async function latestUsage(file, maximumBytes) {
@@ -169,18 +189,92 @@ async function latestUsage(file, maximumBytes) {
     }
 
     // A size increase alone cannot prove append-only behavior: the same inode
-    // can be truncated, rewritten, and regrown between observations. Reuse is
-    // limited to an already-partial tail, whose result cannot be represented as
-    // exact. Exact prior reads are rescanned after every content change.
-    const appendOnly = cached && cached.truncated === true && cached.appendSafe === true &&
+    // can be truncated, rewritten, and regrown between observations. A suffix
+    // witness can prove the old EOF boundary, but it cannot prove that earlier
+    // cached usage bytes survived. Never seed an incremental parse with cached
+    // usage. Reuse the delta only when it contains a complete newer event;
+    // otherwise reconstruct and rescan the complete current tail.
+    const growth = cached ? before.size - cached.signature.size : 0;
+    const appendCandidate = cached && cached.truncated === true && cached.appendSafe === true &&
       cached.maximumBytes === maximumBytes &&
       sameFileIdentity(cached.signature, before) && before.size > cached.signature.size &&
-      before.size - cached.signature.size <= maximumBytes;
-    const requestedBytes = appendOnly
-      ? before.size - cached.signature.size
-      : Math.min(before.size, maximumBytes);
-    const start = appendOnly ? cached.signature.size : Math.max(0, before.size - requestedBytes);
-    if (requestedBytes === 0) {
+      validSuffixWitness(cached.witness, cached.signature.size) &&
+      cached.witness.length + growth <= maximumBytes;
+    let witnessRead = null;
+    let growthRead = null;
+    let bytesRead = 0;
+    let incremental = false;
+    let completeRead = false;
+    let start = 0;
+    let truncated = false;
+    let parsed = null;
+    let witnessedBytes = null;
+    if (appendCandidate) {
+      witnessRead = await readRange(handle, cached.witness.start, cached.witness.length);
+      growthRead = await readRange(handle, cached.signature.size, growth);
+      bytesRead = witnessRead.bytesRead + growthRead.bytesRead;
+      const witnessMatches = witnessRead.bytesRead === cached.witness.length &&
+        crypto.createHash("sha256").update(witnessRead.buffer).digest("hex") === cached.witness.sha256;
+      const deltaAtLineBoundary = cached.trailing === "" &&
+        witnessRead.buffer[witnessRead.buffer.length - 1] === 0x0a;
+      if (witnessMatches && growthRead.bytesRead === growth && deltaAtLineBoundary) {
+        const deltaParsed = parseUsageText(growthRead.text);
+        // A usage event in the delta is later than every byte that may have
+        // changed in the old window, so it is safe without cached state.
+        if (deltaParsed.extracted) {
+          incremental = true;
+          completeRead = true;
+          start = cached.signature.size;
+          truncated = cached.truncated;
+          parsed = deltaParsed;
+          witnessedBytes = Buffer.concat([witnessRead.buffer, growthRead.buffer]);
+        }
+      }
+    }
+
+    if (appendCandidate && !incremental) {
+      // The witness and growth are both part of the current tail. Read only
+      // the missing prefix so the complete rescan remains within the byte cap.
+      const requestedBytes = Math.min(before.size, maximumBytes);
+      start = Math.max(0, before.size - requestedBytes);
+      const prefixLength = cached.witness.start - start;
+      const prefixRead = await readRange(handle, start, prefixLength);
+      bytesRead += prefixRead.bytesRead;
+      const currentTail = Buffer.concat([
+        prefixRead.buffer,
+        witnessRead.buffer,
+        growthRead.buffer
+      ]);
+      completeRead = prefixRead.bytesRead === prefixLength &&
+        witnessRead.bytesRead === cached.witness.length && growthRead.bytesRead === growth &&
+        currentTail.length === requestedBytes;
+      let text = currentTail.toString("utf8");
+      truncated = start > 0 || !completeRead;
+      if (start > 0) {
+        const firstCompleteLine = text.indexOf("\n");
+        text = firstCompleteLine === -1 ? "" : text.slice(firstCompleteLine + 1);
+      }
+      parsed = parseUsageText(text);
+      witnessedBytes = currentTail;
+    } else if (!appendCandidate) {
+      const requestedBytes = Math.min(before.size, maximumBytes);
+      start = Math.max(0, before.size - requestedBytes);
+      if (requestedBytes > 0) {
+        const read = await readRange(handle, start, requestedBytes);
+        bytesRead = read.bytesRead;
+        completeRead = read.bytesRead === requestedBytes;
+        let text = read.text;
+        truncated = start > 0 || !completeRead;
+        if (start > 0) {
+          const firstCompleteLine = text.indexOf("\n");
+          text = firstCompleteLine === -1 ? "" : text.slice(firstCompleteLine + 1);
+        }
+        parsed = parseUsageText(text);
+        witnessedBytes = read.buffer;
+      }
+    }
+
+    if (!parsed) {
       const truncated = before.size > 0;
       const empty = {
         signature: before,
@@ -188,12 +282,13 @@ async function latestUsage(file, maximumBytes) {
         extracted: null,
         trailing: "",
         appendSafe: !truncated,
-        truncated
+        truncated,
+        witness: null
       };
       retainUsageCache(resolved, empty);
       return {
         extracted: null,
-        bytesRead: 0,
+        bytesRead,
         truncated,
         cacheHit: false,
         incremental: false,
@@ -201,42 +296,30 @@ async function latestUsage(file, maximumBytes) {
       };
     }
 
-    const read = await readRange(handle, start, requestedBytes);
     const afterStat = await handle.stat();
     const after = statSignature(afterStat);
     const changedDuringRead = !sameFileVersion(before, after);
-    const completeRead = read.bytesRead === requestedBytes;
-    let text = read.text;
-    let initialLatest = null;
-    let truncated = start > 0 || !completeRead;
-    if (appendOnly) {
-      text = `${cached.trailing}${text}`;
-      initialLatest = cached.extracted;
-      truncated = cached.truncated;
-    } else if (start > 0) {
-      const firstCompleteLine = text.indexOf("\n");
-      text = firstCompleteLine === -1 ? "" : text.slice(firstCompleteLine + 1);
-    }
-    const parsed = parseUsageText(text, initialLatest);
-    if (!changedDuringRead && completeRead) {
+    const cacheable = !changedDuringRead && completeRead;
+    if (cacheable) {
       const appendSafe = Buffer.byteLength(parsed.trailing) <= MAX_CACHED_TRAILING_BYTES;
       retainUsageCache(resolved, {
         signature: after,
         maximumBytes,
         extracted: parsed.extracted,
         trailing: appendSafe ? parsed.trailing : "",
-        appendSafe,
-        truncated
+        appendSafe: appendSafe && witnessedBytes.length > 0,
+        truncated,
+        witness: suffixWitness(witnessedBytes, after.size)
       });
     } else {
       usageTailCache.delete(resolved);
     }
     return {
       extracted: parsed.extracted,
-      bytesRead: read.bytesRead,
+      bytesRead,
       truncated: truncated || changedDuringRead,
       cacheHit: false,
-      incremental: Boolean(appendOnly),
+      incremental,
       changedDuringRead
     };
   } finally {
