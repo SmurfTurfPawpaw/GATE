@@ -61,7 +61,7 @@ Some notable exceptions and mixed terms require deliberate handling:
 - Android SDK and emulator components contain mixed terms.
 - Kali Linux is a collection with per-package licenses, not a single redistributable tool. A GATE image needs a pinned package set, digest, SBOM, and notices.
 
-Future tool-specific adapters will call external executables while preserving upstream identity. All seven managed core binaries can establish exact byte provenance, but none is currently invocation-admitted: each needs a reviewed workflow-phase adapter, with additional privilege admission for `naabu` and exact-template admission for `nuclei`. Vendoring, modifying, embedding, or redistributing a tool requires a separate license review. See [docs/security-tooling.md](docs/security-tooling.md#licensing-notes) for the catalog policy.
+Tool-specific adapters call external executables while preserving upstream identity. All seven managed core binaries can establish exact byte provenance. DNSx and HTTPx each have one narrow reviewed workflow-phase adapter: DNSx admits an exact-domain `A` observation through one explicit resolver, and HTTPx admits an exact-URL `GET` through one operator-approved literal IP while preserving the approved Host header and HTTPS SNI. These adapters do not admit either tool's broader command surface. Subfinder, Katana, Naabu, FFUF, and Nuclei remain invocation-blocked; Naabu also needs privilege admission and Nuclei also needs an exact admitted template pack. Vendoring, modifying, embedding, or redistributing a tool requires a separate license review. See [docs/security-tooling.md](docs/security-tooling.md#licensing-notes) for the catalog policy.
 
 ## Updating notices
 

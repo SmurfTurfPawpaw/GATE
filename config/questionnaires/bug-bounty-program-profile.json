@@ -1,0 +1,1253 @@
+{
+  "$schema": "../../schemas/program-profile-questionnaire.schema.json",
+  "apiVersion": "gate.dev/program-profile-questionnaire/v1",
+  "kind": "ProgramProfileQuestionnaire",
+  "metadata": {
+    "id": "bug-bounty-program-profile",
+    "title": "Bug bounty program profile",
+    "version": 2,
+    "description": "Capture source-backed program authority, exact scope, technique permissions, execution bounds, evidence handling, coverage, and reporting expectations before an engagement is materialized. Imported material is evidence only and never executes or changes policy."
+  },
+  "semantics": {
+    "dispositions": [
+      "allowed",
+      "denied",
+      "conditional",
+      "unknown"
+    ],
+    "claimStates": [
+      "observed",
+      "inferred",
+      "unverified"
+    ],
+    "actions": [
+      "observe",
+      "scan",
+      "intercept",
+      "authenticate",
+      "fuzz",
+      "exploit-safe",
+      "exploit-stateful",
+      "persist",
+      "denial-of-service",
+      "destructive-test",
+      "data-access",
+      "data-removal",
+      "exfiltration-simulation"
+    ],
+    "assistanceModes": [
+      "plan",
+      "analyze",
+      "generate-command",
+      "execute",
+      "report",
+      "retest"
+    ],
+    "stopConditions": [
+      "scope-mismatch",
+      "plan-digest-change",
+      "authorization-expiry",
+      "unexpected-data-loss",
+      "target-instability",
+      "third-party-system-discovered",
+      "rate-limit-exceeded",
+      "evidence-integrity-failure",
+      "unexpected-sensitive-data",
+      "unplanned-privilege-or-persistence",
+      "defensive-control-impact",
+      "cleanup-incomplete",
+      "operator-stop"
+    ],
+    "coverageDomains": [
+      "asset-discovery",
+      "architecture",
+      "authentication",
+      "authorization",
+      "sessions",
+      "inputs",
+      "business-logic",
+      "client-behavior",
+      "data-exposure",
+      "infrastructure",
+      "supply-chain",
+      "post-exploitation-impact",
+      "host-local-privilege",
+      "wireless-radio",
+      "internal-segmentation",
+      "ai-llm-systems",
+      "embedded-iot-ot",
+      "human-physical-security"
+    ],
+    "moduleIds": [
+      "web-api",
+      "cloud-container",
+      "mobile",
+      "desktop",
+      "ai-llm",
+      "network-identity",
+      "wireless-radio",
+      "human-physical",
+      "embedded-iot-ot"
+    ]
+  },
+  "sections": [
+    {
+      "id": "identity-objectives",
+      "title": "Identity, objectives, and completion",
+      "purpose": "Define the program, the testing outcome, and what a satisfactory finished assessment must contain.",
+      "required": true,
+      "questions": [
+        {
+          "id": "identity-program-name",
+          "path": "identity.programName",
+          "prompt": "What is the exact program or engagement name?",
+          "why": "The name anchors private records and generated reports to the correct program.",
+          "type": "text",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "identity-objective",
+          "path": "identity.objective",
+          "prompt": "What concrete security outcome should this assessment achieve?",
+          "why": "A precise objective keeps exploration useful and gives the final report an assessable purpose.",
+          "type": "multiline",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "identity-depth",
+          "path": "identity.depth",
+          "prompt": "How deep should the assessment go?",
+          "why": "Depth sets the expected breadth, validation effort, and time allocation.",
+          "type": "enum",
+          "required": true,
+          "sensitive": false,
+          "choices": [
+            "targeted",
+            "thorough",
+            "exhaustive"
+          ]
+        },
+        {
+          "id": "identity-deliverables",
+          "path": "identity.deliverables",
+          "prompt": "Which deliverables must be produced?",
+          "why": "Explicit deliverables prevent an otherwise useful assessment from missing the form the operator or program expects.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "identity-success-criteria",
+          "path": "identity.successCriteria",
+          "prompt": "What observable conditions make this assessment satisfactory?",
+          "why": "Success criteria distinguish completion from merely running tools or collecting output.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": false
+        }
+      ]
+    },
+    {
+      "id": "authority-sources",
+      "title": "Authority and source ledger",
+      "purpose": "Record the sources that establish authority and program terms, their freshness, and the contacts who can clarify or stop work.",
+      "required": true,
+      "questions": [
+        {
+          "id": "authority-sources",
+          "path": "sources",
+          "prompt": "List every rules, scope, safe-harbor, contract, architecture, account, and operator source used by this profile.",
+          "why": "Every decisive claim cites this ledger so changed or unsupported terms can be detected instead of inferred.",
+          "type": "source-list",
+          "required": true,
+          "sensitive": true
+        },
+        {
+          "id": "authority-basis",
+          "path": "authorization.basis",
+          "prompt": "What is the exact basis for authorization?",
+          "why": "Ownership, a client authorization, a contract, a public program, and a dedicated lab establish different evidence requirements.",
+          "type": "enum",
+          "required": true,
+          "sensitive": false,
+          "choices": [
+            "owner",
+            "client-written-authorization",
+            "contract",
+            "public-bug-bounty-program",
+            "dedicated-lab"
+          ]
+        },
+        {
+          "id": "authority-program-url",
+          "path": "authorization.programUrl",
+          "prompt": "What canonical program URL applies, or null when no program URL exists?",
+          "why": "A canonical location makes rules revalidation deterministic without treating retrieved text as executable instructions.",
+          "type": "text",
+          "required": false,
+          "sensitive": false
+        },
+        {
+          "id": "authority-safe-harbor",
+          "path": "authorization.safeHarbor",
+          "prompt": "What do the cited sources say about safe harbor?",
+          "why": "The decision must be allowed, denied, conditional, or unknown, with provenance and every stated condition.",
+          "type": "decision",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "authority-valid-from",
+          "path": "authorization.validFrom",
+          "prompt": "When does the authorization start, or null if the source has no start time?",
+          "why": "An explicit start prevents work from being scheduled before authority exists.",
+          "type": "datetime",
+          "required": false,
+          "sensitive": false
+        },
+        {
+          "id": "authority-valid-until",
+          "path": "authorization.validUntil",
+          "prompt": "When does the authorization end, or null if the source has no end time?",
+          "why": "An explicit end allows execution to fail closed when authority expires.",
+          "type": "datetime",
+          "required": false,
+          "sensitive": false
+        },
+        {
+          "id": "authority-last-verified",
+          "path": "authorization.lastVerifiedAt",
+          "prompt": "When were all applicable program terms last checked?",
+          "why": "Program scope and rules can change; freshness is part of the authorization claim.",
+          "type": "datetime",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "authority-source-refs",
+          "path": "authorization.sourceRefs",
+          "prompt": "Which source IDs establish the authorization basis?",
+          "why": "Authority must point to exact source-ledger entries rather than a free-form assertion.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "authority-operator-confirmed",
+          "path": "authorization.operatorConfirmed",
+          "prompt": "Have you reviewed these sources and confirmed that they authorize the described work?",
+          "why": "Imported text can provide evidence but cannot grant authority by itself.",
+          "type": "boolean",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "authority-contacts",
+          "path": "authorization.contacts",
+          "prompt": "Who can clarify authority, receive escalation, or stop the assessment?",
+          "why": "Named roles and channels make ambiguity and emergency handling actionable.",
+          "type": "contact-list",
+          "required": true,
+          "sensitive": true
+        }
+      ]
+    },
+    {
+      "id": "scope-assets",
+      "title": "Exact assets and scope boundaries",
+      "purpose": "Express included, excluded, conditional, and unknown assets as typed selectors and define how discovered or third-party systems are handled.",
+      "required": true,
+      "questions": [
+        {
+          "id": "scope-assets",
+          "path": "scope.assets",
+          "prompt": "List every typed asset selector with its disposition, provenance, rationale, conditions, complete per-action decisions, and exact execution-limit envelope.",
+          "why": "Each asset must carry its own effective action and limit policy so a broad global rule cannot silently authorize a narrower or adjacent target. Global action and limit rules remain ceilings.",
+          "type": "selector-decisions",
+          "required": true,
+          "sensitive": true
+        },
+        {
+          "id": "scope-third-party-handling",
+          "path": "scope.thirdPartyHandling",
+          "prompt": "How must third-party services, shared infrastructure, and vendors be handled?",
+          "why": "A program may own an application without authorizing tests against every dependency it uses.",
+          "type": "decision",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "scope-redirect-handling",
+          "path": "scope.redirectHandling",
+          "prompt": "May tools follow redirects, aliases, or alternate authorities, and under what conditions?",
+          "why": "Redirects and aliases can cross the exact selector boundary even when the starting URL is allowed.",
+          "type": "decision",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "scope-discovered-asset-handling",
+          "path": "scope.discoveredAssetHandling",
+          "prompt": "What happens when reconnaissance discovers an asset absent from the cited scope?",
+          "why": "Discovery is evidence, not automatic scope expansion; this decision defines the review path.",
+          "type": "decision",
+          "required": true,
+          "sensitive": false
+        }
+      ]
+    },
+    {
+      "id": "actions-techniques",
+      "title": "Actions and techniques",
+      "purpose": "Classify every GATE action and each program-specific technique without treating silence as permission.",
+      "required": true,
+      "questions": [
+        {
+          "id": "execution-requested-assistance-modes",
+          "path": "executionPolicy.requestedAssistanceModes",
+          "prompt": "Which assistance modes should GATE provide for this program?",
+          "why": "Explicit plan, analyze, command-generation, execution, reporting, and retest intent lets compilation choose compatible model and tool capabilities without silently expanding the request.",
+          "type": "multi-enum",
+          "required": true,
+          "sensitive": false,
+          "choices": [
+            "plan",
+            "analyze",
+            "generate-command",
+            "execute",
+            "report",
+            "retest"
+          ]
+        },
+        {
+          "id": "actions-all",
+          "path": "techniquePolicy.actions",
+          "prompt": "For each of the 13 action labels, is it allowed, denied, conditional, or unknown?",
+          "why": "Every action needs its own source-backed decision; conditional and unknown answers never compile as allowed.",
+          "type": "action-decisions",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "actions-techniques",
+          "path": "techniquePolicy.techniques",
+          "prompt": "Which named techniques need more specific rules than their action label?",
+          "why": "Program terms often distinguish techniques such as automated scanning, credential testing, callbacks, persistence, or data access within the same broad action.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "execution-phase-policies",
+          "path": "executionPolicy.phases",
+          "prompt": "Define each execution slice with a unique ID, workflow phase ID, exact asset refs and actions, allowed and denied tool IDs, conditions, claim state, source refs, and tighter limit overrides.",
+          "why": "Phase slices keep tool use, target contact, provenance, and resource ceilings bound to exact assets and workflow phases instead of flattening global rules across the program.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": true
+        }
+      ]
+    },
+    {
+      "id": "limits-schedule",
+      "title": "Limits, schedule, and budgets",
+      "purpose": "Set concrete time, request, rate, concurrency, token, and spend ceilings for deterministic planning.",
+      "required": true,
+      "questions": [
+        {
+          "id": "limits-timezone",
+          "path": "limits.timezone",
+          "prompt": "Which IANA timezone governs all testing windows?",
+          "why": "A named timezone prevents local-clock ambiguity when windows or contacts are elsewhere.",
+          "type": "text",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "limits-windows",
+          "path": "limits.windows",
+          "prompt": "On which days and times may work occur?",
+          "why": "Explicit windows let planning and preflight reject activity outside the permitted schedule.",
+          "type": "schedule-windows",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "limits-max-minutes",
+          "path": "limits.maxMinutes",
+          "prompt": "What is the maximum duration for one execution?",
+          "why": "A wall-clock ceiling bounds stalled or unexpectedly slow work.",
+          "type": "integer",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "limits-max-requests",
+          "path": "limits.maxRequests",
+          "prompt": "What is the maximum request count for one execution?",
+          "why": "A request ceiling turns an open-ended operation into a bounded test plan.",
+          "type": "integer",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "limits-max-parallel",
+          "path": "limits.maxParallel",
+          "prompt": "What is the maximum concurrency?",
+          "why": "Concurrency affects target load even when the average rate appears acceptable.",
+          "type": "integer",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "limits-max-rate",
+          "path": "limits.maxRatePerSecond",
+          "prompt": "What is the maximum request or packet rate per second?",
+          "why": "A rate ceiling captures short bursts that a total request limit cannot.",
+          "type": "number",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "limits-max-tokens",
+          "path": "limits.maxTokens",
+          "prompt": "What is the maximum model-token budget for one run?",
+          "why": "A token ceiling makes model cost and context use visible and comparable.",
+          "type": "integer",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "limits-max-spend",
+          "path": "limits.maxSpendUsd",
+          "prompt": "What is the maximum external spend in USD? Use 0 to prohibit spending; null explicitly means no monetary ceiling was supplied.",
+          "why": "Zero is an explicit prohibition. Null records that no monetary ceiling was supplied and must never be interpreted as a prohibition.",
+          "type": "number",
+          "required": true,
+          "sensitive": false,
+          "allowNull": true
+        },
+        {
+          "id": "limits-source-refs",
+          "path": "limits.sourceRefs",
+          "prompt": "Which source IDs establish these limits?",
+          "why": "Limit values must remain traceable when program rules or operator decisions change.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": false
+        }
+      ]
+    },
+    {
+      "id": "accounts-identities",
+      "title": "Accounts, identities, and secret references",
+      "purpose": "Describe test personas and privilege boundaries while recording only symbolic secret references.",
+      "required": true,
+      "questions": [
+        {
+          "id": "accounts-personas",
+          "path": "access.accounts",
+          "prompt": "Which test accounts, personas, roles, and environments are available?",
+          "why": "Distinct identities are required to plan authentication, authorization, tenancy, and privilege-transition tests.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": true
+        },
+        {
+          "id": "accounts-identity-provider-notes",
+          "path": "access.identityProviderNotes",
+          "prompt": "What identity-provider, MFA, recovery, federation, or provisioning details affect testing?",
+          "why": "Identity topology and recovery paths often determine both test coverage and lockout risk.",
+          "type": "multiline",
+          "required": false,
+          "sensitive": true
+        }
+      ]
+    },
+    {
+      "id": "architecture-data-flows",
+      "title": "Architecture, trust boundaries, and data flows",
+      "purpose": "Map known components and trust transitions while preserving uncertainty as an explicit input to hypotheses.",
+      "required": true,
+      "questions": [
+        {
+          "id": "architecture-components",
+          "path": "architecture.components",
+          "prompt": "Which components are known, and what evidence supports each one?",
+          "why": "A component map keeps testing hypothesis-led instead of driven only by tool availability.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": true
+        },
+        {
+          "id": "architecture-trust-boundaries",
+          "path": "architecture.trustBoundaries",
+          "prompt": "Where do identities, privileges, tenants, or networks cross trust boundaries?",
+          "why": "Trust boundaries identify high-value authorization and isolation hypotheses.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": true
+        },
+        {
+          "id": "architecture-data-flows",
+          "path": "architecture.dataFlows",
+          "prompt": "Which important data flows cross those components and boundaries?",
+          "why": "Data paths connect technical behavior to confidentiality, integrity, and impact claims.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": true
+        },
+        {
+          "id": "architecture-unknowns",
+          "path": "architecture.unknowns",
+          "prompt": "Which architecture facts remain unknown?",
+          "why": "Explicit unknowns become questions to resolve rather than assumptions silently embedded in a plan.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": true
+        },
+        {
+          "id": "architecture-source-refs",
+          "path": "architecture.sourceRefs",
+          "prompt": "Which source IDs support the architecture map?",
+          "why": "Architecture claims can be observed, inferred, or unverified, but still need traceable provenance.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": false
+        }
+      ]
+    },
+    {
+      "id": "workflow-coverage",
+      "title": "Workflow and coverage",
+      "purpose": "Resolve all 18 workflow coverage domains and select every technology module that needs detailed questions.",
+      "required": true,
+      "questions": [
+        {
+          "id": "coverage-all-domains",
+          "path": "coverage",
+          "prompt": "For each of the 18 coverage domains, is testing allowed, denied, conditional, or unknown?",
+          "why": "A complete matrix exposes gaps and prevents narrow scanner output from being mistaken for end-to-end coverage.",
+          "type": "coverage-decisions",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "coverage-applicable-modules",
+          "path": "questionnaire.applicableModules",
+          "prompt": "Which technology modules apply to this program?",
+          "why": "Selected modules open focused questions for the systems actually present without weakening the common contract.",
+          "type": "multi-enum",
+          "required": true,
+          "sensitive": false,
+          "choices": [
+            "web-api",
+            "cloud-container",
+            "mobile",
+            "desktop",
+            "ai-llm",
+            "network-identity",
+            "wireless-radio",
+            "human-physical",
+            "embedded-iot-ot"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "data-evidence",
+      "title": "Data and evidence handling",
+      "purpose": "Define what data may be observed, where evidence may go, how long it is retained, and what constitutes sufficient proof.",
+      "required": true,
+      "questions": [
+        {
+          "id": "data-classification",
+          "path": "dataEvidence.classification",
+          "prompt": "What is the highest data classification expected in evidence?",
+          "why": "Classification drives model routing, storage, redaction, and reporting decisions.",
+          "type": "enum",
+          "required": true,
+          "sensitive": false,
+          "choices": [
+            "public",
+            "internal",
+            "confidential",
+            "restricted"
+          ]
+        },
+        {
+          "id": "data-destinations",
+          "path": "dataEvidence.allowedDestinations",
+          "prompt": "Which evidence destinations are explicitly permitted?",
+          "why": "Collected material must not leave the destinations approved by the program and operator.",
+          "type": "multi-enum",
+          "required": true,
+          "sensitive": false,
+          "choices": [
+            "gate-home",
+            "configured-cloud-model",
+            "client-destination"
+          ]
+        },
+        {
+          "id": "data-retention-days",
+          "path": "dataEvidence.retentionDays",
+          "prompt": "How many days may private evidence be retained?",
+          "why": "A retention period makes cleanup and closeout verifiable.",
+          "type": "integer",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "data-redaction-rules",
+          "path": "dataEvidence.redactionRules",
+          "prompt": "Which data must be redacted, minimized, or never captured?",
+          "why": "Specific redaction rules reduce unnecessary exposure while preserving reproducible proof.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": true
+        },
+        {
+          "id": "data-minimum-proof",
+          "path": "dataEvidence.minimumProof",
+          "prompt": "What is the least evidence needed to validate impact?",
+          "why": "A minimum-proof rule limits unnecessary record access or extraction after impact is established.",
+          "type": "multiline",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "data-secret-refs",
+          "path": "dataEvidence.secretRefs",
+          "prompt": "Which symbolic env, keychain, or file references may be resolved at execution time?",
+          "why": "Only references belong in the profile; credential values stay outside repository and general logs.",
+          "type": "secret-ref-list",
+          "required": true,
+          "sensitive": true
+        },
+        {
+          "id": "data-source-refs",
+          "path": "dataEvidence.sourceRefs",
+          "prompt": "Which source IDs establish the evidence-handling rules?",
+          "why": "Destinations and retention are receipt-relevant terms and must be traceable.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": false
+        }
+      ]
+    },
+    {
+      "id": "stops-escalation-cleanup",
+      "title": "Stops, escalation, and cleanup",
+      "purpose": "Define the response for all 13 mandatory stops, the emergency contacts, and how target-side state is restored and verified.",
+      "required": true,
+      "questions": [
+        {
+          "id": "stops-all-conditions",
+          "path": "stops.conditions",
+          "prompt": "What response is required for each of the 13 mandatory stop conditions?",
+          "why": "Every mandatory stop remains enabled; response detail makes stopping, evidence preservation, and safe teardown repeatable.",
+          "type": "stop-responses",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "stops-escalation-contacts",
+          "path": "stops.escalationContacts",
+          "prompt": "Who receives urgent scope, stability, data, defensive-control, or cleanup escalations?",
+          "why": "A reachable escalation path prevents an uncertain event from becoming an improvised decision.",
+          "type": "contact-list",
+          "required": true,
+          "sensitive": true
+        },
+        {
+          "id": "stops-cleanup-required",
+          "path": "stops.cleanup.required",
+          "prompt": "Must every target-side change be cleaned up or explicitly held for recovery?",
+          "why": "The workflow requires deterministic cleanup accounting for any stateful test.",
+          "type": "boolean",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "stops-cleanup-steps",
+          "path": "stops.cleanup.steps",
+          "prompt": "Which cleanup steps apply to accounts, files, records, sessions, callbacks, infrastructure, or other test state?",
+          "why": "Predefined steps allow safe teardown after an ordinary completion, stop, or authorization expiry.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": true
+        },
+        {
+          "id": "stops-cleanup-verification",
+          "path": "stops.cleanup.verification",
+          "prompt": "How will restoration be verified?",
+          "why": "A cleanup action is incomplete until evidence shows the intended state was restored.",
+          "type": "multiline",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "stops-cleanup-source-refs",
+          "path": "stops.cleanup.sourceRefs",
+          "prompt": "Which source IDs establish cleanup requirements?",
+          "why": "Cleanup obligations need the same provenance as authorization and scope.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": false
+        }
+      ]
+    },
+    {
+      "id": "reporting-disclosure",
+      "title": "Reporting, disclosure, and retest",
+      "purpose": "Capture the exact format, delivery path, severity system, disclosure restrictions, and retest expectation.",
+      "required": true,
+      "questions": [
+        {
+          "id": "reporting-severity-standard",
+          "path": "reporting.severityStandard",
+          "prompt": "Which severity or prioritization standard should reports use?",
+          "why": "A named standard makes severity reasoning comparable to the program's expectations.",
+          "type": "text",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "reporting-submission-channel",
+          "path": "reporting.submissionChannel",
+          "prompt": "Where and how must reports be submitted?",
+          "why": "The correct private destination and format are part of responsible handling.",
+          "type": "multiline",
+          "required": true,
+          "sensitive": true
+        },
+        {
+          "id": "reporting-disclosure-policy",
+          "path": "reporting.disclosurePolicy",
+          "prompt": "What disclosure, embargo, coordination, and publication rules apply?",
+          "why": "Disclosure terms affect where findings may appear and when they may be discussed.",
+          "type": "multiline",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "reporting-retest-policy",
+          "path": "reporting.retestPolicy",
+          "prompt": "What retest and regression-validation process is expected?",
+          "why": "A defined retest path connects a finding to remediation evidence and closure.",
+          "type": "multiline",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "reporting-required-sections",
+          "path": "reporting.requiredSections",
+          "prompt": "Which report sections and evidence elements are mandatory?",
+          "why": "Required content prevents a technically valid result from being rejected as incomplete.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "reporting-source-refs",
+          "path": "reporting.sourceRefs",
+          "prompt": "Which source IDs establish reporting and disclosure rules?",
+          "why": "Delivery and disclosure constraints must remain traceable when terms change.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": false
+        }
+      ]
+    },
+    {
+      "id": "ambiguities-attestation",
+      "title": "Ambiguities and operator attestation",
+      "purpose": "Surface unresolved terms and record the operator's review of source claims, exact scope, and answer completeness.",
+      "required": true,
+      "questions": [
+        {
+          "id": "ambiguities-items",
+          "path": "ambiguities",
+          "prompt": "Which terms remain ambiguous, and how was each resolved or left unresolved?",
+          "why": "Unknowns must remain visible so they cannot silently become permissions during compilation.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": true
+        },
+        {
+          "id": "attestation-operator",
+          "path": "attestation.operator",
+          "prompt": "Which operator identity is attesting to this profile?",
+          "why": "The attestation must identify the human who reviewed the private source-backed record.",
+          "type": "text",
+          "required": true,
+          "sensitive": true
+        },
+        {
+          "id": "attestation-answers-complete",
+          "path": "attestation.answersComplete",
+          "prompt": "Are all required and applicable questions complete?",
+          "why": "An incomplete draft can be saved, but cannot become ready to materialize.",
+          "type": "boolean",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "attestation-sources-reviewed",
+          "path": "attestation.sourceClaimsReviewed",
+          "prompt": "Have you reviewed every decisive claim against its cited sources?",
+          "why": "This review separates operator confirmation from imported or inferred source material.",
+          "type": "boolean",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "attestation-scope-reviewed",
+          "path": "attestation.exactScopeReviewed",
+          "prompt": "Have you reviewed every included, excluded, conditional, and unknown selector?",
+          "why": "Exact-scope review prevents a broad summary from hiding selector-level differences.",
+          "type": "boolean",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "attestation-at",
+          "path": "attestation.attestedAt",
+          "prompt": "When was this profile attested?",
+          "why": "The timestamp and runtime-managed revision binding make the attestation specific to the exact reviewed profile revision.",
+          "type": "datetime",
+          "required": true,
+          "sensitive": false
+        }
+      ]
+    }
+  ],
+  "conditionalModules": [
+    {
+      "id": "web-api",
+      "title": "Web and API",
+      "purpose": "Capture browser, API, tenant, session, and automation details needed for web and service testing.",
+      "activation": {
+        "path": "questionnaire.applicableModules",
+        "includes": "web-api"
+      },
+      "questions": [
+        {
+          "id": "web-api-assessment",
+          "path": "modules.web-api",
+          "prompt": "What source-backed permission decision applies to the web and API module?",
+          "why": "Module-level permission cannot be inferred from the presence of a web asset.",
+          "type": "decision",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "web-api-entry-points",
+          "path": "modules.web-api.answers.entryPoints",
+          "prompt": "Which base URLs, API roots, GraphQL endpoints, or browser entry points matter?",
+          "why": "Entry points organize coverage without expanding the exact asset selectors.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": true
+        },
+        {
+          "id": "web-api-auth-flows",
+          "path": "modules.web-api.answers.authenticationFlows",
+          "prompt": "Which authentication, session, recovery, federation, and tenant flows exist?",
+          "why": "Flow detail supports role and state-transition hypotheses.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": true
+        },
+        {
+          "id": "web-api-automation-rules",
+          "path": "modules.web-api.answers.automationRules",
+          "prompt": "Which crawling, fuzzing, parameter discovery, callback, and automation rules apply?",
+          "why": "Programs often set technique-specific limits beyond the broad scan and fuzz labels.",
+          "type": "multiline",
+          "required": true,
+          "sensitive": false
+        }
+      ]
+    },
+    {
+      "id": "cloud-container",
+      "title": "Cloud and container",
+      "purpose": "Capture providers, accounts, regions, clusters, services, identities, and shared-responsibility boundaries.",
+      "activation": {
+        "path": "questionnaire.applicableModules",
+        "includes": "cloud-container"
+      },
+      "questions": [
+        {
+          "id": "cloud-container-assessment",
+          "path": "modules.cloud-container",
+          "prompt": "What source-backed permission decision applies to cloud and container testing?",
+          "why": "Cloud tenancy and provider terms require an explicit module decision.",
+          "type": "decision",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "cloud-container-footprint",
+          "path": "modules.cloud-container.answers.footprint",
+          "prompt": "Which providers, accounts, subscriptions, projects, regions, clusters, registries, and services are involved?",
+          "why": "Cloud scope must distinguish owned resources from provider-managed and neighboring tenant infrastructure.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": true
+        },
+        {
+          "id": "cloud-container-identities",
+          "path": "modules.cloud-container.answers.identities",
+          "prompt": "Which roles, service identities, workload identities, and trust relationships may be tested?",
+          "why": "Identity and trust edges drive cloud authorization coverage.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": true
+        },
+        {
+          "id": "cloud-container-provider-limits",
+          "path": "modules.cloud-container.answers.providerLimits",
+          "prompt": "Which provider, managed-service, shared-control-plane, and tenant-impact restrictions apply?",
+          "why": "Program permission does not remove provider or shared-tenancy boundaries.",
+          "type": "multiline",
+          "required": true,
+          "sensitive": false
+        }
+      ]
+    },
+    {
+      "id": "mobile",
+      "title": "Mobile applications",
+      "purpose": "Capture platforms, builds, package identities, backend binding, device assumptions, and client-side test constraints.",
+      "activation": {
+        "path": "questionnaire.applicableModules",
+        "includes": "mobile"
+      },
+      "questions": [
+        {
+          "id": "mobile-assessment",
+          "path": "modules.mobile",
+          "prompt": "What source-backed permission decision applies to mobile testing?",
+          "why": "Possessing a client build does not by itself authorize live backend contact or device-side techniques.",
+          "type": "decision",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "mobile-builds",
+          "path": "modules.mobile.answers.builds",
+          "prompt": "Which platforms, package IDs, versions, signing channels, and build sources apply?",
+          "why": "Exact build identity keeps client evidence tied to the assessed release.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": true
+        },
+        {
+          "id": "mobile-device-conditions",
+          "path": "modules.mobile.answers.deviceConditions",
+          "prompt": "May rooted, jailbroken, emulated, instrumented, or proxy-configured devices be used?",
+          "why": "Device and instrumentation conditions affect both method and validity of observations.",
+          "type": "multiline",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "mobile-backend-rules",
+          "path": "modules.mobile.answers.backendRules",
+          "prompt": "Which backend endpoints, certificate-pinning behavior, push services, deep links, and account flows may be exercised?",
+          "why": "Client scope and backend scope can differ and must remain separately explicit.",
+          "type": "multiline",
+          "required": true,
+          "sensitive": true
+        }
+      ]
+    },
+    {
+      "id": "desktop",
+      "title": "Desktop clients",
+      "purpose": "Capture platforms, exact artifacts, update channels, local privilege boundaries, dynamic-analysis conditions, and live protocol scope.",
+      "activation": {
+        "path": "questionnaire.applicableModules",
+        "includes": "desktop"
+      },
+      "questions": [
+        {
+          "id": "desktop-assessment",
+          "path": "modules.desktop",
+          "prompt": "What source-backed permission decision applies to desktop-client testing?",
+          "why": "Offline artifact analysis and live service interaction are separate permissions.",
+          "type": "decision",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "desktop-artifacts",
+          "path": "modules.desktop.answers.artifacts",
+          "prompt": "Which platforms, versions, hashes, signatures, installers, and update channels apply?",
+          "why": "Exact artifact identity makes static and dynamic results reproducible.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": true
+        },
+        {
+          "id": "desktop-dynamic-conditions",
+          "path": "modules.desktop.answers.dynamicConditions",
+          "prompt": "Under what reset, containment, instrumentation, and network conditions may the client execute?",
+          "why": "Dynamic analysis needs explicit environment and egress assumptions.",
+          "type": "multiline",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "desktop-live-protocol-rules",
+          "path": "modules.desktop.answers.liveProtocolRules",
+          "prompt": "Which client protocols, update systems, telemetry, IPC, local services, and remote endpoints may be exercised?",
+          "why": "Endpoints discovered in a client do not automatically become authorized targets.",
+          "type": "multiline",
+          "required": true,
+          "sensitive": true
+        }
+      ]
+    },
+    {
+      "id": "ai-llm",
+      "title": "AI and LLM systems",
+      "purpose": "Capture models, providers, retrieval sources, tools, agents, memory, tenants, and evaluation boundaries.",
+      "activation": {
+        "path": "questionnaire.applicableModules",
+        "includes": "ai-llm"
+      },
+      "questions": [
+        {
+          "id": "ai-llm-assessment",
+          "path": "modules.ai-llm",
+          "prompt": "What source-backed permission decision applies to AI and LLM testing?",
+          "why": "Model behavior, provider infrastructure, connected tools, and customer data can have different scope owners.",
+          "type": "decision",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "ai-llm-system-map",
+          "path": "modules.ai-llm.answers.systemMap",
+          "prompt": "Which models, providers, prompts, retrieval stores, memories, agents, tools, and output consumers are involved?",
+          "why": "The system map identifies trust boundaries beyond the chat surface.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": true
+        },
+        {
+          "id": "ai-llm-input-surfaces",
+          "path": "modules.ai-llm.answers.inputSurfaces",
+          "prompt": "Which direct, indirect, multimodal, document, tool, and cross-tenant input surfaces may be tested?",
+          "why": "Input provenance and tool connectivity determine relevant injection and isolation hypotheses.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": true
+        },
+        {
+          "id": "ai-llm-data-and-cost-rules",
+          "path": "modules.ai-llm.answers.dataAndCostRules",
+          "prompt": "Which training-data, personal-data, output, provider, token, and spend restrictions apply?",
+          "why": "AI tests can expose data or consume variable external resources, so those bounds must be explicit.",
+          "type": "multiline",
+          "required": true,
+          "sensitive": true
+        }
+      ]
+    },
+    {
+      "id": "network-identity",
+      "title": "Network and identity infrastructure",
+      "purpose": "Capture address ranges, zones, segmentation, directory systems, remote access, protocols, and privilege tiers.",
+      "activation": {
+        "path": "questionnaire.applicableModules",
+        "includes": "network-identity"
+      },
+      "questions": [
+        {
+          "id": "network-identity-assessment",
+          "path": "modules.network-identity",
+          "prompt": "What source-backed permission decision applies to network and identity testing?",
+          "why": "Scanning, authentication, relay, segmentation, and privilege tests need exact infrastructure authority.",
+          "type": "decision",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "network-identity-ranges",
+          "path": "modules.network-identity.answers.ranges",
+          "prompt": "Which CIDRs, addresses, ports, protocols, network zones, and source locations apply?",
+          "why": "Exact network selectors and source constraints are required for bounded enumeration.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": true
+        },
+        {
+          "id": "network-identity-systems",
+          "path": "modules.network-identity.answers.identitySystems",
+          "prompt": "Which directories, identity providers, certificate systems, VPNs, remote-access paths, and privilege tiers exist?",
+          "why": "Identity infrastructure establishes the trust paths for authentication and authorization testing.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": true
+        },
+        {
+          "id": "network-identity-sensitive-techniques",
+          "path": "modules.network-identity.answers.sensitiveTechniques",
+          "prompt": "What rules apply to credential validation, lockout, spraying, relay, poisoning, interception, lateral movement, and segmentation tests?",
+          "why": "These techniques differ materially in load, state change, visibility, and impact.",
+          "type": "multiline",
+          "required": true,
+          "sensitive": true
+        }
+      ]
+    },
+    {
+      "id": "wireless-radio",
+      "title": "Wireless and radio",
+      "purpose": "Capture technologies, frequencies, locations, equipment, transmission authority, observation boundaries, and interference stops.",
+      "activation": {
+        "path": "questionnaire.applicableModules",
+        "includes": "wireless-radio"
+      },
+      "questions": [
+        {
+          "id": "wireless-radio-assessment",
+          "path": "modules.wireless-radio",
+          "prompt": "What source-backed permission decision applies to wireless and radio testing?",
+          "why": "Passive observation and active transmission are separate effects and may involve bystander systems.",
+          "type": "decision",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "wireless-radio-footprint",
+          "path": "modules.wireless-radio.answers.footprint",
+          "prompt": "Which technologies, bands, channels, identifiers, locations, distances, and times apply?",
+          "why": "Physical propagation makes location and time part of exact scope.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": true
+        },
+        {
+          "id": "wireless-radio-equipment",
+          "path": "modules.wireless-radio.answers.equipment",
+          "prompt": "Which adapters, antennas, power limits, firmware, and evidence-capture equipment may be used?",
+          "why": "Equipment and transmit power affect reach, reproducibility, and interference risk.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": true
+        },
+        {
+          "id": "wireless-radio-active-rules",
+          "path": "modules.wireless-radio.answers.activeRules",
+          "prompt": "Which transmission, association, deauthentication, replay, jamming, spoofing, or interference actions are allowed or prohibited?",
+          "why": "Active radio actions require explicit technique-level treatment rather than inference from observation authority.",
+          "type": "multiline",
+          "required": true,
+          "sensitive": false
+        }
+      ]
+    },
+    {
+      "id": "human-physical",
+      "title": "Human and physical security",
+      "purpose": "Capture independently authorized sites, populations, channels, pretexts, safety contacts, exclusions, and evidence handling.",
+      "activation": {
+        "path": "questionnaire.applicableModules",
+        "includes": "human-physical"
+      },
+      "questions": [
+        {
+          "id": "human-physical-assessment",
+          "path": "modules.human-physical",
+          "prompt": "What source-backed permission decision applies to human and physical testing?",
+          "why": "These activities require separately explicit participants, locations, methods, and stop ownership.",
+          "type": "decision",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "human-physical-population",
+          "path": "modules.human-physical.answers.population",
+          "prompt": "Which sites, departments, roles, people, channels, dates, and hours are included or excluded?",
+          "why": "Exact population and location boundaries prevent contact with uninvolved people.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": true
+        },
+        {
+          "id": "human-physical-pretexts",
+          "path": "modules.human-physical.answers.pretexts",
+          "prompt": "Which pretexts, messages, calls, visits, devices, documents, or physical actions are explicitly approved?",
+          "why": "Method-specific authorization is necessary for human and physical exercises.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": true
+        },
+        {
+          "id": "human-physical-protections",
+          "path": "modules.human-physical.answers.protections",
+          "prompt": "Which vulnerable populations, safety systems, emergency services, credentials, payments, personal data, and coercive actions are prohibited?",
+          "why": "Explicit protections and emergency paths are necessary before any independently delivered exercise begins.",
+          "type": "multiline",
+          "required": true,
+          "sensitive": true
+        }
+      ]
+    },
+    {
+      "id": "embedded-iot-ot",
+      "title": "Embedded, IoT, and OT",
+      "purpose": "Capture devices, firmware, interfaces, protocols, physical processes, site safety, maintenance windows, and deterministic recovery.",
+      "activation": {
+        "path": "questionnaire.applicableModules",
+        "includes": "embedded-iot-ot"
+      },
+      "questions": [
+        {
+          "id": "embedded-iot-ot-assessment",
+          "path": "modules.embedded-iot-ot",
+          "prompt": "What source-backed permission decision applies to embedded, IoT, and OT testing?",
+          "why": "Device ownership does not automatically authorize connected services, radio activity, or physical-process impact.",
+          "type": "decision",
+          "required": true,
+          "sensitive": false
+        },
+        {
+          "id": "embedded-iot-ot-assets",
+          "path": "modules.embedded-iot-ot.answers.assets",
+          "prompt": "Which devices, models, serials, firmware versions, interfaces, protocols, networks, and physical processes apply?",
+          "why": "Exact device and process identity is required for reproducible lab and site testing.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": true
+        },
+        {
+          "id": "embedded-iot-ot-safety",
+          "path": "modules.embedded-iot-ot.answers.safety",
+          "prompt": "Which safety owner, isolation state, maintenance window, environmental bounds, and emergency stops apply?",
+          "why": "Safety and process ownership govern whether and how any stateful test may proceed.",
+          "type": "structured-list",
+          "required": true,
+          "sensitive": true
+        },
+        {
+          "id": "embedded-iot-ot-recovery",
+          "path": "modules.embedded-iot-ot.answers.recovery",
+          "prompt": "How will firmware, configuration, calibration, network state, and physical operation be backed up, restored, and verified?",
+          "why": "A deterministic recovery path is required before mutation, fault injection, or destructive effects can be considered.",
+          "type": "multiline",
+          "required": true,
+          "sensitive": true
+        }
+      ]
+    }
+  ]
+}

@@ -55,6 +55,7 @@ export function runtimePaths(options = {}) {
   const offlineAnalyses = path.join(home, "offline-analysis");
   const toolRuntimes = path.join(home, "tool-runtimes");
   const toolCache = path.join(home, "tool-cache");
+  const programs = path.join(home, "programs");
   return {
     repo,
     home,
@@ -65,6 +66,7 @@ export function runtimePaths(options = {}) {
     authorizations: path.join(home, "authorizations"),
     plans: path.join(home, "plans"),
     evidence: path.join(home, "evidence"),
+    programs,
     workflows: path.join(home, "workflows"),
     executions,
     executionManifests: path.join(executions, "manifests"),
@@ -165,6 +167,7 @@ export function ensureRuntime(paths) {
     paths.authorizations,
     paths.plans,
     paths.evidence,
+    paths.programs,
     workflows,
     paths.executions,
     paths.executionManifests,
@@ -255,6 +258,18 @@ export function ensureRuntime(paths) {
       securePrivateDirectory(path.join(paths.executionSandboxes, entry), {
         create: false,
         label: `private execution sandbox ${entry}`
+      });
+    }
+  }
+
+  // Program profiles are directory-scoped private records with their own
+  // bounded file audit. Runtime bootstrap validates only the direct profile
+  // roots so it stays independent of retained compilation history.
+  if (paths.programs) {
+    for (const entry of fs.readdirSync(paths.programs)) {
+      auditPresentEntry(path.join(paths.programs, entry), securePrivateDirectory, {
+        create: false,
+        label: `private program profile ${entry}`
       });
     }
   }

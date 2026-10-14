@@ -187,8 +187,10 @@ export function validateRepository(options = {}) {
     ["policies/updates.json", "update-policy.schema.json"],
     ["catalog/security-tools.json", "tool-catalog.schema.json"],
     ["config/workflows/pentest-e2e.json", "pentest-workflow.schema.json"],
+    ["config/questionnaires/bug-bounty-program-profile.json", "program-profile-questionnaire.schema.json"],
     ["templates/engagement.json", "engagement.schema.json"],
     ["templates/learning.json", "learning.schema.json"],
+    ["templates/provider-capability-profile.json", "provider-capability-profile.schema.json"],
     ["templates/project.json", "project.schema.json"]
   ];
   for (const [relative, schema] of documents) {

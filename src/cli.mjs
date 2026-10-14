@@ -1,6 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createInterface } from "node:readline/promises";
 import { parseArgs, listFlag, requiredFlag } from "./lib/args.mjs";
+import {
+  applyProgramProfileAnswers,
+  compileProgramProfile,
+  createProgramProfile,
+  loadProgramProfileAnswers,
+  programProfileStatus,
+  resumeProgramProfile,
+  showProgramProfile,
+  verifyProgramProfile
+} from "./lib/bounty-profiles.mjs";
 import { writeJsonAtomic } from "./lib/config.mjs";
 import { runDoctor } from "./lib/doctor.mjs";
 import {
@@ -41,6 +52,10 @@ import { toolInventory, toolPlan, toolShow } from "./lib/tools.mjs";
 import { installUpstream, syncUpstream, upstreamStatus } from "./lib/upstreams.mjs";
 import { validateRepository } from "./lib/validation.mjs";
 import { leaseWorkspace, verifyWorkspace, workspaceStatus } from "./lib/workspaces.mjs";
+import {
+  PROGRAM_PROFILE_QUESTIONS,
+  PROGRAM_PROFILE_SECTIONS
+} from "./lib/program-profile-contract.mjs";
 import {
   addWorkflowEvidence,
   attachWorkflowReport,
@@ -83,6 +98,18 @@ Projects
   project list                      List registered project summaries
   project show ID                   Show one registered project contract
   project verify ID                 Verify one registered project contract
+
+Bug bounty program profiles
+  bounty profile create ID [--answers FILE]
+                                    Create a private profile interactively or from answers
+  bounty profile resume ID [--answers FILE]
+                                    Resume the questionnaire or apply another answer file
+  bounty profile status [ID]        Show one profile or the private profile index
+  bounty profile show ID [--format json|review|model-context]
+                                    Render the canonical profile or a bounded derived view
+  bounty profile verify ID          Verify sources, completeness, and compile readiness
+  bounty profile compile ID [--engagement ID] [--workflow ID] [--provider-profile FILE]
+                                    Emit a deterministic no-contact proposed assessment bundle
 
 Offline analysis
   analysis capability               Check the zero-network Bubblewrap analysis lane
@@ -218,6 +245,296 @@ function assertUnambiguousWorkflowArgs(argv) {
     seen.add(name);
   }
 }
+
+function assertUnambiguousBountyArgs(argv) {
+  const seen = new Set();
+  for (const value of argv) {
+    if (value === "--") throw new Error("bounty profile commands do not accept passthrough arguments");
+    if (!value.startsWith("--")) continue;
+    const equals = value.indexOf("=");
+    const name = value.slice(2, equals === -1 ? undefined : equals);
+    if (!name) throw new Error("bounty profile options must have a name");
+    if (seen.has(name)) throw new Error(`bounty profile option must not be repeated: --${name}`);
+    seen.add(name);
+  }
+}
+
+function profilePathParts(value) {
+  const parts = Array.isArray(value)
+    ? value
+    : String(value || "").startsWith("/")
+      ? String(value).slice(1).split("/").map((part) => part.replaceAll("~1", "/").replaceAll("~0", "~"))
+      : String(value || "").split(".");
+  if (!parts.length || parts.some((part) => !part || new Set(["__proto__", "prototype", "constructor"]).has(part))) {
+    throw new Error(`invalid program-profile question path: ${String(value)}`);
+  }
+  return parts;
+}
+
+function profileValueAt(value, fieldPath) {
+  let current = value;
+  for (const part of profilePathParts(fieldPath)) {
+    if (current === null || typeof current !== "object" || !Object.hasOwn(current, part)) return undefined;
+    current = current[part];
+  }
+  return current;
+}
+
+function programProfileFrom(value) {
+  if (value?.profile && typeof value.profile === "object") return value.profile;
+  if (value?.document && typeof value.document === "object") return value.document;
+  return value;
+}
+
+function questionApplies(question, profile) {
+  if (!question.condition) return true;
+  const actual = profileValueAt(profile, question.condition.path);
+  if (Object.hasOwn(question.condition, "equals")) return actual === question.condition.equals;
+  if (Object.hasOwn(question.condition, "includes")) {
+    return Array.isArray(actual)
+      ? actual.includes(question.condition.includes)
+      : typeof actual === "string" && actual.includes(question.condition.includes);
+  }
+  return false;
+}
+
+function questionChoiceValues(question) {
+  return (question.choices || []).map((choice) => {
+    if (choice && typeof choice === "object") return String(choice.value ?? choice.id);
+    return String(choice);
+  });
+}
+
+function parseQuestionAnswer(question, raw) {
+  const value = raw.trim();
+  if (!value) return undefined;
+  if (question.allowNull === true && value === "null") return null;
+  if (question.type === "boolean") {
+    if (/^(?:y|yes|true|1)$/iu.test(value)) return true;
+    if (/^(?:n|no|false|0)$/iu.test(value)) return false;
+    throw new Error("enter yes or no");
+  }
+  if (question.type === "integer") {
+    if (!/^-?\d+$/u.test(value) || !Number.isSafeInteger(Number(value))) throw new Error("enter a whole number");
+    return Number(value);
+  }
+  if (question.type === "number") {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) throw new Error("enter a finite number");
+    return numeric;
+  }
+  if (question.type === "enum") {
+    const choices = questionChoiceValues(question);
+    if (choices.length && !choices.includes(value)) throw new Error(`choose one of: ${choices.join(", ")}`);
+    return value;
+  }
+  if (question.type === "multi-enum") {
+    const values = value.startsWith("[")
+      ? JSON.parse(value)
+      : value.split(",").map((item) => item.trim()).filter(Boolean);
+    if (!Array.isArray(values) || values.some((item) => typeof item !== "string")) {
+      throw new Error("enter a comma-separated list or JSON string array");
+    }
+    const choices = questionChoiceValues(question);
+    const unsupported = choices.length ? values.filter((item) => !choices.includes(item)) : [];
+    if (unsupported.length) throw new Error(`unsupported choice: ${unsupported.join(", ")}`);
+    return values;
+  }
+  if (question.type === "secret-ref-list") {
+    const values = value.startsWith("[")
+      ? JSON.parse(value)
+      : value.split(",").map((item) => item.trim()).filter(Boolean);
+    if (!Array.isArray(values) || values.some((item) => typeof item !== "string")) {
+      throw new Error("enter symbolic secret references as a comma-separated list or JSON string array");
+    }
+    return values;
+  }
+  if (new Set([
+    "decision", "source-list", "selector-decisions", "action-decisions", "coverage-decisions", "stop-responses",
+    "contact-list", "schedule-windows", "structured-list"
+  ]).has(question.type)) {
+    let structured;
+    try {
+      structured = JSON.parse(value);
+    } catch (error) {
+      throw new Error(`enter valid JSON for this structured answer: ${error.message}`);
+    }
+    return structured;
+  }
+  return value;
+}
+
+async function readMultilineAnswer(terminal, firstLine, terminalOutput) {
+  const lines = [firstLine];
+  terminalOutput.write("Multiline input: enter . on its own line to finish.\n");
+  while (true) {
+    const line = await terminal.question("... ");
+    if (line === ".") return lines.join("\n");
+    lines.push(line);
+  }
+}
+
+function questionHasAnswer(question, profile, answers = null) {
+  if (answers?.answers && typeof answers.answers === "object") return Object.hasOwn(answers.answers, question.id);
+  const value = profileValueAt(profile, question.path);
+  return value !== undefined && value !== null && value !== "" && (!Array.isArray(value) || value.length > 0);
+}
+
+function questionSection(question) {
+  const sectionId = question.section || question.sectionId || "profile";
+  return PROGRAM_PROFILE_SECTIONS.find((section) => section.id === sectionId) || { id: sectionId, title: sectionId };
+}
+
+function boundedTerminalValue(value) {
+  const serialized = typeof value === "string" ? value : JSON.stringify(value);
+  const escaped = serialized.replace(/[\u0000-\u001f\u007f-\u009f]/gu, (character) => {
+    const code = character.codePointAt(0).toString(16).padStart(4, "0");
+    return `\\u${code}`;
+  });
+  return escaped.length <= 160 ? escaped : `${escaped.slice(0, 157)}...`;
+}
+
+function newProgramProfileAnswers(id) {
+  return {
+    $schema: "https://gate.local/schemas/bug-bounty-program-profile-answers.schema.json",
+    apiVersion: "gate.dev/program-profile-answers/v1",
+    kind: "BugBountyProgramProfileAnswers",
+    metadata: {
+      programId: id,
+      title: id,
+      updatedAt: new Date().toISOString()
+    },
+    answers: {}
+  };
+}
+
+async function runProgramProfileQuestionnaire(id, mode, options = {}) {
+  const input = options.input || process.stdin;
+  const terminalOutput = options.output || process.stderr;
+  const interactive = options.interactive ?? (input.isTTY === true && terminalOutput.isTTY === true);
+  if (!interactive) {
+    throw new Error("interactive bug-bounty profile questionnaire requires a TTY; pass --answers FILE for headless use");
+  }
+  const paths = options.paths;
+  if (mode === "create") createProgramProfile(id, newProgramProfileAnswers(id), { paths });
+  else resumeProgramProfile(id, { paths });
+
+  let resumed = resumeProgramProfile(id, { paths });
+  let profile = programProfileFrom(resumed);
+  let answers = resumed.answers || newProgramProfileAnswers(id);
+  const questions = PROGRAM_PROFILE_QUESTIONS;
+  let index = questions.findIndex((question) =>
+    question.required && questionApplies(question, profile) && !questionHasAnswer(question, profile, answers)
+  );
+  if (index === -1) {
+    const verification = verifyProgramProfile(id, { paths });
+    const blockerPaths = (verification.blockers || []).map((blocker) => blocker.path).filter(Boolean);
+    index = questions.findIndex((question) => blockerPaths.some((blockerPath) =>
+      blockerPath === question.path ||
+      blockerPath.startsWith(`${question.path}.`) ||
+      question.path.startsWith(`${blockerPath}.`)
+    ));
+    if (index === -1 && blockerPaths.some((blockerPath) => blockerPath.startsWith("attestation."))) {
+      index = questions.findIndex((question) => question.path === "attestation.attestedAt");
+    }
+    if (index === -1) index = questions.findIndex((question) => question.path.startsWith("attestation."));
+    if (index === -1) index = 0;
+    terminalOutput.write(
+      verification.ready
+        ? `All required answers are recorded. Opening ${questions[index].id} for review; use edit QUESTION_ID to change another answer.\n`
+        : `All required answers are recorded. Verification still has ${verification.blockers?.length || 0} blocker(s); opening ${questions[index].id} for review.\n`
+    );
+  } else if (mode === "resume") {
+    terminalOutput.write(`Resuming at unanswered required question: ${questions[index].id}.\n`);
+  }
+  const terminal = createInterface({ input, output: terminalOutput, terminal: options.terminal ?? true });
+  terminalOutput.write("Commands: back, edit QUESTION_ID, why, save, quit. Structured answers use JSON.\n");
+
+  try {
+    while (index < questions.length) {
+      const question = questions[index];
+      if (!questionApplies(question, profile)) {
+        index += 1;
+        continue;
+      }
+      const section = questionSection(question);
+      const choices = questionChoiceValues(question);
+      const current = profileValueAt(profile, question.path);
+      const currentHint = current === undefined || question.sensitive
+        ? ""
+        : ` [current: ${boundedTerminalValue(current)}]`;
+      const choiceHint = choices.length ? ` (${choices.join(" | ")})` : "";
+      const requiredHint = question.required ? " [required]" : "";
+      const multilineHint = question.type === "multiline" ? " [multiline; finish with . on its own line]" : "";
+      const raw = await terminal.question(
+        `\n${section.title} · ${index + 1}/${questions.length} · ${question.id}\n${question.prompt}${choiceHint}${requiredHint}${multilineHint}${currentHint}\n> `
+      );
+      const command = raw.trim();
+      if (command === "why") {
+        terminalOutput.write(`${question.why || "This answer is required to produce an exact, bounded assessment profile."}\n`);
+        continue;
+      }
+      if (command === "save") {
+        terminalOutput.write("Saved. Every accepted answer is already persisted privately.\n");
+        continue;
+      }
+      if (command === "quit") return programProfileStatus(id, { paths });
+      if (command === "back") {
+        index = Math.max(0, index - 1);
+        while (index > 0 && !questionApplies(questions[index], profile)) index -= 1;
+        continue;
+      }
+      if (command.startsWith("edit ")) {
+        const wanted = command.slice(5).trim();
+        const editIndex = questions.findIndex((entry) => entry.id === wanted);
+        if (editIndex === -1) {
+          terminalOutput.write(`Unknown question id: ${wanted}\n`);
+          continue;
+        }
+        index = editIndex;
+        continue;
+      }
+      if (!command) {
+        if (question.required && !questionHasAnswer(question, profile, answers)) {
+          terminalOutput.write("This answer is required. Enter a value, or type save or quit.\n");
+          continue;
+        }
+        index += 1;
+        continue;
+      }
+      let answer;
+      try {
+        const answerInput = question.type === "multiline"
+          ? await readMultilineAnswer(terminal, raw, terminalOutput)
+          : raw;
+        answer = parseQuestionAnswer(question, answerInput);
+      } catch (error) {
+        terminalOutput.write(`${error.message}\n`);
+        continue;
+      }
+      const updatedAnswers = structuredClone(answers);
+      updatedAnswers.metadata.programId = id;
+      updatedAnswers.metadata.updatedAt = new Date().toISOString();
+      updatedAnswers.answers[question.id] = answer;
+      try {
+        applyProgramProfileAnswers(id, updatedAnswers, { paths });
+      } catch (error) {
+        terminalOutput.write(`Answer was not accepted: ${error.message}\n`);
+        continue;
+      }
+      resumed = resumeProgramProfile(id, { paths });
+      profile = programProfileFrom(resumed);
+      answers = resumed.answers || updatedAnswers;
+      terminalOutput.write(`Saved ${question.id}.\n`);
+      index += 1;
+    }
+  } finally {
+    terminal.close();
+  }
+  return programProfileStatus(id, { paths });
+}
+
+export const cliInternals = Object.freeze({ runProgramProfileQuestionnaire });
 
 function optionalValueFlag(flags, name) {
   if (flags[name] === undefined) return undefined;
@@ -427,6 +744,82 @@ export async function main(argv) {
       return;
     }
     throw new Error(`unknown project action: ${action}`);
+  }
+
+  if (command === "bounty") {
+    assertUnambiguousBountyArgs(rest);
+    const [area, action, id] = parsed.positional;
+    if (area !== "profile") throw new Error(`unknown bounty area: ${area || "missing"}`);
+    if (!action) throw new Error("bounty profile action is required");
+    assertBooleanSwitch(parsed.flags, "json");
+
+    if (new Set(["create", "resume"]).has(action)) {
+      assertPositionals(parsed.positional, 3, `gate bounty profile ${action} ID [--answers FILE]`);
+      assertFlags(parsed.flags, ["answers", "json"]);
+      if (!id) throw new Error("program profile id is required");
+      const answersFile = optionalValueFlag(parsed.flags, "answers");
+      if (answersFile) {
+        const answers = loadProgramProfileAnswers(answersFile, { paths });
+        const result = action === "create"
+          ? createProgramProfile(id, answers, { paths })
+          : applyProgramProfileAnswers(id, answers, { paths });
+        return output(result, json);
+      }
+      return output(await runProgramProfileQuestionnaire(id, action, { paths }), json);
+    }
+
+    if (action === "status") {
+      if (parsed.positional.length < 2 || parsed.positional.length > 3) {
+        throw new Error("expected gate bounty profile status [ID]");
+      }
+      assertFlags(parsed.flags, ["json"]);
+      return output(programProfileStatus(id || null, { paths }), json);
+    }
+
+    if (action === "show") {
+      assertPositionals(parsed.positional, 3, "gate bounty profile show ID [--format json|review|model-context]");
+      assertFlags(parsed.flags, ["format", "json"]);
+      if (!id) throw new Error("program profile id is required");
+      const format = optionalValueFlag(parsed.flags, "format") || (json ? "json" : "review");
+      if (!new Set(["json", "review", "model-context"]).has(format)) {
+        throw new Error("--format must be json, review, or model-context");
+      }
+      return output(showProgramProfile(id, { paths, format }), json);
+    }
+
+    if (action === "verify") {
+      assertPositionals(parsed.positional, 3, "gate bounty profile verify ID");
+      assertFlags(parsed.flags, ["json"]);
+      if (!id) throw new Error("program profile id is required");
+      const result = verifyProgramProfile(id, { paths });
+      output(result, json);
+      if (!result.ok || !result.ready) process.exitCode = 2;
+      return;
+    }
+
+    if (action === "compile") {
+      assertPositionals(
+        parsed.positional,
+        3,
+        "gate bounty profile compile ID [--engagement ID] [--workflow ID] [--provider-profile FILE]"
+      );
+      assertFlags(parsed.flags, ["engagement", "workflow", "provider-profile", "json"]);
+      if (!id) throw new Error("program profile id is required");
+      const result = compileProgramProfile(
+        id,
+        {
+          engagementId: optionalValueFlag(parsed.flags, "engagement"),
+          workflowId: optionalValueFlag(parsed.flags, "workflow"),
+          providerProfile: optionalValueFlag(parsed.flags, "provider-profile")
+        },
+        { paths }
+      );
+      output(result, json);
+      if (!result.ok || !result.ready) process.exitCode = 2;
+      return;
+    }
+
+    throw new Error(`unknown bounty profile action: ${action}`);
   }
 
   if (command === "analysis") {

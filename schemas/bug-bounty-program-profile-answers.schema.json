@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/bug-bounty-program-profile-answers.schema.json",
+  "title": "GATE bug bounty program profile answers",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "apiVersion", "kind", "metadata", "answers"],
+  "properties": {
+    "$schema": { "type": "string", "minLength": 1 },
+    "apiVersion": { "const": "gate.dev/program-profile-answers/v1" },
+    "kind": { "const": "BugBountyProgramProfileAnswers" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["programId", "title", "updatedAt"],
+      "properties": {
+        "programId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "^[^\\r\\n]+$" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "answers": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[a-z][a-z0-9-]{1,95}$" },
+      "additionalProperties": true
+    }
+  }
+}

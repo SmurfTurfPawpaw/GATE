@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/provider-capability-profile.schema.json",
+  "title": "GATE provider capability profile",
+  "description": "A complete, time-bounded snapshot of a provider or model route's declared support for GATE actions and assistance modes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "apiVersion", "kind", "metadata", "capabilities"],
+  "properties": {
+    "$schema": {
+      "const": "https://gate.local/schemas/provider-capability-profile.schema.json"
+    },
+    "apiVersion": {
+      "const": "gate.dev/provider-capability-profile/v1"
+    },
+    "kind": {
+      "const": "ProviderCapabilityProfile"
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "model": {
+          "$ref": "#/$defs/oneLine"
+        },
+        "effectiveAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observe",
+        "scan",
+        "intercept",
+        "authenticate",
+        "fuzz",
+        "exploit-safe",
+        "exploit-stateful",
+        "persist",
+        "denial-of-service",
+        "destructive-test",
+        "data-access",
+        "data-removal",
+        "exfiltration-simulation"
+      ],
+      "properties": {
+        "observe": { "$ref": "#/$defs/assistanceModes" },
+        "scan": { "$ref": "#/$defs/assistanceModes" },
+        "intercept": { "$ref": "#/$defs/assistanceModes" },
+        "authenticate": { "$ref": "#/$defs/assistanceModes" },
+        "fuzz": { "$ref": "#/$defs/assistanceModes" },
+        "exploit-safe": { "$ref": "#/$defs/assistanceModes" },
+        "exploit-stateful": { "$ref": "#/$defs/assistanceModes" },
+        "persist": { "$ref": "#/$defs/assistanceModes" },
+        "denial-of-service": { "$ref": "#/$defs/assistanceModes" },
+        "destructive-test": { "$ref": "#/$defs/assistanceModes" },
+        "data-access": { "$ref": "#/$defs/assistanceModes" },
+        "data-removal": { "$ref": "#/$defs/assistanceModes" },
+        "exfiltration-simulation": { "$ref": "#/$defs/assistanceModes" }
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,62}$"
+    },
+    "oneLine": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[^\\r\\n]+$"
+    },
+    "disposition": {
+      "enum": ["allow", "deny", "unknown"]
+    },
+    "assistanceModes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["plan", "analyze", "generate-command", "execute", "report", "retest"],
+      "properties": {
+        "plan": { "$ref": "#/$defs/disposition" },
+        "analyze": { "$ref": "#/$defs/disposition" },
+        "generate-command": { "$ref": "#/$defs/disposition" },
+        "execute": { "$ref": "#/$defs/disposition" },
+        "report": { "$ref": "#/$defs/disposition" },
+        "retest": { "$ref": "#/$defs/disposition" }
+      }
+    }
+  }
+}

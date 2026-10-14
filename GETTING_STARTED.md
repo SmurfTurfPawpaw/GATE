@@ -6,7 +6,7 @@ Run the control plane on Linux or on Windows 11 through WSL2. Keep Windows-nativ
 
 ## 1. Bootstrap GATE
 
-Install Git, GitHub CLI, Codex CLI, Bubblewrap, `prlimit` (from `util-linux` on Ubuntu), and Node.js 22.20 or newer. Node 24 is recommended. Managed installation requires OS- or administrator-owned Git, GitHub CLI, tar, Node, and npm paths; do not run it as root or through a user-writable Node manager.
+Install Git, GitHub CLI, Codex CLI, `curl`, `tar`, Bubblewrap, `prlimit` (from `util-linux` on Ubuntu), and Node.js 22.20 or newer. Node 24 is recommended. Managed installation requires OS- or administrator-owned Git, GitHub CLI, `curl`, `tar`, Node, and npm paths; do not run it as root or through a user-writable Node manager.
 
 ```bash
 gh auth status >/dev/null 2>&1 || gh auth login
@@ -80,6 +80,8 @@ ASSESSMENT_ID="assessment-$(date -u +%Y%m%d-%H%M%S)"
 The workflow records authorization and rules of engagement first, then builds the target and trust map before selecting technical workstreams. These commands do not contact a target.
 
 Follow the [end-to-end penetration-testing workflow](docs/pentest-workflow.md) to attach evidence, disposition each workstream, reserve closeout capacity, record target-side changes, clean up in LIFO order, retest, and close the assessment.
+
+For a bug bounty program, complete the [Program Profile wizard](docs/bug-bounty-program-profile.md) first. It records the program sources, exact asset and technique rules, limits, evidence handling, and reporting expectations in private state, then compiles no-contact model context and a compatibility preflight. A compiled profile supports planning; it does not replace the exact engagement, reviewed plan, operator receipt, workflow admission, or execution confirmation required for active target contact.
 
 ## 4. Analyze a saved Windows artifact offline
 

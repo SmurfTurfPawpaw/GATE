@@ -14,7 +14,7 @@ The setup has four layers:
 The recommended Windows baseline is:
 
 - Windows 11 with current WSL2 and Ubuntu 24.04;
-- Git, GitHub CLI, and Codex CLI inside WSL;
+- distribution-owned Git, `curl`, `tar`, and GitHub CLI, plus Codex CLI, inside WSL;
 - Node 24.x with npm 11.x; the minimum for the GATE package is Node 22.20;
 - Bubblewrap and `prlimit` for the fixed offline-analysis lane and managed-runtime smoke checks;
 - Python 3.12 managed by `uv` for isolated Python tools;
@@ -44,7 +44,7 @@ Inside Ubuntu, install the small native base:
 
 ```bash
 sudo apt update
-sudo apt install --yes bubblewrap build-essential ca-certificates curl git jq tmux unzip util-linux xz-utils
+sudo apt install --yes bubblewrap build-essential ca-certificates curl git jq tar tmux unzip util-linux xz-utils
 ```
 
 Install the tested official Node 24 binary under an administrator-owned path. The ownership and mode normalization matter: managed-upstream verification rejects root execution and any Node, npm file, or parent path that the normal operator can replace. These commands cover WSL on x86-64 and ARM64:

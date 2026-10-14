@@ -1,0 +1,1971 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/bug-bounty-program-profile.schema.json",
+  "title": "GATE private bug bounty program profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "apiVersion",
+    "kind",
+    "metadata",
+    "questionnaire",
+    "identity",
+    "sources",
+    "authorization",
+    "scope",
+    "techniquePolicy",
+    "executionPolicy",
+    "limits",
+    "access",
+    "architecture",
+    "coverage",
+    "dataEvidence",
+    "stops",
+    "reporting",
+    "modules",
+    "ambiguities",
+    "attestation"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "minLength": 1
+    },
+    "apiVersion": {
+      "const": "gate.dev/program-profile/v1"
+    },
+    "kind": {
+      "const": "BugBountyProgramProfile"
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "owner",
+        "status",
+        "revision",
+        "createdAt",
+        "updatedAt"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "title": {
+          "$ref": "#/$defs/oneLine"
+        },
+        "owner": {
+          "$ref": "#/$defs/id"
+        },
+        "status": {
+          "enum": [
+            "draft",
+            "needs-operator-review",
+            "ready-to-materialize",
+            "superseded"
+          ]
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "questionnaire": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sectionStatus",
+        "applicableModules",
+        "activeSection"
+      ],
+      "properties": {
+        "sectionStatus": {
+          "$ref": "#/$defs/sectionStatus"
+        },
+        "applicableModules": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/moduleId"
+          }
+        },
+        "activeSection": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sectionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "programName",
+        "objective",
+        "depth",
+        "deliverables",
+        "successCriteria"
+      ],
+      "properties": {
+        "programName": {
+          "$ref": "#/$defs/oneLine"
+        },
+        "objective": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "depth": {
+          "enum": [
+            "targeted",
+            "thorough",
+            "exhaustive"
+          ]
+        },
+        "deliverables": {
+          "$ref": "#/$defs/nonEmptyStringList"
+        },
+        "successCriteria": {
+          "$ref": "#/$defs/nonEmptyStringList"
+        }
+      }
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/source"
+      }
+    },
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "basis",
+        "programUrl",
+        "safeHarbor",
+        "validFrom",
+        "validUntil",
+        "lastVerifiedAt",
+        "sourceRefs",
+        "operatorConfirmed",
+        "contacts"
+      ],
+      "properties": {
+        "basis": {
+          "enum": [
+            "owner",
+            "client-written-authorization",
+            "contract",
+            "public-bug-bounty-program",
+            "dedicated-lab"
+          ]
+        },
+        "programUrl": {
+          "oneOf": [
+            {
+              "type": "string",
+              "format": "uri",
+              "maxLength": 2000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "safeHarbor": {
+          "$ref": "#/$defs/decision"
+        },
+        "validFrom": {
+          "oneOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "validUntil": {
+          "oneOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lastVerifiedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "sourceRefs": {
+          "$ref": "#/$defs/sourceRefs"
+        },
+        "operatorConfirmed": {
+          "type": "boolean"
+        },
+        "contacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/contact"
+          }
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assets",
+        "thirdPartyHandling",
+        "redirectHandling",
+        "discoveredAssetHandling"
+      ],
+      "properties": {
+        "assets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/assetDecision"
+          }
+        },
+        "thirdPartyHandling": {
+          "$ref": "#/$defs/decision"
+        },
+        "redirectHandling": {
+          "$ref": "#/$defs/decision"
+        },
+        "discoveredAssetHandling": {
+          "$ref": "#/$defs/decision"
+        }
+      }
+    },
+    "techniquePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "actions",
+        "techniques"
+      ],
+      "properties": {
+        "actions": {
+          "$ref": "#/$defs/actionMatrix"
+        },
+        "techniques": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/techniqueDecision"
+          }
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "timezone",
+        "windows",
+        "maxMinutes",
+        "maxRequests",
+        "maxParallel",
+        "maxRatePerSecond",
+        "maxTokens",
+        "maxSpendUsd",
+        "sourceRefs"
+      ],
+      "properties": {
+        "timezone": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "pattern": "^[^\\r\\n]+$"
+        },
+        "windows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/scheduleWindow"
+          }
+        },
+        "maxMinutes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10080
+        },
+        "maxRequests": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000000
+        },
+        "maxParallel": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 256
+        },
+        "maxRatePerSecond": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 100000
+        },
+        "maxTokens": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 100000000
+        },
+        "maxSpendUsd": {
+          "oneOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 10000000
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "External-spend ceiling in USD. Zero explicitly prohibits spending; null explicitly records that no monetary ceiling was supplied."
+        },
+        "sourceRefs": {
+          "$ref": "#/$defs/sourceRefs"
+        }
+      }
+    },
+    "access": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "accounts",
+        "identityProviderNotes"
+      ],
+      "properties": {
+        "accounts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/account"
+          }
+        },
+        "identityProviderNotes": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/nonEmptyText"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "architecture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "components",
+        "trustBoundaries",
+        "dataFlows",
+        "unknowns",
+        "sourceRefs"
+      ],
+      "properties": {
+        "components": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/architectureComponent"
+          }
+        },
+        "trustBoundaries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/trustBoundary"
+          }
+        },
+        "dataFlows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/dataFlow"
+          }
+        },
+        "unknowns": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/oneLine"
+          }
+        },
+        "sourceRefs": {
+          "$ref": "#/$defs/sourceRefs"
+        }
+      }
+    },
+    "coverage": {
+      "$ref": "#/$defs/coverageMatrix"
+    },
+    "dataEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "classification",
+        "allowedDestinations",
+        "retentionDays",
+        "redactionRules",
+        "minimumProof",
+        "secretRefs",
+        "sourceRefs"
+      ],
+      "properties": {
+        "classification": {
+          "enum": [
+            "public",
+            "internal",
+            "confidential",
+            "restricted"
+          ]
+        },
+        "allowedDestinations": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "gate-home",
+              "configured-cloud-model",
+              "client-destination"
+            ]
+          }
+        },
+        "retentionDays": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3650
+        },
+        "redactionRules": {
+          "$ref": "#/$defs/nonEmptyStringList"
+        },
+        "minimumProof": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "secretRefs": {
+          "$ref": "#/$defs/secretRefs"
+        },
+        "sourceRefs": {
+          "$ref": "#/$defs/sourceRefs"
+        }
+      }
+    },
+    "stops": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "conditions",
+        "escalationContacts",
+        "cleanup"
+      ],
+      "properties": {
+        "conditions": {
+          "$ref": "#/$defs/stopMatrix"
+        },
+        "escalationContacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/contact"
+          }
+        },
+        "cleanup": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "required",
+            "steps",
+            "verification",
+            "sourceRefs"
+          ],
+          "properties": {
+            "required": {
+              "const": true
+            },
+            "steps": {
+              "$ref": "#/$defs/nonEmptyStringList"
+            },
+            "verification": {
+              "$ref": "#/$defs/nonEmptyText"
+            },
+            "sourceRefs": {
+              "$ref": "#/$defs/sourceRefs"
+            }
+          }
+        }
+      }
+    },
+    "reporting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "severityStandard",
+        "submissionChannel",
+        "disclosurePolicy",
+        "retestPolicy",
+        "requiredSections",
+        "sourceRefs"
+      ],
+      "properties": {
+        "severityStandard": {
+          "$ref": "#/$defs/oneLine"
+        },
+        "submissionChannel": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "disclosurePolicy": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "retestPolicy": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "requiredSections": {
+          "$ref": "#/$defs/nonEmptyStringList"
+        },
+        "sourceRefs": {
+          "$ref": "#/$defs/sourceRefs"
+        }
+      }
+    },
+    "modules": {
+      "$ref": "#/$defs/moduleMatrix"
+    },
+    "ambiguities": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ambiguity"
+      }
+    },
+    "attestation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operator",
+        "answersComplete",
+        "sourceClaimsReviewed",
+        "exactScopeReviewed",
+        "attestedAt",
+        "attestedRevision"
+      ],
+      "properties": {
+        "operator": {
+          "$ref": "#/$defs/id"
+        },
+        "answersComplete": {
+          "type": "boolean"
+        },
+        "sourceClaimsReviewed": {
+          "type": "boolean"
+        },
+        "exactScopeReviewed": {
+          "type": "boolean"
+        },
+        "attestedAt": {
+          "oneOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attestedRevision": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "executionPolicy": {
+      "$ref": "#/$defs/executionPolicy"
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,62}$"
+    },
+    "oneLine": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "pattern": "^[^\\r\\n]+$"
+    },
+    "nonEmptyText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 10000
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "claimState": {
+      "enum": [
+        "observed",
+        "inferred",
+        "unverified"
+      ]
+    },
+    "disposition": {
+      "enum": [
+        "allowed",
+        "denied",
+        "conditional",
+        "unknown"
+      ]
+    },
+    "sourceRefs": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/id"
+      }
+    },
+    "secretRefs": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^(env|keychain|file)://[^\\s]+$"
+      }
+    },
+    "nonEmptyStringList": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/nonEmptyText"
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "disposition",
+        "claimState",
+        "sourceRefs",
+        "rationale",
+        "conditions"
+      ],
+      "properties": {
+        "disposition": {
+          "$ref": "#/$defs/disposition"
+        },
+        "claimState": {
+          "$ref": "#/$defs/claimState"
+        },
+        "sourceRefs": {
+          "$ref": "#/$defs/sourceRefs"
+        },
+        "rationale": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/nonEmptyText"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "conditions": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmptyText"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "const": "conditional"
+              }
+            },
+            "required": [
+              "disposition"
+            ]
+          },
+          "then": {
+            "properties": {
+              "conditions": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "const": "unknown"
+              }
+            },
+            "required": [
+              "disposition"
+            ]
+          },
+          "then": {
+            "properties": {
+              "claimState": {
+                "const": "unverified"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "type",
+        "title",
+        "reference",
+        "contentSha256",
+        "observedAt",
+        "claimState",
+        "notes"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "enum": [
+            "operator-statement",
+            "program-rules",
+            "safe-harbor",
+            "scope-list",
+            "contract",
+            "platform-page",
+            "architecture",
+            "account-instructions",
+            "other"
+          ]
+        },
+        "title": {
+          "$ref": "#/$defs/oneLine"
+        },
+        "reference": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
+          "pattern": "^[^\\s]+$"
+        },
+        "contentSha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "claimState": {
+          "$ref": "#/$defs/claimState"
+        },
+        "notes": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/nonEmptyText"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "contact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "role",
+        "channel",
+        "purpose",
+        "sourceRefs"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/oneLine"
+        },
+        "role": {
+          "$ref": "#/$defs/oneLine"
+        },
+        "channel": {
+          "$ref": "#/$defs/oneLine"
+        },
+        "purpose": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "sourceRefs": {
+          "$ref": "#/$defs/sourceRefs"
+        }
+      }
+    },
+    "selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "value"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "domain",
+            "ip",
+            "cidr",
+            "url",
+            "application",
+            "account",
+            "repository",
+            "device",
+            "path"
+          ]
+        },
+        "value": {
+          "$ref": "#/$defs/oneLine"
+        }
+      }
+    },
+    "assetDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "selector",
+        "disposition",
+        "claimState",
+        "sourceRefs",
+        "rationale",
+        "conditions",
+        "actionOverrides",
+        "limitOverrides"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "selector": {
+          "$ref": "#/$defs/selector"
+        },
+        "disposition": {
+          "$ref": "#/$defs/disposition"
+        },
+        "claimState": {
+          "$ref": "#/$defs/claimState"
+        },
+        "sourceRefs": {
+          "$ref": "#/$defs/sourceRefs"
+        },
+        "rationale": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/nonEmptyText"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "conditions": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmptyText"
+          }
+        },
+        "actionOverrides": {
+          "$ref": "#/$defs/partialActionMatrix"
+        },
+        "limitOverrides": {
+          "$ref": "#/$defs/partialExecutionLimits"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "const": "conditional"
+              }
+            },
+            "required": [
+              "disposition"
+            ]
+          },
+          "then": {
+            "properties": {
+              "conditions": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "const": "unknown"
+              }
+            },
+            "required": [
+              "disposition"
+            ]
+          },
+          "then": {
+            "properties": {
+              "claimState": {
+                "const": "unverified"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "action": {
+      "enum": [
+        "observe",
+        "scan",
+        "intercept",
+        "authenticate",
+        "fuzz",
+        "exploit-safe",
+        "exploit-stateful",
+        "persist",
+        "denial-of-service",
+        "destructive-test",
+        "data-access",
+        "data-removal",
+        "exfiltration-simulation"
+      ]
+    },
+    "actionMatrix": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observe",
+        "scan",
+        "intercept",
+        "authenticate",
+        "fuzz",
+        "exploit-safe",
+        "exploit-stateful",
+        "persist",
+        "denial-of-service",
+        "destructive-test",
+        "data-access",
+        "data-removal",
+        "exfiltration-simulation"
+      ],
+      "properties": {
+        "observe": {
+          "$ref": "#/$defs/decision"
+        },
+        "scan": {
+          "$ref": "#/$defs/decision"
+        },
+        "intercept": {
+          "$ref": "#/$defs/decision"
+        },
+        "authenticate": {
+          "$ref": "#/$defs/decision"
+        },
+        "fuzz": {
+          "$ref": "#/$defs/decision"
+        },
+        "exploit-safe": {
+          "$ref": "#/$defs/decision"
+        },
+        "exploit-stateful": {
+          "$ref": "#/$defs/decision"
+        },
+        "persist": {
+          "$ref": "#/$defs/decision"
+        },
+        "denial-of-service": {
+          "$ref": "#/$defs/decision"
+        },
+        "destructive-test": {
+          "$ref": "#/$defs/decision"
+        },
+        "data-access": {
+          "$ref": "#/$defs/decision"
+        },
+        "data-removal": {
+          "$ref": "#/$defs/decision"
+        },
+        "exfiltration-simulation": {
+          "$ref": "#/$defs/decision"
+        }
+      }
+    },
+    "techniqueDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "action",
+        "disposition",
+        "claimState",
+        "sourceRefs",
+        "rationale",
+        "conditions",
+        "parameters"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "name": {
+          "$ref": "#/$defs/oneLine"
+        },
+        "action": {
+          "$ref": "#/$defs/action"
+        },
+        "disposition": {
+          "$ref": "#/$defs/disposition"
+        },
+        "claimState": {
+          "$ref": "#/$defs/claimState"
+        },
+        "sourceRefs": {
+          "$ref": "#/$defs/sourceRefs"
+        },
+        "rationale": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/nonEmptyText"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "conditions": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmptyText"
+          }
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "const": "conditional"
+              }
+            },
+            "required": [
+              "disposition"
+            ]
+          },
+          "then": {
+            "properties": {
+              "conditions": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "const": "unknown"
+              }
+            },
+            "required": [
+              "disposition"
+            ]
+          },
+          "then": {
+            "properties": {
+              "claimState": {
+                "const": "unverified"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "scheduleWindow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "days",
+        "start",
+        "end"
+      ],
+      "properties": {
+        "days": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "monday",
+              "tuesday",
+              "wednesday",
+              "thursday",
+              "friday",
+              "saturday",
+              "sunday"
+            ]
+          }
+        },
+        "start": {
+          "type": "string",
+          "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$"
+        },
+        "end": {
+          "type": "string",
+          "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$"
+        }
+      }
+    },
+    "account": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "persona",
+        "role",
+        "environment",
+        "secretRefs",
+        "sourceRefs"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "persona": {
+          "$ref": "#/$defs/oneLine"
+        },
+        "role": {
+          "$ref": "#/$defs/oneLine"
+        },
+        "environment": {
+          "$ref": "#/$defs/oneLine"
+        },
+        "secretRefs": {
+          "$ref": "#/$defs/secretRefs"
+        },
+        "sourceRefs": {
+          "$ref": "#/$defs/sourceRefs"
+        }
+      }
+    },
+    "architectureComponent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "type",
+        "claimState",
+        "sourceRefs"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "name": {
+          "$ref": "#/$defs/oneLine"
+        },
+        "type": {
+          "$ref": "#/$defs/oneLine"
+        },
+        "claimState": {
+          "$ref": "#/$defs/claimState"
+        },
+        "sourceRefs": {
+          "$ref": "#/$defs/sourceRefs"
+        }
+      }
+    },
+    "trustBoundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "from",
+        "to",
+        "description",
+        "claimState",
+        "sourceRefs"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "from": {
+          "$ref": "#/$defs/id"
+        },
+        "to": {
+          "$ref": "#/$defs/id"
+        },
+        "description": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "claimState": {
+          "$ref": "#/$defs/claimState"
+        },
+        "sourceRefs": {
+          "$ref": "#/$defs/sourceRefs"
+        }
+      }
+    },
+    "dataFlow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "from",
+        "to",
+        "dataClassification",
+        "description",
+        "claimState",
+        "sourceRefs"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "from": {
+          "$ref": "#/$defs/id"
+        },
+        "to": {
+          "$ref": "#/$defs/id"
+        },
+        "dataClassification": {
+          "enum": [
+            "public",
+            "internal",
+            "confidential",
+            "restricted",
+            "unknown"
+          ]
+        },
+        "description": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "claimState": {
+          "$ref": "#/$defs/claimState"
+        },
+        "sourceRefs": {
+          "$ref": "#/$defs/sourceRefs"
+        }
+      }
+    },
+    "coverageMatrix": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "asset-discovery",
+        "architecture",
+        "authentication",
+        "authorization",
+        "sessions",
+        "inputs",
+        "business-logic",
+        "client-behavior",
+        "data-exposure",
+        "infrastructure",
+        "supply-chain",
+        "post-exploitation-impact",
+        "host-local-privilege",
+        "wireless-radio",
+        "internal-segmentation",
+        "ai-llm-systems",
+        "embedded-iot-ot",
+        "human-physical-security"
+      ],
+      "properties": {
+        "asset-discovery": {
+          "$ref": "#/$defs/decision"
+        },
+        "architecture": {
+          "$ref": "#/$defs/decision"
+        },
+        "authentication": {
+          "$ref": "#/$defs/decision"
+        },
+        "authorization": {
+          "$ref": "#/$defs/decision"
+        },
+        "sessions": {
+          "$ref": "#/$defs/decision"
+        },
+        "inputs": {
+          "$ref": "#/$defs/decision"
+        },
+        "business-logic": {
+          "$ref": "#/$defs/decision"
+        },
+        "client-behavior": {
+          "$ref": "#/$defs/decision"
+        },
+        "data-exposure": {
+          "$ref": "#/$defs/decision"
+        },
+        "infrastructure": {
+          "$ref": "#/$defs/decision"
+        },
+        "supply-chain": {
+          "$ref": "#/$defs/decision"
+        },
+        "post-exploitation-impact": {
+          "$ref": "#/$defs/decision"
+        },
+        "host-local-privilege": {
+          "$ref": "#/$defs/decision"
+        },
+        "wireless-radio": {
+          "$ref": "#/$defs/decision"
+        },
+        "internal-segmentation": {
+          "$ref": "#/$defs/decision"
+        },
+        "ai-llm-systems": {
+          "$ref": "#/$defs/decision"
+        },
+        "embedded-iot-ot": {
+          "$ref": "#/$defs/decision"
+        },
+        "human-physical-security": {
+          "$ref": "#/$defs/decision"
+        }
+      }
+    },
+    "stopDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "response",
+        "claimState",
+        "sourceRefs"
+      ],
+      "properties": {
+        "enabled": {
+          "const": true
+        },
+        "response": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "claimState": {
+          "$ref": "#/$defs/claimState"
+        },
+        "sourceRefs": {
+          "$ref": "#/$defs/sourceRefs"
+        }
+      }
+    },
+    "stopMatrix": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope-mismatch",
+        "plan-digest-change",
+        "authorization-expiry",
+        "unexpected-data-loss",
+        "target-instability",
+        "third-party-system-discovered",
+        "rate-limit-exceeded",
+        "evidence-integrity-failure",
+        "unexpected-sensitive-data",
+        "unplanned-privilege-or-persistence",
+        "defensive-control-impact",
+        "cleanup-incomplete",
+        "operator-stop"
+      ],
+      "properties": {
+        "scope-mismatch": {
+          "$ref": "#/$defs/stopDecision"
+        },
+        "plan-digest-change": {
+          "$ref": "#/$defs/stopDecision"
+        },
+        "authorization-expiry": {
+          "$ref": "#/$defs/stopDecision"
+        },
+        "unexpected-data-loss": {
+          "$ref": "#/$defs/stopDecision"
+        },
+        "target-instability": {
+          "$ref": "#/$defs/stopDecision"
+        },
+        "third-party-system-discovered": {
+          "$ref": "#/$defs/stopDecision"
+        },
+        "rate-limit-exceeded": {
+          "$ref": "#/$defs/stopDecision"
+        },
+        "evidence-integrity-failure": {
+          "$ref": "#/$defs/stopDecision"
+        },
+        "unexpected-sensitive-data": {
+          "$ref": "#/$defs/stopDecision"
+        },
+        "unplanned-privilege-or-persistence": {
+          "$ref": "#/$defs/stopDecision"
+        },
+        "defensive-control-impact": {
+          "$ref": "#/$defs/stopDecision"
+        },
+        "cleanup-incomplete": {
+          "$ref": "#/$defs/stopDecision"
+        },
+        "operator-stop": {
+          "$ref": "#/$defs/stopDecision"
+        }
+      }
+    },
+    "moduleId": {
+      "enum": [
+        "web-api",
+        "cloud-container",
+        "mobile",
+        "desktop",
+        "ai-llm",
+        "network-identity",
+        "wireless-radio",
+        "human-physical",
+        "embedded-iot-ot"
+      ]
+    },
+    "moduleAssessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "disposition",
+        "claimState",
+        "sourceRefs",
+        "rationale",
+        "conditions",
+        "answers"
+      ],
+      "properties": {
+        "disposition": {
+          "$ref": "#/$defs/disposition"
+        },
+        "claimState": {
+          "$ref": "#/$defs/claimState"
+        },
+        "sourceRefs": {
+          "$ref": "#/$defs/sourceRefs"
+        },
+        "rationale": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/nonEmptyText"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "conditions": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmptyText"
+          }
+        },
+        "answers": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "const": "conditional"
+              }
+            },
+            "required": [
+              "disposition"
+            ]
+          },
+          "then": {
+            "properties": {
+              "conditions": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "const": "unknown"
+              }
+            },
+            "required": [
+              "disposition"
+            ]
+          },
+          "then": {
+            "properties": {
+              "claimState": {
+                "const": "unverified"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "moduleMatrix": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "web-api",
+        "cloud-container",
+        "mobile",
+        "desktop",
+        "ai-llm",
+        "network-identity",
+        "wireless-radio",
+        "human-physical",
+        "embedded-iot-ot"
+      ],
+      "properties": {
+        "web-api": {
+          "$ref": "#/$defs/moduleAssessment"
+        },
+        "cloud-container": {
+          "$ref": "#/$defs/moduleAssessment"
+        },
+        "mobile": {
+          "$ref": "#/$defs/moduleAssessment"
+        },
+        "desktop": {
+          "$ref": "#/$defs/moduleAssessment"
+        },
+        "ai-llm": {
+          "$ref": "#/$defs/moduleAssessment"
+        },
+        "network-identity": {
+          "$ref": "#/$defs/moduleAssessment"
+        },
+        "wireless-radio": {
+          "$ref": "#/$defs/moduleAssessment"
+        },
+        "human-physical": {
+          "$ref": "#/$defs/moduleAssessment"
+        },
+        "embedded-iot-ot": {
+          "$ref": "#/$defs/moduleAssessment"
+        }
+      }
+    },
+    "ambiguity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "question",
+        "status",
+        "resolution",
+        "sourceRefs"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "question": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "status": {
+          "enum": [
+            "unresolved",
+            "resolved"
+          ]
+        },
+        "resolution": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/nonEmptyText"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sourceRefs": {
+          "$ref": "#/$defs/sourceRefs"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "resolved"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "resolution": {
+                "$ref": "#/$defs/nonEmptyText"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "unresolved"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "resolution": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "sectionId": {
+      "enum": [
+        "identity-objectives",
+        "authority-sources",
+        "scope-assets",
+        "actions-techniques",
+        "limits-schedule",
+        "accounts-identities",
+        "architecture-data-flows",
+        "workflow-coverage",
+        "data-evidence",
+        "stops-escalation-cleanup",
+        "reporting-disclosure",
+        "ambiguities-attestation"
+      ]
+    },
+    "sectionStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identity-objectives",
+        "authority-sources",
+        "scope-assets",
+        "actions-techniques",
+        "limits-schedule",
+        "accounts-identities",
+        "architecture-data-flows",
+        "workflow-coverage",
+        "data-evidence",
+        "stops-escalation-cleanup",
+        "reporting-disclosure",
+        "ambiguities-attestation"
+      ],
+      "properties": {
+        "identity-objectives": {
+          "$ref": "#/$defs/sectionProgress"
+        },
+        "authority-sources": {
+          "$ref": "#/$defs/sectionProgress"
+        },
+        "scope-assets": {
+          "$ref": "#/$defs/sectionProgress"
+        },
+        "actions-techniques": {
+          "$ref": "#/$defs/sectionProgress"
+        },
+        "limits-schedule": {
+          "$ref": "#/$defs/sectionProgress"
+        },
+        "accounts-identities": {
+          "$ref": "#/$defs/sectionProgress"
+        },
+        "architecture-data-flows": {
+          "$ref": "#/$defs/sectionProgress"
+        },
+        "workflow-coverage": {
+          "$ref": "#/$defs/sectionProgress"
+        },
+        "data-evidence": {
+          "$ref": "#/$defs/sectionProgress"
+        },
+        "stops-escalation-cleanup": {
+          "$ref": "#/$defs/sectionProgress"
+        },
+        "reporting-disclosure": {
+          "$ref": "#/$defs/sectionProgress"
+        },
+        "ambiguities-attestation": {
+          "$ref": "#/$defs/sectionProgress"
+        }
+      }
+    },
+    "sectionProgress": {
+      "enum": [
+        "not-started",
+        "in-progress",
+        "complete"
+      ]
+    },
+    "assistanceMode": {
+      "enum": [
+        "plan",
+        "analyze",
+        "generate-command",
+        "execute",
+        "report",
+        "retest"
+      ]
+    },
+    "toolId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "minLength": 2,
+      "maxLength": 64
+    },
+    "partialActionMatrix": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "observe": {
+          "$ref": "#/$defs/decision"
+        },
+        "scan": {
+          "$ref": "#/$defs/decision"
+        },
+        "intercept": {
+          "$ref": "#/$defs/decision"
+        },
+        "authenticate": {
+          "$ref": "#/$defs/decision"
+        },
+        "fuzz": {
+          "$ref": "#/$defs/decision"
+        },
+        "exploit-safe": {
+          "$ref": "#/$defs/decision"
+        },
+        "exploit-stateful": {
+          "$ref": "#/$defs/decision"
+        },
+        "persist": {
+          "$ref": "#/$defs/decision"
+        },
+        "denial-of-service": {
+          "$ref": "#/$defs/decision"
+        },
+        "destructive-test": {
+          "$ref": "#/$defs/decision"
+        },
+        "data-access": {
+          "$ref": "#/$defs/decision"
+        },
+        "data-removal": {
+          "$ref": "#/$defs/decision"
+        },
+        "exfiltration-simulation": {
+          "$ref": "#/$defs/decision"
+        }
+      }
+    },
+    "partialExecutionLimits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxMinutes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10080
+        },
+        "maxRequests": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000000
+        },
+        "maxParallel": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 256
+        },
+        "maxRatePerSecond": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 100000
+        },
+        "maxTokens": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 100000000
+        },
+        "maxSpendUsd": {
+          "oneOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 10000000
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "External-spend ceiling in USD. Zero explicitly prohibits spending; null explicitly records that no monetary ceiling was supplied."
+        }
+      }
+    },
+    "phasePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "phaseId",
+        "assetRefs",
+        "actions",
+        "allowedToolIds",
+        "deniedToolIds",
+        "conditions",
+        "claimState",
+        "sourceRefs",
+        "limits"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "phaseId": {
+          "$ref": "#/$defs/id"
+        },
+        "assetRefs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/id"
+          }
+        },
+        "actions": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/action"
+          }
+        },
+        "allowedToolIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/toolId"
+          }
+        },
+        "deniedToolIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/toolId"
+          }
+        },
+        "conditions": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmptyText"
+          }
+        },
+        "claimState": {
+          "$ref": "#/$defs/claimState"
+        },
+        "sourceRefs": {
+          "$ref": "#/$defs/sourceRefs"
+        },
+        "limits": {
+          "$ref": "#/$defs/partialExecutionLimits"
+        }
+      }
+    },
+    "executionPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requestedAssistanceModes",
+        "phases"
+      ],
+      "properties": {
+        "requestedAssistanceModes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/assistanceMode"
+          }
+        },
+        "phases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/phasePolicy"
+          }
+        }
+      }
+    }
+  }
+}
