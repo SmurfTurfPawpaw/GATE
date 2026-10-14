@@ -2329,7 +2329,8 @@
           "entrypoint": "src/adapters/rea-pe-resources.mjs",
           "sandboxCommand": "bwrap",
           "supportedHosts": [
-            "linux"
+            "linux",
+            "wsl2"
           ],
           "capability": "Project-bound, zero-network PE resource inspection through the fixed offline-analysis adapter."
         }

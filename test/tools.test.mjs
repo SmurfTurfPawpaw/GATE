@@ -361,113 +361,123 @@ test("AI red-team candidates have reviewed CLI metadata and stay candidate-only"
   );
 });
 
-test("REA receipt projection stays cheap and full planning admits only the fixed adapter", (t) => {
-  if (process.platform !== "linux") return t.skip("the reviewed REA adapter is Linux-only");
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-rea-tool-plan-"));
-  const upstreamTools = path.join(root, "upstream-tools");
-  const directory = path.join(upstreamTools, "rea-stable");
-  const bin = path.join(directory, "node_modules", ".bin");
-  const managedEntrypoint = path.join(directory, "node_modules", "rea-agents", "scripts", "rea.mjs");
-  const pathBin = path.join(root, "path-bin");
-  const pathCanary = path.join(root, "path-rea-ran");
-  const sandboxCanary = path.join(root, "bwrap-ran");
-  const managedWrapper = path.join(bin, "rea");
-  const pathRea = path.join(pathBin, "rea");
-  const fakeBwrap = path.join(pathBin, "bwrap");
-  fs.mkdirSync(bin, { recursive: true });
-  fs.mkdirSync(path.dirname(managedEntrypoint), { recursive: true });
-  fs.mkdirSync(pathBin, { recursive: true });
-  fs.writeFileSync(managedEntrypoint, "#!/usr/bin/env node\n", { mode: 0o700 });
-  fs.symlinkSync("../rea-agents/scripts/rea.mjs", managedWrapper);
-  fs.writeFileSync(pathRea, `#!/bin/sh\nprintf path > ${JSON.stringify(pathCanary)}\n`, { mode: 0o700 });
-  fs.writeFileSync(fakeBwrap, `#!/bin/sh\nprintf sandbox > ${JSON.stringify(sandboxCanary)}\n`, { mode: 0o700 });
-  const lock = JSON.parse(fs.readFileSync(path.join(repo, "locks", "upstreams.lock.json"), "utf8"));
-  const entry = lock.upstreams.find((candidate) => candidate.id === "rea-stable");
-  fs.writeFileSync(path.join(directory, "install.json"), `${JSON.stringify({
-    apiVersion: "gate.upstream-install/v2",
-    id: entry.id,
-    lane: "npm",
-    package: entry.install.package,
-    version: entry.version,
-    integrity: entry.install.integrity,
-    lockSha256: entry.install.lockSha256,
-    verifiedAt: "2026-10-14T10:00:00.000Z"
-  })}\n`, { mode: 0o600 });
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const runtime = { repo, home: root, upstreamTools };
-  let resolveCalls = 0;
+for (const host of ["linux", "wsl2"]) {
+  test(`REA receipt projection stays cheap and full planning admits only the fixed adapter on ${host}`, (t) => {
+    if (process.platform !== "linux") return t.skip("the reviewed REA adapter requires Linux or WSL2");
+    const originalDistro = process.env.WSL_DISTRO_NAME;
+    if (host === "wsl2") process.env.WSL_DISTRO_NAME = "GATE-test";
+    else delete process.env.WSL_DISTRO_NAME;
+    t.mock.method(os, "release", () => host === "wsl2" ? "6.6.0-microsoft-standard-WSL2" : "6.6.0");
+    t.after(() => {
+      if (originalDistro === undefined) delete process.env.WSL_DISTRO_NAME;
+      else process.env.WSL_DISTRO_NAME = originalDistro;
+    });
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-rea-tool-plan-"));
+    const upstreamTools = path.join(root, "upstream-tools");
+    const directory = path.join(upstreamTools, "rea-stable");
+    const bin = path.join(directory, "node_modules", ".bin");
+    const managedEntrypoint = path.join(directory, "node_modules", "rea-agents", "scripts", "rea.mjs");
+    const pathBin = path.join(root, "path-bin");
+    const pathCanary = path.join(root, "path-rea-ran");
+    const sandboxCanary = path.join(root, "bwrap-ran");
+    const managedWrapper = path.join(bin, "rea");
+    const pathRea = path.join(pathBin, "rea");
+    const fakeBwrap = path.join(pathBin, "bwrap");
+    fs.mkdirSync(bin, { recursive: true });
+    fs.mkdirSync(path.dirname(managedEntrypoint), { recursive: true });
+    fs.mkdirSync(pathBin, { recursive: true });
+    fs.writeFileSync(managedEntrypoint, "#!/usr/bin/env node\n", { mode: 0o700 });
+    fs.symlinkSync("../rea-agents/scripts/rea.mjs", managedWrapper);
+    fs.writeFileSync(pathRea, `#!/bin/sh\nprintf path > ${JSON.stringify(pathCanary)}\n`, { mode: 0o700 });
+    fs.writeFileSync(fakeBwrap, `#!/bin/sh\nprintf sandbox > ${JSON.stringify(sandboxCanary)}\n`, { mode: 0o700 });
+    const lock = JSON.parse(fs.readFileSync(path.join(repo, "locks", "upstreams.lock.json"), "utf8"));
+    const entry = lock.upstreams.find((candidate) => candidate.id === "rea-stable");
+    fs.writeFileSync(path.join(directory, "install.json"), `${JSON.stringify({
+      apiVersion: "gate.upstream-install/v2",
+      id: entry.id,
+      lane: "npm",
+      package: entry.install.package,
+      version: entry.version,
+      integrity: entry.install.integrity,
+      lockSha256: entry.install.lockSha256,
+      verifiedAt: "2026-10-14T10:00:00.000Z"
+    })}\n`, { mode: 0o600 });
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const runtime = { repo, home: root, upstreamTools };
+    let resolveCalls = 0;
 
-  const inventory = toolInventory({
-    paths: runtime,
-    category: "reverse-engineering",
-    environment: { PATH: pathBin },
-    resolveUpstreamBinary() {
-      resolveCalls += 1;
-      throw new Error("inventory must not perform full managed verification");
-    },
-    resolveAdapterCapability() {
-      return { available: true, reason: null };
-    }
-  });
-  const projected = inventory.tools.find((tool) => tool.id === "rea");
-  assert.equal(resolveCalls, 0);
-  assert.equal(projected.installed, true);
-  assert.equal(projected.readiness, "managed-receipt");
-  assert.equal(projected.integrityVerified, false);
-  assert.equal(projected.adapterReady, false);
-  assert.equal(projected.executable, null);
-  assert.equal(projected.commandCandidate, pathRea);
-  assert.equal(projected.genericLaneEligible, false);
-  assert.equal(projected.executionAvailable, false);
+    const inventory = toolInventory({
+      paths: runtime,
+      category: "reverse-engineering",
+      environment: { PATH: pathBin },
+      resolveUpstreamBinary() {
+        resolveCalls += 1;
+        throw new Error("inventory must not perform full managed verification");
+      },
+      resolveAdapterCapability() {
+        return { available: true, reason: null };
+      }
+    });
+    const projected = inventory.tools.find((tool) => tool.id === "rea");
+    assert.equal(resolveCalls, 0);
+    assert.equal(projected.installed, true);
+    assert.equal(projected.readiness, "managed-receipt");
+    assert.equal(projected.integrityVerified, false);
+    assert.equal(projected.adapterReady, false);
+    assert.equal(projected.executable, null);
+    assert.equal(projected.commandCandidate, pathRea);
+    assert.equal(projected.genericLaneEligible, false);
+    assert.equal(projected.executionAvailable, false);
 
-  const planned = toolPlan("rea", {
-    paths: runtime,
-    environment: { PATH: pathBin },
-    resolveUpstreamBinary(id, name) {
-      resolveCalls += 1;
-      assert.equal(id, "rea-stable");
-      assert.equal(name, "rea");
-      return { id, name, executable: managedWrapper, directory };
-    },
-    resolveAdapterCapability() {
-      return { available: true, reason: null };
-    }
-  });
-  assert.equal(resolveCalls, 1);
-  assert.equal(planned.installed, true);
-  assert.equal(planned.executable, managedEntrypoint);
-  assert.equal(planned.readiness, "adapter-ready");
-  assert.equal(planned.versionVerified, true);
-  assert.equal(planned.integrityVerified, true);
-  assert.equal(planned.knownGoodProvenance, true);
-  assert.equal(planned.adapterReady, true);
-  assert.equal(planned.genericLaneEligible, false);
-  assert.equal(planned.broadCapabilityReady, false);
-  assert.deepEqual(planned.executionModes, ["offline-static-pe-resources"]);
-  assert.equal(planned.executionMode, "offline-static-pe-resources");
-  assert.equal(planned.executionAvailable, true);
-  assert.equal(planned.managedAdapterStatus[0].upstreamVerified, true);
-  assert.equal(planned.managedAdapterStatus[0].entrypoint, path.join(repo, "src", "adapters", "rea-pe-resources.mjs"));
-  assert.equal(fs.existsSync(pathCanary), false);
-  assert.equal(fs.existsSync(sandboxCanary), false);
+    const planned = toolPlan("rea", {
+      paths: runtime,
+      environment: { PATH: pathBin },
+      resolveUpstreamBinary(id, name) {
+        resolveCalls += 1;
+        assert.equal(id, "rea-stable");
+        assert.equal(name, "rea");
+        return { id, name, executable: managedWrapper, directory };
+      },
+      resolveAdapterCapability() {
+        return { available: true, reason: null };
+      }
+    });
+    assert.equal(resolveCalls, 1);
+    assert.equal(planned.installed, true);
+    assert.equal(planned.executable, managedEntrypoint);
+    assert.equal(planned.readiness, "adapter-ready");
+    assert.equal(planned.versionVerified, true);
+    assert.equal(planned.integrityVerified, true);
+    assert.equal(planned.knownGoodProvenance, true);
+    assert.equal(planned.adapterReady, true);
+    assert.equal(planned.genericLaneEligible, false);
+    assert.equal(planned.broadCapabilityReady, false);
+    assert.deepEqual(planned.executionModes, ["offline-static-pe-resources"]);
+    assert.equal(planned.executionMode, "offline-static-pe-resources");
+    assert.equal(planned.executionAvailable, true);
+    assert.equal(planned.managedAdapterStatus[0].upstreamVerified, true);
+    assert.equal(planned.managedAdapterStatus[0].entrypoint, path.join(repo, "src", "adapters", "rea-pe-resources.mjs"));
+    assert.equal(fs.existsSync(pathCanary), false);
+    assert.equal(fs.existsSync(sandboxCanary), false);
 
-  const failedVerification = toolPlan("rea", {
-    paths: runtime,
-    environment: { PATH: pathBin },
-    resolveUpstreamBinary() {
-      throw new Error("tampered managed tree");
-    },
-    resolveAdapterCapability() {
-      return { available: true, reason: null };
-    }
+    const failedVerification = toolPlan("rea", {
+      paths: runtime,
+      environment: { PATH: pathBin },
+      resolveUpstreamBinary() {
+        throw new Error("tampered managed tree");
+      },
+      resolveAdapterCapability() {
+        return { available: true, reason: null };
+      }
+    });
+    assert.equal(failedVerification.readiness, "managed-receipt");
+    assert.equal(failedVerification.integrityVerified, false);
+    assert.equal(failedVerification.adapterReady, false);
+    assert.equal(failedVerification.genericLaneEligible, false);
+    assert.equal(failedVerification.executionAvailable, false);
+    assert.equal(failedVerification.executable, null);
   });
-  assert.equal(failedVerification.readiness, "managed-receipt");
-  assert.equal(failedVerification.integrityVerified, false);
-  assert.equal(failedVerification.adapterReady, false);
-  assert.equal(failedVerification.genericLaneEligible, false);
-  assert.equal(failedVerification.executionAvailable, false);
-  assert.equal(failedVerification.executable, null);
-});
+}
 
 test("REA receipt projection rejects symlinked state and upstream roots outside GATE_HOME", (t) => {
   if (process.platform !== "linux") return t.skip("no-follow fixtures target the Linux control plane");
