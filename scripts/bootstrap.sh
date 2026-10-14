@@ -7,10 +7,11 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
 
 CHECK_ONLY=0
 INSTALL_UPSTREAMS=0
+INSTALL_CORE_TOOLS=0
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/bootstrap.sh [--check-only] [--install-upstreams]
+Usage: ./scripts/bootstrap.sh [--check-only] [--install-upstreams] [--install-core-tools]
 
 Prepare a Linux, macOS, or WSL checkout of GATE without changing system
 packages. The default flow installs the locked npm dependencies, creates the
@@ -19,6 +20,7 @@ private GATE runtime, and runs the smoke suite.
 Options:
   --check-only         Check the host and authentication without writing files.
   --install-upstreams  Install integrity-pinned managed upstreams after base setup.
+  --install-core-tools Download, verify, and install the reviewed core security-tool profile.
   -h, --help           Show this help.
 
 Environment:
@@ -39,6 +41,7 @@ for argument in "$@"; do
   case "${argument}" in
     --check-only) CHECK_ONLY=1 ;;
     --install-upstreams) INSTALL_UPSTREAMS=1 ;;
+    --install-core-tools) INSTALL_CORE_TOOLS=1 ;;
     -h|--help) usage; exit 0 ;;
     *) fail "unknown option: ${argument}" ;;
   esac
@@ -90,8 +93,8 @@ fi
 note "host preflight passed (Node ${node_version}, npm $(npm --version), Git $(git --version | awk '{print $3}'))"
 
 if ((CHECK_ONLY)); then
-  if ((INSTALL_UPSTREAMS)); then
-    fail "--check-only and --install-upstreams cannot be combined"
+  if ((INSTALL_UPSTREAMS || INSTALL_CORE_TOOLS)); then
+    fail "--check-only cannot be combined with an install option"
   fi
   note "check-only complete; no files were intentionally changed"
   exit 0
@@ -116,5 +119,44 @@ if ((INSTALL_UPSTREAMS)); then
   node ./bin/gate.mjs upstream install all --json
 fi
 
-"${SCRIPT_DIR}/smoke.sh"
+smoke_arguments=()
+if ((INSTALL_CORE_TOOLS)); then
+  case "$(uname -s)" in
+    Linux) ;;
+    *) fail "--install-core-tools currently requires Linux or WSL2 for the zero-egress smoke sandbox" ;;
+  esac
+
+  core_install_file="$(mktemp "${TMPDIR:-/tmp}/gate-core-install.XXXXXX")"
+  cleanup_core_install() {
+    rm -f -- "${core_install_file}"
+  }
+  trap cleanup_core_install EXIT
+
+  note "downloading and installing the reviewed core security-tool profile"
+  if ! node ./bin/gate.mjs tool install --profile core --json >"${core_install_file}"; then
+    cat -- "${core_install_file}"
+    fail "the reviewed core security-tool profile did not install completely"
+  fi
+  cat -- "${core_install_file}"
+  node -e '
+    const fs = require("node:fs");
+    const result = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const counts = result.counts || {};
+    if (
+      result.operation !== "install" ||
+      result.selector?.type !== "profile" ||
+      result.selector?.id !== "core" ||
+      result.ok !== true ||
+      result.complete !== true ||
+      !Number.isInteger(counts.selected) ||
+      counts.selected < 1 ||
+      counts.installed !== counts.selected ||
+      counts.verified !== counts.selected ||
+      counts.unresolved !== 0
+    ) process.exit(1);
+  ' "${core_install_file}" || fail "core install output did not satisfy the reviewed profile contract"
+  smoke_arguments+=(--require-core-tools)
+fi
+
+"${SCRIPT_DIR}/smoke.sh" "${smoke_arguments[@]}"
 note "ready; start the local cockpit with: npm run dashboard"

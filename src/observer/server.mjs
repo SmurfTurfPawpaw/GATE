@@ -134,6 +134,42 @@ const OFFLINE_ANALYSIS_UNAVAILABLE = new Set([
 ]);
 const OFFLINE_RETENTION_LOCK_STATES = new Set(["absent", "active", "stale", "invalid", "indeterminate"]);
 const OFFLINE_SNAPSHOT_STATES = new Set(["stable", "consistent", "mutation-active", "indeterminate"]);
+const TOOL_RUNTIME_VERIFICATION_MODES = new Set([
+  "current-bytes-and-live-zero-egress-smoke",
+  "current-bytes-and-install-smoke-evidence",
+  "receipt-only"
+]);
+const TOOL_RUNTIME_PLATFORMS = new Set(["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"]);
+const TOOL_RUNTIME_STATES = new Set([
+  "absent",
+  "invalid",
+  "invalid-lock",
+  "invalid-receipt",
+  "receipt-only",
+  "unmanaged",
+  "unsupported-platform",
+  "verified",
+  "verified-install-evidence"
+]);
+const TOOL_RUNTIME_REASONS = new Set([
+  "explicit-integrity-and-smoke-verification-required",
+  "external-or-licensed-runtime-unavailable",
+  "hardware-runtime-unavailable",
+  "java-runtime-unavailable",
+  "language-runtime-unavailable",
+  "managed-runtime-absent",
+  "native-runtime-unavailable",
+  "oci-runtime-unavailable",
+  "reviewed-data-dependencies-unavailable",
+  "reviewed-platform-artifact-unavailable",
+  "reviewed-runtime-lock-unavailable",
+  "runtime-integrity-invalid",
+  "runtime-lock-invalid",
+  "runtime-privilege-adapter-unavailable",
+  "workflow-phase-admission-unavailable",
+  "zero-egress-smoke-sandbox-unavailable"
+]);
+const MAX_TOOL_RUNTIMES = 256;
 const ENGAGEMENT_STATUSES = new Set(["draft", "proposed", "approved", "active", "paused", "closed", "expired", "revoked"]);
 const TECHNICAL_REVIEW_STATUSES = new Set(["pending", "passed", "failed"]);
 const OPERATOR_RECEIPT_STATUSES = new Set(["pending", "approved", "revoked"]);
@@ -706,6 +742,79 @@ function summarizeOfflineAnalysis(value) {
   };
 }
 
+function toolRuntimeName(value) {
+  const text = boundedString(value, 80);
+  if (!text || text.includes("://") || text.includes("\\")) return null;
+  return /^[A-Za-z0-9][A-Za-z0-9+._ -]*(?: \/ [A-Za-z0-9][A-Za-z0-9+._ -]*)?$/u.test(text) ? text : null;
+}
+
+function toolRuntimeReason(value) {
+  if (TOOL_RUNTIME_REASONS.has(value)) return value;
+  // Runtime verification can return filesystem-derived exception text. Keep
+  // the fault visible without exposing that text across the observer boundary.
+  return boundedString(value, 500) ? "runtime-integrity-invalid" : null;
+}
+
+function toolRuntimeReasons(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.slice(0, 32).map(toolRuntimeReason).filter(Boolean))];
+}
+
+function summarizeToolRuntime(value) {
+  const runtime = object(value);
+  const rawId = boundedString(runtime?.id, 128);
+  const toolId = rawId && /^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(rawId)
+    ? rawId
+    : null;
+  if (!toolId) return null;
+  return {
+    id: toolId,
+    name: toolRuntimeName(runtime.name),
+    state: safeEnum(runtime.state, TOOL_RUNTIME_STATES, "unknown"),
+    locked: typeof runtime.locked === "boolean" ? runtime.locked : null,
+    installed: typeof runtime.installed === "boolean" ? runtime.installed : null,
+    verified: typeof runtime.verified === "boolean" ? runtime.verified : null,
+    executable: typeof runtime.executable === "boolean" ? runtime.executable : null,
+    reasons: toolRuntimeReasons(runtime.reasons)
+  };
+}
+
+/**
+ * Project managed runtime status through an explicit metadata allowlist. Raw
+ * verification exceptions may contain private paths, so unknown reason text is
+ * represented by one generic integrity signal rather than copied verbatim.
+ */
+export function summarizeToolRuntimes(value) {
+  const summary = object(value) || {};
+  const reasonCounts = new Map();
+  if (Array.isArray(summary.unresolvedConstraints)) {
+    for (const raw of summary.unresolvedConstraints.slice(0, MAX_TOOL_RUNTIMES)) {
+      const constraint = object(raw);
+      const reason = toolRuntimeReason(constraint?.reason);
+      const count = nonNegativeInteger(constraint?.count);
+      if (!reason || count === null) continue;
+      reasonCounts.set(reason, Math.min(Number.MAX_SAFE_INTEGER, (reasonCounts.get(reason) || 0) + count));
+    }
+  }
+  return {
+    ok: typeof summary.ok === "boolean" ? summary.ok : null,
+    verificationMode: safeEnum(summary.verificationMode, TOOL_RUNTIME_VERIFICATION_MODES, null),
+    platform: safeEnum(summary.platform, TOOL_RUNTIME_PLATFORMS, null),
+    catalog: nonNegativeInteger(summary.catalog),
+    locked: nonNegativeInteger(summary.locked),
+    installed: nonNegativeInteger(summary.installed),
+    verified: nonNegativeInteger(summary.verified),
+    executable: nonNegativeInteger(summary.executable),
+    unresolved: nonNegativeInteger(summary.unresolved),
+    unresolvedConstraints: [...reasonCounts]
+      .map(([reason, count]) => ({ reason, count }))
+      .sort((left, right) => right.count - left.count || left.reason.localeCompare(right.reason)),
+    tools: Array.isArray(summary.tools)
+      ? summary.tools.slice(0, MAX_TOOL_RUNTIMES).map(summarizeToolRuntime).filter(Boolean)
+      : []
+  };
+}
+
 function summarizeEngagement(value, execution) {
   const engagement = object(value);
   if (!engagement) return null;
@@ -844,6 +953,7 @@ export function projectSnapshot(rawStatus, paths) {
   };
   const execution = summarizeExecution(raw.execution);
   const offlineAnalysis = summarizeOfflineAnalysis(raw.offlineAnalysis);
+  const toolRuntimes = summarizeToolRuntimes(raw.toolRuntimes);
   return {
     status: {
       apiVersion: OBSERVER_API_VERSION,
@@ -857,6 +967,7 @@ export function projectSnapshot(rawStatus, paths) {
       telemetry: { freshness, lastActivityAt, ageSeconds },
       execution,
       offlineAnalysis,
+      toolRuntimes,
       engagements: Array.isArray(raw.engagements)
         ? raw.engagements.map((value) => summarizeEngagement(value, execution)).filter(Boolean)
         : [],

@@ -2,7 +2,7 @@
 
 GATE composes independent upstream projects and security tools. The [MIT license](LICENSE) applies to GATE's original code; every upstream, package, dataset, rule pack, firmware image, container layer, and externally installed tool retains its own terms.
 
-The machine-readable authority for upstream selection is [locks/upstreams.lock.json](locks/upstreams.lock.json). It records full Git commits, release-artifact integrity, and, for npm lanes, the exact direct version plus the digest of a committed dependency lock under [locks/npm](locks/npm). If this document and the lock differ, stop the update and correct the reviewed lock and notice together.
+The machine-readable authorities are [locks/upstreams.lock.json](locks/upstreams.lock.json) for orchestration and analysis dependencies and [locks/tool-runtimes.lock.json](locks/tool-runtimes.lock.json) for the seven managed core security-tool releases. They record full Git commits and exact release-artifact integrity; npm lanes also bind the direct version and digest of a committed dependency lock under [locks/npm](locks/npm), while managed tool entries bind the catalog entry, exact archive member set, executable digest, platform, and smoke. If this document and either lock differ, stop the update and correct the reviewed lock and notice together.
 
 ## Orchestration and analysis upstreams
 
@@ -35,7 +35,21 @@ Transitive packages are listed in `package-lock.json` and retain their own licen
 
 ## Security-tool catalog
 
-[catalog/security-tools.json](catalog/security-tools.json) is metadata for 122 tools; it is not a bundled distribution. Each entry records its canonical upstream, license label, open-source status, hosts, privileges, risk class, and possible installation lanes. Installing an entry creates a separate relationship between the operator and that upstream.
+[catalog/security-tools.json](catalog/security-tools.json) is metadata for 126 tools; it is not a bundled distribution. Seven entries have exact managed release locks, while the other 119 remain metadata and admission-planning candidates. Each entry records its canonical upstream, license label, open-source status, hosts, privileges, risk class, and possible installation lanes. Installing an entry creates a separate relationship between the operator and that upstream.
+
+The managed core remains external software. GATE downloads its exact reviewed archives into private `GATE_HOME`, verifies and extracts one locked executable, and preserves the upstream identity and license:
+
+| Project | Locked revision | Version | License | Managed use |
+| --- | --- | --- | --- | --- |
+| [Subfinder](https://github.com/projectdiscovery/subfinder/tree/c97f25802892093060f0fc424bfc3f39e273693a) | `c97f25802892093060f0fc424bfc3f39e273693a` | 2.17.0 | MIT | Passive subdomain discovery |
+| [DNSX](https://github.com/projectdiscovery/dnsx/tree/01e315f216db7d36198ec326fac13dd7846b1bec) | `01e315f216db7d36198ec326fac13dd7846b1bec` | 1.3.1 | MIT | DNS resolution and validation |
+| [HTTPX](https://github.com/projectdiscovery/httpx/tree/4b6a9a9d476f94a4f3a630f37051f5671ecfb1f8) | `4b6a9a9d476f94a4f3a630f37051f5671ecfb1f8` | 1.12.0 | MIT | HTTP service probing |
+| [Katana](https://github.com/projectdiscovery/katana/tree/35267ac5c8ff1db9694a319d0eb466ed97b0969f) | `35267ac5c8ff1db9694a319d0eb466ed97b0969f` | 1.8.0 | MIT | Web crawling |
+| [Naabu](https://github.com/projectdiscovery/naabu/tree/5a0ca8bde91b5bb16213e9e8b5c6871eac954bd8) | `5a0ca8bde91b5bb16213e9e8b5c6871eac954bd8` | 2.6.1 | MIT | Port discovery; execution still needs a raw-network privilege adapter |
+| [Nuclei](https://github.com/projectdiscovery/nuclei/tree/a8c88feb4a1c8e961b7902534ce3af97e9d524a4) | `a8c88feb4a1c8e961b7902534ce3af97e9d524a4` | 3.11.1 | MIT | Template engine; execution still needs an admitted template pack |
+| [FFUF](https://github.com/ffuf/ffuf/tree/256c1b02499f5f8672af965d4ad7a321d606bc65) | `256c1b02499f5f8672af965d4ad7a321d606bc65` | 2.3.0 | MIT | Web content discovery and fuzzing |
+
+All 28 locked artifacts cover Linux and macOS on x64 and ARM64. GitHub reported `immutable: false` for every observed release. The six ProjectDiscovery source commits carried GitHub's verified status; FFUF's source commit evidence was unverified. GATE does not claim an upstream signature or immutable-release guarantee for these artifacts. Trust rests on the reviewed release and asset identities, exact sizes, archive SHA-256 values, exact member sets, executable SHA-256 values, and repeated local verification. Preserve the upstream license files and notices from each downloaded archive when redistributing any artifact.
 
 Some notable exceptions and mixed terms require deliberate handling:
 
@@ -47,7 +61,7 @@ Some notable exceptions and mixed terms require deliberate handling:
 - Android SDK and emulator components contain mixed terms.
 - Kali Linux is a collection with per-package licenses, not a single redistributable tool. A GATE image needs a pinned package set, digest, SBOM, and notices.
 
-Future tool adapters will call external executables while preserving upstream identity. No general security-tool execution adapter ships in v0.1. Vendoring, modifying, embedding, or redistributing a tool requires a separate license review. See [docs/security-tooling.md](docs/security-tooling.md#licensing-notes) for the catalog policy.
+Future tool-specific adapters will call external executables while preserving upstream identity. All seven managed core binaries can establish exact byte provenance, but none is currently invocation-admitted: each needs a reviewed workflow-phase adapter, with additional privilege admission for `naabu` and exact-template admission for `nuclei`. Vendoring, modifying, embedding, or redistributing a tool requires a separate license review. See [docs/security-tooling.md](docs/security-tooling.md#licensing-notes) for the catalog policy.
 
 ## Updating notices
 

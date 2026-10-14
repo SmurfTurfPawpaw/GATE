@@ -8,6 +8,7 @@ import { ensureRuntime, runtimePaths } from "./paths.mjs";
 import { projectRegistryStatus } from "./projects.mjs";
 import { validateDocument } from "./schema.mjs";
 import { scanCodexUsage } from "./tokens.mjs";
+import { managedToolSummary } from "./tool-runtimes.mjs";
 import { upstreamStatus } from "./upstreams.mjs";
 
 function canonicalUsageRecords(values, paths, partial = false) {
@@ -64,6 +65,7 @@ export async function buildStatus(options = {}) {
     offlineAnalysis: offlineAnalysisStatus({ paths }),
     projects: projectRegistryStatus({ paths }),
     tokens,
-    upstreams: upstreamStatus({ paths, verifyIntegrity: false })
+    upstreams: upstreamStatus({ paths, verifyIntegrity: false }),
+    toolRuntimes: managedToolSummary({ paths, staticIntegrity: true })
   };
 }

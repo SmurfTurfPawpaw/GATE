@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/tool-install-receipt.schema.json",
+  "title": "GATE private managed tool installation receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion", "id", "toolId", "provider", "version", "platform",
+    "lockEntrySha256", "catalogEntrySha256", "artifact", "executable",
+    "smoke", "installedAt", "authority"
+  ],
+  "properties": {
+    "apiVersion": { "const": "gate.tool-install/v1" },
+    "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+    "toolId": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+    "provider": { "const": "verified-release" },
+    "version": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "platform": { "enum": ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"] },
+    "lockEntrySha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "catalogEntrySha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assetId", "url", "size", "sha256"],
+      "properties": {
+        "assetId": { "type": "integer", "minimum": 1 },
+        "url": { "type": "string", "format": "uri", "pattern": "^https://" },
+        "size": { "type": "integer", "minimum": 1 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "executable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relativePath", "sha256", "size"],
+      "properties": {
+        "relativePath": { "type": "string", "pattern": "^bin/[A-Za-z0-9][A-Za-z0-9._+-]{0,79}$" },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "size": { "type": "integer", "minimum": 1, "maximum": 268435456 }
+      }
+    },
+    "smoke": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["specSha256", "status", "network", "sandbox", "exitCode", "outputSha256", "completedAt"],
+      "properties": {
+        "specSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "status": { "const": "passed" },
+        "network": { "const": "none" },
+        "sandbox": { "const": "bubblewrap-prlimit-v1" },
+        "exitCode": { "const": 0 },
+        "outputSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "completedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "installedAt": { "type": "string", "format": "date-time" },
+    "authority": { "const": "none-installation-does-not-authorize-target-contact" }
+  }
+}

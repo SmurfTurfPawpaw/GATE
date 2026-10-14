@@ -6,7 +6,9 @@ import {
   executionRunPresentation,
   offlineAnalysisPresentation,
   offlineAnalysisRunPresentation,
-  reconcileRefreshResults
+  reconcileRefreshResults,
+  toolRuntimeItemPresentation,
+  toolRuntimePresentation
 } from "./app.js";
 
 const at = "2026-10-13T12:00:00.000Z";
@@ -302,4 +304,50 @@ test("offline control presentation distinguishes active and manifest-scoped faul
   });
   assert.equal(indeterminate.controlState, "blocked");
   assert.equal(indeterminate.controlMutationLabel, "Blocked");
+});
+
+test("managed runtime presentation distinguishes aggregate health and per-tool readiness", () => {
+  assert.deepEqual(toolRuntimePresentation({
+    ok: true,
+    verificationMode: "current-bytes-and-install-smoke-evidence",
+    platform: "linux-x64",
+    catalog: 126,
+    locked: 4,
+    installed: 3,
+    verified: 2,
+    executable: 1,
+    unresolved: 125
+  }), {
+    healthState: "partial",
+    healthLabel: "125 unresolved",
+    modeLabel: "Current bytes and install smoke evidence",
+    platformLabel: "linux-x64",
+    catalogLabel: "126",
+    lockedLabel: "4",
+    installedLabel: "3",
+    verifiedLabel: "2",
+    executableLabel: "1",
+    unresolvedLabel: "125"
+  });
+  assert.equal(toolRuntimePresentation({ ok: false }).healthLabel, "Lock invalid");
+  assert.equal(toolRuntimePresentation({ ok: true, unresolved: 0 }).healthLabel, "Ready");
+  assert.deepEqual(toolRuntimeItemPresentation({
+    id: "nuclei",
+    name: "Nuclei",
+    state: "verified-install-evidence",
+    locked: true,
+    installed: true,
+    verified: true,
+    executable: true,
+    reasons: []
+  }), {
+    id: "nuclei",
+    name: "Nuclei",
+    state: "verified-install-evidence",
+    stateLabel: "Verified install evidence",
+    tone: "ready",
+    flags: ["locked yes", "installed yes", "verified yes", "executable yes"],
+    reasons: []
+  });
+  assert.equal(toolRuntimeItemPresentation({ state: "invalid-receipt" }).tone, "invalid");
 });

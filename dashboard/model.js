@@ -6,6 +6,7 @@
  */
 
 const RECORD_LIMIT = 100;
+const TOOL_RUNTIME_LIMIT = 256;
 const STRING_LIMIT = 160;
 const MAX_COUNT = Number.MAX_SAFE_INTEGER;
 
@@ -151,6 +152,34 @@ const OFFLINE_ANALYSIS_UNAVAILABLE = new Set([
 ]);
 const OFFLINE_RETENTION_LOCK_STATES = new Set(["absent", "active", "stale", "invalid", "indeterminate"]);
 const OFFLINE_SNAPSHOT_STATES = new Set(["stable", "consistent", "mutation-active", "indeterminate"]);
+const TOOL_RUNTIME_VERIFICATION_MODES = new Set([
+  "current-bytes-and-live-zero-egress-smoke",
+  "current-bytes-and-install-smoke-evidence",
+  "receipt-only"
+]);
+const TOOL_RUNTIME_PLATFORMS = new Set(["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"]);
+const TOOL_RUNTIME_STATES = new Set([
+  "absent", "invalid", "invalid-lock", "invalid-receipt", "receipt-only", "unmanaged",
+  "unsupported-platform", "verified", "verified-install-evidence", "unknown"
+]);
+const TOOL_RUNTIME_REASONS = new Set([
+  "explicit-integrity-and-smoke-verification-required",
+  "external-or-licensed-runtime-unavailable",
+  "hardware-runtime-unavailable",
+  "java-runtime-unavailable",
+  "language-runtime-unavailable",
+  "managed-runtime-absent",
+  "native-runtime-unavailable",
+  "oci-runtime-unavailable",
+  "reviewed-data-dependencies-unavailable",
+  "reviewed-platform-artifact-unavailable",
+  "reviewed-runtime-lock-unavailable",
+  "runtime-integrity-invalid",
+  "runtime-lock-invalid",
+  "runtime-privilege-adapter-unavailable",
+  "workflow-phase-admission-unavailable",
+  "zero-egress-smoke-sandbox-unavailable"
+]);
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/;
 const EVENT_KIND = /^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+$/;
 
@@ -415,6 +444,67 @@ function offlineAnalysisShape(input) {
   };
 }
 
+function toolRuntimeName(value) {
+  if (typeof value !== "string" || value.length > 80 || value.includes("://") || value.includes("\\")) return null;
+  return /^[A-Za-z0-9][A-Za-z0-9+._ -]*(?: \/ [A-Za-z0-9][A-Za-z0-9+._ -]*)?$/.test(value)
+    ? value
+    : null;
+}
+
+function toolRuntimeReasons(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.slice(0, 32).filter((reason) => TOOL_RUNTIME_REASONS.has(reason)))];
+}
+
+function toolRuntimeShape(input) {
+  const value = record(input);
+  const toolId = typeof value.id === "string" && value.id.length <= 128 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.id)
+    ? value.id
+    : null;
+  if (!toolId) return null;
+  return {
+    id: toolId,
+    name: toolRuntimeName(value.name),
+    state: enumValue(value.state, TOOL_RUNTIME_STATES, "unknown"),
+    locked: typeof value.locked === "boolean" ? value.locked : null,
+    installed: typeof value.installed === "boolean" ? value.installed : null,
+    verified: typeof value.verified === "boolean" ? value.verified : null,
+    executable: typeof value.executable === "boolean" ? value.executable : null,
+    reasons: toolRuntimeReasons(value.reasons)
+  };
+}
+
+function toolRuntimesShape(input) {
+  const value = record(input);
+  const reasonCounts = new Map();
+  if (Array.isArray(value.unresolvedConstraints)) {
+    for (const raw of value.unresolvedConstraints.slice(0, TOOL_RUNTIME_LIMIT)) {
+      const constraint = record(raw);
+      const reason = TOOL_RUNTIME_REASONS.has(constraint.reason) ? constraint.reason : null;
+      const total = count(constraint.count);
+      if (!reason || total === null) continue;
+      reasonCounts.set(reason, Math.min(MAX_COUNT, (reasonCounts.get(reason) || 0) + total));
+    }
+  }
+  return {
+    ok: typeof value.ok === "boolean" ? value.ok : null,
+    verificationMode: enumValue(value.verificationMode, TOOL_RUNTIME_VERIFICATION_MODES, null),
+    platform: enumValue(value.platform, TOOL_RUNTIME_PLATFORMS, null),
+    catalog: count(value.catalog),
+    locked: count(value.locked),
+    installed: count(value.installed),
+    verified: count(value.verified),
+    executable: count(value.executable),
+    unresolved: count(value.unresolved),
+    unresolvedConstraints: [...reasonCounts]
+      .map(([reason, total]) => ({ reason, count: total }))
+      .sort((left, right) => right.count - left.count || left.reason.localeCompare(right.reason)),
+    tools: Array.isArray(value.tools)
+      ? value.tools.slice(0, TOOL_RUNTIME_LIMIT).map(toolRuntimeShape).filter(Boolean)
+      : []
+  };
+}
+
 function agentShape(input) {
   const value = record(input);
   const agentName = identifier(firstDefined(value.agent, value.name, value.agentId, value.id), null);
@@ -461,6 +551,7 @@ export function sanitizeStatusPayload(input) {
     agents,
     execution: executionShape(value.execution),
     offlineAnalysis: offlineAnalysisShape(value.offlineAnalysis),
+    toolRuntimes: toolRuntimesShape(value.toolRuntimes),
     usage: usageShape(firstDefined(value.usage, value.tokenUsage, value.tokens)),
     telemetry: {
       state: telemetryState === "fresh" ? "live" : telemetryState,

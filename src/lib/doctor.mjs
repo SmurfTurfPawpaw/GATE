@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
+import { managedToolSummary } from "./tool-runtimes.mjs";
 import { validateRepository } from "./validation.mjs";
 
 const toolChecks = [
@@ -155,7 +156,12 @@ export function runDoctor(options = {}) {
     ok: validation.ok && requiredTools.every((tool) => tool.available),
     host,
     tools,
-    repository: validation
+    repository: validation,
+    toolRuntimes: managedToolSummary({
+      ...options,
+      verify: options.full === true,
+      staticIntegrity: options.full !== true
+    })
   };
   if (options.full) result.capabilities = inspectCapabilities(host);
   return result;

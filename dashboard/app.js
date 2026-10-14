@@ -73,6 +73,18 @@ const view = {
   offlineAnalysisControlInvalidRuns: select("#offline-analysis-control-invalid-runs"),
   offlineAnalysisControlBlockedManifests: select("#offline-analysis-control-blocked-manifests"),
   offlineAnalysisNote: select("#offline-analysis-note"),
+  toolRuntimeHealth: select("#tool-runtime-health"),
+  toolRuntimeMode: select("#tool-runtime-mode"),
+  toolRuntimePlatform: select("#tool-runtime-platform"),
+  toolRuntimeCatalog: select("#tool-runtime-catalog"),
+  toolRuntimeLocked: select("#tool-runtime-locked"),
+  toolRuntimeInstalled: select("#tool-runtime-installed"),
+  toolRuntimeVerified: select("#tool-runtime-verified"),
+  toolRuntimeExecutable: select("#tool-runtime-executable"),
+  toolRuntimeUnresolved: select("#tool-runtime-unresolved"),
+  toolRuntimeConstraints: select("#tool-runtime-constraints"),
+  toolRuntimeList: select("#tool-runtime-list"),
+  toolRuntimeCount: select("#tool-runtime-count"),
   metricRunning: select("#metric-running"),
   metricRunningDetail: select("#metric-running-detail"),
   metricWaiting: select("#metric-waiting"),
@@ -329,6 +341,58 @@ export function offlineAnalysisRunPresentation(run = {}) {
       : isolationState === "unverified"
         ? "Isolation not verified"
         : "Isolation pending"
+  };
+}
+
+export function toolRuntimePresentation(summary = {}) {
+  const unresolved = Number.isFinite(summary.unresolved) ? summary.unresolved : null;
+  const healthState = summary.ok === false
+    ? "invalid"
+    : summary.ok === true && unresolved === 0
+      ? "ready"
+      : summary.ok === true
+        ? "partial"
+        : "unknown";
+  return {
+    healthState,
+    healthLabel: healthState === "invalid"
+      ? "Lock invalid"
+      : healthState === "ready"
+        ? "Ready"
+        : healthState === "partial"
+          ? `${fullNumber(unresolved)} unresolved`
+          : "Unknown",
+    modeLabel: summary.verificationMode ? readableCapability(summary.verificationMode) : "Unknown",
+    platformLabel: summary.platform || "Unknown",
+    catalogLabel: Number.isFinite(summary.catalog) ? fullNumber(summary.catalog) : "—",
+    lockedLabel: Number.isFinite(summary.locked) ? fullNumber(summary.locked) : "—",
+    installedLabel: Number.isFinite(summary.installed) ? fullNumber(summary.installed) : "—",
+    verifiedLabel: Number.isFinite(summary.verified) ? fullNumber(summary.verified) : "—",
+    executableLabel: Number.isFinite(summary.executable) ? fullNumber(summary.executable) : "—",
+    unresolvedLabel: unresolved === null ? "—" : fullNumber(unresolved)
+  };
+}
+
+export function toolRuntimeItemPresentation(tool = {}) {
+  const flags = [
+    ["locked", tool.locked],
+    ["installed", tool.installed],
+    ["verified", tool.verified],
+    ["executable", tool.executable]
+  ].map(([label, value]) => `${label} ${value === true ? "yes" : value === false ? "no" : "unknown"}`);
+  const tone = tool.executable === true
+    ? "ready"
+    : ["invalid", "invalid-lock", "invalid-receipt"].includes(tool.state)
+      ? "invalid"
+      : "unresolved";
+  return {
+    id: tool.id || "unknown",
+    name: tool.name || tool.id || "Unknown tool",
+    state: tool.state || "unknown",
+    stateLabel: readableCapability(tool.state || "unknown"),
+    tone,
+    flags,
+    reasons: Array.isArray(tool.reasons) ? tool.reasons.map(readableCapability) : []
   };
 }
 
@@ -665,6 +729,54 @@ function renderOfflineAnalysis() {
   );
 }
 
+function renderToolRuntimes() {
+  const runtimes = state.status.toolRuntimes;
+  const presentation = toolRuntimePresentation(runtimes);
+  setText(view.toolRuntimeHealth, presentation.healthLabel);
+  view.toolRuntimeHealth.className = `source-badge runtime-${presentation.healthState}`;
+  setText(view.toolRuntimeMode, presentation.modeLabel);
+  setText(view.toolRuntimePlatform, presentation.platformLabel);
+  setText(view.toolRuntimeCatalog, presentation.catalogLabel);
+  setText(view.toolRuntimeLocked, presentation.lockedLabel);
+  setText(view.toolRuntimeInstalled, presentation.installedLabel);
+  setText(view.toolRuntimeVerified, presentation.verifiedLabel);
+  setText(view.toolRuntimeExecutable, presentation.executableLabel);
+  setText(view.toolRuntimeUnresolved, presentation.unresolvedLabel);
+
+  const constraints = Array.isArray(runtimes.unresolvedConstraints) ? runtimes.unresolvedConstraints : [];
+  if (!constraints.length) {
+    view.toolRuntimeConstraints.replaceChildren(element("li", "empty", "none reported"));
+  } else {
+    const fragment = document.createDocumentFragment();
+    for (const constraint of constraints) {
+      fragment.append(element("li", "", `${readableCapability(constraint.reason)} · ${fullNumber(constraint.count)}`));
+    }
+    view.toolRuntimeConstraints.replaceChildren(fragment);
+  }
+
+  const tools = Array.isArray(runtimes.tools) ? runtimes.tools : [];
+  setText(view.toolRuntimeCount, Number.isFinite(runtimes.catalog) ? `${tools.length} / ${runtimes.catalog}` : String(tools.length));
+  if (!tools.length) {
+    view.toolRuntimeList.replaceChildren(element("li", "execution-run-empty", "No managed runtime metadata observed"));
+    return;
+  }
+  const fragment = document.createDocumentFragment();
+  for (const tool of tools) {
+    const display = toolRuntimeItemPresentation(tool);
+    const item = element("li", `tool-runtime-item ${display.tone}`);
+    const head = element("div", "tool-runtime-head");
+    const identity = element("span", "tool-runtime-identity");
+    identity.append(element("strong", "", display.name), element("code", "", display.id));
+    head.append(identity, element("span", `runtime-state ${display.tone}`, display.stateLabel));
+    const flags = element("div", "tool-runtime-flags");
+    for (const flag of display.flags) flags.append(element("span", "", flag));
+    item.append(head, flags);
+    if (display.reasons.length) item.append(element("p", "tool-runtime-reasons", display.reasons.join(" · ")));
+    fragment.append(item);
+  }
+  view.toolRuntimeList.replaceChildren(fragment);
+}
+
 function setMeter(meter, fill, percent, label) {
   const available = Number.isFinite(percent);
   const width = available ? percent : 0;
@@ -807,6 +919,7 @@ function render() {
   renderMetrics();
   renderExecution();
   renderOfflineAnalysis();
+  renderToolRuntimes();
   renderAgents();
   renderEvents();
   renderLearnings();
@@ -938,7 +1051,8 @@ function handleKeyboard(event) {
     "3": "#execution-panel",
     "4": "#telemetry-panel",
     "5": "#learning-panel",
-    "6": "#offline-analysis-panel"
+    "6": "#offline-analysis-panel",
+    "7": "#tool-runtime-panel"
   };
   if (focusTargets[event.key]) {
     event.preventDefault();

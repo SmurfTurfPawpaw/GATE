@@ -33,6 +33,7 @@ import { ensureRuntime, runtimePaths } from "./lib/paths.mjs";
 import { checkPublication, publishPullRequest } from "./lib/publication.mjs";
 import { listProjects, registerProject, showProject, verifyProject } from "./lib/projects.mjs";
 import { buildStatus } from "./lib/status.mjs";
+import { runManagedToolOperation } from "./lib/tool-runtimes.mjs";
 import { toolInventory, toolPlan } from "./lib/tools.mjs";
 import { installUpstream, syncUpstream, upstreamStatus } from "./lib/upstreams.mjs";
 import { validateRepository } from "./lib/validation.mjs";
@@ -102,6 +103,10 @@ Upstreams
 Security tools
   tool list [--profile ID] [--category ID]
   tool plan ID                         Show host, lane, risk, and admission needs
+  tool prefetch ID|--profile ID        Cache reviewed release bytes without activating them
+  tool install ID|--profile ID         Install and zero-egress-smoke reviewed runtimes
+  tool verify ID|--profile ID          Recheck current bytes, lock, platform, and smoke
+  tool remove ID|--profile ID          Remove runtimes; retain cache bytes for re-verification
 
 Publication
   publication check|dry-run --repo OWNER/REPO --pr N --head SHA --run RUN
@@ -146,6 +151,19 @@ function assertBooleanSwitch(flags, name) {
   }
 }
 
+function assertUnambiguousToolArgs(argv) {
+  const seen = new Set();
+  for (const value of argv) {
+    if (value === "--") throw new Error("tool commands do not accept -- passthrough arguments");
+    if (!value.startsWith("--")) continue;
+    const equals = value.indexOf("=");
+    const name = value.slice(2, equals === -1 ? undefined : equals);
+    if (!name) throw new Error("tool options must have a name");
+    if (seen.has(name)) throw new Error(`tool option must not be repeated: --${name}`);
+    seen.add(name);
+  }
+}
+
 function optionalValueFlag(flags, name) {
   if (flags[name] === undefined) return undefined;
   if (typeof flags[name] !== "string" || !flags[name].trim()) throw new Error(`--${name} needs a value`);
@@ -168,6 +186,11 @@ function printDoctor(doctor, json) {
     process.stdout.write(`${state}\t${tool.id}\t${tool.version || "unavailable"}\n`);
   }
   process.stdout.write(`config\t${doctor.repository.ok ? "valid" : "invalid"}\n`);
+  if (doctor.toolRuntimes) {
+    process.stdout.write(
+      `tool-runtimes\tcatalog=${doctor.toolRuntimes.catalog} locked=${doctor.toolRuntimes.locked} installed=${doctor.toolRuntimes.installed} verified=${doctor.toolRuntimes.verified} executable=${doctor.toolRuntimes.executable} unresolved=${doctor.toolRuntimes.unresolved}\n`
+    );
+  }
   if (doctor.capabilities) {
     const { capture, debugger: debuggerCapability, usb, containers } = doctor.capabilities;
     process.stdout.write(`capture\tinterfaces=${capture.nonLoopbackInterfaceCount} cap_net_raw=${capture.rawSocketCapability ?? "unknown"} cap_net_admin=${capture.networkAdminCapability ?? "unknown"}\n`);
@@ -631,6 +654,7 @@ export async function main(argv) {
   }
 
   if (command === "tool") {
+    assertUnambiguousToolArgs(rest);
     const [action = "list", id] = parsed.positional;
     if (action === "list") {
       assertPositionals(parsed.positional, 1, "gate tool list [--profile ID] [--category ID]");
@@ -649,6 +673,23 @@ export async function main(argv) {
       assertFlags(parsed.flags, ["json"]);
       if (!id) throw new Error("security tool id is required");
       return output(toolPlan(id, { paths }), json);
+    }
+    if (new Set(["prefetch", "install", "verify", "remove"]).has(action)) {
+      assertFlags(parsed.flags, ["profile", "json"]);
+      assertBooleanSwitch(parsed.flags, "json");
+      const profile = optionalValueFlag(parsed.flags, "profile");
+      if (Boolean(id) === Boolean(profile)) {
+        throw new Error(`gate tool ${action} requires exactly one tool id or --profile ID`);
+      }
+      assertPositionals(
+        parsed.positional,
+        id ? 2 : 1,
+        `gate tool ${action} ID|--profile ID [--json]`
+      );
+      const result = await runManagedToolOperation(action, { paths, id, profile });
+      output(result, json);
+      if (!result.ok) process.exitCode = 2;
+      return;
     }
     throw new Error(`unknown tool action: ${action}`);
   }

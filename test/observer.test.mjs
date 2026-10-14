@@ -11,7 +11,8 @@ import {
   createObserver,
   isLoopbackHost,
   projectSnapshot,
-  startObserver
+  startObserver,
+  summarizeToolRuntimes
 } from "../src/observer/server.mjs";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -257,6 +258,43 @@ function statusFixture(overrides = {}) {
     ],
     execution: executionFixture(),
     offlineAnalysis: offlineAnalysisFixture(),
+    toolRuntimes: {
+      ok: true,
+      verificationMode: "current-bytes-and-install-smoke-evidence",
+      platform: "linux-x64",
+      catalog: 2,
+      locked: 1,
+      installed: 1,
+      verified: 1,
+      executable: 1,
+      unresolved: 1,
+      unresolvedConstraints: [{ reason: "managed-runtime-absent", count: 1 }],
+      tools: [
+        {
+          id: "nuclei",
+          name: "Nuclei",
+          state: "verified-install-evidence",
+          locked: true,
+          installed: true,
+          verified: true,
+          executable: true,
+          reasons: [],
+          path: "/private/TOOL_RUNTIME_PATH_CANARY",
+          sha256: "TOOL_RUNTIME_HASH_CANARY",
+          url: "https://example.invalid/TOOL_RUNTIME_URL_CANARY"
+        },
+        {
+          id: "wireshark",
+          name: "Wireshark",
+          state: "unmanaged",
+          locked: false,
+          installed: false,
+          verified: false,
+          executable: false,
+          reasons: ["native-runtime-unavailable"]
+        }
+      ]
+    },
     projects: [
       {
         id: "project_CUSTOMER_PROJECT_CANARY",
@@ -450,6 +488,22 @@ test("observer endpoints coalesce status reads and expose metadata-only projecti
     status.offlineAnalysis.recent[0].runId,
     `run_${crypto.createHash("sha256").update(`arun_${"3".repeat(32)}`).digest("hex").slice(0, 16)}`
   );
+  assert.equal(status.toolRuntimes.ok, true);
+  assert.equal(status.toolRuntimes.verificationMode, "current-bytes-and-install-smoke-evidence");
+  assert.equal(status.toolRuntimes.platform, "linux-x64");
+  assert.equal(status.toolRuntimes.catalog, 2);
+  assert.equal(status.toolRuntimes.executable, 1);
+  assert.deepEqual(status.toolRuntimes.unresolvedConstraints, [{ reason: "managed-runtime-absent", count: 1 }]);
+  assert.deepEqual(status.toolRuntimes.tools[0], {
+    id: "nuclei",
+    name: "Nuclei",
+    state: "verified-install-evidence",
+    locked: true,
+    installed: true,
+    verified: true,
+    executable: true,
+    reasons: []
+  });
   assert.match(status.projects[0].id, /^project_[a-f0-9]{16}$/);
   assert.equal(status.projects[0].status, "ready");
   assert.equal(status.projects[0].provider, "github");
@@ -505,6 +559,9 @@ test("observer endpoints coalesce status reads and expose metadata-only projecti
     "OFFLINE_ARTIFACT_HASH_CANARY",
     "OFFLINE_EVIDENCE_CANARY",
     "OFFLINE_RETENTION_CANARY",
+    "TOOL_RUNTIME_PATH_CANARY",
+    "TOOL_RUNTIME_HASH_CANARY",
+    "TOOL_RUNTIME_URL_CANARY",
     "private-project-canary",
     `arun_${"3".repeat(32)}`,
     `amf_${"4".repeat(32)}`,
@@ -525,6 +582,81 @@ test("observer endpoints coalesce status reads and expose metadata-only projecti
     assert.equal(response.headers.get("access-control-allow-origin"), null);
     assert.equal(response.headers.get("x-content-type-options"), "nosniff");
   }
+});
+
+test("tool runtime observer summary allowlists metadata and withholds raw verification errors", () => {
+  const summary = summarizeToolRuntimes({
+    ok: false,
+    verificationMode: "receipt-only",
+    platform: "darwin-arm64",
+    catalog: 2,
+    locked: 2,
+    installed: 1,
+    verified: 0,
+    executable: 0,
+    unresolved: 2,
+    unresolvedConstraints: [
+      { reason: "managed-runtime-absent", count: 1 },
+      { reason: "failed at /private/AGGREGATE_PATH_CANARY https://target.invalid", count: 1 }
+    ],
+    tools: [
+      {
+        id: "searchsploit",
+        name: "SearchSploit / ExploitDB",
+        state: "invalid",
+        locked: true,
+        installed: true,
+        verified: false,
+        executable: false,
+        reasons: ["receipt at /private/TOOL_PATH_CANARY contains TOOL_SECRET_CANARY"],
+        executablePath: "/private/EXECUTABLE_CANARY",
+        artifactSha256: "ARTIFACT_HASH_CANARY",
+        source: { url: "https://target.invalid/SOURCE_URL_CANARY" }
+      },
+      {
+        id: "bad/id",
+        name: "/private/NAME_CANARY",
+        state: "verified",
+        locked: true,
+        installed: true,
+        verified: true,
+        executable: true,
+        reasons: []
+      }
+    ],
+    error: "LOCK_ERROR_CANARY /private/lock"
+  });
+
+  assert.deepEqual(summary, {
+    ok: false,
+    verificationMode: "receipt-only",
+    platform: "darwin-arm64",
+    catalog: 2,
+    locked: 2,
+    installed: 1,
+    verified: 0,
+    executable: 0,
+    unresolved: 2,
+    unresolvedConstraints: [
+      { reason: "managed-runtime-absent", count: 1 },
+      { reason: "runtime-integrity-invalid", count: 1 }
+    ],
+    tools: [{
+      id: "searchsploit",
+      name: "SearchSploit / ExploitDB",
+      state: "invalid",
+      locked: true,
+      installed: true,
+      verified: false,
+      executable: false,
+      reasons: ["runtime-integrity-invalid"]
+    }]
+  });
+  const serialized = JSON.stringify(summary);
+  for (const canary of [
+    "AGGREGATE_PATH_CANARY", "target.invalid", "TOOL_PATH_CANARY", "TOOL_SECRET_CANARY",
+    "EXECUTABLE_CANARY", "ARTIFACT_HASH_CANARY", "SOURCE_URL_CANARY", "NAME_CANARY", "LOCK_ERROR_CANARY"
+  ]) assert.equal(serialized.includes(canary), false, `observer leaked ${canary}`);
 });
 
 test("missing token telemetry remains unavailable instead of becoming zero", () => {

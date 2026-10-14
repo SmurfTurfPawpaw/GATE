@@ -16,7 +16,7 @@ The recommended Windows baseline is:
 - Windows 11 with current WSL2 and Ubuntu 24.04;
 - Git, GitHub CLI, and Codex CLI inside WSL;
 - Node 24.x with npm 11.x; the minimum for the GATE package is Node 22.20;
-- Bubblewrap for the fixed zero-network offline-analysis lane;
+- Bubblewrap and `prlimit` for the fixed offline-analysis lane and managed-runtime smoke checks;
 - Python 3.12 managed by `uv` for isolated Python tools;
 - Go installed only when a pinned Go upstream requires it;
 - Docker Desktop with WSL integration when OCI tool profiles are needed;
@@ -44,7 +44,7 @@ Inside Ubuntu, install the small native base:
 
 ```bash
 sudo apt update
-sudo apt install --yes bubblewrap build-essential ca-certificates curl git jq tmux unzip xz-utils
+sudo apt install --yes bubblewrap build-essential ca-certificates curl git jq tmux unzip util-linux xz-utils
 ```
 
 Install the tested official Node 24 binary under an administrator-owned path. The ownership and mode normalization matter: managed-upstream verification rejects root execution and any Node, npm file, or parent path that the normal operator can replace. These commands cover WSL on x86-64 and ARM64:
@@ -121,7 +121,7 @@ Then prepare the locked JavaScript dependencies and private runtime:
 ./scripts/bootstrap.sh
 ```
 
-The script runs `npm ci` with package lifecycle scripts disabled, creates the private runtime with `gate bootstrap`, and executes the smoke suite. It does not install system packages or broad security suites.
+The script runs `npm ci` with package lifecycle scripts disabled, creates the private runtime with `gate bootstrap`, and executes the smoke suite. It does not install system packages or broad security suites. Add `--install-core-tools` after the read-only preflight to install all seven reviewed core releases and make the final smoke require a nonempty installed and byte-verified core result.
 
 By default, private state is stored under `~/.local/share/gate`. Set `GATE_HOME` before bootstrap if it belongs on another local disk:
 
@@ -130,7 +130,7 @@ export GATE_HOME="$HOME/.local/share/gate"
 ./scripts/bootstrap.sh
 ```
 
-Keep this directory out of cloud-synced folders and Git. It contains events, registered project contracts, private learnings, engagement records, plans, offline-analysis manifests and input snapshots, evidence, managed upstream installations, and Treehouse's private state root. Project contracts can contain repository and deployment references even though general status and observer responses omit those details.
+Keep this directory out of cloud-synced folders and Git. It contains events, registered project contracts, private learnings, engagement records, plans, offline-analysis manifests and input snapshots, evidence, managed upstream installations, content-addressed tool archives, managed tool staging and runtimes, installation receipts, and Treehouse's private state root. Project contracts can contain repository and deployment references even though general status and observer responses omit those details.
 
 Keep upstream telemetry disabled in interactive shells as well as bootstrap runs. Add these values to the WSL shell profile used for GATE:
 
@@ -154,6 +154,27 @@ For npm upstreams, this verifies the committed dependency-lock digest recorded i
 
 `gate upstream sync` always builds a fresh staged source clone with system and global Git configuration and templates isolated, verifies it against the locked commit, then atomically replaces the managed checkout. Full readiness compares the commit tree, index, and raw worktree bytes and rejects Git replacement mechanisms, hidden index flags, and every extra path, including ignored files and empty directories. Submodules are not initialized in v0.1 and therefore fail source readiness. Do not keep local work in a GATE-managed upstream checkout.
 
+### Install the managed core tools
+
+GATE has exact reviewed release locks for `subfinder`, `dnsx`, `httpx`, `katana`, `naabu`, `ffuf`, and `nuclei`. The `core` profile selects those seven tools. Review the effects for an individual tool, cache the exact release artifacts, install them into private state, and then rerun current-byte and live smoke verification:
+
+```bash
+./bin/gate.mjs tool plan subfinder --json
+./bin/gate.mjs tool prefetch --profile core --json
+./bin/gate.mjs tool install --profile core --json
+./bin/gate.mjs tool verify --profile core --json
+```
+
+Each of `prefetch`, `install`, `verify`, and `remove` accepts either one tool ID, such as `tool install ffuf`, or exactly one `--profile ID`. A profile operation keeps every per-tool result and exits nonzero when any selected runtime remains unresolved; inspect `unresolved` rather than treating partial installation as success. `tool remove ID|--profile ID` atomically retires installed runtimes and receipts while retaining the content-addressed archive cache; the next reuse rechecks its exact size and SHA-256.
+
+The lock binds each catalog-entry digest, version, full source commit, release and checksum evidence, artifact URL and size, archive and executable SHA-256, exact safe archive members, supported platform, and smoke arguments and limits. It contains artifacts for `linux-x64`, `linux-arm64`, `darwin-x64`, and `darwin-arm64`. `prefetch` verifies the downloaded archive bytes without executing the tool. Activation is currently Linux/WSL2 only: `install` and `verify` launch the exact executable with no shell inside a Bubblewrap-created zero-network namespace, then apply `prlimit` inside that namespace. macOS artifacts can be prefetched, but installation remains unresolved until GATE has an equivalent reviewed zero-egress smoke sandbox. Native Windows is not in this lock.
+
+The installer uses a private content-addressed cache under `GATE_HOME/tool-cache/sha256`, stages an exact two-file runtime tree under `GATE_HOME/tool-runtimes/.staging`, smoke-tests it, and atomically publishes `bin/TOOL` plus `install.json` under `GATE_HOME/tool-runtimes/TOOL`. Archive traversal, links, devices, duplicate or case-colliding names, unreviewed extra members, size or digest drift, catalog drift, and executable drift fail closed. A receipt records evidence but cannot re-anchor changed bytes.
+
+`tool list --profile core` is the cheap view: it performs no process execution or network access and treats an installation receipt as receipt-only evidence. Broader inventory can run an existing adapter's capability probe. `tool plan ID`, `tool verify`, and `doctor --full` rehash the installed executable and rerun its bounded zero-egress smoke. Normal `status` and `doctor` rehash current bytes but rely on the smoke evidence bound at install time. `gate status`, `gate doctor`, and the cockpit expose catalog, locked, installed, verified, executable, and unresolved counts. `executable` remains zero after all seven verify because workflow-phase admission is still unavailable; `unresolved` is a full-catalog readiness count, not a failed-install count.
+
+Installing a runtime never grants target authority or execution admission. All seven core binaries remain invocation-blocked after live verification until a reviewed workflow-phase adapter binds each action and argument shape. `naabu` additionally needs a reviewed raw-network privilege adapter, and `nuclei` additionally needs its separately versioned template dependency admitted. A future active adapter must still require the exact engagement, tool allowlist, target/action check, and applicable confirmation. The other 119 catalog entries remain on their documented native, GUI, hardware, OCI, Python, Node, Java, source-build, or external installation lanes.
+
 ### Bootstrap the first No Mistakes config
 
 No Mistakes reads repository controls from the fetched default branch, so a new `.no-mistakes.yaml` cannot govern the same pull request that introduces it. Run that first review with `--no-publish-intent`; independently run `npm ci --ignore-scripts`, `npm test`, and `npm run check`; manually review the complete diff and policy; and require normal CI. Treat the config as authoritative only after the pull request merges and the default branch is fetched again. Later config changes also take effect only after they are merged and trusted on the fetched default branch.
@@ -164,6 +185,7 @@ From Windows PowerShell, the equivalent launcher is:
 
 ```powershell
 .\scripts\bootstrap.ps1 -Distribution Ubuntu-24.04
+.\scripts\bootstrap.ps1 -Distribution Ubuntu-24.04 -InstallCoreTools
 .\scripts\smoke.ps1 -Distribution Ubuntu-24.04
 ```
 
@@ -191,7 +213,7 @@ codex -C "$HOME/src/GATE" --add-dir "$GATE_HOME" \
   --sandbox workspace-write --ask-for-approval on-request --search
 ```
 
-In v0.1, any process with write access to all of `GATE_HOME` can change project records, offline snapshots and manifests, engagement records, unsigned approval receipts, active-execution manifests, claims, stop records, run metadata, and evidence. It can therefore forge or erase local authority and execution provenance by rewriting the trust domain. Exclusive files and hashes provide workflow consistency against ordinary races and reuse; they do not protect state from its same-user owner. Managed-upstream bytes remain anchored to the reviewed repository locks rather than their writable installation receipts. Keep credential values outside this broad writable root in an OS secret store or narrowly permissioned file, and use symbolic references in GATE state.
+In v0.1, any process with write access to all of `GATE_HOME` can change project records, offline snapshots and manifests, engagement records, unsigned approval receipts, active-execution manifests, claims, stop records, run metadata, evidence, managed tool caches and runtimes, and installation receipts. It can therefore forge or erase local authority and execution provenance by rewriting the trust domain. Exclusive files and hashes provide workflow consistency against ordinary races and reuse; they do not protect state from its same-user owner. Managed-upstream bytes remain anchored to `locks/upstreams.lock.json`, and managed tool bytes remain anchored to `locks/tool-runtimes.lock.json` plus the bound catalog entry, rather than to writable installation receipts. Keep credential values outside this broad writable root in an OS secret store or narrowly permissioned file, and use symbolic references in GATE state.
 
 Operations that need Npcap, a debugger, a certificate store, USB, or another host capability are operator-run native operations today. Record their versions, exact commands, and bounded evidence manually. Narrow native capability providers and their event bridges are a target design; v0.1 does not supply them.
 
@@ -201,9 +223,12 @@ Run the smoke suite after a runtime, dependency, or host change:
 
 ```bash
 ./scripts/smoke.sh
+./scripts/smoke.sh --require-core-tools
+# Equivalent for automation:
+GATE_REQUIRE_CORE_TOOLS=1 ./scripts/smoke.sh
 ```
 
-The smoke suite validates schemas and pins, runs the tests, verifies required CLIs, exercises status and catalog reads, and reports only the presence of optional executables such as Docker. It does not execute optional tools or probe the Docker engine.
+The base smoke validates schemas and pins, runs the tests, verifies required CLIs, exercises static status and catalog reads, and reports only the presence of optional executables such as Docker. It does not execute unmanaged optional tools or probe the Docker engine. `--require-core-tools` and `GATE_REQUIRE_CORE_TOOLS=1` additionally require a nonempty installed core pack, a `doctor --full` current-byte and live zero-egress-smoke result, and matching static status evidence. The `--install-core-tools` bootstrap option enables that assertion automatically after all seven installations succeed.
 
 ## 5. Register a project and verify Treehouse
 
@@ -313,7 +338,7 @@ A proprietary client or other proprietary artifact must be lawfully supplied by 
 
 ## Run a supervised security tool
 
-The generic execution lane requires Linux or WSL2 with `/proc` mounted, an installed catalog command discoverable on `PATH` with `commandIdentity.genericLaneAdmission: path-discovery` and a supported host, a receipt-bound `scope.environment: host`, and receipt-approved `gate-home` because raw evidence always lands there. It rejects container, rootless-container, VM, and remote-lab engagements because it does not create those environments. Add the exact tool ID, host environment, and data destination when creating the engagement:
+The generic execution lane requires Linux or WSL2 with `/proc` mounted, an installed catalog command discoverable on `PATH` whose `commandIdentity.genericLaneAdmission` is `path-discovery`, a receipt-bound `scope.environment: host`, and receipt-approved `gate-home` because raw evidence always lands there. Verified managed core runtimes remain blocked from this lane until reviewed workflow-phase adapters exist. The lane rejects container, rootless-container, VM, and remote-lab engagements because it does not create those environments. Add the exact tool ID, host environment, and data destination when creating the engagement:
 
 Nmap is a planning example: `./bin/gate.mjs tool plan nmap --json` reports its requirements. It remains blocked from generic execution pending reviewed runtime admission, even if installed and engagement-approved.
 
@@ -392,15 +417,15 @@ Install host-integrated tools from their official distribution channels. At mini
 - Sysinternals and WinDbg for Windows process, filesystem, and debugger evidence;
 - Android platform tools when a mobile engagement needs USB or ADB.
 
-The target design treats each native program as a provider: a probe records its executable path and version, and an adapter supplies explicit arguments and evidence destinations. v0.1 provides catalog metadata and filesystem-only executable discovery, but it does not verify the discovered version, integrity, or provenance. Compatible Linux/WSL2 command-line tools can use the supervised generic lane only when the catalog permits PATH discovery for that command identity. A `reviewed-admission` entry remains `identity-unverified` and blocked even when a namesake is present. This prevents Python HTTPX from being mistaken for ProjectDiscovery httpx and keeps broad REA commands outside the fixed offline adapter. Native Windows and host-specific GUI or hardware paths still need a reviewed adapter or an operator-run step with bounded evidence. Do not add an entire installation directory to prompts or grant an agent an unrestricted shell merely because the program is installed.
+The target design treats each native program as a provider: a probe records its executable path and version, and an adapter supplies explicit arguments and evidence destinations. v0.1 verifies the exact bytes and version smoke of seven managed core runtimes, while other catalog entries have metadata and filesystem-only executable discovery. Compatible Linux/WSL2 PATH commands can use the supervised generic lane only when the catalog permits PATH discovery for that command identity. A `reviewed-admission` PATH entry remains `identity-unverified` and blocked even when a namesake is present. This prevents Python HTTPX from being mistaken for ProjectDiscovery httpx; the exact managed ProjectDiscovery release is byte-verified but also invocation-blocked until a workflow-phase adapter exists. Broad REA commands remain outside the fixed offline adapter. Native Windows and host-specific GUI or hardware paths still need a reviewed adapter or an operator-run step with bounded evidence. Do not add an entire installation directory to prompts or grant an agent an unrestricted shell merely because the program is installed.
 
 Kali can be added later as a named WSL distribution or pinned container image. It is a compatibility toolbox, not GATE's version source. The catalog and lock records remain authoritative for the tools an agent may select.
 
 ## Cloud environment
 
-Codex cloud is suitable for repository edits, tests, builds, static analysis, and offline evidence processing when the selected image provides the required CLIs. Run the preflight on each image rather than assuming Node, npm, GitHub CLI, Codex CLI, Python, Bubblewrap, or Docker is present. The base bootstrap and tests can use a worker-local writable `GATE_HOME` such as `/tmp/gate`. `analysis capability` performs cheap file-presence checks and a real minimal Bubblewrap namespace launch; manifest creation and execution perform the expensive managed-REA integrity reconstruction and runtime hashing.
+Codex cloud is suitable for repository edits, tests, builds, static analysis, and offline evidence processing when the selected image provides the required CLIs. Run the preflight on each image rather than assuming Node, npm, GitHub CLI, Codex CLI, Python, Bubblewrap, `prlimit`, or Docker is present. The base bootstrap and tests can use a worker-local writable `GATE_HOME` such as `/tmp/gate`. `analysis capability` performs cheap file-presence checks and a real minimal Bubblewrap namespace launch; manifest creation and execution perform the expensive managed-REA integrity reconstruction and runtime hashing. A worker can expose `/usr/bin/bwrap` while blocking unprivileged user namespaces, so a real namespace smoke remains required. Report managed core activation as unavailable when that launch fails; do not replace it with an unsandboxed version command.
 
-Managed cloud workers may lack raw sockets, packet interfaces, debugger attachment, USB devices, kernel capabilities, and unrestricted target routing. In v0.1, `gate doctor --full` reports the OS, architecture, WSL detection, repository validation, presence-only results for optional executables, visible non-loopback interfaces, Linux `CAP_NET_RAW` and `CAP_NET_ADMIN`, Yama `ptrace_scope`, `/dev/bus/usb` presence, and whether the default Linux Docker socket path exists. It deliberately leaves Docker-engine reachability unprobed and does not execute optional tools. Those facts do not prove that debugger attachment, a specific capture, USB hardware, Docker, or target routing works. They also do not make generic execution egress-restricted: target-argument binding cannot prevent redirects, plug-ins, child processes, or the tool itself from contacting other systems. Probe the exact required capability before planning work and record an unavailable result when it cannot run. Live capture, interception of Windows applications, device analysis, and low-level active testing should remain on a deliberately configured laptop or lab until a narrow provider exists.
+Managed cloud workers may lack raw sockets, packet interfaces, debugger attachment, USB devices, kernel capabilities, and unrestricted target routing. In v0.1, `gate doctor --full` reports the OS, architecture, WSL detection, repository validation, managed-runtime counts and a live smoke result for every installed locked runtime, presence-only results for other optional executables, visible non-loopback interfaces, Linux `CAP_NET_RAW` and `CAP_NET_ADMIN`, Yama `ptrace_scope`, `/dev/bus/usb` presence, and whether the default Linux Docker socket path exists. It deliberately leaves Docker-engine reachability unprobed and does not execute unmanaged optional tools. Those facts do not prove that debugger attachment, a specific capture, USB hardware, Docker, or target routing works. They also do not make generic execution egress-restricted: target-argument binding cannot prevent redirects, plug-ins, child processes, or the tool itself from contacting other systems. Probe the exact required capability before planning work and record an unavailable result when it cannot run. Live capture, interception of Windows applications, device analysis, and low-level active testing should remain on a deliberately configured laptop or lab until a narrow provider exists.
 
 Example cloud smoke run:
 
@@ -434,6 +459,16 @@ node ./bin/gate.mjs tool plan TOOL_ID --json
 ```
 
 Use the catalog's installation lane. Record any setup failure or compatibility workaround as a cause-to-change learning before promoting it into the shared defaults.
+
+For one of the seven locked core tools, distinguish an absent runtime, receipt-only state, byte drift, and a smoke failure with the managed commands:
+
+```bash
+./bin/gate.mjs tool list --profile core --json
+./bin/gate.mjs tool plan TOOL_ID --json
+./bin/gate.mjs tool verify TOOL_ID --json
+```
+
+Reinstall only after reviewing the plan. A proxy-configured release download uses protected system `curl` with bounded manual redirects restricted to the reviewed GitHub release hosts; direct downloads use the same HTTPS host allowlist and redirect ceiling. Do not disable TLS or change a locked digest to make a download pass. Install publication failures roll back atomically. Removal atomically retires a runtime from its active path; restoration after a deletion failure is best effort. On Linux, GATE conservatively reclaims a process- and boot-bound lock only when its owner is definitively dead; it also reclaims an ownerless lock directory after a 60-second grace period. Non-Linux process ownership remains indeterminate. `SIGKILL` or power loss can still leave orphaned staging or `.previous-*` directories that need manual reconciliation inside the private `GATE_HOME`, but they do not block later installs. If a mutation lock remains indeterminate, prove no process still owns it rather than deleting it blindly.
 
 If `analysis capability` reports Bubblewrap or `rea-stable` unavailable, install the missing system package or managed upstream and rerun capability:
 

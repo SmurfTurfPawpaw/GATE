@@ -5,6 +5,7 @@ import { readJson } from "./config.mjs";
 import { runtimePaths } from "./paths.mjs";
 import { pentestWorkflowSemanticErrors } from "./pentest-workflow.mjs";
 import { validateDocument } from "./schema.mjs";
+import { validateToolRuntimeContract } from "./tool-runtimes.mjs";
 
 const riskClassOrder = new Map(["P0", "P1", "A1", "A2", "A3"].map((value, index) => [value, index]));
 
@@ -30,6 +31,7 @@ export function validateRepository(options = {}) {
     "README.md",
     "SECURITY.md",
     "locks/upstreams.lock.json",
+    "locks/tool-runtimes.lock.json",
     "catalog/security-tools.json"
   ];
   for (const relative of required) {
@@ -175,6 +177,7 @@ export function validateRepository(options = {}) {
   const documents = [
     ["config/gate.config.json", "gate-config.schema.json"],
     ["locks/upstreams.lock.json", "upstream-lock.schema.json"],
+    ["locks/tool-runtimes.lock.json", "tool-runtime-lock.schema.json"],
     ["policies/autonomy.json", "autonomy-policy.schema.json"],
     ["policies/data-handling.json", "data-policy.schema.json"],
     ["policies/engagements.json", "engagement-policy.schema.json"],
@@ -207,6 +210,8 @@ export function validateRepository(options = {}) {
       checks.push(result(`contract:${relative}`, false, error.message));
     }
   }
+
+  checks.push(...validateToolRuntimeContract({ paths }));
 
 
   const learningLog = path.join(paths.repo, "memory", "learnings.jsonl");

@@ -567,6 +567,83 @@ test("offline retention projection preserves aggregate fault signals and discard
   assert.equal(JSON.stringify(invalidLockText).includes("SNAPSHOT_CANARY"), false);
 });
 
+test("managed runtime projection preserves safe readiness metadata and rejects private fields", () => {
+  const status = sanitizeStatusPayload({
+    toolRuntimes: {
+      ok: true,
+      verificationMode: "current-bytes-and-install-smoke-evidence",
+      platform: "linux-x64",
+      catalog: 2,
+      locked: 2,
+      installed: 1,
+      verified: 1,
+      executable: 1,
+      unresolved: 1,
+      unresolvedConstraints: [
+        { reason: "managed-runtime-absent", count: 1, path: "/private/CONSTRAINT_CANARY" },
+        { reason: "https://target.invalid/REASON_CANARY", count: 900 }
+      ],
+      tools: [{
+        id: "searchsploit",
+        name: "SearchSploit / ExploitDB",
+        state: "verified-install-evidence",
+        locked: true,
+        installed: true,
+        verified: true,
+        executable: true,
+        reasons: ["reviewed-data-dependencies-unavailable", "/private/REASON_PATH_CANARY"],
+        path: "/private/TOOL_PATH_CANARY",
+        sha256: "TOOL_HASH_CANARY",
+        url: "https://target.invalid/TOOL_URL_CANARY"
+      }]
+    }
+  });
+
+  assert.deepEqual(status.toolRuntimes, {
+    ok: true,
+    verificationMode: "current-bytes-and-install-smoke-evidence",
+    platform: "linux-x64",
+    catalog: 2,
+    locked: 2,
+    installed: 1,
+    verified: 1,
+    executable: 1,
+    unresolved: 1,
+    unresolvedConstraints: [{ reason: "managed-runtime-absent", count: 1 }],
+    tools: [{
+      id: "searchsploit",
+      name: "SearchSploit / ExploitDB",
+      state: "verified-install-evidence",
+      locked: true,
+      installed: true,
+      verified: true,
+      executable: true,
+      reasons: ["reviewed-data-dependencies-unavailable"]
+    }]
+  });
+  const serialized = JSON.stringify(status.toolRuntimes);
+  for (const canary of [
+    "CONSTRAINT_CANARY", "target.invalid", "REASON_CANARY", "REASON_PATH_CANARY",
+    "TOOL_PATH_CANARY", "TOOL_HASH_CANARY", "TOOL_URL_CANARY"
+  ]) assert.equal(serialized.includes(canary), false, `dashboard model leaked ${canary}`);
+
+  const fullCatalog = sanitizeStatusPayload({
+    toolRuntimes: {
+      tools: Array.from({ length: 126 }, (_, index) => ({
+        id: `tool-${String(index).padStart(3, "0")}`,
+        name: `Tool ${index}`,
+        state: "unmanaged",
+        locked: false,
+        installed: false,
+        verified: false,
+        executable: false,
+        reasons: ["reviewed-runtime-lock-unavailable"]
+      }))
+    }
+  });
+  assert.equal(fullCatalog.toolRuntimes.tools.length, 126);
+});
+
 test("event limit keeps the newest records regardless of source ordering", () => {
   const events = Array.from({ length: 110 }, (_, index) => ({
     id: `evt_record_${String(index).padStart(3, "0")}`,

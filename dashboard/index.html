@@ -193,6 +193,42 @@
       <p class="execution-note" id="offline-analysis-note">Artifact identity, paths, evidence, output, and confirmations stay private.</p>
     </section>
 
+    <section class="panel tool-runtime-overview" id="tool-runtime-panel" tabindex="-1" aria-labelledby="tool-runtime-title">
+      <header class="panel-header compact">
+        <div>
+          <p class="eyebrow">Pinned local capabilities</p>
+          <h2 id="tool-runtime-title">Managed tool runtimes</h2>
+        </div>
+        <span class="source-badge" id="tool-runtime-health">Unknown</span>
+      </header>
+      <div class="tool-runtime-body">
+        <dl class="tool-runtime-facts">
+          <div><dt>Verification</dt><dd id="tool-runtime-mode">Unknown</dd></div>
+          <div><dt>Platform</dt><dd id="tool-runtime-platform">Unknown</dd></div>
+          <div><dt>Catalog</dt><dd id="tool-runtime-catalog">—</dd></div>
+          <div><dt>Locked</dt><dd id="tool-runtime-locked">—</dd></div>
+          <div><dt>Installed</dt><dd id="tool-runtime-installed">—</dd></div>
+          <div><dt>Verified</dt><dd id="tool-runtime-verified">—</dd></div>
+          <div><dt>Executable</dt><dd id="tool-runtime-executable">—</dd></div>
+          <div><dt>Unresolved</dt><dd id="tool-runtime-unresolved">—</dd></div>
+        </dl>
+        <section class="tool-runtime-constraints unavailable" aria-labelledby="tool-runtime-constraints-title">
+          <h3 id="tool-runtime-constraints-title">Unresolved constraints</h3>
+          <ul class="capability-list unavailable" id="tool-runtime-constraints"><li class="empty">Awaiting status</li></ul>
+        </section>
+        <section class="tool-runtime-inventory" aria-labelledby="tool-runtime-inventory-title">
+          <header>
+            <h3 id="tool-runtime-inventory-title">Runtime inventory</h3>
+            <span id="tool-runtime-count">0</span>
+          </header>
+          <ol id="tool-runtime-list">
+            <li class="execution-run-empty">No managed runtime metadata observed</li>
+          </ol>
+        </section>
+      </div>
+      <p class="execution-note">Runtime readiness is local evidence only. Target contact still requires engagement authority and an approved execution manifest.</p>
+    </section>
+
     <main class="workspace" id="workspace">
       <section class="panel fleet-panel" id="fleet-panel" tabindex="-1" aria-labelledby="fleet-title">
         <header class="panel-header">
@@ -325,6 +361,7 @@
           <div><dt><kbd>4</kbd></dt><dd>Focus resource posture</dd></div>
           <div><dt><kbd>5</kbd></dt><dd>Focus learning log</dd></div>
           <div><dt><kbd>6</kbd></dt><dd>Focus offline analysis</dd></div>
+          <div><dt><kbd>7</kbd></dt><dd>Focus managed tool runtimes</dd></div>
           <div><dt><kbd>/</kbd></dt><dd>Filter safe activity metadata</dd></div>
           <div><dt><kbd>R</kbd></dt><dd>Refresh all endpoints</dd></div>
           <div><dt><kbd>P</kbd></dt><dd>Pause or resume live updates</dd></div>

@@ -37,6 +37,8 @@ export function runtimePaths(options = {}) {
   const repo = path.resolve(options.repo || findRepoRoot(options.cwd));
   const executions = path.join(home, "executions");
   const offlineAnalyses = path.join(home, "offline-analysis");
+  const toolRuntimes = path.join(home, "tool-runtimes");
+  const toolCache = path.join(home, "tool-cache");
   return {
     repo,
     home,
@@ -65,6 +67,10 @@ export function runtimePaths(options = {}) {
     projects: path.join(home, "projects"),
     upstreams: path.join(home, "upstreams"),
     upstreamTools: path.join(home, "upstream-tools"),
+    toolRuntimes,
+    toolRuntimeStaging: path.join(toolRuntimes, ".staging"),
+    toolCache,
+    toolArtifactCache: path.join(toolCache, "sha256"),
     privateLearnings: path.join(home, "memory", "private", "learnings.jsonl"),
     publicLearningRecords: path.join(repo, "memory", "learnings.jsonl"),
     publicLearnings: path.join(repo, "memory", "LEARNINGS.md")
@@ -154,6 +160,10 @@ export function ensureRuntime(paths) {
     paths.projects,
     paths.upstreams,
     paths.upstreamTools,
+    paths.toolRuntimes,
+    paths.toolRuntimeStaging,
+    paths.toolCache,
+    paths.toolArtifactCache,
     path.join(home, "cache"),
     path.join(home, "cache", "npm"),
     paths.privateLearnings ? path.dirname(paths.privateLearnings) : null
@@ -242,6 +252,27 @@ export function ensureRuntime(paths) {
       securePrivateDirectory(path.join(directory, entry), {
         create: false,
         label: `managed upstream directory ${entry}`
+      });
+    }
+  }
+
+  // Runtime installations are private, content-verified trees. The staging
+  // directory is internal bookkeeping rather than an installed tool.
+  if (paths.toolRuntimes) {
+    for (const entry of fs.readdirSync(paths.toolRuntimes)) {
+      if (entry === ".staging") continue;
+      securePrivateDirectory(path.join(paths.toolRuntimes, entry), {
+        create: false,
+        label: `managed tool runtime ${entry}`
+      });
+    }
+  }
+
+  if (paths.toolArtifactCache) {
+    for (const entry of fs.readdirSync(paths.toolArtifactCache)) {
+      securePrivateFile(path.join(paths.toolArtifactCache, entry), {
+        allowMissing: false,
+        label: `managed tool artifact ${entry}`
       });
     }
   }

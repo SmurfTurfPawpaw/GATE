@@ -5,6 +5,12 @@ import { readJson } from "./config.mjs";
 import { offlineAnalysisCapability } from "./offline-analysis.mjs";
 import { runtimePaths } from "./paths.mjs";
 import { readPrivateFileBounded } from "./private-fs.mjs";
+import {
+  managedToolPlan,
+  managedToolReceiptStatus,
+  readToolRuntimeLock,
+  verifyManagedTool
+} from "./tool-runtimes.mjs";
 import { readUpstreamLock, resolveUpstreamBinary } from "./upstreams.mjs";
 
 const MAX_INSTALL_RECEIPT_BYTES = 64 * 1024;
@@ -277,19 +283,58 @@ function resolvedTool(tool, paths, host, options) {
   const acceptsPathDiscovery = identity.genericLaneAdmission === "path-discovery";
   const dataDependencyAdmissionRequired = Array.isArray(tool.dataDependencies) && tool.dataDependencies.length > 0;
   const compatible = tool.supportedHosts.includes(host);
+  const runtimeEntry = options.runtimeEntries?.get(tool.id) || null;
+  let managedRuntime = null;
+  if (runtimeEntry) {
+    if (paths.toolRuntimes) {
+      managedRuntime = options.verifyManagedIntegrity === true
+        ? verifyManagedTool(tool.id, { ...options, paths })
+        : managedToolReceiptStatus(tool.id, { ...options, paths });
+    } else {
+      managedRuntime = {
+        id: tool.id,
+        toolId: tool.id,
+        locked: true,
+        installed: false,
+        verified: false,
+        executable: null,
+        state: "absent",
+        version: runtimeEntry.version,
+        reasons: ["managed-runtime-path-unavailable"]
+      };
+    }
+  }
+  const managedRuntimeVerified = Boolean(managedRuntime?.verified && managedRuntime?.executable);
+  const privilegeAdapterRequired = tool.privileges.some((value) => value !== "user");
+  // A reviewed release establishes byte identity. It does not establish that a
+  // catalog command is safe for every workflow phase, action, or argv shape.
+  // Managed runtimes therefore remain invocation candidates until a reviewed
+  // phase-specific adapter/admission binds those semantics.
+  const managedRuntimeAdmissionRequired = managedRuntimeVerified;
   const managedAdapterStatuses = managedAdapterStatus(tool, paths, host, environment, options);
   const receiptManagedAdapter = managedAdapterStatuses.find((adapter) => adapter.receiptPresent) || null;
   const verifiedManagedAdapter = managedAdapterStatuses.find((adapter) => adapter.upstreamVerified) || null;
   const readyManagedAdapters = managedAdapterStatuses.filter((adapter) => adapter.ready);
-  const genericLaneEligible = Boolean(commandCandidate) && acceptsPathDiscovery && compatible &&
+  const pathGenericLaneEligible = Boolean(commandCandidate) && acceptsPathDiscovery && compatible &&
     new Set(["linux", "wsl2"]).has(host);
+  const genericLaneEligible = !managedRuntimeVerified && pathGenericLaneEligible;
   const executionModes = [
     ...(genericLaneEligible ? ["supervised-generic"] : []),
     ...readyManagedAdapters.map((adapter) => adapter.mode)
   ];
-  const installed = Boolean(receiptManagedAdapter || verifiedManagedAdapter || (commandCandidate && acceptsPathDiscovery));
+  const installed = Boolean(
+    managedRuntime?.installed || receiptManagedAdapter || verifiedManagedAdapter || (commandCandidate && acceptsPathDiscovery)
+  );
   const readiness = readyManagedAdapters.length
     ? "adapter-ready"
+    : managedRuntimeVerified
+      ? dataDependencyAdmissionRequired
+        ? "managed-verified-data-required"
+        : privilegeAdapterRequired
+          ? "managed-verified-adapter-required"
+          : "managed-verified-admission-required"
+      : managedRuntime?.installed
+        ? "managed-receipt"
     : verifiedManagedAdapter
       ? "managed-verified"
       : receiptManagedAdapter
@@ -299,13 +344,25 @@ function resolvedTool(tool, paths, host, options) {
           : commandCandidate
             ? "discovered"
             : "candidate";
-  const executable = verifiedManagedAdapter?.executable || (acceptsPathDiscovery ? commandCandidate : null);
-  const next = genericLaneEligible
+  const executable = managedRuntimeVerified
+    ? managedRuntime.executable
+    : verifiedManagedAdapter?.executable || (acceptsPathDiscovery ? commandCandidate : null);
+  const next = managedRuntimeVerified && dataDependencyAdmissionRequired
+      ? "Admit the reviewed data dependencies before creating an execution manifest."
+      : managedRuntimeVerified && privilegeAdapterRequired
+        ? "Use a reviewed privilege-aware adapter before creating an execution manifest."
+        : managedRuntimeAdmissionRequired
+          ? "Add a reviewed workflow-phase adapter that binds action and argv semantics before creating an execution manifest."
+        : genericLaneEligible
     ? "Prepare a one-shot supervised execution manifest; launch-time hashing proves executable identity, not trusted provenance."
     : readyManagedAdapters.length
       ? `Use the reviewed ${readyManagedAdapters[0].mode} adapter; broader ${tool.name} capability remains unadmitted.`
       : commandCandidate && !acceptsPathDiscovery
         ? "Admit a pinned executable or reviewed adapter; this command name alone is not accepted as product identity."
+        : managedRuntime?.installed
+          ? `Run gate tool verify ${tool.id}; a receipt alone never admits execution.`
+          : runtimeEntry
+            ? `Run gate tool install ${tool.id} to materialize its reviewed release.`
         : verifiedManagedAdapter
           ? "Restore the fixed adapter host prerequisites before execution; the managed upstream alone does not grant broad execution."
           : receiptManagedAdapter
@@ -323,9 +380,13 @@ function resolvedTool(tool, paths, host, options) {
     executable,
     commandCandidate,
     readiness,
-    versionVerified: Boolean(verifiedManagedAdapter),
-    integrityVerified: Boolean(verifiedManagedAdapter),
-    knownGoodProvenance: Boolean(verifiedManagedAdapter),
+    versionVerified: managedRuntimeVerified || Boolean(verifiedManagedAdapter),
+    integrityVerified: managedRuntimeVerified || Boolean(verifiedManagedAdapter),
+    knownGoodProvenance: managedRuntimeVerified || Boolean(verifiedManagedAdapter),
+    managedRuntime,
+    managedRuntimeLocked: Boolean(runtimeEntry),
+    managedRuntimeVerified,
+    managedRuntimeAdmissionRequired,
     adapterConfigured: managedAdapterStatuses.length > 0,
     adapterReady: readyManagedAdapters.length > 0,
     managedAdapterStatus: managedAdapterStatuses,
@@ -333,10 +394,12 @@ function resolvedTool(tool, paths, host, options) {
     dataDependencyReadiness: dataDependencyAdmissionRequired ? "admission-required" : "not-declared",
     identityAdmissionRequired: !acceptsPathDiscovery,
     genericLaneEligible,
-    broadCapabilityReady: genericLaneEligible,
+    broadCapabilityReady: genericLaneEligible && !managedRuntimeAdmissionRequired,
     executionModes,
     executionMode: executionModes[0] || null,
     executionAvailable: executionModes.length > 0,
+    targetAuthority: "engagement-receipt-required",
+    installationGrantsAuthority: false,
     next
   };
 }
@@ -389,15 +452,29 @@ export function toolInventory(options = {}) {
   const profile = options.profile ? loadToolProfile(options.profile, { paths, catalog }) : null;
   const selected = profile ? new Set(profile.toolIds) : null;
   const host = currentHost();
+  let runtimeEntries = new Map();
+  try {
+    const runtimeLock = options.runtimeLock || readToolRuntimeLock({ paths }).lock;
+    runtimeEntries = new Map(runtimeLock.runtimes.map((entry) => [entry.toolId, entry]));
+  } catch {
+    // Inventory remains available when the optional runtime lock is invalid;
+    // repository validation and tool plan surface the lock error explicitly.
+  }
   const tools = catalog.tools
     .filter((tool) => !selected || selected.has(tool.id))
     .filter((tool) => !options.category || tool.category === options.category)
-    .map((tool) => resolvedTool(tool, paths, host, options));
+    .map((tool) => resolvedTool(tool, paths, host, { ...options, runtimeEntries }));
   return {
     host,
     profile: profile ? { id: profile.id, description: profile.description, maxRiskClass: profile.maxRiskClass } : null,
     count: tools.length,
+    locked: tools.filter((tool) => tool.managedRuntimeLocked).length,
     installed: tools.filter((tool) => tool.installed).length,
+    receiptOnly: tools.filter((tool) => tool.managedRuntime?.state === "receipt-only").length,
+    verified: tools.filter((tool) => tool.integrityVerified).length,
+    executable: tools.filter((tool) => tool.executionAvailable).length,
+    unresolved: tools.filter((tool) => !tool.executionAvailable).length,
+    verificationMode: options.verifyManagedIntegrity === true ? "full" : "receipt-only",
     tools
   };
 }
@@ -406,13 +483,33 @@ export function toolPlan(id, options = {}) {
   const { paths, catalog } = loadToolCatalog(options);
   const tool = catalog.tools.find((candidate) => candidate.id === id);
   if (!tool) throw new Error(`unknown security tool: ${id}`);
+  let runtimeEntries = new Map();
+  try {
+    const runtimeLock = options.runtimeLock || readToolRuntimeLock({ paths }).lock;
+    runtimeEntries = new Map(runtimeLock.runtimes.map((entry) => [entry.toolId, entry]));
+  } catch {
+    // managedToolPlan below returns the exact invalid-lock diagnostic.
+  }
   const resolved = resolvedTool(tool, paths, currentHost(), {
     ...options,
+    runtimeEntries,
     verifyManagedIntegrity: options.verifyManagedIntegrity !== false
   });
+  let runtimePlan = null;
+  try {
+    runtimePlan = managedToolPlan(id, {
+      ...options,
+      paths,
+      verify: options.verifyManagedIntegrity !== false,
+      verification: options.verifyManagedIntegrity !== false ? resolved.managedRuntime : null
+    });
+  } catch (error) {
+    runtimePlan = { ok: false, state: "invalid-lock", reasons: [String(error.message || error)] };
+  }
   return {
     ...resolved,
-    preferredLane: tool.installLanes[0],
-    alternateLanes: tool.installLanes.slice(1)
+    preferredLane: runtimeEntries.has(id) ? "managed-verified-release" : tool.installLanes[0],
+    alternateLanes: runtimeEntries.has(id) ? tool.installLanes : tool.installLanes.slice(1),
+    runtimePlan
   };
 }
