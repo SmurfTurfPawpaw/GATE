@@ -671,6 +671,9 @@ function semanticProfileErrors(value, paths) {
     if (typeof answer === "string" && !meaningfulText(answer)) {
       errors.push(`${question.path} must contain visible text when ready`);
     }
+    if (question.path === "architecture.unknowns" && !programProfileQuestionAnswerIsComplete(question, answer)) {
+      errors.push(`${question.path} must contain visible text in every supplied entry when ready`);
+    }
   }
 
   for (const sectionId of PROGRAM_PROFILE_SECTION_IDS) {
@@ -779,6 +782,9 @@ function meaningfulStructuredAnswer(value) {
 }
 
 export function programProfileQuestionAnswerIsComplete(question, value) {
+  if (question?.path === "architecture.unknowns") {
+    return Array.isArray(value) && value.every((entry) => typeof entry === "string" && meaningfulText(entry));
+  }
   if (value === undefined) return false;
   if (value === null) return question?.allowNull === true;
   if (typeof value === "string") return meaningfulText(value);

@@ -20,6 +20,7 @@ import {
   assertValidProgramProfile,
   loadProgramProfileQuestionnaire,
   normalizeProgramProfile,
+  programProfileQuestionAnswerIsComplete,
   validateProgramProfile,
   validateProgramProfileAnswers,
   validateProgramProfileQuestionnaire
@@ -605,6 +606,22 @@ test("applicable required module answers contain non-empty content when ready", 
     note: null
   }];
   assert.equal(validateProgramProfile(explicitOptionalValue, { repo }).ok, true);
+});
+
+test("architecture unknowns require visible supplied entries while allowing an empty list", () => {
+  const question = PROGRAM_PROFILE_QUESTIONS.find((item) => item.path === "architecture.unknowns");
+  for (const unknowns of [[""], [" \t"], ["\u200b"], ["\u200b\u200d"], ["Unverified data flow", "\u200b"]]) {
+    const value = readyProfile();
+    value.architecture.unknowns = unknowns;
+    assert.equal(validateProgramProfile(value, { repo }).ok, false, JSON.stringify(unknowns));
+    assert.equal(programProfileQuestionAnswerIsComplete(question, unknowns), false, JSON.stringify(unknowns));
+  }
+  for (const unknowns of [[], ["The session storage boundary is unverified"]]) {
+    const value = readyProfile();
+    value.architecture.unknowns = unknowns;
+    assert.equal(validateProgramProfile(value, { repo }).ok, true);
+    assert.equal(programProfileQuestionAnswerIsComplete(question, unknowns), true);
+  }
 });
 
 test("ready profiles reject invisible-only text outside conditional modules", () => {
