@@ -55,17 +55,33 @@ export async function readJsonLines(file, {
     const firstCompleteLine = text.indexOf("\n");
     text = firstCompleteLine === -1 ? "" : text.slice(firstCompleteLine + 1);
   }
-  const values = [];
+  const retainedLines = [];
+  let nextLine = 0;
   let parsedLines = 0;
-  for (const line of text.split(/\r?\n/u)) {
+  let lineStart = 0;
+  while (lineStart <= text.length) {
+    const newline = text.indexOf("\n", lineStart);
+    const lineEnd = newline === -1 ? text.length : newline;
+    const contentEnd = lineEnd > lineStart && text[lineEnd - 1] === "\r" ? lineEnd - 1 : lineEnd;
+    const line = text.slice(lineStart, contentEnd);
+    lineStart = newline === -1 ? text.length + 1 : newline + 1;
     if (!line.trim()) continue;
     parsedLines += 1;
+    if (limit > 0) {
+      if (retainedLines.length < limit) retainedLines.push(line);
+      else {
+        retainedLines[nextLine] = line;
+        nextLine = (nextLine + 1) % limit;
+      }
+    }
+  }
+  const values = [];
+  for (let index = 0; index < retainedLines.length; index += 1) {
+    const line = retainedLines[(nextLine + index) % retainedLines.length];
     try {
       values.push(JSON.parse(line));
-      if (values.length > limit) values.shift();
     } catch {
       values.push({ kind: "invalid-jsonl", summary: "A malformed local record was skipped." });
-      if (values.length > limit) values.shift();
     }
   }
   if (metadata && typeof metadata === "object") metadata.limitTruncated = parsedLines > limit;

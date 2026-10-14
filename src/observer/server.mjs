@@ -767,6 +767,7 @@ function summarizeToolRuntime(value) {
     ? rawId
     : null;
   if (!toolId) return null;
+  const evidence = object(runtime.verificationEvidence);
   return {
     id: toolId,
     name: toolRuntimeName(runtime.name),
@@ -775,6 +776,18 @@ function summarizeToolRuntime(value) {
     installed: typeof runtime.installed === "boolean" ? runtime.installed : null,
     verified: typeof runtime.verified === "boolean" ? runtime.verified : null,
     executable: typeof runtime.executable === "boolean" ? runtime.executable : null,
+    ...(evidence ? { verificationEvidence: {
+      kind: safeEnum(evidence.kind, new Set([
+        "installation-receipt",
+        "current-bytes-and-install-smoke-evidence",
+        "current-bytes-and-live-zero-egress-smoke"
+      ]), null),
+      lastVerifiedAt: timestamp(evidence.lastVerifiedAt),
+      ageSeconds: nonNegativeInteger(evidence.ageSeconds),
+      current: typeof evidence.current === "boolean" ? evidence.current : null,
+      currentBytesChecked: typeof evidence.currentBytesChecked === "boolean" ? evidence.currentBytesChecked : null,
+      liveSmokeExecutedNow: typeof evidence.liveSmokeExecutedNow === "boolean" ? evidence.liveSmokeExecutedNow : null
+    } } : {}),
     reasons: toolRuntimeReasons(runtime.reasons)
   };
 }
@@ -799,6 +812,12 @@ export function summarizeToolRuntimes(value) {
   return {
     ok: typeof summary.ok === "boolean" ? summary.ok : null,
     verificationMode: safeEnum(summary.verificationMode, TOOL_RUNTIME_VERIFICATION_MODES, null),
+    ...(typeof summary.currentBytesChecked === "boolean"
+      ? { currentBytesChecked: summary.currentBytesChecked }
+      : {}),
+    ...(nonNegativeInteger(summary.executableHashReads) !== null
+      ? { executableHashReads: nonNegativeInteger(summary.executableHashReads) }
+      : {}),
     platform: safeEnum(summary.platform, TOOL_RUNTIME_PLATFORMS, null),
     catalog: nonNegativeInteger(summary.catalog),
     locked: nonNegativeInteger(summary.locked),

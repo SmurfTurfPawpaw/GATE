@@ -644,6 +644,41 @@ test("managed runtime projection preserves safe readiness metadata and rejects p
   assert.equal(fullCatalog.toolRuntimes.tools.length, 126);
 });
 
+test("managed runtime projection preserves only bounded verification-age evidence", () => {
+  const status = sanitizeStatusPayload({
+    toolRuntimes: {
+      ok: true,
+      verificationMode: "receipt-only",
+      currentBytesChecked: false,
+      executableHashReads: 0,
+      tools: [{
+        id: "nuclei",
+        state: "receipt-only",
+        verificationEvidence: {
+          kind: "installation-receipt",
+          lastVerifiedAt: "2026-10-14T16:00:00.000Z",
+          ageSeconds: 12,
+          current: false,
+          currentBytesChecked: false,
+          liveSmokeExecutedNow: false,
+          receiptPath: "/private/RECEIPT_CANARY"
+        }
+      }]
+    }
+  });
+  assert.equal(status.toolRuntimes.currentBytesChecked, false);
+  assert.equal(status.toolRuntimes.executableHashReads, 0);
+  assert.deepEqual(status.toolRuntimes.tools[0].verificationEvidence, {
+    kind: "installation-receipt",
+    lastVerifiedAt: "2026-10-14T16:00:00.000Z",
+    ageSeconds: 12,
+    current: false,
+    currentBytesChecked: false,
+    liveSmokeExecutedNow: false
+  });
+  assert.equal(JSON.stringify(status).includes("RECEIPT_CANARY"), false);
+});
+
 test("event limit keeps the newest records regardless of source ordering", () => {
   const events = Array.from({ length: 110 }, (_, index) => ({
     id: `evt_record_${String(index).padStart(3, "0")}`,

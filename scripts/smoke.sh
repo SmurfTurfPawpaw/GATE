@@ -100,14 +100,16 @@ if ((REQUIRE_CORE_TOOLS)); then
       return report.tools.filter((tool) => coreIds.has(tool.id) && tool[key] === true).length;
     };
     const live = doctor.toolRuntimes;
-    const staticStatus = status.toolRuntimes;
+    const observerStatus = status.toolRuntimes;
     if (
       live?.verificationMode !== "current-bytes-and-live-zero-egress-smoke" ||
-      staticStatus?.verificationMode !== "current-bytes-and-install-smoke-evidence" ||
+      observerStatus?.verificationMode !== "receipt-only" ||
+      observerStatus?.currentBytesChecked !== false ||
+      observerStatus?.executableHashReads !== 0 ||
       countCore(live, "installed") < 1 ||
       countCore(live, "verified") < 1 ||
-      countCore(staticStatus, "installed") < 1 ||
-      countCore(staticStatus, "verified") < 1
+      countCore(observerStatus, "installed") < 1 ||
+      countCore(observerStatus, "verified") !== 0
     ) process.exit(1);
   ' "${doctor_file}" "${status_file}" "${REPO_ROOT}/config/profiles/core.json" || \
     fail "managed core runtimes are not installed and byte-verified"

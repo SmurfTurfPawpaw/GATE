@@ -479,6 +479,25 @@ export function toolInventory(options = {}) {
   };
 }
 
+export function toolShow(id, options = {}) {
+  const { paths, catalog } = loadToolCatalog(options);
+  const tool = catalog.tools.find((candidate) => candidate.id === id);
+  if (!tool) throw new Error(`unknown security tool: ${id}`);
+  let runtimeEntries = new Map();
+  try {
+    const runtimeLock = options.runtimeLock || readToolRuntimeLock({ paths }).lock;
+    runtimeEntries = new Map(runtimeLock.runtimes.map((entry) => [entry.toolId, entry]));
+  } catch {
+    // Validation and plan expose the exact lock failure. This read-only detail
+    // path stays available but cannot become execution-ready.
+  }
+  return resolvedTool(tool, paths, currentHost(), {
+    ...options,
+    runtimeEntries,
+    verifyManagedIntegrity: false
+  });
+}
+
 export function toolPlan(id, options = {}) {
   const { paths, catalog } = loadToolCatalog(options);
   const tool = catalog.tools.find((candidate) => candidate.id === id);

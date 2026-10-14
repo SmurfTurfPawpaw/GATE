@@ -82,6 +82,8 @@ const view = {
   toolRuntimeVerified: select("#tool-runtime-verified"),
   toolRuntimeExecutable: select("#tool-runtime-executable"),
   toolRuntimeUnresolved: select("#tool-runtime-unresolved"),
+  toolRuntimeCurrentBytes: select("#tool-runtime-current-bytes"),
+  toolRuntimeHashReads: select("#tool-runtime-hash-reads"),
   toolRuntimeConstraints: select("#tool-runtime-constraints"),
   toolRuntimeList: select("#tool-runtime-list"),
   toolRuntimeCount: select("#tool-runtime-count"),
@@ -353,7 +355,7 @@ export function toolRuntimePresentation(summary = {}) {
       : summary.ok === true
         ? "partial"
         : "unknown";
-  return {
+  const result = {
     healthState,
     healthLabel: healthState === "invalid"
       ? "Lock invalid"
@@ -371,9 +373,14 @@ export function toolRuntimePresentation(summary = {}) {
     executableLabel: Number.isFinite(summary.executable) ? fullNumber(summary.executable) : "—",
     unresolvedLabel: unresolved === null ? "—" : fullNumber(unresolved)
   };
+  if (typeof summary.currentBytesChecked === "boolean") {
+    result.currentBytesLabel = summary.currentBytesChecked ? "Checked now" : "Receipt only";
+  }
+  if (Number.isFinite(summary.executableHashReads)) result.hashReadsLabel = fullNumber(summary.executableHashReads);
+  return result;
 }
 
-export function toolRuntimeItemPresentation(tool = {}) {
+export function toolRuntimeItemPresentation(tool = {}, now = Date.now()) {
   const flags = [
     ["locked", tool.locked],
     ["installed", tool.installed],
@@ -385,6 +392,18 @@ export function toolRuntimeItemPresentation(tool = {}) {
     : ["invalid", "invalid-lock", "invalid-receipt"].includes(tool.state)
       ? "invalid"
       : "unresolved";
+  const evidence = tool.verificationEvidence;
+  const verifiedAt = Date.parse(evidence?.lastVerifiedAt || "");
+  const observedAt = now instanceof Date ? now.getTime() : Number(now);
+  const evidenceAgeMs = Number.isFinite(verifiedAt) && Number.isFinite(observedAt)
+    ? Math.max(0, observedAt - verifiedAt)
+    : null;
+  const evidenceLabel = evidence?.lastVerifiedAt
+    ? `Last verified ${dateTime(evidence.lastVerifiedAt)} ` +
+      `(${formatAge(evidenceAgeMs)}) · ` +
+      `${readableCapability(evidence.kind || "unknown")} · ` +
+      `${evidence.currentBytesChecked === true ? "current bytes checked" : "current bytes not checked"}`
+    : null;
   return {
     id: tool.id || "unknown",
     name: tool.name || tool.id || "Unknown tool",
@@ -392,6 +411,7 @@ export function toolRuntimeItemPresentation(tool = {}) {
     stateLabel: readableCapability(tool.state || "unknown"),
     tone,
     flags,
+    ...(evidenceLabel ? { evidenceLabel } : {}),
     reasons: Array.isArray(tool.reasons) ? tool.reasons.map(readableCapability) : []
   };
 }
@@ -742,6 +762,8 @@ function renderToolRuntimes() {
   setText(view.toolRuntimeVerified, presentation.verifiedLabel);
   setText(view.toolRuntimeExecutable, presentation.executableLabel);
   setText(view.toolRuntimeUnresolved, presentation.unresolvedLabel);
+  setText(view.toolRuntimeCurrentBytes, presentation.currentBytesLabel || "Unknown");
+  setText(view.toolRuntimeHashReads, presentation.hashReadsLabel || "—");
 
   const constraints = Array.isArray(runtimes.unresolvedConstraints) ? runtimes.unresolvedConstraints : [];
   if (!constraints.length) {
@@ -771,6 +793,7 @@ function renderToolRuntimes() {
     const flags = element("div", "tool-runtime-flags");
     for (const flag of display.flags) flags.append(element("span", "", flag));
     item.append(head, flags);
+    if (display.evidenceLabel) item.append(element("p", "tool-runtime-evidence", display.evidenceLabel));
     if (display.reasons.length) item.append(element("p", "tool-runtime-reasons", display.reasons.join(" · ")));
     fragment.append(item);
   }

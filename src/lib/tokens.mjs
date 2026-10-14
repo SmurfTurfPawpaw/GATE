@@ -5,6 +5,9 @@ import path from "node:path";
 
 const SESSION_SOURCE = "codex-session-jsonl:host-session-roots";
 const TOKEN_KEYS = ["inputTokens", "cachedInputTokens", "outputTokens", "reasoningTokens", "totalTokens"];
+const usageTailCache = new Map();
+const MAX_USAGE_CACHE_ENTRIES = 1_000;
+const MAX_CACHED_TRAILING_BYTES = 32 * 1024;
 const DEFAULT_LIMITS = Object.freeze({
   maximumFiles: 500,
   maximumDiscoveredFiles: 5_000,
@@ -75,35 +78,167 @@ export function extractTokenRecord(record) {
   return null;
 }
 
+function statSignature(stat) {
+  return {
+    device: String(stat.dev),
+    inode: String(stat.ino),
+    size: stat.size,
+    modified: stat.mtimeMs,
+    changed: stat.ctimeMs
+  };
+}
+
+function sameFileIdentity(left, right) {
+  return left.device === right.device && left.inode === right.inode;
+}
+
+function sameFileVersion(left, right) {
+  return sameFileIdentity(left, right) && left.size === right.size &&
+    left.modified === right.modified && left.changed === right.changed;
+}
+
+function parseUsageText(text, initialLatest = null) {
+  let latest = initialLatest;
+  let cursor = 0;
+  while (cursor <= text.length) {
+    const newline = text.indexOf("\n", cursor);
+    const end = newline === -1 ? text.length : newline;
+    const line = text.slice(cursor, end).replace(/\r$/u, "");
+    if (
+      line.includes('"token_count"') ||
+      line.includes('"total_token_usage"') ||
+      line.includes('"token_usage"')
+    ) {
+      try {
+        const extracted = extractTokenRecord(JSON.parse(line));
+        // JSONL event order is the only sound ordering shared by usage records.
+        // Individual counters can be absent, reset, or use incomparable units,
+        // so always retain the latest parseable usage event in file order.
+        if (extracted) latest = extracted;
+      } catch {
+        // Session logs can be concurrently appended. Retain the trailing bytes
+        // so an append can complete the record without rereading the file.
+      }
+    }
+    if (newline === -1) break;
+    cursor = newline + 1;
+  }
+  const lastNewline = text.lastIndexOf("\n");
+  return {
+    extracted: latest,
+    trailing: lastNewline === -1 ? text : text.slice(lastNewline + 1)
+  };
+}
+
+function retainUsageCache(file, value) {
+  usageTailCache.delete(file);
+  usageTailCache.set(file, value);
+  while (usageTailCache.size > MAX_USAGE_CACHE_ENTRIES) {
+    usageTailCache.delete(usageTailCache.keys().next().value);
+  }
+}
+
+async function readRange(handle, start, length) {
+  const buffer = Buffer.allocUnsafe(length);
+  let bytesRead = 0;
+  while (bytesRead < length) {
+    const result = await handle.read(buffer, bytesRead, length - bytesRead, start + bytesRead);
+    if (result.bytesRead === 0) break;
+    bytesRead += result.bytesRead;
+  }
+  return { bytesRead, text: buffer.subarray(0, bytesRead).toString("utf8") };
+}
+
 async function latestUsage(file, maximumBytes) {
-  let latest = null;
-  const handle = await fs.promises.open(file, "r");
+  const resolved = path.resolve(file);
+  const handle = await fs.promises.open(resolved, "r");
   try {
-    const stat = await handle.stat();
-    const requestedBytes = Math.min(stat.size, maximumBytes);
-    if (requestedBytes === 0) return { extracted: null, bytesRead: 0, truncated: stat.size > 0 };
-    const start = Math.max(0, stat.size - requestedBytes);
-    const buffer = Buffer.allocUnsafe(requestedBytes);
-    const { bytesRead } = await handle.read(buffer, 0, requestedBytes, start);
-    let text = buffer.subarray(0, bytesRead).toString("utf8");
-    if (start > 0) {
+    const beforeStat = await handle.stat();
+    if (!beforeStat.isFile()) throw new Error("Codex session source is not a regular file");
+    const before = statSignature(beforeStat);
+    const cached = usageTailCache.get(resolved);
+    if (cached && cached.maximumBytes === maximumBytes && sameFileVersion(cached.signature, before)) {
+      return {
+        extracted: cached.extracted,
+        bytesRead: 0,
+        truncated: cached.truncated,
+        cacheHit: true,
+        incremental: false,
+        changedDuringRead: false
+      };
+    }
+
+    // A size increase alone cannot prove append-only behavior: the same inode
+    // can be truncated, rewritten, and regrown between observations. Reuse is
+    // limited to an already-partial tail, whose result cannot be represented as
+    // exact. Exact prior reads are rescanned after every content change.
+    const appendOnly = cached && cached.truncated === true && cached.appendSafe === true &&
+      cached.maximumBytes === maximumBytes &&
+      sameFileIdentity(cached.signature, before) && before.size > cached.signature.size &&
+      before.size - cached.signature.size <= maximumBytes;
+    const requestedBytes = appendOnly
+      ? before.size - cached.signature.size
+      : Math.min(before.size, maximumBytes);
+    const start = appendOnly ? cached.signature.size : Math.max(0, before.size - requestedBytes);
+    if (requestedBytes === 0) {
+      const truncated = before.size > 0;
+      const empty = {
+        signature: before,
+        maximumBytes,
+        extracted: null,
+        trailing: "",
+        appendSafe: !truncated,
+        truncated
+      };
+      retainUsageCache(resolved, empty);
+      return {
+        extracted: null,
+        bytesRead: 0,
+        truncated,
+        cacheHit: false,
+        incremental: false,
+        changedDuringRead: false
+      };
+    }
+
+    const read = await readRange(handle, start, requestedBytes);
+    const afterStat = await handle.stat();
+    const after = statSignature(afterStat);
+    const changedDuringRead = !sameFileVersion(before, after);
+    const completeRead = read.bytesRead === requestedBytes;
+    let text = read.text;
+    let initialLatest = null;
+    let truncated = start > 0 || !completeRead;
+    if (appendOnly) {
+      text = `${cached.trailing}${text}`;
+      initialLatest = cached.extracted;
+      truncated = cached.truncated;
+    } else if (start > 0) {
       const firstCompleteLine = text.indexOf("\n");
       text = firstCompleteLine === -1 ? "" : text.slice(firstCompleteLine + 1);
     }
-    for (const line of text.split(/\r?\n/u)) {
-      if (
-        !line.includes('"token_count"') &&
-        !line.includes('"total_token_usage"') &&
-        !line.includes('"token_usage"')
-      ) continue;
-      try {
-        const extracted = extractTokenRecord(JSON.parse(line));
-        if (extracted && (!latest || extracted.usage.total >= latest.usage.total)) latest = extracted;
-      } catch {
-        // Session logs can be concurrently appended. Ignore incomplete or unrelated lines.
-      }
+    const parsed = parseUsageText(text, initialLatest);
+    if (!changedDuringRead && completeRead) {
+      const appendSafe = Buffer.byteLength(parsed.trailing) <= MAX_CACHED_TRAILING_BYTES;
+      retainUsageCache(resolved, {
+        signature: after,
+        maximumBytes,
+        extracted: parsed.extracted,
+        trailing: appendSafe ? parsed.trailing : "",
+        appendSafe,
+        truncated
+      });
+    } else {
+      usageTailCache.delete(resolved);
     }
-    return { extracted: latest, bytesRead, truncated: start > 0 || bytesRead < stat.size };
+    return {
+      extracted: parsed.extracted,
+      bytesRead: read.bytesRead,
+      truncated: truncated || changedDuringRead,
+      cacheHit: false,
+      incremental: Boolean(appendOnly),
+      changedDuringRead
+    };
   } finally {
     await handle.close();
   }
@@ -208,6 +343,10 @@ export async function scanCodexUsage(options = {}) {
   let scannedFiles = 0;
   let bytesRead = 0;
   let tailTruncatedFiles = 0;
+  let cacheHits = 0;
+  let incrementalFiles = 0;
+  let filesRead = 0;
+  let changedDuringReadFiles = 0;
   let byteLimited = false;
   let timedOut = discovery.timedOut;
   for (let index = 0; index < selectedFiles.length; index += 1) {
@@ -230,11 +369,16 @@ export async function scanCodexUsage(options = {}) {
       continue;
     }
     bytesRead += result.bytesRead;
+    if (result.cacheHit) cacheHits += 1;
+    if (result.incremental) incrementalFiles += 1;
+    if (result.bytesRead > 0) filesRead += 1;
+    if (result.changedDuringRead) changedDuringReadFiles += 1;
     if (result.truncated) tailTruncatedFiles += 1;
     const extracted = result.extracted;
     if (!extracted) continue;
     const fingerprint = crypto.createHash("sha256").update(path.resolve(item.file)).digest("hex").slice(0, 20);
     const at = extracted.at || new Date(item.modified).toISOString();
+    const recordAvailability = result.truncated ? "estimated" : "exact";
     const record = {
       apiVersion: "gate.usage/v1",
       id: `use_${fingerprint}`,
@@ -244,7 +388,7 @@ export async function scanCodexUsage(options = {}) {
       agent: "codex",
       provider: extracted.provider,
       model: extracted.model,
-      availability: "exact",
+      availability: recordAvailability,
       measure: "cumulative",
       inputTokens: extracted.usage.input,
       cachedInputTokens: extracted.usage.cached_input,
@@ -260,7 +404,7 @@ export async function scanCodexUsage(options = {}) {
       provider: record.provider,
       model: record.model,
       source: SESSION_SOURCE,
-      availability: "exact",
+      availability: recordAvailability,
       context_window: extracted.context_window,
       usage: extracted.usage
     });
@@ -285,6 +429,10 @@ export async function scanCodexUsage(options = {}) {
     unreadableDirectories: discovery.unreadableDirectories,
     directoriesVisited: discovery.directoriesVisited,
     bytesRead,
+    filesRead,
+    cacheHits,
+    incrementalFiles,
+    changedDuringReadFiles,
     tailTruncatedFiles,
     directoryLimited: discovery.directoryLimited,
     discoveryFileLimited: discovery.discoveryFileLimited,

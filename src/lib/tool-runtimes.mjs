@@ -23,6 +23,7 @@ const RELEASE_REDIRECT_HOSTS = new Set([
 const TOOL_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
 const SHA256 = /^[a-f0-9]{64}$/u;
 const PLATFORM_KEYS = new Set(["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"]);
+const LOADED_RUNTIME = Symbol("gate.loaded-tool-runtime");
 
 function canonicalValue(value) {
   if (Array.isArray(value)) return value.map(canonicalValue);
@@ -174,11 +175,28 @@ export function readToolRuntimeLock(options = {}) {
 
 function entryFor(id, options = {}) {
   if (!TOOL_ID.test(String(id || ""))) throw new Error(`invalid tool id: ${id}`);
-  const loaded = readToolRuntimeLock(options);
+  const loaded = options[LOADED_RUNTIME] || readToolRuntimeLock(options);
   const tool = loaded.catalog.tools.find((candidate) => candidate.id === id);
   if (!tool) throw new Error(`unknown security tool: ${id}`);
   const entry = loaded.lock.runtimes.find((candidate) => candidate.toolId === id) || null;
   return { ...loaded, entry, tool };
+}
+
+function receiptVerificationEvidence(receipt, now = Date.now()) {
+  const lastVerifiedAt = receipt.smoke.completedAt;
+  const verifiedAtMs = Date.parse(lastVerifiedAt);
+  const observedAtMs = now instanceof Date ? now.getTime() : Number(now);
+  const ageSeconds = Number.isFinite(verifiedAtMs) && Number.isFinite(observedAtMs)
+    ? Math.max(0, Math.floor((observedAtMs - verifiedAtMs) / 1000))
+    : null;
+  return {
+    kind: "installation-receipt",
+    lastVerifiedAt,
+    ageSeconds,
+    current: false,
+    currentBytesChecked: false,
+    liveSmokeExecutedNow: false
+  };
 }
 
 function artifactFor(entry, platform) {
@@ -1025,12 +1043,14 @@ export function verifyManagedTool(id, options = {}) {
   if (!fs.existsSync(directory)) return baseResult("verify", tool, entry, platform, {
     ok: false, state: "absent", installed: false, verified: false, executable: null, reasons: ["managed-runtime-absent"]
   });
+  let executableHashReads = 0;
   try {
     securePrivateDirectory(directory, { create: false, label: `managed tool runtime ${entry.id}` });
     exactInstalledTree(directory, entry);
     const receipt = readReceipt(path.join(directory, "install.json"), paths);
     verifyReceiptBindings(receipt, entry, artifact, platform);
     const executable = path.join(directory, entry.executable.relativePath);
+    executableHashReads += 1;
     const bytes = readBoundedRegularFile(executable, MAX_EXECUTABLE_BYTES, `managed executable ${entry.id}`, { mode: 0o700 });
     if (bytes.length !== receipt.executable.size || digestBuffer(bytes) !== artifact.executableSha256) {
       throw new Error("managed tool executable differs from the reviewed lock");
@@ -1047,6 +1067,15 @@ export function verifyManagedTool(id, options = {}) {
       executable,
       provenance: reviewedProvenance(entry, artifact, platform),
       receipt: { installedAt: receipt.installedAt, smokeCompletedAt: smoke.completedAt },
+      verificationEvidence: {
+        kind: "current-bytes-and-live-zero-egress-smoke",
+        lastVerifiedAt: smoke.completedAt,
+        ageSeconds: 0,
+        current: true,
+        currentBytesChecked: true,
+        liveSmokeExecutedNow: true
+      },
+      executableHashReads,
       reasons: []
     });
   } catch (error) {
@@ -1056,6 +1085,7 @@ export function verifyManagedTool(id, options = {}) {
       installed: true,
       verified: false,
       executable: null,
+      executableHashReads,
       reasons: [String(error.message || error)]
     });
   }
@@ -1087,6 +1117,8 @@ export function managedToolReceiptStatus(id, options = {}) {
     return {
       id, toolId: id, name: tool.name, locked: true, installed: true, verified: false,
       executable: null, state: "receipt-only", version: entry.version, platform: platform.key,
+      verificationEvidence: receiptVerificationEvidence(receipt, options.now),
+      executableHashReads: 0,
       reasons: ["explicit-integrity-and-smoke-verification-required"]
     };
   } catch (error) {
@@ -1115,12 +1147,14 @@ function managedToolStaticStatus(id, options = {}) {
     executable: null, state: "absent", version: entry.version, platform: platform.key,
     reasons: ["managed-runtime-absent"]
   };
+  let executableHashReads = 0;
   try {
     securePrivateDirectory(directory, { create: false, label: `managed tool runtime ${entry.id}` });
     exactInstalledTree(directory, entry);
     const receipt = readReceipt(path.join(directory, "install.json"), paths);
     verifyReceiptBindings(receipt, entry, artifact, platform);
     const executable = path.join(directory, entry.executable.relativePath);
+    executableHashReads += 1;
     const bytes = readBoundedRegularFile(executable, MAX_EXECUTABLE_BYTES, `managed executable ${entry.id}`, { mode: 0o700 });
     if (bytes.length !== receipt.executable.size || digestBuffer(bytes) !== artifact.executableSha256) {
       throw new Error("managed tool executable differs from the reviewed lock");
@@ -1128,12 +1162,20 @@ function managedToolStaticStatus(id, options = {}) {
     return {
       id, toolId: id, name: tool.name, locked: true, installed: true, verified: true,
       executable, state: "verified-install-evidence", version: entry.version, platform: platform.key,
+      verificationEvidence: {
+        ...receiptVerificationEvidence(receipt, options.now),
+        kind: "current-bytes-and-install-smoke-evidence",
+        current: true,
+        currentBytesChecked: true
+      },
+      executableHashReads,
       smokeExecutedNow: false, reasons: []
     };
   } catch (error) {
     return {
       id, toolId: id, name: tool.name, locked: true, installed: true, verified: false,
       executable: null, state: "invalid", version: entry.version, platform: platform.key,
+      executableHashReads,
       smokeExecutedNow: false, reasons: [String(error.message || error)]
     };
   }
@@ -1352,6 +1394,7 @@ export function managedToolSummary(options = {}) {
     };
   }
   const platform = options.platform || currentRuntimePlatform(options.environment);
+  let executableHashReads = 0;
   const tools = loaded.catalog.tools.map((tool) => {
     const entry = loaded.lock.runtimes.find((candidate) => candidate.toolId === tool.id);
     if (!entry) return {
@@ -1359,10 +1402,11 @@ export function managedToolSummary(options = {}) {
       executable: false, state: "unmanaged", reasons: [unmanagedReason(tool)]
     };
     const status = options.verify === true
-      ? verifyManagedTool(tool.id, { ...options, paths: loaded.paths, platform })
+      ? verifyManagedTool(tool.id, { ...options, paths: loaded.paths, platform, [LOADED_RUNTIME]: loaded })
       : options.staticIntegrity === true
-        ? managedToolStaticStatus(tool.id, { ...options, paths: loaded.paths, platform })
-        : managedToolReceiptStatus(tool.id, { ...options, paths: loaded.paths, platform });
+        ? managedToolStaticStatus(tool.id, { ...options, paths: loaded.paths, platform, [LOADED_RUNTIME]: loaded })
+        : managedToolReceiptStatus(tool.id, { ...options, paths: loaded.paths, platform, [LOADED_RUNTIME]: loaded });
+    executableHashReads += Number.isSafeInteger(status.executableHashReads) ? status.executableHashReads : 0;
     const dependencyBlocked = Array.isArray(tool.dataDependencies) && tool.dataDependencies.length > 0;
     const privilegeBlocked = tool.privileges.some((value) => value !== "user");
     const phaseAdmissionBlocked = status.verified === true;
@@ -1374,6 +1418,7 @@ export function managedToolSummary(options = {}) {
       verified: status.verified === true,
       executable: false,
       state: status.state,
+      verificationEvidence: status.verificationEvidence || null,
       reasons: [
         ...(status.reasons || []),
         ...(dependencyBlocked ? ["reviewed-data-dependencies-unavailable"] : []),
@@ -1393,6 +1438,8 @@ export function managedToolSummary(options = {}) {
       : options.staticIntegrity === true
         ? "current-bytes-and-install-smoke-evidence"
         : "receipt-only",
+    currentBytesChecked: options.verify === true || options.staticIntegrity === true,
+    executableHashReads,
     platform: platform.key,
     catalog: tools.length,
     locked: tools.filter((tool) => tool.locked).length,

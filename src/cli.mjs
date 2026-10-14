@@ -33,8 +33,9 @@ import { ensureRuntime, runtimePaths } from "./lib/paths.mjs";
 import { checkPublication, publishPullRequest } from "./lib/publication.mjs";
 import { listProjects, registerProject, showProject, verifyProject } from "./lib/projects.mjs";
 import { buildStatus } from "./lib/status.mjs";
+import { statusSummary, toolDetailSummary, toolInventorySummary } from "./lib/summaries.mjs";
 import { runManagedToolOperation } from "./lib/tool-runtimes.mjs";
-import { toolInventory, toolPlan } from "./lib/tools.mjs";
+import { toolInventory, toolPlan, toolShow } from "./lib/tools.mjs";
 import { installUpstream, syncUpstream, upstreamStatus } from "./lib/upstreams.mjs";
 import { validateRepository } from "./lib/validation.mjs";
 import { leaseWorkspace, verifyWorkspace, workspaceStatus } from "./lib/workspaces.mjs";
@@ -46,7 +47,7 @@ Usage: gate <command> [options]
 Core
   bootstrap                         Create private runtime directories and verify config
   doctor [--full] [--json]          Inspect the host, repository, and optional integrations
-  status [--json]                   Show activity, tokens, learnings, engagements, and pins
+  status [--summary] [--json]       Show full status or an agent-sized bounded summary
   up [--host 127.0.0.1] [--port 4173]
                                     Run the read-only local cockpit
   validate [--json]                 Validate tracked configuration and pins
@@ -101,7 +102,8 @@ Upstreams
   upstream path ID                     Print its source or package directory
 
 Security tools
-  tool list [--profile ID] [--category ID]
+  tool list [--profile ID] [--category ID] [--summary] [--limit N] [--cursor N]
+  tool show ID                         Show one bounded receipt-only tool projection
   tool plan ID                         Show host, lane, risk, and admission needs
   tool prefetch ID|--profile ID        Cache reviewed release bytes without activating them
   tool install ID|--profile ID         Install and zero-egress-smoke reviewed runtimes
@@ -276,9 +278,12 @@ export async function main(argv) {
   }
 
   if (command === "status") {
-    assertFlags(parsed.flags, ["json"]);
-    assertPositionals(parsed.positional, 0, "gate status [--json]");
-    return output(await buildStatus({ paths }), json);
+    assertFlags(parsed.flags, ["summary", "json"]);
+    assertBooleanSwitch(parsed.flags, "summary");
+    assertBooleanSwitch(parsed.flags, "json");
+    assertPositionals(parsed.positional, 0, "gate status [--summary] [--json]");
+    const status = await buildStatus({ paths });
+    return output(parsed.flags.summary === true ? statusSummary(status) : status, json);
   }
 
   if (command === "up") {
@@ -657,16 +662,38 @@ export async function main(argv) {
     assertUnambiguousToolArgs(rest);
     const [action = "list", id] = parsed.positional;
     if (action === "list") {
-      assertPositionals(parsed.positional, 1, "gate tool list [--profile ID] [--category ID]");
-      assertFlags(parsed.flags, ["profile", "category", "json"]);
+      assertPositionals(parsed.positional, 1, "gate tool list [--profile ID] [--category ID] [--summary] [--limit N] [--cursor N]");
+      assertFlags(parsed.flags, ["profile", "category", "summary", "limit", "cursor", "json"]);
+      assertBooleanSwitch(parsed.flags, "summary");
+      assertBooleanSwitch(parsed.flags, "json");
+      if ((parsed.flags.limit !== undefined || parsed.flags.cursor !== undefined) && parsed.flags.summary !== true) {
+        throw new Error("--limit and --cursor require --summary");
+      }
+      const profile = optionalValueFlag(parsed.flags, "profile");
+      const category = optionalValueFlag(parsed.flags, "category");
+      const inventory = toolInventory({
+        paths,
+        profile: profile || null,
+        category: category || null
+      });
       return output(
-        toolInventory({
-          paths,
-          profile: typeof parsed.flags.profile === "string" ? parsed.flags.profile : null,
-          category: typeof parsed.flags.category === "string" ? parsed.flags.category : null
-        }),
+        parsed.flags.summary === true
+          ? toolInventorySummary(inventory, {
+              limit: optionalValueFlag(parsed.flags, "limit"),
+              cursor: optionalValueFlag(parsed.flags, "cursor"),
+              profile: profile || null,
+              category: category || null
+            })
+          : inventory,
         json
       );
+    }
+    if (action === "show") {
+      assertPositionals(parsed.positional, 2, "gate tool show ID [--json]");
+      assertFlags(parsed.flags, ["json"]);
+      assertBooleanSwitch(parsed.flags, "json");
+      if (!id) throw new Error("security tool id is required");
+      return output(toolDetailSummary(toolShow(id, { paths })), json);
     }
     if (action === "plan") {
       assertPositionals(parsed.positional, 2, "gate tool plan ID");

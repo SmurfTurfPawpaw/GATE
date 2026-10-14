@@ -157,6 +157,11 @@ const TOOL_RUNTIME_VERIFICATION_MODES = new Set([
   "current-bytes-and-install-smoke-evidence",
   "receipt-only"
 ]);
+const TOOL_RUNTIME_EVIDENCE_KINDS = new Set([
+  "installation-receipt",
+  "current-bytes-and-install-smoke-evidence",
+  "current-bytes-and-live-zero-egress-smoke"
+]);
 const TOOL_RUNTIME_PLATFORMS = new Set(["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"]);
 const TOOL_RUNTIME_STATES = new Set([
   "absent", "invalid", "invalid-lock", "invalid-receipt", "receipt-only", "unmanaged",
@@ -456,12 +461,28 @@ function toolRuntimeReasons(value) {
   return [...new Set(value.slice(0, 32).filter((reason) => TOOL_RUNTIME_REASONS.has(reason)))];
 }
 
+function toolRuntimeEvidenceShape(input) {
+  const value = record(input);
+  const kind = enumValue(value.kind, TOOL_RUNTIME_EVIDENCE_KINDS, null);
+  const lastVerifiedAt = timestamp(value.lastVerifiedAt);
+  if (!kind || !lastVerifiedAt) return null;
+  return {
+    kind,
+    lastVerifiedAt,
+    ageSeconds: count(value.ageSeconds),
+    current: typeof value.current === "boolean" ? value.current : null,
+    currentBytesChecked: typeof value.currentBytesChecked === "boolean" ? value.currentBytesChecked : null,
+    liveSmokeExecutedNow: typeof value.liveSmokeExecutedNow === "boolean" ? value.liveSmokeExecutedNow : null
+  };
+}
+
 function toolRuntimeShape(input) {
   const value = record(input);
   const toolId = typeof value.id === "string" && value.id.length <= 128 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.id)
     ? value.id
     : null;
   if (!toolId) return null;
+  const verificationEvidence = toolRuntimeEvidenceShape(value.verificationEvidence);
   return {
     id: toolId,
     name: toolRuntimeName(value.name),
@@ -470,6 +491,7 @@ function toolRuntimeShape(input) {
     installed: typeof value.installed === "boolean" ? value.installed : null,
     verified: typeof value.verified === "boolean" ? value.verified : null,
     executable: typeof value.executable === "boolean" ? value.executable : null,
+    ...(verificationEvidence ? { verificationEvidence } : {}),
     reasons: toolRuntimeReasons(value.reasons)
   };
 }
@@ -486,9 +508,12 @@ function toolRuntimesShape(input) {
       reasonCounts.set(reason, Math.min(MAX_COUNT, (reasonCounts.get(reason) || 0) + total));
     }
   }
+  const executableHashReads = count(value.executableHashReads);
   return {
     ok: typeof value.ok === "boolean" ? value.ok : null,
     verificationMode: enumValue(value.verificationMode, TOOL_RUNTIME_VERIFICATION_MODES, null),
+    ...(typeof value.currentBytesChecked === "boolean" ? { currentBytesChecked: value.currentBytesChecked } : {}),
+    ...(executableHashReads !== null ? { executableHashReads } : {}),
     platform: enumValue(value.platform, TOOL_RUNTIME_PLATFORMS, null),
     catalog: count(value.catalog),
     locked: count(value.locked),

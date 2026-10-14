@@ -13,6 +13,7 @@ import {
   catalogEntrySha256,
   installManagedTool,
   managedToolPlan,
+  managedToolSummary,
   prefetchManagedTool,
   readToolRuntimeLock,
   runManagedToolOperation,
@@ -217,6 +218,53 @@ test("managed install binds reviewed bytes, uses a private receipt, and grants n
   assert.equal(receipt.lockEntrySha256, canonicalSha256(fixture.entry));
   assert.equal(fs.statSync(receiptFile).mode & 0o777, 0o600);
   assert.equal(fs.statSync(path.dirname(receiptFile)).mode & 0o777, 0o700);
+});
+
+test("receipt status performs zero executable hash reads while explicit verification stays exact", async (t) => {
+  if (process.platform !== "linux") return t.skip("kernel mutation serialization requires Linux/WSL2");
+  const fixture = createFixture(t);
+  await installManagedTool("fixture-tool", {
+    paths: fixture.paths,
+    platform,
+    downloadArtifact: fixture.downloadArtifact,
+    runSmoke: fixture.runSmoke
+  });
+  const receipt = JSON.parse(fs.readFileSync(
+    path.join(fixture.paths.toolRuntimes, "fixture-tool", "install.json"),
+    "utf8"
+  ));
+  const observedAt = new Date(Date.parse(receipt.smoke.completedAt) + 12_000);
+  const fast = managedToolSummary({
+    paths: fixture.paths,
+    platform,
+    now: observedAt
+  });
+  assert.equal(fast.verificationMode, "receipt-only");
+  assert.equal(fast.currentBytesChecked, false);
+  assert.equal(fast.executableHashReads, 0);
+  assert.equal(fast.verified, 0);
+  assert.equal(fast.tools[0].state, "receipt-only");
+  assert.deepEqual(fast.tools[0].verificationEvidence, {
+    kind: "installation-receipt",
+    lastVerifiedAt: receipt.smoke.completedAt,
+    ageSeconds: 12,
+    current: false,
+    currentBytesChecked: false,
+    liveSmokeExecutedNow: false
+  });
+
+  const exact = managedToolSummary({
+    paths: fixture.paths,
+    platform,
+    verify: true,
+    runSmoke: fixture.runSmoke
+  });
+  assert.equal(exact.verificationMode, "current-bytes-and-live-zero-egress-smoke");
+  assert.equal(exact.currentBytesChecked, true);
+  assert.equal(exact.executableHashReads, 1);
+  assert.equal(exact.verified, 1);
+  assert.equal(exact.tools[0].verificationEvidence.current, true);
+  assert.equal(exact.tools[0].verificationEvidence.liveSmokeExecutedNow, true);
 });
 
 test("a PATH namesake cannot replace a verified managed executable", async (t) => {

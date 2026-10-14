@@ -25,6 +25,47 @@ test("JSONL reads are tail-bounded and never parse a truncated leading line", as
   assert.equal(limitMetadata.limitTruncated, true);
 });
 
+test("large JSONL tails retain ordered records without repeatedly shifting the result", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-jsonl-large-"));
+  const file = path.join(root, "events.jsonl");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const lineCount = 100_000;
+  const limit = 8_192;
+  const invalidIndex = lineCount - 11;
+  const lines = Array.from({ length: lineCount }, (_, index) => (
+    index === invalidIndex ? "{malformed" : JSON.stringify({ index })
+  ));
+  const payload = `${lines.join("\n")}\n`;
+  fs.writeFileSync(file, payload);
+
+  const metadata = {};
+  const values = await readJsonLines(file, {
+    limit,
+    maxBytes: Buffer.byteLength(payload) + 1,
+    metadata
+  });
+
+  assert.equal(values.length, limit);
+  assert.deepEqual(values[0], { index: lineCount - limit });
+  assert.deepEqual(values.at(-1), { index: lineCount - 1 });
+  assert.deepEqual(values[invalidIndex - (lineCount - limit)], {
+    kind: "invalid-jsonl",
+    summary: "A malformed local record was skipped."
+  });
+  assert.deepEqual(metadata, { byteTruncated: false, limitTruncated: true });
+});
+
+test("a zero JSONL limit reports truncation without retaining records", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-jsonl-zero-"));
+  const file = path.join(root, "events.jsonl");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(file, `${JSON.stringify({ index: 0 })}\n{malformed\n`);
+
+  const metadata = {};
+  assert.deepEqual(await readJsonLines(file, { limit: 0, metadata }), []);
+  assert.deepEqual(metadata, { byteTruncated: false, limitTruncated: true });
+});
+
 test("private JSONL append and read never follow a pre-positioned symlink", {
   skip: process.platform === "win32" && "creating symlinks can require elevated Windows privileges"
 }, async (t) => {

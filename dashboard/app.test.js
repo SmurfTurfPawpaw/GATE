@@ -331,6 +331,13 @@ test("managed runtime presentation distinguishes aggregate health and per-tool r
   });
   assert.equal(toolRuntimePresentation({ ok: false }).healthLabel, "Lock invalid");
   assert.equal(toolRuntimePresentation({ ok: true, unresolved: 0 }).healthLabel, "Ready");
+  assert.deepEqual(
+    {
+      currentBytesLabel: toolRuntimePresentation({ currentBytesChecked: false, executableHashReads: 0 }).currentBytesLabel,
+      hashReadsLabel: toolRuntimePresentation({ currentBytesChecked: false, executableHashReads: 0 }).hashReadsLabel
+    },
+    { currentBytesLabel: "Receipt only", hashReadsLabel: "0" }
+  );
   assert.deepEqual(toolRuntimeItemPresentation({
     id: "nuclei",
     name: "Nuclei",
@@ -349,5 +356,18 @@ test("managed runtime presentation distinguishes aggregate health and per-tool r
     flags: ["locked yes", "installed yes", "verified yes", "executable yes"],
     reasons: []
   });
+  const receipt = toolRuntimeItemPresentation({
+    id: "nuclei",
+    state: "receipt-only",
+    verificationEvidence: {
+      kind: "installation-receipt",
+      lastVerifiedAt: "2026-10-14T16:00:00.000Z",
+      ageSeconds: 1,
+      currentBytesChecked: false
+    }
+  }, Date.parse("2026-10-14T16:00:12.000Z"));
+  assert.match(receipt.evidenceLabel, /Last verified/);
+  assert.match(receipt.evidenceLabel, /12s ago/);
+  assert.match(receipt.evidenceLabel, /current bytes not checked/);
   assert.equal(toolRuntimeItemPresentation({ state: "invalid-receipt" }).tone, "invalid");
 });

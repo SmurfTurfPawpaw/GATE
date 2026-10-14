@@ -28,6 +28,7 @@ function canonicalUsageRecords(values, paths, partial = false) {
 export async function buildStatus(options = {}) {
   const paths = options.paths || runtimePaths(options);
   ensureRuntime(paths);
+  const observedAt = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
   const tokenRead = {};
   const [events, publicLearnings, privateLearnings, tokenLog] = await Promise.all([
     readJsonLines(paths.events, { limit: 100, privateFile: true }),
@@ -52,7 +53,7 @@ export async function buildStatus(options = {}) {
       })
     : [];
   return {
-    at: new Date().toISOString(),
+    at: observedAt.toISOString(),
     repository: paths.repo,
     gate_home: paths.home,
     events: events.slice(-30).reverse(),
@@ -66,6 +67,14 @@ export async function buildStatus(options = {}) {
     projects: projectRegistryStatus({ paths }),
     tokens,
     upstreams: upstreamStatus({ paths, verifyIntegrity: false }),
-    toolRuntimes: managedToolSummary({ paths, staticIntegrity: true })
+    // Observer/status refreshes use validated installation receipts. They do
+    // not reread large executables and never present that cached evidence as a
+    // current verification. Explicit tool verify, doctor --full, planning and
+    // pre-execution paths retain exact current-byte checks.
+    toolRuntimes: managedToolSummary({
+      paths,
+      staticIntegrity: false,
+      now: observedAt
+    })
   };
 }
