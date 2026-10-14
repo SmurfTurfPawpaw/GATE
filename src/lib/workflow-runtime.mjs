@@ -733,6 +733,12 @@ function mutate(id, options, planner) {
         return { projection: loaded.projection, entry: repeated, replayed: true, paths };
       }
     }
+    if (options.expectedSequence !== undefined && Number(options.expectedSequence) !== loaded.projection.appliedSequence) {
+      throw new Error(`workflow sequence changed: expected ${options.expectedSequence}, observed ${loaded.projection.appliedSequence}`);
+    }
+    if (options.expectedHead !== undefined && String(options.expectedHead) !== loaded.projection.journalHeadSha256) {
+      throw new Error("workflow journal head changed before mutation");
+    }
     const planned = planner(loaded.projection, loaded.entries, paths);
     if (planned.noop) {
       return { projection: loaded.projection, entry: planned.entry, replayed: true, paths };
@@ -1032,7 +1038,7 @@ function admissionAction(value) {
   return value.action || value.actionClass;
 }
 
-function loadAdmission(paths, projection, definition, phase, bytesOrFile, options = {}) {
+function validateAdmission(paths, projection, definition, phase, bytesOrFile, options = {}) {
   const bytes = Buffer.isBuffer(bytesOrFile)
     ? bytesOrFile
     : stableFileBytes(bytesOrFile, 2 * 1024 * 1024, "workflow admission file");
@@ -1102,7 +1108,6 @@ function loadAdmission(paths, projection, definition, phase, bytesOrFile, option
   if (binding.target.value !== value.target || binding.action !== action || !binding.permittedTools.includes(value.toolId)) {
     throw new Error("workflow admission target, action, or tool is outside current authority");
   }
-  saveContentAddressed(paths.workflowAdmissions, digest, bytes, `workflow admission ${digest}`);
   return {
     value,
     digest,
@@ -1119,7 +1124,7 @@ function loadAdmission(paths, projection, definition, phase, bytesOrFile, option
   };
 }
 
-function loadHandoff(paths, projection, definition, phase, transition, admission, bytesOrFile, options = {}) {
+function validateHandoff(paths, projection, definition, phase, transition, admission, bytesOrFile, options = {}) {
   const bytes = Buffer.isBuffer(bytesOrFile)
     ? bytesOrFile
     : stableFileBytes(bytesOrFile, 2 * 1024 * 1024, "workflow handoff file");
@@ -1165,7 +1170,6 @@ function loadHandoff(paths, projection, definition, phase, transition, admission
     (Date.now() >= Date.parse(value.expiresAt) && !options.allowExpiredTeardown)) {
     throw new Error("workflow handoff is not currently valid");
   }
-  saveContentAddressed(paths.workflowHandoffs, digest, bytes, `workflow handoff ${digest}`);
   return { value, digest };
 }
 
@@ -1306,6 +1310,159 @@ export function workflowStatus(id, options = {}) {
   return result;
 }
 
+function requireConfirmationPreconditions(projection, options, label) {
+  if (options.expectedSequence === undefined || options.expectedHead === undefined) {
+    throw new Error(`${label} requires the exact --expected-sequence and --expected-head returned by preflight`);
+  }
+  if (Number(options.expectedSequence) !== projection.appliedSequence) {
+    throw new Error(`workflow sequence changed: expected ${options.expectedSequence}, observed ${projection.appliedSequence}`);
+  }
+  if (String(options.expectedHead) !== projection.journalHeadSha256) {
+    throw new Error("workflow journal head changed before mutation");
+  }
+}
+
+function validatePhaseStart(projection, paths, input, admissionBytes, handoffBytes, options = {}) {
+  const phaseId = requireEvidenceId(input.phaseId, "phase id");
+  if (["closed", "reported"].includes(projection.status)) throw new Error(`workflow status ${projection.status} cannot start a phase`);
+  if (projection.activePhase) throw new Error(`phase ${projection.activePhase.phaseId} is already active`);
+  if (projection.phases[phaseId]) throw new Error(`phase ${phaseId} already has an attempt`);
+  const definition = loadDefinition(paths, projection.definition.id);
+  const phase = phaseById(definition, phaseId);
+  if (projection.joined && !new Set(["retest-and-regression", "retest-cleanup-verification"]).has(phaseId)) {
+    throw new Error("joined coverage permits only the defined retest branch before reporting");
+  }
+  const sourcePhase = input.sourcePhase ? requireEvidenceId(input.sourcePhase, "source phase") : null;
+  const handoffId = input.handoffId ? requireEvidenceId(input.handoffId, "handoff id") : null;
+  let transition = transitionFor(projection, definition, sourcePhase, phase, handoffId);
+  if (transition) transition = { ...transition, __fromPhase: sourcePhase };
+  const teardown = transition?.guard.authorization === "preauthorized-teardown" && TEARDOWN_PHASES.has(phase.id);
+  if (["stopped", "recovery-hold"].includes(projection.status) && !teardown) {
+    throw new Error("a fired stop blocks normal phase progress");
+  }
+  if (!teardown) assertDependencies(projection, phase, definition);
+  let admission = null;
+  let handoff = null;
+  let authorizationSha256 = null;
+  let confirmationRequired = null;
+  if (phase.targetContact) {
+    if (!admissionBytes) throw new Error("target-contact phase requires a reviewed admission file");
+    admission = validateAdmission(paths, projection, definition, phase, admissionBytes, {
+      allowExpiredTeardown: teardown,
+      sourceAuthority: projection.phases[sourcePhase]?.authority || null
+    });
+    if (transition?.guard.authorization === "new-engagement") {
+      const sourceAuthority = projection.phases[sourcePhase]?.authority;
+      if (sourceAuthority?.receiptSha256 === admission.authority.receiptSha256) {
+        throw new Error("transition requires a fresh engagement receipt");
+      }
+    } else if (transition?.guard.authorization === "current-engagement") {
+      const sourceAuthority = projection.phases[sourcePhase]?.authority;
+      if (!sourceAuthority || sourceAuthority.receiptSha256 !== admission.authority.receiptSha256) {
+        throw new Error("transition requires the current engagement receipt");
+      }
+    } else if (transition?.guard.authorization === "preauthorized-teardown") {
+      const sourceAuthority = projection.phases[sourcePhase]?.authority;
+      if (!sourceAuthority || sourceAuthority.receiptSha256 !== admission.authority.receiptSha256 ||
+        sourceAuthority.engagementId !== admission.authority.engagementId) {
+        throw new Error("preauthorized teardown must retain the source phase authority receipt");
+      }
+    }
+    if (phase.effectClass === "A3") {
+      if (!transition?.handoffId) throw new Error("A3 phase entry requires a structured handoff id");
+      if (handoffBytes) {
+        handoff = validateHandoff(paths, projection, definition, phase, transition, admission, handoffBytes, {
+          allowExpiredTeardown: teardown
+        });
+      } else if (!options.preflight) {
+        throw new Error("A3 phase entry requires a structured handoff file");
+      }
+    }
+  } else if (admissionBytes || handoffBytes || input.confirm) {
+    throw new Error("non-contact phase does not accept active admission or high-impact confirmation");
+  }
+  const transitionSha256 = transition
+    ? canonicalDigest({ sourcePhase, transition: Object.fromEntries(Object.entries(transition).filter(([key]) => key !== "__fromPhase")), handoffId: transition.handoffId || handoffId }, "gate.workflow.transition.v1")
+    : canonicalDigest({ root: phase.id }, "gate.workflow.transition.v1");
+  if (handoff) {
+    authorizationSha256 = canonicalDigest({
+      instanceId: projection.instanceId,
+      workflowDefinitionSha256: projection.definition.sha256,
+      journalSequence: projection.appliedSequence,
+      journalHeadSha256: projection.journalHeadSha256,
+      phaseId: phase.id,
+      sourcePhase,
+      transitionSha256,
+      admissionSha256: admission.digest,
+      handoffSha256: handoff.digest
+    }, "gate.workflow.phase-authorization.v1");
+    confirmationRequired = `AUTHORIZE A3 ${projection.instanceId} ${phase.id} ${handoff.digest} ${authorizationSha256}`;
+    if (!options.preflight) {
+      requireConfirmationPreconditions(projection, options, "A3 phase start");
+      if (input.confirm !== confirmationRequired) {
+        throw new Error(`high-impact confirmation must be exactly: ${confirmationRequired}`);
+      }
+    }
+  }
+  return {
+    admission,
+    authorizationSha256,
+    confirmationRequired,
+    definition,
+    handoff,
+    handoffId,
+    handoffRequired: phase.effectClass === "A3",
+    phase,
+    sourcePhase,
+    teardown,
+    transition,
+    transitionSha256
+  };
+}
+
+export function preflightWorkflowPhase(id, input, options = {}) {
+  const phaseId = requireEvidenceId(input.phaseId, "phase id");
+  const admissionBytes = input.admissionFile ? stableFileBytes(input.admissionFile, 2 * 1024 * 1024, "workflow admission file") : null;
+  const handoffBytes = input.handoffFile ? stableFileBytes(input.handoffFile, 2 * 1024 * 1024, "workflow handoff file") : null;
+  const paths = workflowPaths(options.paths || options, id);
+  ensureWorkflowRoot(paths);
+  ensureInstanceDirectories(paths, false);
+  const owner = acquireLock(paths);
+  let primaryError = null;
+  try {
+    const loaded = loadProjection(paths, { repair: false, requireCurrentContract: true });
+    const validated = validatePhaseStart(loaded.projection, paths, { ...input, phaseId }, admissionBytes, handoffBytes, {
+      preflight: true
+    });
+    if (!validated.phase.targetContact) throw new Error("workflow phase preflight is only available for target-contact phases");
+    return {
+      ok: true,
+      readOnly: true,
+      operation: "workflow.phase.start",
+      instanceId: loaded.projection.instanceId,
+      phaseId,
+      sourcePhase: validated.sourcePhase,
+      journal: {
+        sequence: loaded.projection.appliedSequence,
+        headSha256: loaded.projection.journalHeadSha256
+      },
+      transitionSha256: validated.transitionSha256,
+      admissionSha256: validated.admission.digest,
+      authorizationSha256: validated.authorizationSha256,
+      handoffRequired: validated.handoffRequired,
+      handoffSha256: validated.handoff?.digest || null,
+      confirmationRequired: validated.confirmationRequired,
+      readyForMutation: !validated.handoffRequired || Boolean(validated.handoff),
+      persisted: false
+    };
+  } catch (error) {
+    primaryError = error;
+    throw error;
+  } finally {
+    try { releaseLock(paths, owner); } catch (error) { if (!primaryError) throw error; }
+  }
+}
+
 export function startWorkflowPhase(id, input, options = {}) {
   const phaseId = requireEvidenceId(input.phaseId, "phase id");
   const admissionBytes = input.admissionFile ? stableFileBytes(input.admissionFile, 2 * 1024 * 1024, "workflow admission file") : null;
@@ -1318,62 +1475,13 @@ export function startWorkflowPhase(id, input, options = {}) {
     handoffFileSha256: handoffBytes ? sha256(handoffBytes) : null
   };
   return mutate(id, intentOptions(options, "phase.start", startIntent), (projection, entries, paths) => {
-    if (["closed", "reported"].includes(projection.status)) throw new Error(`workflow status ${projection.status} cannot start a phase`);
-    if (projection.activePhase) throw new Error(`phase ${projection.activePhase.phaseId} is already active`);
-    if (projection.phases[phaseId]) throw new Error(`phase ${phaseId} already has an attempt`);
-    const definition = loadDefinition(paths, projection.definition.id);
-    const phase = phaseById(definition, phaseId);
-    if (projection.joined && !new Set(["retest-and-regression", "retest-cleanup-verification"]).has(phaseId)) {
-      throw new Error("joined coverage permits only the defined retest branch before reporting");
-    }
-    const sourcePhase = input.sourcePhase ? requireEvidenceId(input.sourcePhase, "source phase") : null;
-    const handoffId = input.handoffId ? requireEvidenceId(input.handoffId, "handoff id") : null;
-    let transition = transitionFor(projection, definition, sourcePhase, phase, handoffId);
-    if (transition) transition = { ...transition, __fromPhase: sourcePhase };
-    const teardown = transition?.guard.authorization === "preauthorized-teardown" && TEARDOWN_PHASES.has(phase.id);
-    if (["stopped", "recovery-hold"].includes(projection.status) && !teardown) {
-      throw new Error("a fired stop blocks normal phase progress");
-    }
-    if (!teardown) assertDependencies(projection, phase, definition);
-    let admission = null;
-    let handoff = null;
-    if (phase.targetContact) {
-      if (!admissionBytes) throw new Error("target-contact phase requires a reviewed admission file");
-      admission = loadAdmission(paths, projection, definition, phase, admissionBytes, {
-        allowExpiredTeardown: teardown,
-        sourceAuthority: projection.phases[sourcePhase]?.authority || null
-      });
-      if (transition?.guard.authorization === "new-engagement") {
-        const sourceAuthority = projection.phases[sourcePhase]?.authority;
-        if (sourceAuthority?.receiptSha256 === admission.authority.receiptSha256) {
-          throw new Error("transition requires a fresh engagement receipt");
-        }
-      } else if (transition?.guard.authorization === "current-engagement") {
-        const sourceAuthority = projection.phases[sourcePhase]?.authority;
-        if (!sourceAuthority || sourceAuthority.receiptSha256 !== admission.authority.receiptSha256) {
-          throw new Error("transition requires the current engagement receipt");
-        }
-      } else if (transition?.guard.authorization === "preauthorized-teardown") {
-        const sourceAuthority = projection.phases[sourcePhase]?.authority;
-        if (!sourceAuthority || sourceAuthority.receiptSha256 !== admission.authority.receiptSha256 ||
-          sourceAuthority.engagementId !== admission.authority.engagementId) {
-          throw new Error("preauthorized teardown must retain the source phase authority receipt");
-        }
-      }
-      if (phase.effectClass === "A3") {
-        if (!transition?.handoffId || !handoffBytes) throw new Error("A3 phase entry requires a structured handoff file");
-        handoff = loadHandoff(paths, projection, definition, phase, transition, admission, handoffBytes, {
-          allowExpiredTeardown: teardown
-        });
-        const exactConfirmation = `AUTHORIZE A3 ${projection.instanceId} ${phase.id} ${handoff.digest}`;
-        if (input.confirm !== exactConfirmation) throw new Error(`high-impact confirmation must be exactly: ${exactConfirmation}`);
-      }
-    } else if (admissionBytes || handoffBytes || input.confirm) {
-      throw new Error("non-contact phase does not accept active admission or high-impact confirmation");
-    }
-    const transitionSha256 = transition
-      ? canonicalDigest({ sourcePhase, transition: Object.fromEntries(Object.entries(transition).filter(([key]) => key !== "__fromPhase")), handoffId: transition.handoffId || handoffId }, "gate.workflow.transition.v1")
-      : canonicalDigest({ root: phase.id }, "gate.workflow.transition.v1");
+    const validated = validatePhaseStart(projection, paths, { ...input, phaseId }, admissionBytes, handoffBytes, {
+      expectedSequence: options.expectedSequence,
+      expectedHead: options.expectedHead
+    });
+    const { admission, definition, handoff, handoffId, phase, sourcePhase, transition, transitionSha256 } = validated;
+    if (admission) saveContentAddressed(paths.workflowAdmissions, admission.digest, admissionBytes, `workflow admission ${admission.digest}`);
+    if (handoff) saveContentAddressed(paths.workflowHandoffs, handoff.digest, handoffBytes, `workflow handoff ${handoff.digest}`);
     const attemptId = newId("wpa");
     const executionEpochSha256 = canonicalDigest({
       instanceId: projection.instanceId,
@@ -1541,77 +1649,161 @@ export function setWorkflowCoverage(id, input, options = {}) {
   });
 }
 
-export function openWorkflowLedger(id, input, options = {}) {
-  const changeType = oneLine(input.changeType, "state change type", 80);
-  const targetSelectorSha256 = String(input.targetSelectorSha256 || "");
-  const beforeEvidenceSha256 = String(input.beforeEvidenceSha256 || "");
-  if (!SHA256_PATTERN.test(targetSelectorSha256) || !SHA256_PATTERN.test(beforeEvidenceSha256)) {
+function validateLedgerOpen(projection, paths, input, pivotAdmissionBytes, options = {}) {
+  if (!projection.activePhase) throw new Error("a ledger change requires an active phase");
+  if (projection.status !== "open") throw new Error(`workflow status ${projection.status} cannot open new target state`);
+  if (!projection.evidence.some((record) => record.sha256 === input.beforeEvidenceSha256 &&
+    record.phaseId === projection.activePhase.phaseId && record.attemptId === projection.activePhase.attemptId)) {
+    throw new Error("ledger before-evidence digest is not bound to the active phase attempt");
+  }
+  const definition = loadDefinition(paths, projection.definition.id);
+  const phase = phaseById(definition, projection.activePhase.phaseId);
+  if (!phase.stateChangeHandling?.mayChangeState) throw new Error("active phase does not permit target-side state change");
+  const pivotEntries = Object.values(projection.ledger).filter((entry) => entry.changeType === "pivot");
+  if (input.changeType === "pivot" && pivotEntries.length >= 3) throw new Error("pivot depth is capped at three workflow ledger entries");
+  let admission = null;
+  let confirmationRequired = null;
+  let pivot = null;
+  if (input.changeType === "pivot") {
+    if (!pivotAdmissionBytes) throw new Error("pivot subiteration requires a fresh reviewed admission file");
+    if (pendingReservations(projection).length) throw new Error("pivot cannot begin while an execution reservation is pending");
+    admission = validateAdmission(paths, projection, definition, phase, pivotAdmissionBytes);
+    const priorReceipts = new Set([
+      ...Object.values(projection.phases).map((record) => record.authority?.receiptSha256),
+      ...pivotEntries.map((record) => record.pivot?.authority?.receiptSha256)
+    ].filter(Boolean));
+    if (priorReceipts.has(admission.authority.receiptSha256)) throw new Error("pivot subiteration requires a fresh engagement receipt");
+    const targetSha256 = sha256(Buffer.from(admission.value.target));
+    if (targetSha256 !== input.targetSelectorSha256) throw new Error("pivot target selector digest differs from its fresh admission target");
+    const depth = pivotEntries.length + 1;
+    const authorizationSha256 = canonicalDigest({
+      instanceId: projection.instanceId,
+      workflowDefinitionSha256: projection.definition.sha256,
+      journalSequence: projection.appliedSequence,
+      journalHeadSha256: projection.journalHeadSha256,
+      phaseId: phase.id,
+      phaseAttemptId: projection.activePhase.attemptId,
+      depth,
+      admissionSha256: admission.digest,
+      targetSelectorSha256: input.targetSelectorSha256,
+      beforeEvidenceSha256: input.beforeEvidenceSha256,
+      cleanupAction: input.cleanupAction
+    }, "gate.workflow.pivot-authorization.v1");
+    confirmationRequired = `AUTHORIZE PIVOT ${projection.instanceId} ${phase.id} ${admission.digest} ${authorizationSha256}`;
+    if (!options.preflight) {
+      requireConfirmationPreconditions(projection, options, "pivot ledger open");
+      if (input.pivotConfirm !== confirmationRequired) {
+        throw new Error(`pivot confirmation must be exactly: ${confirmationRequired}`);
+      }
+    }
+    pivot = {
+      depth,
+      toolId: admission.value.toolId,
+      toolMappingSha256: admission.mappingSha256,
+      admissionSha256: admission.digest,
+      authorizationSha256,
+      authority: admission.authority,
+      envelope: admission.value.envelope,
+      targetSha256,
+      executionEpochSha256: canonicalDigest({
+        instanceId: projection.instanceId,
+        phaseId: phase.id,
+        attemptId: projection.activePhase.attemptId,
+        depth,
+        admissionSha256: admission.digest,
+        previousJournalHeadSha256: projection.journalHeadSha256
+      }, "gate.workflow.pivot-epoch.v1")
+    };
+  } else if (pivotAdmissionBytes || input.pivotConfirm) {
+    throw new Error("non-pivot ledger entries do not accept pivot authority");
+  }
+  return { admission, confirmationRequired, phase, pivot };
+}
+
+function normalizeLedgerOpenInput(input) {
+  const normalized = {
+    ...input,
+    changeType: oneLine(input.changeType, "state change type", 80),
+    targetSelectorSha256: String(input.targetSelectorSha256 || ""),
+    beforeEvidenceSha256: String(input.beforeEvidenceSha256 || ""),
+    cleanupAction: oneLine(input.cleanupAction, "cleanup action", 1000)
+  };
+  if (!SHA256_PATTERN.test(normalized.targetSelectorSha256) || !SHA256_PATTERN.test(normalized.beforeEvidenceSha256)) {
     throw new Error("ledger target and before-evidence digests must be SHA-256 values");
   }
-  const pivotAdmissionBytes = input.pivotAdmissionFile
-    ? stableFileBytes(input.pivotAdmissionFile, 2 * 1024 * 1024, "pivot admission file") : null;
+  return normalized;
+}
+
+export function preflightWorkflowPivot(id, input, options = {}) {
+  const normalized = normalizeLedgerOpenInput(input);
+  if (normalized.changeType !== "pivot") throw new Error("workflow ledger preflight is only available for pivot entries");
+  const pivotAdmissionBytes = normalized.pivotAdmissionFile
+    ? stableFileBytes(normalized.pivotAdmissionFile, 2 * 1024 * 1024, "pivot admission file") : null;
+  const paths = workflowPaths(options.paths || options, id);
+  ensureWorkflowRoot(paths);
+  ensureInstanceDirectories(paths, false);
+  const owner = acquireLock(paths);
+  let primaryError = null;
+  try {
+    const loaded = loadProjection(paths, { repair: false, requireCurrentContract: true });
+    const validated = validateLedgerOpen(loaded.projection, paths, normalized, pivotAdmissionBytes, { preflight: true });
+    return {
+      ok: true,
+      readOnly: true,
+      operation: "workflow.ledger.open",
+      instanceId: loaded.projection.instanceId,
+      phaseId: validated.phase.id,
+      phaseAttemptId: loaded.projection.activePhase.attemptId,
+      journal: {
+        sequence: loaded.projection.appliedSequence,
+        headSha256: loaded.projection.journalHeadSha256
+      },
+      admissionSha256: validated.admission.digest,
+      authorizationSha256: validated.pivot.authorizationSha256,
+      targetSelectorSha256: normalized.targetSelectorSha256,
+      beforeEvidenceSha256: normalized.beforeEvidenceSha256,
+      cleanupActionSha256: sha256(Buffer.from(normalized.cleanupAction)),
+      confirmationRequired: validated.confirmationRequired,
+      readyForMutation: true,
+      persisted: false
+    };
+  } catch (error) {
+    primaryError = error;
+    throw error;
+  } finally {
+    try { releaseLock(paths, owner); } catch (error) { if (!primaryError) throw error; }
+  }
+}
+
+export function openWorkflowLedger(id, input, options = {}) {
+  const normalized = normalizeLedgerOpenInput(input);
+  const pivotAdmissionBytes = normalized.pivotAdmissionFile
+    ? stableFileBytes(normalized.pivotAdmissionFile, 2 * 1024 * 1024, "pivot admission file") : null;
   const intent = {
-    ...input,
-    pivotAdmissionFile: input.pivotAdmissionFile ? path.basename(input.pivotAdmissionFile) : null,
+    ...normalized,
+    pivotAdmissionFile: normalized.pivotAdmissionFile ? path.basename(normalized.pivotAdmissionFile) : null,
     pivotAdmissionFileSha256: pivotAdmissionBytes ? sha256(pivotAdmissionBytes) : null
   };
   return mutate(id, intentOptions(options, "ledger.open", intent), (projection, entries, paths) => {
-    if (!projection.activePhase) throw new Error("a ledger change requires an active phase");
-    if (projection.status !== "open") throw new Error(`workflow status ${projection.status} cannot open new target state`);
-    if (!projection.evidence.some((record) => record.sha256 === beforeEvidenceSha256 &&
-      record.phaseId === projection.activePhase.phaseId && record.attemptId === projection.activePhase.attemptId)) {
-      throw new Error("ledger before-evidence digest is not bound to the active phase attempt");
-    }
-    const definition = loadDefinition(paths, projection.definition.id);
-    const phase = phaseById(definition, projection.activePhase.phaseId);
-    if (!phase.stateChangeHandling?.mayChangeState) throw new Error("active phase does not permit target-side state change");
-    const pivotEntries = Object.values(projection.ledger).filter((entry) => entry.changeType === "pivot");
-    if (changeType === "pivot" && pivotEntries.length >= 3) throw new Error("pivot depth is capped at three workflow ledger entries");
-    let pivot = null;
-    if (changeType === "pivot") {
-      if (!pivotAdmissionBytes) throw new Error("pivot subiteration requires a fresh reviewed admission file");
-      if (pendingReservations(projection).length) throw new Error("pivot cannot begin while an execution reservation is pending");
-      const admission = loadAdmission(paths, projection, definition, phase, pivotAdmissionBytes);
-      const priorReceipts = new Set([
-        ...Object.values(projection.phases).map((record) => record.authority?.receiptSha256),
-        ...pivotEntries.map((record) => record.pivot?.authority?.receiptSha256)
-      ].filter(Boolean));
-      if (priorReceipts.has(admission.authority.receiptSha256)) throw new Error("pivot subiteration requires a fresh engagement receipt");
-      const targetSha256 = sha256(Buffer.from(admission.value.target));
-      if (targetSha256 !== targetSelectorSha256) throw new Error("pivot target selector digest differs from its fresh admission target");
-      const confirmation = `AUTHORIZE PIVOT ${projection.instanceId} ${phase.id} ${admission.digest}`;
-      if (input.pivotConfirm !== confirmation) throw new Error(`pivot confirmation must be exactly: ${confirmation}`);
-      pivot = {
-        depth: pivotEntries.length + 1,
-        toolId: admission.value.toolId,
-        toolMappingSha256: admission.mappingSha256,
-        admissionSha256: admission.digest,
-        authority: admission.authority,
-        envelope: admission.value.envelope,
-        targetSha256,
-        executionEpochSha256: canonicalDigest({
-          instanceId: projection.instanceId,
-          phaseId: phase.id,
-          attemptId: projection.activePhase.attemptId,
-          depth: pivotEntries.length + 1,
-          admissionSha256: admission.digest,
-          previousJournalHeadSha256: projection.journalHeadSha256
-        }, "gate.workflow.pivot-epoch.v1")
-      };
-    } else if (pivotAdmissionBytes || input.pivotConfirm) {
-      throw new Error("non-pivot ledger entries do not accept pivot authority");
+    const validated = validateLedgerOpen(projection, paths, normalized, pivotAdmissionBytes, {
+      expectedSequence: options.expectedSequence,
+      expectedHead: options.expectedHead
+    });
+    if (validated.admission) {
+      saveContentAddressed(paths.workflowAdmissions, validated.admission.digest, pivotAdmissionBytes,
+        `workflow admission ${validated.admission.digest}`);
     }
     return {
       type: "ledger.opened",
       payload: {
         entryId: newId("wle"),
-        phaseId: phase.id,
+        phaseId: validated.phase.id,
         attemptId: projection.activePhase.attemptId,
-        changeType,
-        targetSelectorSha256,
-        beforeEvidenceSha256,
-        cleanupAction: oneLine(input.cleanupAction, "cleanup action", 1000),
-        pivot
+        changeType: normalized.changeType,
+        targetSelectorSha256: normalized.targetSelectorSha256,
+        beforeEvidenceSha256: normalized.beforeEvidenceSha256,
+        cleanupAction: normalized.cleanupAction,
+        pivot: validated.pivot
       }
     };
   });

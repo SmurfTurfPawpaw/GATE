@@ -50,6 +50,8 @@ import {
   holdWorkflowLedger,
   joinWorkflowCoverage,
   openWorkflowLedger,
+  preflightWorkflowPhase,
+  preflightWorkflowPivot,
   recordWorkflowLedgerCleanup,
   setWorkflowCoverage,
   startWorkflowPhase,
@@ -117,11 +119,12 @@ Engagements
 Pentest workflows
   workflow new ID [--engagement ID]  Create a private map-first workflow instance
   workflow status ID                 Show the compact journal-derived projection
+  workflow phase preflight ID --phase PHASE --from PHASE --admission FILE [--handoff-id ID] [--handoff FILE]
   workflow phase start ID --phase PHASE [--from PHASE] [--admission FILE]
   workflow phase finish ID --phase PHASE --disposition DISPOSITION
   workflow evidence add ID --phase PHASE --evidence ID --file PATH
   workflow coverage set ID --domain DOMAIN --disposition DISPOSITION
-  workflow ledger open|cleanup|verify|hold ID [options]
+  workflow ledger preflight|open|cleanup|verify|hold ID [options]
   workflow execution cancel ID --reservation ID --reason TEXT
   workflow stop ID --condition ID --reason TEXT
   workflow join ID                    Enforce the 18-domain and clean-ledger barrier
@@ -750,6 +753,18 @@ export async function main(argv) {
       if (!result.ok) process.exitCode = 2;
       return;
     }
+    if (area === "phase" && actionOrId === "preflight") {
+      assertPositionals(parsed.positional, 3, "gate workflow phase preflight ID --phase PHASE --from PHASE --admission FILE [--handoff-id ID] [--handoff FILE]");
+      assertFlags(parsed.flags, ["phase", "from", "admission", "handoff", "handoff-id", "json"]);
+      const result = preflightWorkflowPhase(maybeId, {
+        phaseId: requiredFlag(parsed.flags, "phase"),
+        sourcePhase: optionalValueFlag(parsed.flags, "from"),
+        admissionFile: requiredFlag(parsed.flags, "admission"),
+        handoffFile: optionalValueFlag(parsed.flags, "handoff"),
+        handoffId: optionalValueFlag(parsed.flags, "handoff-id")
+      }, { paths });
+      return output(result, json);
+    }
     if (area === "phase" && actionOrId === "start") {
       assertPositionals(parsed.positional, 3, "gate workflow phase start ID --phase PHASE [options]");
       assertFlags(parsed.flags, [
@@ -797,6 +812,18 @@ export async function main(argv) {
         rationale: optionalValueFlag(parsed.flags, "rationale")
       }, workflowMutationOptions(parsed.flags, paths));
       return output(workflowCommit(result), json);
+    }
+    if (area === "ledger" && actionOrId === "preflight") {
+      assertPositionals(parsed.positional, 3, "gate workflow ledger preflight ID --type pivot [options]");
+      assertFlags(parsed.flags, ["type", "target-sha", "before-sha", "cleanup", "pivot-admission", "json"]);
+      const result = preflightWorkflowPivot(maybeId, {
+        changeType: requiredFlag(parsed.flags, "type"),
+        targetSelectorSha256: requiredFlag(parsed.flags, "target-sha"),
+        beforeEvidenceSha256: requiredFlag(parsed.flags, "before-sha"),
+        cleanupAction: requiredFlag(parsed.flags, "cleanup"),
+        pivotAdmissionFile: requiredFlag(parsed.flags, "pivot-admission")
+      }, { paths });
+      return output(result, json);
     }
     if (area === "ledger" && actionOrId === "open") {
       assertPositionals(parsed.positional, 3, "gate workflow ledger open ID [options]");
