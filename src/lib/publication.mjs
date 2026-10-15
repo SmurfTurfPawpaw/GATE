@@ -666,9 +666,9 @@ function inspectPublication(request, runner, checkedAt, operation) {
     "POST",
     "--raw-field",
     `query=${PUBLICATION_QUERY}`,
-    "--field",
+    "--raw-field",
     `owner=${owner}`,
-    "--field",
+    "--raw-field",
     `name=${name}`,
     "--field",
     `number=${request.pullRequest}`

@@ -207,6 +207,24 @@ test("checkPublication is read-only, uses gh without a shell, and returns eviden
   }
 });
 
+test("publication preserves literal-looking repository strings at the gh boundary", () => {
+  for (const literal of ["123", "true", "false", "null"]) {
+    for (const repository of [`example/${literal}`, `${literal}/gate`]) {
+      for (const invoke of [checkPublication, publishPullRequest]) {
+        const fake = queuedRunner([{ stdout: publicationResponse({ repository }) }]);
+        const result = invoke({ ...REQUEST, repository }, { runner: fake.runner, dryRun: true });
+        assert.equal(result.ok, true);
+        assert.equal(fake.calls.length, 1);
+        const args = fake.calls[0].args;
+        const [owner, name] = repository.split("/");
+        assert.equal(args[args.indexOf(`owner=${owner}`) - 1], "--raw-field");
+        assert.equal(args[args.indexOf(`name=${name}`) - 1], "--raw-field");
+        assert.equal(args[args.indexOf("number=42") - 1], "--field");
+      }
+    }
+  }
+});
+
 test("publication child environment keeps only reviewed authentication and network inputs", (t) => {
   if (!fs.existsSync("/etc/ssl/certs/ca-certificates.crt") || !fs.existsSync("/etc/ssl/certs")) {
     return t.skip("this host does not expose the distribution CA bundle paths used by the WSL2 contract");
