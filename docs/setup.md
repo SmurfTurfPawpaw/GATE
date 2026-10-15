@@ -92,7 +92,7 @@ gh auth status
 codex login status
 ```
 
-If Codex was installed by another supported method, keep that installation and only run the verification commands. Export `GH_TOKEN` or `GITHUB_TOKEN` in each shell that performs a managed release install. The downloader uses a fresh GitHub CLI configuration directory, so it deliberately cannot consume credentials stored only by `gh auth login`; do not save the token in this repository.
+If Codex was installed by another supported method, keep that installation and only run the verification commands. Export `GH_TOKEN` or `GITHUB_TOKEN` in each shell that performs a managed release install or [publication preflight](../README.md#preflight-an-exact-reviewed-head). Both isolate GitHub CLI configuration, so they deliberately cannot consume credentials stored only by `gh auth login`; do not save the token in this repository.
 
 ## 2. Clone into the WSL filesystem
 
