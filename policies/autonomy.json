@@ -47,7 +47,7 @@
       "actions": ["github.merge", "deploy", "publish"],
       "decision": "delegate",
       "owner": "gate-publication",
-      "requirements": ["verified-no-mistakes-attestation", "trusted-publication-adapter", "protected-checks-pass", "exact-head-match", "configured-destination"]
+      "requirements": ["verified-no-mistakes-attestation", "trusted-publication-adapter", "exact-head-checks-pass", "exact-head-match", "configured-destination"]
     },
     {
       "id": "cyber-research",

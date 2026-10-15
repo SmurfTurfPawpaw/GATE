@@ -73,7 +73,7 @@ The offline branch is bound to a project contract and local snapshot rather than
 | Treehouse | Development workspace allocation, durable leases, and its versioned state format | Orchestration, safe destructive cleanup, or security isolation |
 | GNHF | A bounded iterative task inside one exclusive lease | Worktree creation, push, PR, or policy |
 | No Mistakes | Handoff, rebase, review, tests, documentation, lint, push, PR, CI | Merge, deployment, target authorization, arbitrary tool execution |
-| GATE publication authority | Read-only exact-head and required-check preflight in v0.1; trusted mutation adapters in the target design | Editing or reviewing the change |
+| GATE publication authority | Read-only exact-head and observed-check preflight in v0.1; trusted mutation adapters in the target design | Editing or reviewing the change |
 | GATE engagement broker | Plan receipt, target/action-label/tool/environment preflight, one-shot generic manifests, supervised execution, stop/revocation, and reviewed adapter admission | Creating its own authorization, interpreting arbitrary argv as an action proof, or launching an unbound command |
 | GATE managed tool runtime | Exact GitHub-release lock validation, private artifact cache, staged install, zero-egress smoke, current-byte verification, removal, and lifecycle results | Target authority, argument semantics, data-pack admission, privilege brokering, or execution outside a separately approved lane |
 | GATE offline-analysis lane | Project/artifact/runtime binding, private snapshots, one-shot confirmation, zero-network launch, and bounded evidence for the fixed REA adapter | Target contact, arbitrary REA commands, artifact execution, or authorization inferred from artifact contents |
@@ -84,7 +84,7 @@ The offline branch is bound to a project contract and local snapshot rather than
 | Observer | Read-only GATE activity, derived agent/task, learning, status, and token views | Execution |
 | Learning pipeline | Correction capture and validated memory changes | Expanding authorization or releasing data |
 
-No Mistakes deliberately stops when a PR is ready. In v0.1, the publication authority can only inspect PR state, exact head, mergeability, and required checks. A future mutation adapter must verify a No Mistakes attestation bound to that head before it can merge, deploy, or publish. GATE never reports that upstream No Mistakes performed those actions.
+No Mistakes deliberately stops when a PR is ready. In v0.1, the publication authority can only inspect PR state, exact head, mergeability, and the complete bounded set of checks observed on that head. Branch protection is not required. A future mutation adapter must verify a No Mistakes attestation bound to that head before it can merge, deploy, or publish. GATE never reports that upstream No Mistakes performed those actions.
 
 ## State and data boundaries
 
@@ -164,7 +164,7 @@ Workspace operations are serialized by an owner-only clone-specific lock. When a
 4. GNHF may run only as a bounded leaf task in that lease. Iteration, time, token, and failure caps are mandatory.
 5. The worker hands an immutable commit to No Mistakes.
 6. No Mistakes owns review through green CI. No other reviewer or publisher mutates the same branch during this stage.
-7. The v0.1 publication authority performs a read-only exact-head and required-check preflight. A future trusted adapter verifies the external No Mistakes attestation and project policy before any merge, deployment, or publication.
+7. The v0.1 publication authority performs a read-only exact-head and observed-check preflight without depending on branch protection. A future trusted adapter verifies the external No Mistakes attestation and project policy before any merge, deployment, or publication.
 8. The observer records available GATE state. GATE verifies that the exact clean, inactive workspace head is locally reachable from the named checked-out branch, then retains the lease for manual reconciliation.
 
 Only the project registry and Treehouse lease/status/verify portions of this lifecycle are newly wired. GATE still does not invoke Firstmate, launch Codex or GNHF, hand a branch to No Mistakes, verify No Mistakes attestations, land a change, safely destroy a Treehouse root, or perform publication mutation.

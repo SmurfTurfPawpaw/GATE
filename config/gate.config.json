@@ -48,7 +48,7 @@
       "owner": "gate-publication",
       "requires": [
         "no-mistakes-success",
-        "protected-checks-pass",
+        "exact-head-checks-pass",
         "exact-head-match"
       ]
     }

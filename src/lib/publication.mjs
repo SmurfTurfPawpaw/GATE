@@ -2,10 +2,10 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-const API_VERSION = "gate.publication/v1";
+const API_VERSION = "gate.publication/v2";
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
 const REPOSITORY_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,99})\/[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,99})$/;
-const MAX_REQUIRED_CHECK_CONTEXTS = 100;
+const MAX_CHECK_CONTEXTS = 100;
 const SUCCESSFUL_CHECK_BUCKETS = new Set(["pass"]);
 const CHECK_BUCKETS = new Set(["pass", "fail", "pending", "skipping", "cancel"]);
 const CHECK_RUN_STATUSES = new Set(["COMPLETED", "IN_PROGRESS", "PENDING", "QUEUED", "REQUESTED", "WAITING"]);
@@ -57,7 +57,7 @@ const PUBLICATION_QUERY = `query GatePublicationPreflight($owner: String!, $name
           commit {
             oid
             statusCheckRollup {
-              contexts(first: ${MAX_REQUIRED_CHECK_CONTEXTS}) {
+              contexts(first: ${MAX_CHECK_CONTEXTS}) {
                 totalCount
                 nodes {
                   __typename
@@ -66,14 +66,12 @@ const PUBLICATION_QUERY = `query GatePublicationPreflight($owner: String!, $name
                     status
                     conclusion
                     detailsUrl
-                    isRequired(pullRequestNumber: $number)
                     checkSuite { workflowRun { workflow { name } } }
                   }
                   ... on StatusContext {
                     context
                     state
                     targetUrl
-                    isRequired(pullRequestNumber: $number)
                   }
                 }
                 pageInfo { hasNextPage endCursor }
@@ -144,20 +142,20 @@ export function projectPullRequest(raw) {
   };
 }
 
-/** Project and validate the required-check response from GitHub CLI. */
-export function projectRequiredChecks(raw) {
-  if (!Array.isArray(raw)) throw new TypeError("required checks response must be an array");
+/** Project and validate a bounded check response from GitHub CLI. */
+export function projectChecks(raw) {
+  if (!Array.isArray(raw)) throw new TypeError("checks response must be an array");
   return raw.map((candidate, index) => {
-    const value = plainObject(candidate, `required check ${index}`);
-    const name = boundedString(value.name, `required check ${index} name`, 300);
-    const bucket = boundedString(value.bucket, `required check ${index} bucket`, 30).toLowerCase();
-    if (!CHECK_BUCKETS.has(bucket)) throw new TypeError(`unrecognized bucket for required check ${name}: ${bucket}`);
+    const value = plainObject(candidate, `check ${index}`);
+    const name = boundedString(value.name, `check ${index} name`, 300);
+    const bucket = boundedString(value.bucket, `check ${index} bucket`, 30).toLowerCase();
+    if (!CHECK_BUCKETS.has(bucket)) throw new TypeError(`unrecognized bucket for check ${name}: ${bucket}`);
     return {
       name,
       bucket,
-      state: optionalString(value.state, `required check ${index} state`, 100),
-      workflow: optionalString(value.workflow, `required check ${index} workflow`, 300),
-      link: optionalString(value.link, `required check ${index} link`, 2_000)
+      state: optionalString(value.state, `check ${index} state`, 100),
+      workflow: optionalString(value.workflow, `check ${index} workflow`, 300),
+      link: optionalString(value.link, `check ${index} link`, 2_000)
     };
   });
 }
@@ -173,24 +171,20 @@ function checkRunBucket(status, conclusion) {
 
 function projectWorkflow(value, index) {
   if (value === null || value === undefined) return null;
-  const suite = plainObject(value, `required check ${index} check suite`);
+  const suite = plainObject(value, `check ${index} check suite`);
   if (suite.workflowRun === null || suite.workflowRun === undefined) return null;
-  const run = plainObject(suite.workflowRun, `required check ${index} workflow run`);
+  const run = plainObject(suite.workflowRun, `check ${index} workflow run`);
   if (run.workflow === null || run.workflow === undefined) return null;
-  const workflow = plainObject(run.workflow, `required check ${index} workflow`);
-  return boundedString(workflow.name, `required check ${index} workflow name`, 300);
+  const workflow = plainObject(run.workflow, `check ${index} workflow`);
+  return boundedString(workflow.name, `check ${index} workflow name`, 300);
 }
 
-function projectRequiredContext(candidate, index) {
+function projectCheckContext(candidate, index) {
   const value = plainObject(candidate, `check context ${index}`);
   const type = boundedString(value.__typename, `check context ${index} type`, 30);
   if (!CHECK_CONTEXT_TYPES.has(type)) {
     throw new TypeError(`unrecognized check context type: ${type}`);
   }
-  if (typeof value.isRequired !== "boolean") {
-    throw new TypeError(`check context ${index} required state must be boolean`);
-  }
-
   if (type === "CheckRun") {
     const name = boundedString(value.name, `check context ${index} name`, 300);
     const status = boundedString(value.status, `check context ${index} status`, 30).toUpperCase();
@@ -211,7 +205,7 @@ function projectRequiredContext(candidate, index) {
       workflow: projectWorkflow(value.checkSuite, index),
       link: optionalString(value.detailsUrl, `check context ${index} details URL`, 2_000)
     };
-    return value.isRequired ? projected : null;
+    return projected;
   }
 
   const name = boundedString(value.context, `check context ${index} name`, 300);
@@ -224,7 +218,7 @@ function projectRequiredContext(candidate, index) {
     workflow: null,
     link: optionalString(value.targetUrl, `check context ${index} target URL`, 2_000)
   };
-  return value.isRequired ? projected : null;
+  return projected;
 }
 
 /** Project one bounded, exact-PR GraphQL publication response. */
@@ -260,30 +254,29 @@ export function projectPublicationResponse(raw, request) {
   }
 
   if (commit.statusCheckRollup === null || commit.statusCheckRollup === undefined) {
-    return { pullRequest, requiredChecks: [] };
+    return { pullRequest, checks: [] };
   }
   const rollup = plainObject(commit.statusCheckRollup, "publication GraphQL status check rollup");
   const contexts = plainObject(rollup.contexts, "publication GraphQL check context connection");
   if (!Number.isSafeInteger(contexts.totalCount) || contexts.totalCount < 0) {
     throw new TypeError("publication GraphQL check context count must be a non-negative integer");
   }
-  if (!Array.isArray(contexts.nodes) || contexts.nodes.length > MAX_REQUIRED_CHECK_CONTEXTS) {
-    throw new TypeError(`publication GraphQL response exceeds ${MAX_REQUIRED_CHECK_CONTEXTS} check contexts`);
+  if (!Array.isArray(contexts.nodes) || contexts.nodes.length > MAX_CHECK_CONTEXTS) {
+    throw new TypeError(`publication GraphQL response exceeds ${MAX_CHECK_CONTEXTS} check contexts`);
   }
   const pageInfo = plainObject(contexts.pageInfo, "publication GraphQL check context page information");
   if (typeof pageInfo.hasNextPage !== "boolean") {
     throw new TypeError("publication GraphQL check context pagination state must be boolean");
   }
   if (pageInfo.hasNextPage || contexts.totalCount !== contexts.nodes.length) {
-    throw new TypeError(`publication GraphQL response exceeds the bounded ${MAX_REQUIRED_CHECK_CONTEXTS}-context page`);
+    throw new TypeError(`publication GraphQL response exceeds the bounded ${MAX_CHECK_CONTEXTS}-context page`);
   }
 
-  const requiredChecks = [];
+  const checks = [];
   for (const [index, candidate] of contexts.nodes.entries()) {
-    const projected = projectRequiredContext(candidate, index);
-    if (projected) requiredChecks.push(projected);
+    checks.push(projectCheckContext(candidate, index));
   }
-  return { pullRequest, requiredChecks };
+  return { pullRequest, checks };
 }
 
 /** Pure request validation. No command is run until this succeeds. */
@@ -336,14 +329,15 @@ export function validatePublicationRequest(input) {
 }
 
 /**
- * Pure fail-closed evaluation of a projected PR and its required checks.
+ * Pure fail-closed evaluation of a projected PR and all checks observed on its
+ * exact head. GitHub branch protection is not a publication prerequisite.
  * `viewEstablished` and `checksEstablished` let callers distinguish an empty
- * required-check list from an unavailable check list.
+ * check list from an unavailable check list.
  */
 export function evaluatePublication({
   request,
   pullRequest,
-  requiredChecks,
+  checks,
   viewEstablished = true,
   checksEstablished = true
 }) {
@@ -369,14 +363,14 @@ export function evaluatePublication({
     }
   }
 
-  if (!checksEstablished || !Array.isArray(requiredChecks)) {
-    reasons.push(reason("required-check-state-unavailable", "required check state could not be established"));
-  } else if (requiredChecks.length === 0) {
-    reasons.push(reason("no-required-checks", "the pull request has no required checks to validate"));
+  if (!checksEstablished || !Array.isArray(checks)) {
+    reasons.push(reason("check-state-unavailable", "exact-head check state could not be established"));
+  } else if (checks.length === 0) {
+    reasons.push(reason("no-checks", "the pull request head has no checks to validate"));
   } else {
-    for (const check of requiredChecks) {
+    for (const check of checks) {
       if (!SUCCESSFUL_CHECK_BUCKETS.has(check.bucket)) {
-        reasons.push(reason("required-check-not-green", `required check ${check.name} is ${check.bucket}`));
+        reasons.push(reason("check-not-green", `check ${check.name} is ${check.bucket}`));
       }
     }
   }
@@ -645,7 +639,7 @@ function baseEvidence(operation, checkedAt, request, requestReasons = []) {
     noMistakesRunId: request?.noMistakesRunId || null,
     mergeMode: request?.mergeMode || null,
     pullRequest: null,
-    requiredChecks: null,
+    checks: null,
     commands: [],
     mutationAttempted: false,
     outcome: "blocked",
@@ -682,12 +676,12 @@ function inspectPublication(request, runner, checkedAt, operation) {
     evidence.reasons.push(reason("publication-command-failed", "gh could not establish publication state"));
   }
   evidence.pullRequest = projected.value?.pullRequest || null;
-  evidence.requiredChecks = projected.value?.requiredChecks || null;
+  evidence.checks = projected.value?.checks || null;
 
   const decision = evaluatePublication({
     request,
     pullRequest: evidence.pullRequest,
-    requiredChecks: evidence.requiredChecks,
+    checks: evidence.checks,
     viewEstablished: projected.established,
     checksEstablished: projected.established
   });

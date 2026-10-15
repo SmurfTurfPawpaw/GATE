@@ -33,7 +33,7 @@ npm test
 npm run check
 ```
 
-No Mistakes owns the branch after handoff through review, tests, documentation, lint, push, pull request, and CI. Do not mutate the branch concurrently. GATE v0.1 provides read-only exact-head and required-check preflight. Merge or publication remains blocked until a trusted adapter verifies a No Mistakes attestation bound to that head and enforces project policy.
+No Mistakes owns the branch after handoff through review, tests, documentation, lint, push, pull request, and CI. Do not mutate the branch concurrently. GATE v0.1 provides read-only exact-head and observed-check preflight without requiring branch protection. Merge or publication remains blocked until a trusted adapter verifies a No Mistakes attestation bound to that head and enforces project policy.
 
 Tests should cover meaningful contracts and failure modes. Receipt invalidation, target and exclusion matching, redaction, schema rejection, private/public storage, command invocation, cancellation, and recovery deserve direct tests. Do not add tests that only repeat implementation text.
 

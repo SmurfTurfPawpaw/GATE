@@ -7,9 +7,9 @@ import {
   checkPublication,
   evaluatePublication,
   publicationInternals,
+  projectChecks,
   projectPublicationResponse,
   projectPullRequest,
-  projectRequiredChecks,
   publishPullRequest,
   validatePublicationRequest
 } from "../src/lib/publication.mjs";
@@ -57,7 +57,6 @@ function checkRun(overrides = {}) {
     status: "COMPLETED",
     conclusion: "SUCCESS",
     detailsUrl: "https://github.com/example/gate/actions/runs/1",
-    isRequired: true,
     checkSuite: { workflowRun: { workflow: { name: "Validate" } } },
     ...overrides
   };
@@ -132,7 +131,7 @@ test("untrusted GitHub JSON is projected into a bounded representation", () => {
     mergeState: "CLEAN",
     mergedAt: null
   });
-  assert.deepEqual(projectRequiredChecks(checks()), [
+  assert.deepEqual(projectChecks(checks()), [
     {
       name: "validate",
       bucket: "pass",
@@ -142,7 +141,7 @@ test("untrusted GitHub JSON is projected into a bounded representation", () => {
     }
   ]);
   assert.throws(() => projectPullRequest(pullRequest({ headRefOid: "main" })), /40 lowercase hex/);
-  assert.throws(() => projectRequiredChecks([{ name: "validate", bucket: "mystery" }]), /unrecognized bucket/);
+  assert.throws(() => projectChecks([{ name: "validate", bucket: "mystery" }]), /unrecognized bucket/);
 
   assert.deepEqual(projectPublicationResponse(publicationResponse(), REQUEST), {
     pullRequest: {
@@ -154,7 +153,7 @@ test("untrusted GitHub JSON is projected into a bounded representation", () => {
       mergeState: "CLEAN",
       mergedAt: null
     },
-    requiredChecks: checks()
+    checks: checks()
   });
 });
 
@@ -174,15 +173,15 @@ test("request and state validation fail closed", () => {
   const decision = evaluatePublication({
     request,
     pullRequest: projected,
-    requiredChecks: projectRequiredChecks(checks({ bucket: "pending" }))
+    checks: projectChecks(checks({ bucket: "pending" }))
   });
   assert.equal(decision.ok, false);
   assert.deepEqual(
     decision.reasons.map((item) => item.code),
-    ["pull-request-is-draft", "head-mismatch", "required-check-not-green"]
+    ["pull-request-is-draft", "head-mismatch", "check-not-green"]
   );
   assert.equal(
-    evaluatePublication({ request, pullRequest: projected, requiredChecks: null, checksEstablished: false }).ok,
+    evaluatePublication({ request, pullRequest: projected, checks: null, checksEstablished: false }).ok,
     false
   );
 });
@@ -194,7 +193,9 @@ test("checkPublication is read-only, uses gh without a shell, and returns eviden
   assert.equal(result.ok, true);
   assert.equal(result.outcome, "ready");
   assert.equal(result.noMistakesRunId, REQUEST.noMistakesRunId);
+  assert.equal(result.apiVersion, "gate.publication/v2");
   assert.equal(fake.calls.length, 1);
+  assert.equal(publicationInternals.publicationQuery.includes("isRequired"), false);
   assert.deepEqual(fake.calls[0].args.slice(0, 2), ["api", "graphql"]);
   for (const call of fake.calls) {
     assert.equal(call.command, "gh");
@@ -367,11 +368,11 @@ test("ambient GitHub configuration cannot redirect publication evidence from git
   assert.equal(call.args.includes("name=gate"), true);
 });
 
-test("an unavailable or malformed required-check response blocks publication", () => {
+test("an unavailable, malformed, or empty exact-head check response blocks publication", () => {
   const unavailable = queuedRunner([{ status: 1, stdout: "", stderr: "network unavailable" }]);
   const unavailableResult = checkPublication(REQUEST, { runner: unavailable.runner });
   assert.equal(unavailableResult.ok, false);
-  assert.ok(unavailableResult.reasons.some((item) => item.code === "required-check-state-unavailable"));
+  assert.ok(unavailableResult.reasons.some((item) => item.code === "check-state-unavailable"));
 
   const malformed = queuedRunner([{ stdout: { unexpected: true } }]);
   const malformedResult = checkPublication(REQUEST, { runner: malformed.runner });
@@ -381,32 +382,53 @@ test("an unavailable or malformed required-check response blocks publication", (
   const absent = queuedRunner([{ stdout: publicationResponse({ contexts: [] }) }]);
   const absentResult = checkPublication(REQUEST, { runner: absent.runner });
   assert.equal(absentResult.ok, false);
-  assert.ok(absentResult.reasons.some((item) => item.code === "no-required-checks"));
+  assert.ok(absentResult.reasons.some((item) => item.code === "no-checks"));
+
+  const noRollup = queuedRunner([{ stdout: publicationResponse({ statusCheckRollup: null }) }]);
+  const noRollupResult = checkPublication(REQUEST, { runner: noRollup.runner });
+  assert.equal(noRollupResult.ok, false);
+  assert.ok(noRollupResult.reasons.some((item) => item.code === "no-checks"));
 });
 
-test("GraphQL publication state is exact-head-bound, required-only, and bounded", () => {
-  const optionalFailure = checkRun({ name: "optional", conclusion: "FAILURE", isRequired: false });
-  const requiredLegacy = {
+test("GraphQL publication state is exact-head-bound, protection-independent, and bounded", () => {
+  const optionalFailure = checkRun({ name: "optional", conclusion: "FAILURE" });
+  const legacy = {
     __typename: "StatusContext",
-    context: "legacy-required",
+    context: "legacy",
     state: "SUCCESS",
-    targetUrl: "https://github.com/example/gate/status/1",
-    isRequired: true
+    targetUrl: "https://github.com/example/gate/status/1"
   };
-  const ready = checkPublication(REQUEST, {
-    runner: queuedRunner([{ stdout: publicationResponse({ contexts: [optionalFailure, checkRun(), requiredLegacy] }) }]).runner
+  const blockedOptional = checkPublication(REQUEST, {
+    runner: queuedRunner([{ stdout: publicationResponse({ contexts: [optionalFailure, checkRun(), legacy] }) }]).runner
   });
-  assert.equal(ready.ok, true);
-  assert.deepEqual(ready.requiredChecks.map((check) => check.name), ["validate", "legacy-required"]);
+  assert.equal(blockedOptional.ok, false);
+  assert.deepEqual(blockedOptional.checks.map((check) => check.name), ["optional", "validate", "legacy"]);
+  assert.ok(blockedOptional.reasons.some(({ code }) => code === "check-not-green"));
 
-  for (const conclusion of ["NEUTRAL", "SKIPPED"]) {
+  const unprotectedReady = checkPublication(REQUEST, {
+    runner: queuedRunner([{ stdout: publicationResponse({ contexts: [
+      checkRun({ name: "Node 22.20.0" }),
+      checkRun({ name: "Node 24.x" })
+    ] }) }]).runner
+  });
+  assert.equal(unprotectedReady.ok, true);
+  assert.deepEqual(unprotectedReady.checks.map((check) => check.name), ["Node 22.20.0", "Node 24.x"]);
+
+  for (const conclusion of ["ACTION_REQUIRED", "CANCELLED", "FAILURE", "NEUTRAL", "SKIPPED", "STALE", "STARTUP_FAILURE", "TIMED_OUT"]) {
     const nonSuccess = checkPublication(REQUEST, {
       runner: queuedRunner([{ stdout: publicationResponse({ contexts: [checkRun({ conclusion })] }) }]).runner
     });
     assert.equal(nonSuccess.ok, false, conclusion);
-    assert.equal(nonSuccess.requiredChecks[0].bucket, "skipping", conclusion);
-    assert.ok(nonSuccess.reasons.some(({ code }) => code === "required-check-not-green"), conclusion);
+    assert.notEqual(nonSuccess.checks[0].bucket, "pass", conclusion);
+    assert.ok(nonSuccess.reasons.some(({ code }) => code === "check-not-green"), conclusion);
   }
+
+  const running = checkPublication(REQUEST, {
+    runner: queuedRunner([{ stdout: publicationResponse({ contexts: [checkRun({ status: "IN_PROGRESS", conclusion: null })] }) }]).runner
+  });
+  assert.equal(running.ok, false);
+  assert.equal(running.checks[0].bucket, "pending");
+  assert.ok(running.reasons.some(({ code }) => code === "check-not-green"));
 
   for (const response of [
     publicationResponse({ commitOid: "b".repeat(40) }),
