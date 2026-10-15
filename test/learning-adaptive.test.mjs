@@ -419,6 +419,43 @@ test("consult uses exact canonical applicability and emits a deterministic bound
   assert.deepEqual(stale.selected, []);
 });
 
+test("consultation selects the newest instant across timezone offsets with a limit of one", (t) => {
+  const paths = fixture(t);
+  const older = promotePublic(paths, addCandidate(paths), { at: "2026-10-15T12:00:00+02:00" });
+  const newer = promotePublic(paths, addCandidate(paths), { at: "2026-10-15T11:00:00Z" });
+  const limited = consultLearnings({ applicability, limit: 1 }, { paths });
+  assert.deepEqual(limited.selected.map((item) => item.id), [newer.id]);
+  const full = consultLearnings({ applicability }, { paths });
+  assert.deepEqual(full.selected.map((item) => item.id), [newer.id, older.id]);
+  const verified = verifyLearningConsultationSnapshot({
+    applicability,
+    learningIds: [newer.id, older.id],
+    ledgerHeadSha256: full.ledgerHeadSha256,
+    projectionSha256: full.projectionSha256
+  }, { paths });
+  assert.deepEqual(verified.selected.map((item) => item.id), [newer.id, older.id]);
+});
+
+test("equivalent validation instants use domain then ID tie-breakers", (t) => {
+  const paths = fixture(t);
+  const software = promotePublic(paths, addCandidate(paths), {
+    at: "2026-10-15T13:00:00+02:00",
+    id: "lrn_20261015110000_00000001"
+  });
+  const activeLaterId = promotePublic(paths, addCandidate(paths, { domain: "active-testing" }), {
+    at: "2026-10-15T11:00:00Z",
+    id: "lrn_20261015110000_00000003"
+  });
+  const activeEarlierId = promotePublic(paths, addCandidate(paths, { domain: "active-testing" }), {
+    at: "2026-10-15T06:00:00-05:00",
+    id: "lrn_20261015110000_00000002"
+  });
+  assert.deepEqual(consultLearnings({ applicability, limit: 1 }, { paths }).selected.map((item) => item.id),
+    [activeEarlierId.id]);
+  assert.deepEqual(consultLearnings({ applicability }, { paths }).selected.map((item) => item.id),
+    [activeEarlierId.id, activeLaterId.id, software.id]);
+});
+
 test("historical consultation verification replays an exact retained ledger prefix", (t) => {
   const paths = fixture(t);
   const first = promotePublic(paths, addCandidate(paths), { at: "2026-10-15T10:00:00.000Z" });

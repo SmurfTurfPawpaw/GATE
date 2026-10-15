@@ -1278,7 +1278,7 @@ function consultLearningsWithRecords(input = {}, options = {}, suppliedRecords =
   const candidates = effectiveV2.filter((record) => !conflictedIds.has(record.id)).map(v2Projection);
 
   candidates.sort((left, right) =>
-    right.validatedAt.localeCompare(left.validatedAt) ||
+    Date.parse(right.validatedAt) - Date.parse(left.validatedAt) ||
     left.domain.localeCompare(right.domain) ||
     left.id.localeCompare(right.id)
   );
