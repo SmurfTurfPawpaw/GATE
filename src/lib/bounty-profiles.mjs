@@ -2441,15 +2441,14 @@ export function compileProgramProfile(id, input = {}, options = {}) {
   const cleanId = cleanProfileId(id);
   const paths = bountyPaths(options);
   ensureProfileDirectory(paths, cleanId, { create: false });
-  const verifiedAt = new Date(options.now || Date.now()).toISOString();
-  // Minute precision keeps repeated no-change compilation idempotent while
-  // still recording the current assessment interval. Readiness itself uses
-  // the exact verification instant above and is never rounded.
-  const assessedAt = new Date(Math.floor(Date.parse(verifiedAt) / 60_000) * 60_000).toISOString();
+  // Capture one exact decision instant. Authorization readiness, provider
+  // freshness, emitted artifacts, and the content-addressed compilation ID
+  // must describe that same instant, especially at validity boundaries.
+  const assessedAt = new Date(options.now || Date.now()).toISOString();
   const profile = withProfileLock(paths, cleanId, () => loadStoredProfile(paths, cleanId));
-  const verification = verifyProfileValue(profile, cleanId, { ...options, paths, now: verifiedAt });
+  const verification = verifyProfileValue(profile, cleanId, { ...options, paths, now: assessedAt });
   if (!verification.structuralValid) throw new Error(`program profile is structurally invalid: ${verification.checks.filter((item) => !item.ok && item.name !== "compile-readiness").map((item) => item.detail).join("; ")}`);
-  const provider = providerProfileInput(input.providerProfile, paths, { ...options, now: verifiedAt });
+  const provider = providerProfileInput(input.providerProfile, paths, { ...options, now: assessedAt });
   const compileInput = {
     engagementId: cleanProfileId(input.engagementId || derivedProfileId(cleanId, "assessment")),
     workflowId: cleanProfileId(input.workflowId || derivedProfileId(cleanId, "pentest-e2e")),

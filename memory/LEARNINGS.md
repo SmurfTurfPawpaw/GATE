@@ -84,6 +84,7 @@ Add proposed lessons here only after removing sensitive context. Promotion must 
 - 2026-10-14 | Cause: Equal-millisecond cumulative usage records were resolved by timestamp alone, so an earlier total could be presented as current. | Change: Break equal usage timestamps by original append order and cover both compact agent and observer projections with regression tests. | Evidence: event://evt_20261014182116_5c3b238b | Status: proposed
 
 - 2026-10-14 | Cause: Replacing a duplicate token ID retained its first Map position and selected stale equal-timestamp cumulative totals. | Change: Delete each valid token ID before reinserting it so canonical records retain last-occurrence order for all status consumers. | Evidence: evidence://test/optimization.test.mjs, evidence://test/observer.test.mjs | Status: proposed
+- 2026-10-15 | Cause: Exact-head review found broad blocker matching and minute-rounded assessment timestamps could misroute attestation resume and contradict boundary decisions. | Change: Prefer exact questionnaire paths and bind authorization, provider freshness, emitted artifacts, and compilation identity to one exact captured assessment instant. | Evidence: event://evt_20261015001318_e05ef96d | Status: proposed
 
 ## Superseded or reverted
 

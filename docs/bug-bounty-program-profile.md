@@ -93,7 +93,7 @@ Verify, then compile. Optional engagement and workflow IDs label proposed downst
 
 `show --format model-context` renders a bounded view with the default proposed IDs. The compile result returns private references and SHA-256 values for the exact packet bound to its selected engagement, workflow, and provider profile.
 
-The canonical profile is stored at `GATE_HOME/programs/acme-program/program-profile.json`. A successful compile writes a 64-character digest-named directory below `GATE_HOME/programs/acme-program/compiled/`. The digest binds the profile, proposed IDs, provider snapshot, verification result, and minute-bounded assessment time, so a repeated compile in the same assessment interval is idempotent and changed input cannot overwrite an earlier bundle. The directory contains:
+The canonical profile is stored at `GATE_HOME/programs/acme-program/program-profile.json`. A successful compile writes a 64-character digest-named directory below `GATE_HOME/programs/acme-program/compiled/`. Compilation captures one exact assessment instant and uses it for authorization readiness, provider freshness, every emitted assessment timestamp, and the directory digest. Repeating a compile with the same exact inputs and assessment instant is idempotent; a later invocation produces a distinct time-bound bundle even within the same minute. Changed input cannot overwrite an earlier bundle. The directory contains:
 
 - `source-ledger.json`, `authorization-summary.md`, `operator-review.md`, and `ambiguities.json`/`ambiguities.md` for provenance and operator review;
 - `scope-matrix.json`, `technique-matrix.json`, `coverage-plan.json`, and `execution-policy.json` for deterministic planning;

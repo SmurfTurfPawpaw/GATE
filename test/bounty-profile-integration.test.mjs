@@ -5,9 +5,11 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { PassThrough, Writable } from "node:stream";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { cliInternals } from "../src/cli.mjs";
 import {
   applyProgramProfileAnswers,
   bountyProfileInternals,
@@ -506,6 +508,42 @@ test("substantive edits invalidate attestation until the current revision is exp
   assert.equal(current.metadata.revision, 3);
 });
 
+test("interactive resume opens the exact false attestation answer", { timeout: 5000 }, async (t) => {
+  const { paths } = fixture(t);
+  const id = "false-attestation-resume";
+  const profile = completeProfile(id);
+  profile.attestation.answersComplete = false;
+  profile.attestation.attestedRevision = null;
+  createProgramProfile(id, profile, { paths, now: fixedAt });
+
+  const verification = verifyProgramProfile(id, { paths, now: fixedAt });
+  assert.ok(verification.blockers.some(({ path: profilePath }) => profilePath === "attestation.answersComplete"));
+
+  const input = new PassThrough();
+  let transcript = "";
+  const terminalOutput = new Writable({
+    write(chunk, _encoding, callback) {
+      transcript += chunk.toString();
+      callback();
+    }
+  });
+  const timer = setTimeout(() => input.write("quit\n"), 40);
+  t.after(() => clearTimeout(timer));
+
+  await cliInternals.runProgramProfileQuestionnaire(id, "resume", {
+    paths,
+    input,
+    output: terminalOutput,
+    interactive: true,
+    terminal: false
+  });
+  input.end();
+
+  assert.match(transcript, /opening attestation-answers-complete for review/u);
+  assert.match(transcript, /attestation-answers-complete\n/u);
+  assert.doesNotMatch(transcript, /opening attestation-operator for review/u);
+});
+
 test("answer provenance time cannot make expired authorization verify as current", (t) => {
   const { home, paths } = fixture(t);
   const id = "stale-answer-clock";
@@ -660,6 +698,70 @@ test("compilation is deterministic, lossless across every policy matrix, and kee
   assert.equal(proposal.scope.assetPolicies[0].actions.observe.executable, true);
   assert.ok(first.contextTokensEstimated < profile.limits.maxTokens);
   assertPrivateTree(path.join(home, "programs"));
+});
+
+test("compilation uses one exact decision instant at authorization and provider boundaries", (t) => {
+  const { paths } = fixture(t);
+  const id = "exact-assessment-boundaries";
+  const effectiveAt = "2026-10-14T12:30:30.000Z";
+  const expiresAt = "2026-10-14T12:31:00.000Z";
+  const profile = completeProfile(id);
+  profile.authorization.validFrom = effectiveAt;
+  profile.authorization.validUntil = expiresAt;
+  createProgramProfile(id, profile, { paths, now: effectiveAt });
+
+  const provider = providerProfile();
+  provider.metadata.destination = "local";
+  provider.metadata.effectiveAt = effectiveAt;
+  provider.metadata.expiresAt = expiresAt;
+
+  const compileAt = (assessedAt) => {
+    const result = compileProgramProfile(id, { providerProfile: provider }, { paths, now: assessedAt });
+    const root = path.join(paths.programs, id, "compiled", result.compilationId);
+    return {
+      result,
+      context: readJson(path.join(root, "model-context.json")),
+      preflight: readJson(path.join(root, "model-preflight.json"))
+    };
+  };
+
+  const beforeEffective = compileAt("2026-10-14T12:30:29.999Z");
+  assert.equal(beforeEffective.result.profileReady, false);
+  assert.ok(beforeEffective.result.blockers.some(({ code }) => code === "authorization-not-active"));
+  assert.equal(beforeEffective.preflight.provider.policyFreshness, "stale");
+
+  const atEffective = compileAt(effectiveAt);
+  assert.equal(atEffective.result.profileReady, true);
+  assert.equal(atEffective.preflight.provider.policyFreshness, "current");
+
+  const beforeExpiry = compileAt("2026-10-14T12:30:59.999Z");
+  assert.equal(beforeExpiry.result.profileReady, true);
+  assert.equal(beforeExpiry.preflight.provider.policyFreshness, "current");
+
+  const atExpiry = compileAt(expiresAt);
+  assert.equal(atExpiry.result.profileReady, false);
+  assert.ok(atExpiry.result.blockers.some(({ code }) => code === "authorization-expired"));
+  assert.equal(atExpiry.preflight.provider.policyFreshness, "stale");
+
+  for (const [expected, compilation] of [
+    ["2026-10-14T12:30:29.999Z", beforeEffective],
+    [effectiveAt, atEffective],
+    ["2026-10-14T12:30:59.999Z", beforeExpiry],
+    [expiresAt, atExpiry]
+  ]) {
+    assert.equal(compilation.context.metadata.issuedAt, expected);
+    assert.equal(compilation.preflight.assessedAt, expected);
+  }
+
+  assert.equal(new Set([
+    beforeEffective.result.compilationId,
+    atEffective.result.compilationId,
+    beforeExpiry.result.compilationId,
+    atExpiry.result.compilationId
+  ]).size, 4, "distinct exact instants in the same minute must produce distinct bundles");
+  const repeated = compileAt(effectiveAt);
+  assert.equal(repeated.result.created, false);
+  assert.equal(repeated.result.compilationId, atEffective.result.compilationId);
 });
 
 test("provider compatibility evaluates requested assistance modes only", (t) => {

@@ -371,6 +371,32 @@ function questionSection(question) {
   return PROGRAM_PROFILE_SECTIONS.find((section) => section.id === sectionId) || { id: sectionId, title: sectionId };
 }
 
+function verificationQuestionIndex(questions, blockers = []) {
+  const blockerPaths = blockers.map((blocker) => blocker.path).filter(Boolean);
+
+  // A broad semantic blocker can precede a more precise ready-contract
+  // blocker for the same field. Resolve the exact field first so resume does
+  // not send the operator to the first sibling below the broad path.
+  const exact = questions.findIndex((question) => blockerPaths.includes(question.path));
+  if (exact !== -1) return exact;
+
+  const nested = questions
+    .map((question, index) => ({ question, index }))
+    .filter(({ question }) => blockerPaths.some((blockerPath) => blockerPath.startsWith(`${question.path}.`)))
+    .sort((left, right) => right.question.path.length - left.question.path.length || left.index - right.index);
+  if (nested.length) return nested[0].index;
+
+  if (blockerPaths.some((blockerPath) => blockerPath === "attestation" || blockerPath.startsWith("attestation."))) {
+    const timestamp = questions.findIndex((question) => question.path === "attestation.attestedAt");
+    if (timestamp !== -1) return timestamp;
+  }
+
+  const broad = questions.findIndex((question) => blockerPaths.some((blockerPath) =>
+    question.path.startsWith(`${blockerPath}.`)
+  ));
+  return broad;
+}
+
 function boundedTerminalValue(value) {
   const serialized = typeof value === "string" ? value : JSON.stringify(value);
   const escaped = serialized.replace(/[\u0000-\u001f\u007f-\u009f]/gu, (character) => {
@@ -413,15 +439,7 @@ async function runProgramProfileQuestionnaire(id, mode, options = {}) {
   );
   if (index === -1) {
     const verification = verifyProgramProfile(id, { paths });
-    const blockerPaths = (verification.blockers || []).map((blocker) => blocker.path).filter(Boolean);
-    index = questions.findIndex((question) => blockerPaths.some((blockerPath) =>
-      blockerPath === question.path ||
-      blockerPath.startsWith(`${question.path}.`) ||
-      question.path.startsWith(`${blockerPath}.`)
-    ));
-    if (index === -1 && blockerPaths.some((blockerPath) => blockerPath.startsWith("attestation."))) {
-      index = questions.findIndex((question) => question.path === "attestation.attestedAt");
-    }
+    index = verificationQuestionIndex(questions, verification.blockers || []);
     if (index === -1) index = questions.findIndex((question) => question.path.startsWith("attestation."));
     if (index === -1) index = 0;
     terminalOutput.write(
@@ -522,7 +540,7 @@ async function runProgramProfileQuestionnaire(id, mode, options = {}) {
   return programProfileStatus(id, { paths });
 }
 
-export const cliInternals = Object.freeze({ questionHasAnswer, runProgramProfileQuestionnaire });
+export const cliInternals = Object.freeze({ questionHasAnswer, runProgramProfileQuestionnaire, verificationQuestionIndex });
 
 function optionalValueFlag(flags, name) {
   if (flags[name] === undefined) return undefined;

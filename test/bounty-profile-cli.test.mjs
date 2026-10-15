@@ -202,6 +202,16 @@ test("interactive answer completeness rejects placeholders and preserves explici
   assert.equal(cliInternals.questionHasAnswer(objective, profile, envelope("\u200b\u200d", objective)), false);
 });
 
+test("interactive resume prefers the exact attestation blocker over its broad parent", () => {
+  const blockers = [
+    { code: "operator-attestation-incomplete", path: "attestation" },
+    { code: "ready-contract-incomplete", path: "attestation.answersComplete" }
+  ];
+  const index = cliInternals.verificationQuestionIndex(PROGRAM_PROFILE_QUESTIONS, blockers);
+
+  assert.equal(PROGRAM_PROFILE_QUESTIONS[index].id, "attestation-answers-complete");
+});
+
 test("resume maps a ready-required empty list back to its exact question", { timeout: 5000 }, async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-bounty-attestation-resume-"));
   const home = path.join(root, "home");
@@ -296,7 +306,7 @@ test("profile CLI rejects ambiguous and unsupported command surfaces before muta
   assert.equal(fs.existsSync(home), false);
 });
 
-test("headless answer files create and resume a private draft deterministically", (t) => {
+test("headless answer files create and resume a private draft without activating work", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-bounty-headless-"));
   const home = path.join(root, "home");
   const answersFile = path.join(root, "answers.json");
@@ -355,8 +365,8 @@ test("headless answer files create and resume a private draft deterministically"
   const repeated = invoke(compileArgs, home);
   assert.equal(repeated.status, 2, repeated.stderr);
   const repeatedCompilation = JSON.parse(repeated.stdout);
-  assert.equal(repeatedCompilation.compilationId, compilation.compilationId);
-  assert.equal(repeatedCompilation.created, false);
+  assert.notEqual(repeatedCompilation.compilationId, compilation.compilationId);
+  assert.equal(repeatedCompilation.created, true);
   assert.deepEqual(fs.readdirSync(path.join(home, "engagements")), []);
   assert.deepEqual(fs.readdirSync(path.join(home, "workflows")), []);
 });
