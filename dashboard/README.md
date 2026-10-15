@@ -41,6 +41,8 @@ The status response contains:
 - `budget`, the configured bounded-loop limit and its source; v0.1 does not measure budget consumption;
 - `telemetry`, containing source freshness and last-activity time;
 - `execution`, with supervisor configuration, lane availability, mode, canonical lifecycle counts, enforced, best-effort, and unavailable capabilities, plus at most 30 recent runs containing only process-scoped pseudonyms and lifecycle metadata;
+- `workflows`, with lifecycle and health counts, bounded instance summaries containing process-scoped workflow pseudonyms, active phase metadata and control availability, journal sequence, reservation and stop counts, and scan completeness;
+- `toolRuntimes`, with verification mode, platform, inventory counts, categorized unresolved constraints, and bounded tool metadata and verification freshness; private paths, hashes, raw receipts, and verifier errors are withheld;
 - `offlineAnalysis`, with offline-lane configuration and availability, canonical lifecycle counts, reviewed capability labels, at most 25 recent process-scoped run pseudonyms with status and isolation state, and bounded aggregate retention and control-health measurements;
 - `engagements`, with process-scoped pseudonyms plus status, review state, validity time, token cap, one-shot-manifest requirement, global supervisor-lane state, explicit manifest-required eligibility, and local-unverified attestation status;
 - `projects`, with process-scoped pseudonyms, registry status, provider and environment metadata, configuration flags, global supervisor-lane state, and explicit not-evaluated execution eligibility;
@@ -102,7 +104,9 @@ Example reduced status fields:
       "minimal-environment",
       "private-stdout-stderr",
       "one-shot-claim",
-      "declared-bounds-within-receipt"
+      "declared-bounds-within-receipt",
+      "workflow-phase-binding",
+      "workflow-reservation"
     ],
     "bestEffort": [
       "authorization-revocation-polling",
@@ -135,7 +139,13 @@ Example reduced status fields:
         "finishedAt": null,
         "terminationReason": null,
         "exitCode": null,
-        "signal": null
+        "signal": null,
+        "workflow": {
+          "instanceId": "workflow_1234567890abcdef",
+          "phaseId": "active-surface-validation",
+          "phaseAttemptId": "phase-attempt_1234567890abcdef",
+          "reservationId": "reservation_1234567890abcdef"
+        }
       }
     ]
   },
@@ -173,6 +183,8 @@ Example reduced status fields:
 Token availability is `exact`, `estimated`, or `unavailable`. When availability is `unavailable`, token counts are `null` even if an input source supplied zero placeholders. Context use and bounded-loop budget use are unavailable in v0.1; a configured window or limit may still be shown. `telemetry.lastActivityAt` describes observed source activity, while `at` is only the time the snapshot was generated.
 
 The Active execution panel separates configuration from supervisor-lane availability. An available lane means the local Linux supervisor prerequisites and the complete reviewed capability taxonomy are present. It does not authorize a project, engagement, target, action, tool, destination, or command. Every launch still requires a fresh, approved, digest-bound one-shot manifest for a host engagement whose receipt approves `gate-home`, because raw evidence always lands there. Running and stopping counts come from durable run records; they do not independently prove that a process is alive. Best-effort and unavailable controls remain visible beside enforced controls so the panel does not imply sandboxing, egress restriction, request metering, known-good executable provenance, immutable executable bytes, or containment after the supervisor itself crashes. `executable-descriptor-observed-sha256` means bytes were read through the opened descriptor; a same-UID writer can mutate a writable inode before or during exec, so this does not prove atomically frozen or launched bytes. A cancelled run with termination reason `process-group-remained` records that the leader exited while a same-session process-group descendant remained and the supervisor terminated and drained the group. If authenticated group identity is lost during teardown, status is `unknown` with termination reason `supervision-lost` rather than a termination claim.
+
+Recent execution records require valid workflow bindings. Their `workflow` object exposes the public phase ID and process-scoped instance, phase-attempt, and reservation pseudonyms; execution epochs and journal digests remain private. Termination reasons are filtered through the server and browser allowlists in [`src/observer/server.mjs`](../src/observer/server.mjs) and [`dashboard/model.js`](model.js), including workflow-claim, managed-runtime, and output-validation failures.
 
 The Offline analysis panel keeps zero-network artifact inspection visible without exposing artifact identities. It shows lifecycle totals and recent run pseudonyms with status and isolation state only. Retention health includes quotas and aggregate counts for missing, invalid, orphaned, purge-pending, and unknown records. Control health includes mutation availability, retention-lock and snapshot state, pending or invalid transactions, creation activity, invalid creation, claim, purge, and run records, and blocked manifests. A true `mutationBlocked` value (including malformed input storage), an invalid or indeterminate lock, an indeterminate or mutation-active snapshot, or invalid global transaction or creation controls displays `Mutation blocked`; manifest-scoped invalid claim, purge, or run records display `Needs attention`. Missing or incomplete health telemetry stays `Unknown`. Artifact paths, hashes, manifest digests, evidence, output, confirmations, process identities, and control-record contents never cross the observer boundary.
 
@@ -235,7 +247,7 @@ Learning `cause` and `change` are the only prose fields in the projection. Priva
 
 The browser fetches the three API endpoints independently every two seconds. A valid empty `events` or `learnings` array clears that view. A failed or malformed endpoint preserves the last valid collection and marks the connection partial; it never replaces known history with an empty fallback from another endpoint. If the server cannot build a new snapshot, it serves the last snapshot with stale telemetry when one exists, or returns a generic `503` before the first valid snapshot.
 
-The observer must never include prompt or response bodies, chat titles, task descriptions, tool arguments or results, commands, shell output, executable paths, process identities, absolute paths, target selectors, target URLs, packet data, evidence references or contents, manifest digests, credentials, or session JSONL records. Session, run, manifest, task, member, project, and engagement identifiers use a keyed HMAC with an ephemeral per-process key in HTTP projections. They cannot be matched with an offline dictionary of low-entropy names and intentionally change after an observer restart. Dynamic values are inserted with `textContent`; the dashboard has no third-party assets, analytics, outbound requests, or state-changing controls.
+The observer must never include prompt or response bodies, chat titles, task descriptions, tool arguments or results, commands, shell output, executable paths, process identities, absolute paths, target selectors, target URLs, packet data, evidence references or contents, manifest digests, credentials, or session JSONL records. Session, run, manifest, task, member, project, engagement, workflow, phase-attempt, and reservation identifiers use a keyed HMAC with an ephemeral per-process key in HTTP projections. They cannot be matched with an offline dictionary of low-entropy names and intentionally change after an observer restart. Dynamic values are inserted with `textContent`; the dashboard has no third-party assets, analytics, outbound requests, or state-changing controls.
 
 ## Keyboard use
 
@@ -245,6 +257,7 @@ The observer must never include prompt or response bodies, chat titles, task des
 - `4` focuses resource posture.
 - `5` focuses learning.
 - `6` focuses Offline analysis.
+- `7` focuses managed tool runtimes.
 - `/` focuses the safe metadata filter.
 - `R` refreshes all endpoints.
 - `P` pauses or resumes polling.
