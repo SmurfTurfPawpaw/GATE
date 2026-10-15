@@ -107,6 +107,52 @@ test("malformed non-null workflow lock identity is preserved and blocks reads an
   assert.deepEqual(fs.readFileSync(lock), lockBytes);
 });
 
+test("dead workflow lock recovery ignores PATH flock and ambient Node preload", (t) => {
+  if (process.platform !== "linux") return t.skip("workflow mutation locks require Linux/WSL2");
+  const { root, paths } = fixture(t, "gate-workflow-lock-path-");
+  const id = "protected-lock-recovery";
+  createWorkflowInstance(id, {}, { paths });
+  const { lock } = instanceFiles(paths, id);
+  const fakeBin = path.join(root, "fake-bin");
+  const flockMarker = path.join(root, "fake-flock-ran.txt");
+  const preloadMarker = path.join(root, "node-preload-ran.txt");
+  const preload = path.join(root, "preload.cjs");
+  fs.mkdirSync(fakeBin, { mode: 0o700 });
+  fs.writeFileSync(path.join(fakeBin, "flock"),
+    `#!/bin/sh\nprintf '%s' "$GATE_WORKFLOW_TOKEN" > '${flockMarker}'\nexec /usr/bin/flock "$@"\n`,
+    { mode: 0o700 });
+  fs.writeFileSync(preload, `require('node:fs').writeFileSync(${JSON.stringify(preloadMarker)}, 'loaded');\n`, { mode: 0o600 });
+  fs.writeFileSync(lock, `${JSON.stringify({
+    apiVersion: "gate.workflow-lock/v1",
+    pid: process.pid,
+    bootId: "00000000-0000-0000-0000-000000000000",
+    startTimeTicks: "1",
+    nonce: "b".repeat(32),
+    createdAt: new Date().toISOString()
+  })}\n`, { flag: "wx", mode: 0o600 });
+
+  const names = ["PATH", "NODE_OPTIONS", "GATE_WORKFLOW_TOKEN"];
+  const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+  t.after(() => {
+    for (const name of names) {
+      if (previous[name] === undefined) delete process.env[name];
+      else process.env[name] = previous[name];
+    }
+  });
+  process.env.PATH = `${fakeBin}${path.delimiter}${previous.PATH || ""}`;
+  process.env.NODE_OPTIONS = `--require=${preload}`;
+  process.env.GATE_WORKFLOW_TOKEN = "WORKFLOW_TOKEN_CANARY";
+
+  const stopped = stopWorkflow(id, {
+    condition: "operator-stop",
+    reason: "Exercise protected stale-lock recovery."
+  }, { paths });
+  assert.equal(stopped.projection.status, "stopped");
+  assert.equal(fs.existsSync(flockMarker), false, "PATH-first flock must not execute");
+  assert.equal(fs.existsSync(preloadMarker), false, "NODE_OPTIONS must not reach the lock-recovery Node child");
+  assert.equal(fs.existsSync(lock), false, "the protected flock path must still complete lock recovery");
+});
+
 test("a stopped workflow rejects direct progress mutations and ordinary phase starts", (t) => {
   const { root, paths } = fixture(t, "gate-workflow-stopped-guard-");
   const id = "stopped-guard";

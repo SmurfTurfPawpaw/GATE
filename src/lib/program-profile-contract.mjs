@@ -5,6 +5,7 @@ import { domainToASCII } from "node:url";
 
 import { runtimePaths } from "./paths.mjs";
 import { validateDocument } from "./schema.mjs";
+import { assertNoUnsafeText, escapeUnsafeText } from "./text.mjs";
 
 export const PROGRAM_PROFILE_DISPOSITIONS = Object.freeze([
   "allowed",
@@ -625,8 +626,41 @@ function baseQuestionApplies(question, value) {
   return false;
 }
 
-function semanticProfileErrors(value, paths) {
+function unsafeTextErrors(value, location = "") {
   const errors = [];
+  const visit = (item, parts) => {
+    if (typeof item === "string") {
+      try {
+        assertNoUnsafeText(item, parts.join(".") || "profile value");
+      } catch (error) {
+        errors.push(error.message);
+      }
+      return;
+    }
+    if (Array.isArray(item)) {
+      item.forEach((child, index) => visit(child, [...parts, String(index)]));
+      return;
+    }
+    if (item && typeof item === "object") {
+      for (const [key, child] of Object.entries(item)) {
+        const propertyLocation = `${parts.join(".") || "profile value"} property name`;
+        let safeKey = key;
+        try {
+          assertNoUnsafeText(key, propertyLocation);
+        } catch (error) {
+          errors.push(error.message);
+          safeKey = escapeUnsafeText(key);
+        }
+        visit(child, [...parts, safeKey]);
+      }
+    }
+  };
+  visit(value, location ? [location] : []);
+  return errors;
+}
+
+function semanticProfileErrors(value, paths) {
+  const errors = unsafeTextErrors(value);
   const sourceIds = collectIds(value.sources, "source", errors);
   const assetIds = collectIds(value.scope.assets, "scope asset", errors);
   collectIds(value.techniquePolicy.techniques, "technique", errors);
@@ -781,6 +815,17 @@ function meaningfulStructuredAnswer(value) {
   return false;
 }
 
+function meaningfulStructuredListItem(value) {
+  if (typeof value === "string") return meaningfulText(value);
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const containsMeaningfulText = (candidate) => {
+    if (typeof candidate === "string") return meaningfulText(candidate);
+    if (Array.isArray(candidate)) return candidate.some(containsMeaningfulText);
+    return Boolean(candidate && typeof candidate === "object" && Object.values(candidate).some(containsMeaningfulText));
+  };
+  return Object.keys(value).length > 0 && containsMeaningfulText(value);
+}
+
 export function programProfileQuestionAnswerIsComplete(question, value) {
   if (question?.path === "architecture.unknowns") {
     return Array.isArray(value) && value.every((entry) => typeof entry === "string" && meaningfulText(entry));
@@ -790,7 +835,7 @@ export function programProfileQuestionAnswerIsComplete(question, value) {
   if (typeof value === "string") return meaningfulText(value);
   if (!question?.module) return true;
   if (question?.type === "structured-list") {
-    return Array.isArray(value) && value.length > 0 && value.every(meaningfulStructuredAnswer);
+    return Array.isArray(value) && value.length > 0 && value.every(meaningfulStructuredListItem);
   }
   if (Array.isArray(value)) return value.length > 0 && value.every(meaningfulStructuredAnswer);
   if (value && typeof value === "object") return meaningfulStructuredAnswer(value);
@@ -815,8 +860,8 @@ function moduleAnswerErrors(moduleId, answers, required = false) {
         errors.push(`${question.path} must contain at least one item when ready`);
       } else if (required && question.required) {
         answer.forEach((item, index) => {
-          if (!meaningfulStructuredAnswer(item)) {
-            errors.push(`${question.path}.${index} must contain only meaningful non-empty values when ready`);
+          if (!meaningfulStructuredListItem(item)) {
+            errors.push(`${question.path}.${index} must be non-empty text or an object containing non-empty text when ready`);
           }
         });
       }
@@ -857,8 +902,9 @@ export function validateProgramProfileAnswers(value, options = {}) {
     ...PROGRAM_PROFILE_QUESTIONS,
     ...PROGRAM_PROFILE_MODULE_QUESTIONS
   ].map((question) => question.id));
-  const errors = Object.keys(value.answers).filter((id) => !known.has(id)).sort()
-    .map((id) => `answers contains unknown question id: ${id}`);
+  const errors = unsafeTextErrors(value);
+  errors.push(...Object.keys(value.answers).filter((id) => !known.has(id)).sort()
+    .map((id) => `answers contains unknown question id: ${id}`));
   for (const question of PROGRAM_PROFILE_MODULE_QUESTIONS) {
     if (!Object.hasOwn(value.answers, question.id)) continue;
     const answer = value.answers[question.id];

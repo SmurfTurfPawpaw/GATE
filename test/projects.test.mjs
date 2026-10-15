@@ -102,6 +102,52 @@ test("project registry validates, stores, lists, shows, and verifies a private c
   }
 });
 
+test("project template sentinels cannot register or verify as ready", (t) => {
+  const { root, paths } = fixture(t);
+  const template = JSON.parse(fs.readFileSync(path.join(repo, "templates", "project.json"), "utf8"));
+  assert.equal(template.$schema, "https://gate.local/schemas/project.schema.json");
+
+  const sentinels = [
+    {
+      id: "replace-project",
+      check: "template-metadata-id",
+      error: /replace the project template metadata\.id before registration/u,
+      value: project("sentinel-id", { metadata: { id: "replace-project" } })
+    },
+    {
+      id: "sentinel-display",
+      check: "template-display-name",
+      error: /replace the project template metadata\.displayName before registration/u,
+      value: project("sentinel-display", { metadata: { displayName: "Replace Project" } })
+    },
+    {
+      id: "sentinel-repository",
+      check: "template-repository-url",
+      error: /replace the project template repository\.url before registration/u,
+      value: project("sentinel-repository", {
+        repository: { url: "https://github.com/replace-owner/replace-project" }
+      })
+    }
+  ];
+
+  for (const sentinel of sentinels) {
+    assert.throws(
+      () => registerProject(writeSource(root, sentinel.value, `${sentinel.id}-source.json`), { paths }),
+      sentinel.error
+    );
+
+    const stored = path.join(paths.projects, `${sentinel.id}.json`);
+    fs.writeFileSync(stored, `${JSON.stringify(sentinel.value, null, 2)}\n`, { mode: 0o600 });
+    const verification = verifyProject(sentinel.id, { paths });
+    assert.equal(verification.ok, false);
+    assert.equal(verification.status, "invalid");
+    assert.equal(verification.project, null);
+    assert.ok(verification.checks.some((item) =>
+      item.name === sentinel.check && item.ok === false && sentinel.error.test(item.detail)
+    ));
+  }
+});
+
 test("registration is idempotent but rejects replacement and duplicate repository identity", (t) => {
   const { root, paths } = fixture(t);
   const original = project();

@@ -17,6 +17,7 @@ import {
   createProgramProfile,
   loadProgramProfileAnswers,
   resumeProgramProfile,
+  showProgramProfile,
   verifyProgramProfile
 } from "../src/lib/bounty-profiles.mjs";
 import {
@@ -304,9 +305,20 @@ function answerEnvelope(id, profile) {
 function providerProfile(overrides = {}) {
   return {
     $schema: "https://gate.local/schemas/provider-capability-profile.schema.json",
-    apiVersion: "gate.dev/provider-capability-profile/v1",
+    apiVersion: "gate.dev/provider-capability-profile/v2",
     kind: "ProviderCapabilityProfile",
-    metadata: { id: "provider-canary", model: "fixture-model", effectiveAt: fixedAt },
+    metadata: {
+      id: "provider-canary",
+      model: "fixture-model",
+      effectiveAt: fixedAt,
+      expiresAt: "2027-10-14T00:00:00.000Z"
+    },
+    contextWindow: {
+      maxTokens: 1000000,
+      reservedOutputTokens: 16000,
+      requestOverheadTokensUpperBound: 2000,
+      countingMethod: "utf8-bytes-upper-bound"
+    },
     capabilities: Object.fromEntries(PROGRAM_PROFILE_ACTIONS.map((action) => [action, {
       plan: "allow",
       analyze: "allow",
@@ -574,7 +586,7 @@ test("empty and placeholder required answers keep an applicable module blocked t
     answers: {
       entryPoints: [null],
       authenticationFlows: [" \t"],
-      automationRules: "\u200b\u200d"
+      automationRules: " \t"
     }
   };
 
@@ -601,25 +613,17 @@ test("empty and placeholder required answers keep an applicable module blocked t
   ));
 });
 
-test("invisible-only required core text cannot become ready or compile", (t) => {
+test("invisible-only required core text is rejected before persistence", (t) => {
   const { paths } = fixture(t);
   const id = "invisible-core-answer";
   const profile = completeProfile(id);
   profile.identity.objective = "\u200b\u200d";
 
-  const created = createProgramProfile(id, profile, { paths, now: fixedAt });
-  assert.equal(created.ready, false);
-  const verification = verifyProgramProfile(id, { paths, now: fixedAt });
-  assert.equal(verification.ready, false);
-  assert.ok(verification.blockers.some(({ code, detail, path: profilePath }) =>
-    code === "ready-contract-incomplete" &&
-    detail === "identity.objective must contain visible text when ready" &&
-    profilePath === "identity.objective"
-  ));
-
-  const compilation = compileProgramProfile(id, {}, { paths, now: fixedAt });
-  assert.equal(compilation.gateDecision, "block");
-  assert.equal(compilation.profileReady, false);
+  assert.throws(
+    () => createProgramProfile(id, profile, { paths, now: fixedAt }),
+    /validation failed|direction-formatting|must match pattern/u
+  );
+  assert.equal(fs.existsSync(path.join(paths.programs, id)), false);
 });
 
 test("compilation is deterministic, lossless across every policy matrix, and keeps provider prediction separate", (t) => {
@@ -646,6 +650,7 @@ test("compilation is deterministic, lossless across every policy matrix, and kee
   assert.equal(first.created, true);
   assert.equal(second.created, false);
   assert.equal(first.compilationId, second.compilationId);
+  assert.equal(first.artifactContractVersion, "gate.dev/program-profile-compilation/v2");
   assert.deepEqual(first.artifacts, second.artifacts);
   assert.equal(first.targetContact, false);
   assert.equal(first.executionAuthority, false);
@@ -659,6 +664,10 @@ test("compilation is deterministic, lossless across every policy matrix, and kee
   const preflight = readJson(path.join(compiled, "model-preflight.json"));
   const proposal = readJson(path.join(compiled, "engagement-proposal.json"));
   const executionPolicy = readJson(path.join(compiled, "execution-policy.json"));
+
+  assert.equal(context.apiVersion, "gate.dev/model-context/v2");
+  assert.equal(context.metadata.compilationContract, "gate.dev/program-profile-compilation/v2");
+  assert.equal(preflight.apiVersion, "gate.dev/model-preflight/v2");
 
   assert.deepEqual(new Set(Object.keys(techniques.actions)), new Set(PROGRAM_PROFILE_ACTIONS));
   assert.equal(Object.keys(techniques.actions).length, 13);
@@ -696,7 +705,8 @@ test("compilation is deterministic, lossless across every policy matrix, and kee
   assert.equal(executionPolicy.phases[0].assets[0].limits.maxRequests, 1000);
   assert.deepEqual(proposal.executionPolicy.phases[0].allowedToolIds, ["httpx"]);
   assert.equal(proposal.scope.assetPolicies[0].actions.observe.executable, true);
-  assert.ok(first.contextTokensEstimated < profile.limits.maxTokens);
+  assert.ok(first.contextInputTokensUpperBound > 0);
+  assert.equal(first.runTokenBudgetStatus, "pass");
   assertPrivateTree(path.join(home, "programs"));
 });
 
@@ -791,29 +801,147 @@ test("provider compatibility evaluates requested assistance modes only", (t) => 
   writeJson(undatedFile, undated);
   const undatedCompilation = compileProgramProfile(id, { providerProfile: undatedFile }, { paths, now: fixedAt });
   assert.equal(undatedCompilation.providerPrediction, "unknown");
+
+  for (const missing of ["effectiveAt", "expiresAt"]) {
+    const oneSided = providerProfile();
+    oneSided.metadata.destination = "local";
+    delete oneSided.metadata[missing];
+    const oneSidedCompilation = compileProgramProfile(id, { providerProfile: oneSided }, { paths, now: fixedAt });
+    const oneSidedPreflight = readJson(path.join(
+      paths.programs,
+      id,
+      "compiled",
+      oneSidedCompilation.compilationId,
+      "model-preflight.json"
+    ));
+    assert.equal(oneSidedPreflight.provider.policyFreshness, "unknown", missing);
+    assert.equal(oneSidedCompilation.routeReady, false, missing);
+    assert.ok(oneSidedCompilation.blockers.some(({ code }) => code === "context-accounting-unavailable"), missing);
+  }
 });
 
-test("model context and reserved output must jointly fit the token ceiling", (t) => {
-  const baselineFixture = fixture(t);
-  const baselineId = "token-baseline";
-  createProgramProfile(baselineId, completeProfile(baselineId), { paths: baselineFixture.paths, now: fixedAt });
-  const baseline = compileProgramProfile(baselineId, {}, { paths: baselineFixture.paths, now: fixedAt });
+test("provider template sentinels cannot establish model routing", (t) => {
+  const { paths } = fixture(t);
+  const id = "provider-template-sentinels";
+  createProgramProfile(id, completeProfile(id), { paths, now: fixedAt });
 
-  const tightFixture = fixture(t);
-  const tightId = "token-ceiling";
-  const profile = completeProfile(tightId);
-  const ceiling = baseline.contextTokensEstimated + 500;
-  profile.executionPolicy.phases[0].limits.maxTokens = ceiling;
-  createProgramProfile(tightId, profile, { paths: tightFixture.paths, now: fixedAt });
-  const tight = compileProgramProfile(tightId, {}, { paths: tightFixture.paths, now: fixedAt });
+  const untouched = readJson(path.join(repo, "templates", "provider-capability-profile.json"));
+  assert.throws(
+    () => compileProgramProfile(id, { providerProfile: untouched }, { paths, now: fixedAt }),
+    /template metadata\.id/u
+  );
 
-  assert.ok(tight.contextTokensEstimated < ceiling);
-  assert.ok(tight.totalTokensReserved > ceiling);
-  assert.equal(tight.gateDecision, "block");
-  assert.ok(tight.blockers.some(({ code }) => code === "context-budget-exceeded"));
-  const preflight = readJson(path.join(tightFixture.paths.programs, tightId, "compiled", tight.compilationId, "model-preflight.json"));
-  assert.equal(preflight.contextBudget.profileTokenCeiling, profile.limits.maxTokens);
-  assert.equal(preflight.contextBudget.effectiveTokenCeiling, ceiling);
+  const placeholderModel = providerProfile();
+  placeholderModel.metadata.model = "replace-model";
+  assert.throws(
+    () => compileProgramProfile(id, { providerProfile: placeholderModel }, { paths, now: fixedAt }),
+    /template metadata\.model/u
+  );
+
+  const legacyTemplateDates = providerProfile();
+  legacyTemplateDates.metadata.effectiveAt = "2026-10-14T00:00:00Z";
+  legacyTemplateDates.metadata.expiresAt = "2027-10-14T00:00:00Z";
+  assert.throws(
+    () => compileProgramProfile(id, { providerProfile: legacyTemplateDates }, { paths, now: fixedAt }),
+    /legacy template freshness interval/u
+  );
+});
+
+test("provider context windows and cumulative run-token ceilings are separate fail-closed route checks", (t) => {
+  const { paths } = fixture(t);
+  const id = "separate-token-ceilings";
+  const profile = completeProfile(id);
+  profile.executionPolicy.phases[0].limits.maxTokens = 1000;
+  createProgramProfile(id, profile, { paths, now: fixedAt });
+  const provider = providerProfile();
+  provider.metadata.destination = "local";
+
+  const compiled = compileProgramProfile(id, { providerProfile: provider }, { paths, now: fixedAt });
+  assert.equal(compiled.gateDecision, "block");
+  assert.equal(compiled.ready, false);
+  assert.equal(compiled.providerContextWindowStatus, "pass");
+  assert.equal(compiled.runTokenBudgetStatus, "block");
+  assert.equal(compiled.routeReady, false);
+  assert.ok(compiled.blockers.some(({ code }) => code === "run-token-budget-exceeded"));
+  assert.equal(compiled.routingStrategy, "operator");
+  assert.match(compiled.routingReason, /cumulative run-token ceiling/u);
+
+  const preflight = readJson(path.join(paths.programs, id, "compiled", compiled.compilationId, "model-preflight.json"));
+  assert.equal(preflight.dimensions.find(({ id: dimension }) => dimension === "provider-context-window").status, "pass");
+  assert.equal(preflight.dimensions.find(({ id: dimension }) => dimension === "run-token-budget").status, "block");
+  assert.equal(preflight.contextBudget.profileRunTokenBudget.accounting, "cumulative-run-ceiling");
+  assert.equal(preflight.contextBudget.profileRunTokenBudget.effectiveMaxTokens, 1000);
+  assert.ok(preflight.contextBudget.accounting.totalRequestTokensUpperBound > 1000);
+});
+
+test("provider context accounting is unknown unless current metadata binds a conservative counter", (t) => {
+  const { paths } = fixture(t);
+  const id = "unknown-context-accounting";
+  createProgramProfile(id, completeProfile(id), { paths, now: fixedAt });
+  const provider = providerProfile();
+  provider.metadata.destination = "local";
+  provider.contextWindow = null;
+
+  const compiled = compileProgramProfile(id, { providerProfile: provider }, { paths, now: fixedAt });
+  assert.equal(compiled.gateDecision, "block");
+  assert.equal(compiled.providerPrediction, "compatible");
+  assert.equal(compiled.providerContextWindowStatus, "unknown");
+  assert.equal(compiled.runTokenBudgetStatus, "unknown");
+  assert.equal(compiled.routeReady, false);
+  assert.ok(compiled.blockers.some(({ code }) => code === "context-accounting-unavailable"));
+  assert.equal(compiled.routingStrategy, "operator");
+  assert.match(compiled.routingReason, /context-window accounting/u);
+
+  const legacyProvider = providerProfile();
+  legacyProvider.apiVersion = "gate.dev/provider-capability-profile/v1";
+  legacyProvider.metadata.destination = "local";
+  delete legacyProvider.contextWindow;
+  const legacyCompiled = compileProgramProfile(id, { providerProfile: legacyProvider }, { paths, now: fixedAt });
+  const legacyPreflight = readJson(path.join(
+    paths.programs,
+    id,
+    "compiled",
+    legacyCompiled.compilationId,
+    "model-preflight.json"
+  ));
+  assert.equal(legacyPreflight.provider.apiVersion, "gate.dev/provider-capability-profile/v1");
+  assert.equal(legacyPreflight.provider.contextWindow, null);
+});
+
+test("the compact packet uses a UTF-8-byte upper bound at exact provider context boundaries", (t) => {
+  const { paths } = fixture(t);
+  const id = "provider-context-boundary";
+  const profile = completeProfile(id);
+  profile.identity.objective = "a1b2c3d4".repeat(1000);
+  createProgramProfile(id, profile, { paths, now: fixedAt });
+  const provider = providerProfile();
+  provider.metadata.destination = "local";
+  provider.contextWindow.reservedOutputTokens = 1000;
+  provider.contextWindow.requestOverheadTokensUpperBound = 128;
+
+  const baseline = compileProgramProfile(id, { providerProfile: provider }, { paths, now: fixedAt });
+  const baselineRoot = path.join(paths.programs, id, "compiled", baseline.compilationId);
+  const baselineContext = fs.readFileSync(path.join(baselineRoot, "model-context.json"));
+  const baselinePreflight = readJson(path.join(baselineRoot, "model-preflight.json"));
+  assert.equal(baselinePreflight.provider.apiVersion, "gate.dev/provider-capability-profile/v2");
+  assert.equal(baselinePreflight.contextBudget.payload.bytes, baselineContext.length);
+  assert.equal(baselinePreflight.contextBudget.accounting.inputTokensUpperBound, baselineContext.length);
+  assert.equal(baselineContext.includes(Buffer.from("\n  \"", "utf8")), false, "machine context must use compact JSON");
+  assert.equal(baselinePreflight.packetSha256, crypto.createHash("sha256").update(baselineContext).digest("hex"));
+
+  const exact = structuredClone(provider);
+  exact.contextWindow.maxTokens = baselinePreflight.contextBudget.accounting.totalRequestTokensUpperBound;
+  const exactResult = compileProgramProfile(id, { providerProfile: exact }, { paths, now: fixedAt });
+  assert.equal(exactResult.providerContextWindowStatus, "pass");
+  assert.equal(exactResult.routeReady, true);
+
+  const below = structuredClone(exact);
+  below.contextWindow.maxTokens -= 1;
+  const belowResult = compileProgramProfile(id, { providerProfile: below }, { paths, now: fixedAt });
+  assert.equal(belowResult.providerContextWindowStatus, "block");
+  assert.equal(belowResult.gateDecision, "block");
+  assert.equal(belowResult.routeReady, false);
+  assert.equal(belowResult.routingStrategy, "operator");
 });
 
 test("global action ceilings compile to conservative and phase-scoped executable sets", (t) => {
@@ -887,7 +1015,9 @@ test("source-backed conditional decisions are complete but never compile as exec
 
   const compilation = compileProgramProfile(id, {}, { paths, now: fixedAt });
   assert.equal(compilation.profileReady, true);
-  assert.equal(compilation.gateDecision, "pass");
+  assert.equal(compilation.gateDecision, "block");
+  assert.equal(compilation.ready, false);
+  assert.ok(compilation.blockers.some(({ code }) => code === "context-accounting-unavailable"));
   const compiled = path.join(home, "programs", id, "compiled", compilation.compilationId);
   const techniques = readJson(path.join(compiled, "technique-matrix.json"));
   const context = readJson(path.join(compiled, "model-context.json"));
@@ -1061,7 +1191,9 @@ test("an open-ended reusable program profile requires a finite downstream engage
 
   const compilation = compileProgramProfile(id, {}, { paths, now: fixedAt });
   assert.equal(compilation.profileReady, true);
-  assert.equal(compilation.gateDecision, "pass");
+  assert.equal(compilation.gateDecision, "block");
+  assert.equal(compilation.ready, false);
+  assert.ok(compilation.blockers.some(({ code }) => code === "context-accounting-unavailable"));
   assert.equal(compilation.engagementDecision, "block");
   assert.deepEqual(compilation.engagementBlockers.map(({ code }) => code), ["engagement-authorization-window-required"]);
   const compiled = path.join(home, "programs", id, "compiled", compilation.compilationId);
@@ -1096,6 +1228,62 @@ test("content-backed sources require digests while operator statements may remai
   });
   const acceptedResult = createProgramProfile("operator-source-null-digest", complete, { paths: accepted.paths, now: fixedAt });
   assert.equal(acceptedResult.ready, true);
+});
+
+test("source, authorization, and attestation timestamps cannot claim future or impossible review order", (t) => {
+  const future = fixture(t);
+  const futureId = "future-provenance";
+  const futureProfile = completeProfile(futureId);
+  futureProfile.sources[0].observedAt = "2099-01-01T00:00:00.000Z";
+  futureProfile.authorization.lastVerifiedAt = "2099-01-01T00:00:00.000Z";
+  futureProfile.attestation.attestedAt = "2099-01-01T00:00:00.000Z";
+  assert.equal(createProgramProfile(futureId, futureProfile, { paths: future.paths, now: fixedAt }).ready, false);
+  const futureCodes = new Set(verifyProgramProfile(futureId, { paths: future.paths, now: fixedAt }).blockers.map(({ code }) => code));
+  for (const code of [
+    "source-observation-in-future",
+    "authorization-verification-in-future",
+    "operator-attestation-in-future"
+  ]) assert.equal(futureCodes.has(code), true, code);
+
+  const ordered = fixture(t);
+  const orderedId = "misordered-provenance";
+  const orderedProfile = completeProfile(orderedId);
+  orderedProfile.sources[0].observedAt = "2026-10-14T11:00:00.000Z";
+  orderedProfile.authorization.lastVerifiedAt = "2026-10-14T11:30:00.000Z";
+  orderedProfile.attestation.attestedAt = "2026-10-14T11:15:00.000Z";
+  assert.equal(createProgramProfile(orderedId, orderedProfile, { paths: ordered.paths, now: fixedAt }).ready, false);
+  const orderedCodes = new Set(verifyProgramProfile(orderedId, { paths: ordered.paths, now: fixedAt }).blockers.map(({ code }) => code));
+  assert.equal(orderedCodes.has("operator-attestation-predates-authorization-verification"), true);
+
+  const sourceOrder = fixture(t);
+  const sourceOrderId = "source-order-provenance";
+  const sourceOrderProfile = completeProfile(sourceOrderId);
+  sourceOrderProfile.sources[0].observedAt = "2026-10-14T11:00:00.000Z";
+  sourceOrderProfile.authorization.lastVerifiedAt = "2026-10-14T10:00:00.000Z";
+  sourceOrderProfile.attestation.attestedAt = "2026-10-14T09:00:00.000Z";
+  assert.equal(createProgramProfile(sourceOrderId, sourceOrderProfile, { paths: sourceOrder.paths, now: fixedAt }).ready, false);
+  const sourceOrderCodes = new Set(verifyProgramProfile(sourceOrderId, { paths: sourceOrder.paths, now: fixedAt }).blockers.map(({ code }) => code));
+  assert.equal(sourceOrderCodes.has("authorization-verification-predates-source"), true);
+  assert.equal(sourceOrderCodes.has("operator-attestation-predates-source"), true);
+});
+
+test("packet classification cannot understate an architecture data flow", (t) => {
+  const { paths } = fixture(t);
+  const lowId = "low-release-classification";
+  const low = completeProfile(lowId);
+  low.dataEvidence.classification = "public";
+  assert.equal(createProgramProfile(lowId, low, { paths, now: fixedAt }).ready, false);
+  assert.ok(verifyProgramProfile(lowId, { paths, now: fixedAt }).blockers.some(
+    ({ code }) => code === "data-release-classification-too-low"
+  ));
+
+  const unknownId = "unknown-flow-classification";
+  const unknown = completeProfile(unknownId);
+  unknown.architecture.dataFlows[0].dataClassification = "unknown";
+  assert.equal(createProgramProfile(unknownId, unknown, { paths, now: fixedAt }).ready, false);
+  assert.ok(verifyProgramProfile(unknownId, { paths, now: fixedAt }).blockers.some(
+    ({ code }) => code === "data-flow-classification-unknown"
+  ));
 });
 
 test("profile inputs and private state fail closed on links and remain owner-only", (t) => {
@@ -1253,6 +1441,101 @@ test("literal secrets are rejected before persistence while symbolic references 
   assert.equal(fs.readFileSync(path.join(accepted.home, "programs", id, "program-profile.json"), "utf8"), original);
 });
 
+test("nested credential aliases reject literal values and legacy profiles cannot emit derived artifacts", (t) => {
+  const { home, paths } = fixture(t);
+  const uuidSecret = "550e8400-e29b-41d4-a716-446655440000";
+  const aliases = [
+    ["credentials", { value: uuidSecret }],
+    ["secrets", { value: uuidSecret }],
+    ["tokens", { value: uuidSecret }],
+    ["passwords", { value: uuidSecret }],
+    ["apiKeys", { primary: uuidSecret }],
+    ["headers", { Authorization: uuidSecret }],
+    ["auth", { value: uuidSecret }]
+  ];
+  for (const [index, [key, value]] of aliases.entries()) {
+    const id = `nested-secret-${index}`;
+    const profile = completeProfile(id);
+    profile.techniquePolicy.techniques[0].parameters = { [key]: value };
+    assert.throws(
+      () => createProgramProfile(id, profile, { paths, now: fixedAt }),
+      /credential|symbolic secret reference|secret-value-or-invalid-reference/u,
+      key
+    );
+  }
+
+  const legacyId = "legacy-secret";
+  createProgramProfile(legacyId, completeProfile(legacyId), { paths, now: fixedAt });
+  const directory = path.join(home, "programs", legacyId);
+  const profileFile = path.join(directory, "program-profile.json");
+  const legacy = readJson(profileFile);
+  legacy.techniquePolicy.techniques[0].parameters = { sessionToken: uuidSecret };
+  writeJson(profileFile, legacy);
+  const profileBytes = fs.readFileSync(profileFile);
+  const bindingFile = path.join(directory, "state-binding.json");
+  const binding = readJson(bindingFile);
+  binding.profileSha256 = crypto.createHash("sha256").update(profileBytes).digest("hex");
+  writeJson(bindingFile, binding);
+
+  assert.throws(
+    () => showProgramProfile(legacyId, { paths, now: fixedAt, format: "model-context" }),
+    /credential|symbolic secret reference|rejected/u
+  );
+  assert.throws(
+    () => compileProgramProfile(legacyId, {}, { paths, now: fixedAt }),
+    /credential|symbolic secret reference|rejected/u
+  );
+  assert.equal(fs.existsSync(path.join(directory, "compiled")), false);
+});
+
+test("credential-bearing URLs and terminal control text are rejected before persistence", (t) => {
+  const { home, paths } = fixture(t);
+  const urlToken = "aB9_Zx7Qp2Lm8Nv4Rk6Ts1Wd3Hy5";
+  const credentialUrl = completeProfile("url-secret-rejected");
+  credentialUrl.authorization.programUrl = `https://example.invalid/program?session_token=${urlToken}`;
+  assert.throws(
+    () => createProgramProfile("url-secret-rejected", credentialUrl, { paths, now: fixedAt }),
+    /credential|secret-value-or-invalid-reference/u
+  );
+
+  const userInfoUrl = completeProfile("userinfo-rejected");
+  userInfoUrl.authorization.programUrl = "https://operator:private-value@example.invalid/program";
+  assert.throws(
+    () => createProgramProfile("userinfo-rejected", userInfoUrl, { paths, now: fixedAt }),
+    /URL user information|credential|secret-value-or-invalid-reference/u
+  );
+
+  const terminalControl = completeProfile("terminal-control-rejected");
+  terminalControl.identity.objective = "Copy this payload\u001b]52;c;dGVzdA==\u0007";
+  assert.throws(
+    () => createProgramProfile("terminal-control-rejected", terminalControl, { paths, now: fixedAt }),
+    /pattern|terminal control|direction-formatting/u
+  );
+
+  const secretKey = completeProfile("secret-key-rejected");
+  secretKey.techniquePolicy.techniques[0].parameters = {
+    [`session_token=${urlToken}`]: "benign"
+  };
+  assert.throws(
+    () => createProgramProfile("secret-key-rejected", secretKey, { paths, now: fixedAt }),
+    /credential|secret-value-or-invalid-reference/u
+  );
+
+  const controlKey = completeProfile("control-key-rejected");
+  controlKey.techniquePolicy.techniques[0].parameters = {
+    ["safe\u001b]52;c;payload\u0007"]: "benign"
+  };
+  assert.throws(
+    () => createProgramProfile("control-key-rejected", controlKey, { paths, now: fixedAt }),
+    /terminal control|direction-formatting/u
+  );
+
+  const retained = allFiles(home).map((file) => fs.readFileSync(file, "utf8")).join("\n");
+  assert.equal(retained.includes(urlToken), false);
+  assert.equal(retained.includes("private-value"), false);
+  assert.doesNotMatch(retained, /[\u0007\u001B]/u);
+});
+
 test("imported source text is inert and target details do not cross events or observer output", async (t) => {
   const { root, home, paths } = fixture(t);
   const marker = path.join(root, "source-text-executed");
@@ -1340,6 +1623,10 @@ test("model routing requires a current destination matching the recorded release
     const report = readJson(path.join(paths.programs, id, "compiled", compilation.compilationId, "model-preflight.json"));
     assert.equal(report.dimensions.find((item) => item.id === "data-release").status, expected);
     assert.equal(report.routing.strategy, expected === "pass" && report.gateDecision === "pass" ? "provider-model" : "operator");
+    assert.equal(compilation.dataReleaseStatus, expected);
+    assert.equal(compilation.routingStrategy, report.routing.strategy);
+    assert.equal(compilation.routingReason, report.routing.reason);
+    assert.equal(compilation.routeReady, expected === "pass" && report.gateDecision === "pass");
   }
 });
 

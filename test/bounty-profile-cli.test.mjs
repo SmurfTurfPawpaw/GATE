@@ -13,7 +13,7 @@ import {
   createProgramProfile,
   resumeProgramProfile
 } from "../src/lib/bounty-profiles.mjs";
-import { PROGRAM_PROFILE_QUESTIONS } from "../src/lib/program-profile-contract.mjs";
+import { PROGRAM_PROFILE_ACTIONS, PROGRAM_PROFILE_QUESTIONS } from "../src/lib/program-profile-contract.mjs";
 import { runtimePaths } from "../src/lib/paths.mjs";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -89,6 +89,15 @@ test("interactive questionnaire commands persist each accepted answer for resume
   input.end();
 
   assert.equal(result.id, "interactive-profile");
+  assert.equal(result.saved, true);
+  assert.equal(result.outcome, "saved");
+  assert.equal(result.ready, false);
+  assert.ok(result.blockerCount > 0);
+  assert.equal(Object.hasOwn(result, "blockers"), false);
+  assert.equal(Object.hasOwn(result, "checks"), false);
+  assert.equal(Object.hasOwn(result, "profile"), false);
+  assert.equal(result.nextCommand, "./bin/gate.mjs bounty profile resume interactive-profile");
+  assert.ok(JSON.stringify(result).length < 1000);
   const profileRoot = path.join(home, "programs", "interactive-profile");
   const envelope = JSON.parse(fs.readFileSync(path.join(profileRoot, "answers.json"), "utf8"));
   assert.equal(envelope.answers[PROGRAM_PROFILE_QUESTIONS[0].id], "Interactive fixture");
@@ -98,6 +107,173 @@ test("interactive questionnaire commands persist each accepted answer for resume
   assert.match(transcript, new RegExp(PROGRAM_PROFILE_QUESTIONS[0].why.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
   assert.match(transcript, new RegExp(`Saved ${PROGRAM_PROFILE_QUESTIONS[0].id}\\.`, "u"));
   assert.match(transcript, /Every accepted answer is already persisted privately\./u);
+  assert.match(transcript, /1\/66 applicable · identity-program-name/u);
+  assert.match(transcript, /unconfirmed draft: interactive-profile; enter explicitly to confirm/u);
+  assert.doesNotMatch(transcript, /identity-program-name[^\n]*\n[^\n]*\[current: interactive-profile\]/u);
+});
+
+test("interactive format guidance explains contract-backed structured answer shapes", { timeout: 5000 }, async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-bounty-format-"));
+  const home = path.join(root, "home");
+  const paths = runtimePaths({ repo, home });
+  const input = new PassThrough();
+  let transcript = "";
+  const terminalOutput = new Writable({
+    write(chunk, _encoding, callback) {
+      transcript += chunk.toString();
+      callback();
+    }
+  });
+  const timers = [];
+  t.after(() => {
+    for (const timer of timers) clearTimeout(timer);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  [
+    "edit identity-deliverables\n",
+    "format\n",
+    "edit authority-safe-harbor\n",
+    "format\n",
+    "edit actions-all\n",
+    "format\n",
+    "quit\n"
+  ].forEach((response, index) => {
+    timers.push(setTimeout(() => input.write(response), 40 * (index + 1)));
+  });
+  const result = await cliInternals.runProgramProfileQuestionnaire("format-profile", "create", {
+    paths,
+    input,
+    output: terminalOutput,
+    interactive: true,
+    terminal: false
+  });
+  input.end();
+
+  assert.equal(result.outcome, "saved");
+  assert.match(transcript, /Commands: back, edit QUESTION_ID, why, format, save, quit\./u);
+  assert.match(transcript, /Accepted format: a JSON array matching the records requested by this prompt/u);
+  assert.match(transcript, /"Technical vulnerability report"/u);
+  assert.match(transcript, /Accepted format: a JSON decision object with disposition, claimState, sourceRefs, rationale, and conditions\./u);
+  assert.match(transcript, /Example only; replace every sample value with the exact recorded facts:/u);
+  assert.match(transcript, /Accepted format: a JSON object containing every action class and its decision\./u);
+  for (const action of ["observe", "scan", "exploit-safe", "exfiltration-simulation"]) {
+    assert.match(transcript, new RegExp(`"${action}"`, "u"));
+  }
+});
+
+test("interactive progress counts only questions applicable to the current profile", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-bounty-progress-"));
+  const paths = runtimePaths({ repo, home: path.join(root, "home") });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  createProgramProfile("progress-profile", {}, { paths, now: "2026-10-14T00:00:00.000Z" });
+  const profile = resumeProgramProfile("progress-profile", { paths }).profile;
+  const firstIndex = 0;
+  const baseQuestions = PROGRAM_PROFILE_QUESTIONS.filter((question) => !question.module);
+  const base = cliInternals.applicableQuestionProgress(PROGRAM_PROFILE_QUESTIONS, profile, firstIndex);
+  assert.deepEqual(base, { position: 1, total: baseQuestions.length });
+
+  profile.questionnaire.applicableModules = ["web-api"];
+  const withWeb = cliInternals.applicableQuestionProgress(PROGRAM_PROFILE_QUESTIONS, profile, firstIndex);
+  const webQuestions = PROGRAM_PROFILE_QUESTIONS.filter((question) => question.module === "web-api");
+  assert.deepEqual(withWeb, { position: 1, total: baseQuestions.length + webQuestions.length });
+});
+
+test("format guidance uses valid field-specific scalar examples", () => {
+  const guidance = (id) => cliInternals.questionFormatGuidance(
+    PROGRAM_PROFILE_QUESTIONS.find((question) => question.id === id)
+  );
+  assert.match(guidance("limits-timezone"), /Etc\/UTC/u);
+  assert.match(guidance("limits-max-parallel"), /\n2$/u);
+  assert.doesNotMatch(guidance("limits-max-parallel"), /1000/u);
+  assert.match(guidance("limits-max-tokens"), /50000/u);
+  assert.match(guidance("data-retention-days"), /\n30$/u);
+  assert.match(guidance("data-classification"), /\nconfidential$/u);
+  assert.match(guidance("attestation-operator"), /local-operator/u);
+  assert.match(guidance("architecture-unknowns"), /use \[\] when the recorded answer is none/u);
+  assert.match(guidance("architecture-unknowns"), /\n\[\]$/u);
+  assert.match(guidance("authority-valid-from"), /2026-01-01T00:00:00Z/u);
+  assert.match(guidance("authority-valid-until"), /2026-12-01T00:00:00Z/u);
+  for (const id of ["limits-max-spend", "authority-program-url", "authority-valid-from", "authority-valid-until"]) {
+    assert.match(guidance(id), /\nAlternative: null$/u);
+    assert.doesNotMatch(guidance(id), /\(or null\)/u);
+  }
+});
+
+test("persisted legacy values are escaped before terminal display", () => {
+  const rendered = cliInternals.boundedTerminalValue("before\u202Eafter\u2028tag\u{E0001}\n> forged prompt\tvalue");
+  assert.equal(rendered, "before\\u202Eafter\\u2028tag\\uE0001\\u000A> forged prompt\\u0009value");
+  assert.doesNotMatch(rendered, /[\t\n\u2028\u202E\u{E0001}]/u);
+});
+
+test("structured format examples use coherent architecture and execution references", () => {
+  const example = (id) => {
+    const guidance = cliInternals.questionFormatGuidance(
+      PROGRAM_PROFILE_QUESTIONS.find((question) => question.id === id)
+    );
+    return JSON.parse(guidance.split("\n").slice(2).join("\n"));
+  };
+
+  const components = example("architecture-components");
+  const componentIds = new Set(components.map(({ id }) => id));
+  for (const relationship of [
+    ...example("architecture-trust-boundaries"),
+    ...example("architecture-data-flows")
+  ]) {
+    assert.equal(componentIds.has(relationship.from), true, relationship.from);
+    assert.equal(componentIds.has(relationship.to), true, relationship.to);
+  }
+
+  const assets = example("scope-assets");
+  const actions = example("actions-all");
+  const phases = example("execution-phase-policies");
+  const assetIds = new Set(assets.map(({ id }) => id));
+  assert.deepEqual(Object.keys(assets[0].actionOverrides), PROGRAM_PROFILE_ACTIONS);
+  assert.deepEqual(Object.keys(assets[0].limitOverrides), [
+    "maxMinutes", "maxRequests", "maxParallel", "maxRatePerSecond", "maxTokens", "maxSpendUsd"
+  ]);
+  for (const phase of phases) {
+    assert.equal(phase.assetRefs.every((id) => assetIds.has(id)), true);
+    assert.equal(phase.actions.every((action) => actions[action]?.disposition === "allowed"), true);
+    for (const assetRef of phase.assetRefs) {
+      const asset = assets.find(({ id }) => id === assetRef);
+      assert.equal(asset.disposition, "allowed");
+      assert.equal(phase.actions.every((action) => asset.actionOverrides[action]?.disposition === "allowed"), true);
+    }
+  }
+});
+
+test("questionnaire completion returns a bounded next-step summary", () => {
+  const result = cliInternals.questionnaireResult({
+    id: "complete-profile",
+    status: "ready-to-materialize",
+    ready: true,
+    structuralValid: true,
+    profileSha256: "a".repeat(64),
+    blockers: [],
+    warnings: [],
+    checks: Array.from({ length: 500 }, () => ({ detail: "not returned" })),
+    profile: {
+      profileRef: "private://programs/complete-profile/program-profile.json",
+      profileSha256: "a".repeat(64)
+    }
+  }, "questions-complete");
+
+  assert.deepEqual(result, {
+    saved: true,
+    outcome: "questions-complete",
+    id: "complete-profile",
+    status: "ready-to-materialize",
+    ready: true,
+    structuralValid: true,
+    blockerCount: 0,
+    warningCount: 0,
+    profileRef: "private://programs/complete-profile/program-profile.json",
+    profileSha256: "a".repeat(64),
+    nextCommand: "./bin/gate.mjs bounty profile verify complete-profile"
+  });
+  assert.ok(JSON.stringify(result).length < 1000);
 });
 
 test("interactive multiline answers preserve lines until the explicit terminator", { timeout: 5000 }, async (t) => {

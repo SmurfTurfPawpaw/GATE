@@ -15,6 +15,7 @@ const template = JSON.parse(fs.readFileSync(path.join(repo, "templates", "provid
 const clone = (value) => structuredClone(value);
 
 test("the sanitized provider profile template is complete, closed, and repository-validated", () => {
+  assert.equal(template.contextWindow, null);
   assert.deepEqual(Object.keys(template.capabilities), PROGRAM_PROFILE_ACTIONS);
   for (const action of PROGRAM_PROFILE_ACTIONS) {
     assert.deepEqual(Object.keys(template.capabilities[action]), modes, action);
@@ -34,6 +35,47 @@ test("the sanitized provider profile template is complete, closed, and repositor
     ok: true,
     detail: schemaName
   });
+});
+
+test("provider context accounting is explicit, bounded, and closed", () => {
+  const omitted = clone(template);
+  delete omitted.contextWindow;
+  assert.equal(validateDocument(omitted, schemaName, { paths: { repo } }).ok, true);
+
+  const declared = clone(template);
+  declared.metadata.model = "fixture-model";
+  declared.contextWindow = {
+    maxTokens: 128000,
+    reservedOutputTokens: 16000,
+    requestOverheadTokensUpperBound: 8000,
+    countingMethod: "utf8-bytes-upper-bound"
+  };
+  assert.equal(validateDocument(declared, schemaName, { paths: { repo } }).ok, true);
+
+  const legacy = clone(template);
+  legacy.apiVersion = "gate.dev/provider-capability-profile/v1";
+  delete legacy.contextWindow;
+  assert.equal(validateDocument(legacy, schemaName, { paths: { repo } }).ok, true);
+  legacy.contextWindow = declared.contextWindow;
+  assert.equal(validateDocument(legacy, schemaName, { paths: { repo } }).ok, false);
+
+  for (const mutate of [
+    (value) => { value.contextWindow.countingMethod = "bytes-divided-by-four"; },
+    (value) => { value.contextWindow.maxTokens = 0; },
+    (value) => { value.contextWindow.reservedOutputTokens = 0; },
+    (value) => { value.contextWindow.reservedOutputTokens = -1; },
+    (value) => { value.contextWindow.requestOverheadTokensUpperBound = -1; },
+    (value) => { value.contextWindow.unreviewed = true; },
+    (value) => { delete value.contextWindow.requestOverheadTokensUpperBound; }
+  ]) {
+    const invalid = clone(declared);
+    mutate(invalid);
+    assert.equal(validateDocument(invalid, schemaName, { paths: { repo } }).ok, false);
+  }
+
+  const unbound = clone(declared);
+  delete unbound.metadata.model;
+  assert.equal(validateDocument(unbound, schemaName, { paths: { repo } }).ok, false);
 });
 
 test("provider profile schema rejects incomplete action and assistance-mode matrices", () => {
@@ -62,4 +104,15 @@ test("provider profile schema rejects unknown fields, invalid dispositions, and 
   const timestamp = clone(template);
   timestamp.metadata.expiresAt = "tomorrow";
   assert.equal(validateDocument(timestamp, schemaName, { paths: { repo } }).ok, false);
+});
+
+test("provider identity text rejects terminal and direction-formatting controls", () => {
+  for (const model of ["fixture\u001b]52;c;payload\u0007", "safe\u202Etxt.exe", "safe\u200Bhidden", "safe\u{E0001}hidden"]) {
+    const invalid = clone(template);
+    invalid.metadata.model = model;
+    assert.equal(validateDocument(invalid, schemaName, { paths: { repo } }).ok, false);
+  }
+  const visibleJoiner = clone(template);
+  visibleJoiner.metadata.model = "Persian می‌رود model";
+  assert.equal(validateDocument(visibleJoiner, schemaName, { paths: { repo } }).ok, true);
 });

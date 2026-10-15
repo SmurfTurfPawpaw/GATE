@@ -2,9 +2,9 @@
 
 ## Report a vulnerability
 
-GitHub private vulnerability reporting is not enabled on the current repository. Until it is available, open one minimal public issue titled **Private security contact requested**. Include no vulnerability details, reproduction steps, logs, links, target information, or attachments. The maintainer can then establish a private channel before you share technical material.
+GATE is currently a private repository. People without repository access cannot use its issues or Security tab. Collaborators should contact the repository owner through an existing private channel, confirm the recipient and channel, and only then share technical details. Do not open a public issue or put vulnerability details in any public channel.
 
-After the repository is renamed to GATE, its owner should manually enable **Settings → Code security and analysis → Private vulnerability reporting**. Once the repository's **Report a vulnerability** form is visible under the Security tab, use that form instead of the interim public issue.
+If the repository is made public, its owner should enable **Settings → Code security and analysis → Private vulnerability reporting** before inviting outside reports, provided GitHub makes that control available for the repository's visibility and plan. Once the repository's **Report a vulnerability** form is visible under the Security tab, use that form. Until either that form or another explicit private contact is available, unaffiliated reporters have no supported submission channel; they should not disclose details publicly to request one.
 
 Include, when available:
 

@@ -47,14 +47,19 @@ import { checkPublication, publishPullRequest } from "./lib/publication.mjs";
 import { listProjects, registerProject, showProject, verifyProject } from "./lib/projects.mjs";
 import { buildStatus } from "./lib/status.mjs";
 import { statusSummary, toolDetailSummary, toolInventorySummary } from "./lib/summaries.mjs";
+import { escapeUnsafeText } from "./lib/text.mjs";
 import { runManagedToolOperation } from "./lib/tool-runtimes.mjs";
 import { toolInventory, toolPlan, toolShow } from "./lib/tools.mjs";
 import { installUpstream, syncUpstream, upstreamStatus } from "./lib/upstreams.mjs";
 import { validateRepository } from "./lib/validation.mjs";
 import { leaseWorkspace, verifyWorkspace, workspaceStatus } from "./lib/workspaces.mjs";
 import {
+  PROGRAM_PROFILE_ACTIONS,
+  PROGRAM_PROFILE_COVERAGE_DOMAINS,
+  PROGRAM_PROFILE_EXECUTION_LIMITS,
   PROGRAM_PROFILE_QUESTIONS,
   PROGRAM_PROFILE_SECTIONS,
+  PROGRAM_PROFILE_STOP_CONDITIONS,
   programProfileQuestionAnswerIsComplete
 } from "./lib/program-profile-contract.mjs";
 import {
@@ -399,11 +404,314 @@ function verificationQuestionIndex(questions, blockers = []) {
 
 function boundedTerminalValue(value) {
   const serialized = typeof value === "string" ? value : JSON.stringify(value);
-  const escaped = serialized.replace(/[\u0000-\u001f\u007f-\u009f]/gu, (character) => {
-    const code = character.codePointAt(0).toString(16).padStart(4, "0");
-    return `\\u${code}`;
-  });
+  const escaped = escapeUnsafeText(serialized ?? String(value)).replace(/[\t\n]/gu, (character) =>
+    character === "\t" ? "\\u0009" : "\\u000A"
+  );
   return escaped.length <= 160 ? escaped : `${escaped.slice(0, 157)}...`;
+}
+
+function exampleDecision(disposition = "unknown") {
+  return {
+    disposition,
+    claimState: "unverified",
+    sourceRefs: ["program-rules"],
+    rationale: "Replace this example with the exact source-backed decision.",
+    conditions: []
+  };
+}
+
+function exampleStructuredList(question) {
+  const stringLists = {
+    "identity-deliverables": ["Technical vulnerability report"],
+    "identity-success-criteria": ["Every selected coverage domain has a sourced disposition."],
+    "authority-source-refs": ["program-rules"],
+    "limits-source-refs": ["program-rules"],
+    "architecture-unknowns": [],
+    "architecture-source-refs": ["program-rules"],
+    "data-redaction-rules": ["Remove credentials and unrelated personal data."],
+    "data-source-refs": ["program-rules"],
+    "stops-cleanup-steps": ["Remove test data and revoke temporary sessions."],
+    "stops-cleanup-source-refs": ["program-rules"],
+    "reporting-required-sections": ["Summary", "Reproduction", "Impact", "Evidence", "Remediation"],
+    "reporting-source-refs": ["program-rules"],
+    "web-api-entry-points": ["https://app.example.test/"],
+    "web-api-auth-flows": ["OIDC sign-in and account recovery for the recorded test tenant."],
+    "cloud-container-footprint": ["Example Cloud project program-test in region example-1."],
+    "cloud-container-identities": ["Workload identity program-test-runner with its recorded trust relationship."],
+    "mobile-builds": ["Android package test.example.app, version 1.2.3, from the program test channel."],
+    "desktop-artifacts": ["Windows x64 installer version 1.2.3 with the source-recorded SHA-256."],
+    "ai-llm-system-map": ["Hosted model, retrieval store, support agent, and report output consumer."],
+    "ai-llm-input-surfaces": ["Direct chat input and source-backed document ingestion in the test tenant."],
+    "network-identity-ranges": ["192.0.2.0/24 on TCP 443 from the recorded test source address."],
+    "network-identity-systems": ["Test identity provider and VPN with standard-user and administrator tiers."],
+    "wireless-radio-footprint": ["Program lab Wi-Fi on the recorded channel, location, distance, and window."],
+    "wireless-radio-equipment": ["Program-approved adapter and antenna within the recorded power limit."],
+    "human-physical-population": ["Named test site and participating role during the recorded business-hours window."],
+    "human-physical-pretexts": ["Program-approved support message sent only to the recorded participant group."],
+    "embedded-iot-ot-assets": ["Test device model, firmware version, interface, protocol, and isolated lab network."],
+    "embedded-iot-ot-safety": ["Named safety owner, isolated state, maintenance window, and emergency stop procedure."]
+  };
+  if (Object.hasOwn(stringLists, question.id)) return stringLists[question.id];
+
+  const examples = {
+    "actions-techniques": [{
+      id: "header-observation",
+      name: "Observe response headers",
+      action: "observe",
+      ...exampleDecision("allowed"),
+      parameters: { method: "GET" }
+    }],
+    "execution-phase-policies": [{
+      id: "active-web-validation",
+      phaseId: "active-surface-validation",
+      assetRefs: ["primary-web"],
+      actions: ["observe"],
+      allowedToolIds: ["httpx"],
+      deniedToolIds: [],
+      conditions: ["Use the recorded test account only."],
+      claimState: "unverified",
+      sourceRefs: ["program-rules"],
+      limits: {
+        maxMinutes: 60,
+        maxRequests: 500,
+        maxParallel: 2,
+        maxRatePerSecond: 1,
+        maxTokens: 50000,
+        maxSpendUsd: 0
+      }
+    }],
+    "accounts-personas": [{
+      id: "researcher-account",
+      persona: "Researcher",
+      role: "Standard user",
+      environment: "program test tenant",
+      secretRefs: ["env://GATE_TEST_ACCOUNT"],
+      sourceRefs: ["program-rules"]
+    }],
+    "architecture-components": [
+      {
+        id: "browser",
+        name: "Researcher browser",
+        type: "client",
+        claimState: "unverified",
+        sourceRefs: ["program-rules"]
+      },
+      {
+        id: "web-api",
+        name: "Program web API",
+        type: "service",
+        claimState: "unverified",
+        sourceRefs: ["program-rules"]
+      }
+    ],
+    "architecture-trust-boundaries": [{
+      id: "browser-to-api",
+      from: "browser",
+      to: "web-api",
+      description: "Public TLS boundary.",
+      claimState: "unverified",
+      sourceRefs: ["program-rules"]
+    }],
+    "architecture-data-flows": [{
+      id: "request-flow",
+      from: "browser",
+      to: "web-api",
+      dataClassification: "confidential",
+      description: "Research account requests and responses.",
+      claimState: "unverified",
+      sourceRefs: ["program-rules"]
+    }],
+    "ambiguities-items": []
+  };
+  if (Object.hasOwn(examples, question.id)) return examples[question.id];
+
+  return [{
+    item: "Replace this example with the exact source-backed detail requested by the prompt.",
+    sourceRefs: ["program-rules"]
+  }];
+}
+
+function questionFormatGuidance(question) {
+  let accepted;
+  let example;
+  switch (question.type) {
+    case "text": {
+      const examples = {
+        "identity-program-name": "Acme bug bounty",
+        "authority-program-url": "https://program.example.test/rules",
+        "limits-timezone": "Etc/UTC",
+        "reporting-severity-standard": "CVSS 4.0 with program-specific overrides",
+        "attestation-operator": "local-operator"
+      };
+      accepted = "plain text on one line";
+      example = examples[question.id] || "Recorded value";
+      break;
+    }
+    case "multiline":
+      accepted = "plain text; finish multiline input with . on its own line";
+      example = "Describe the exact source-backed rule.";
+      break;
+    case "boolean":
+      accepted = "yes or no (also accepts true/false or 1/0)";
+      example = "yes";
+      break;
+    case "integer": {
+      const examples = {
+        "limits-max-minutes": "60",
+        "limits-max-requests": "1000",
+        "limits-max-parallel": "2",
+        "limits-max-tokens": "50000",
+        "data-retention-days": "30"
+      };
+      accepted = question.allowNull ? "a whole number, or null" : "a whole number";
+      example = examples[question.id] || "1";
+      break;
+    }
+    case "number":
+      accepted = question.allowNull ? "a finite number, or null" : "a finite number";
+      example = "2.5";
+      break;
+    case "datetime": {
+      const examples = {
+        "authority-valid-from": "2026-01-01T00:00:00Z",
+        "authority-valid-until": "2026-12-01T00:00:00Z",
+        "authority-last-verified": "2026-10-01T00:00:00Z",
+        "attestation-at": "2026-10-01T00:00:00Z"
+      };
+      accepted = question.allowNull ? "an ISO 8601 date-time, or null" : "an ISO 8601 date-time";
+      example = examples[question.id] || "2026-10-01T00:00:00Z";
+      break;
+    }
+    case "enum":
+      accepted = `one exact value: ${(question.choices || []).join(", ")}`;
+      example = question.id === "data-classification" ? "confidential" : question.choices?.[0] || "value";
+      break;
+    case "multi-enum":
+      accepted = `a comma-separated list or JSON string array using: ${(question.choices || []).join(", ")}`;
+      example = question.choices?.length ? [question.choices[0]] : [];
+      break;
+    case "secret-ref-list":
+      accepted = "a comma-separated list or JSON string array of env://, keychain://, or file:// references";
+      example = ["env://GATE_TEST_ACCOUNT"];
+      break;
+    case "decision":
+      accepted = "a JSON decision object with disposition, claimState, sourceRefs, rationale, and conditions";
+      example = exampleDecision();
+      break;
+    case "source-list":
+      accepted = "a JSON array of source records";
+      example = [{
+        id: "program-rules",
+        type: "program-rules",
+        title: "Published program rules",
+        reference: "https://program.example.test/rules",
+        contentSha256: "a".repeat(64),
+        observedAt: "2026-10-01T00:00:00Z",
+        claimState: "observed",
+        notes: "Captured in operator-controlled private storage."
+      }];
+      break;
+    case "selector-decisions":
+      accepted = "a JSON array of exact asset selectors and their decisions";
+      example = [{
+        id: "primary-web",
+        selector: { type: "url", value: "https://app.example.test/" },
+        ...exampleDecision("allowed"),
+        actionOverrides: Object.fromEntries(PROGRAM_PROFILE_ACTIONS.map((action) => [
+          action,
+          exampleDecision(action === "observe" ? "allowed" : "unknown")
+        ])),
+        limitOverrides: Object.fromEntries(PROGRAM_PROFILE_EXECUTION_LIMITS.map((limit) => [limit, ({
+          maxMinutes: 60,
+          maxRequests: 500,
+          maxParallel: 2,
+          maxRatePerSecond: 1,
+          maxTokens: 50000,
+          maxSpendUsd: 0
+        })[limit]]))
+      }];
+      break;
+    case "action-decisions":
+      accepted = "a JSON object containing every action class and its decision";
+      example = Object.fromEntries(PROGRAM_PROFILE_ACTIONS.map((action) => [
+        action,
+        exampleDecision(action === "observe" ? "allowed" : "unknown")
+      ]));
+      break;
+    case "coverage-decisions":
+      accepted = "a JSON object containing every coverage domain and its decision";
+      example = Object.fromEntries(PROGRAM_PROFILE_COVERAGE_DOMAINS.map((domain) => [domain, exampleDecision()]));
+      break;
+    case "stop-responses":
+      accepted = "a JSON object containing every mandatory stop condition and response";
+      example = Object.fromEntries(PROGRAM_PROFILE_STOP_CONDITIONS.map((condition) => [condition, {
+        enabled: true,
+        response: `Stop affected work on ${condition}, preserve bounded evidence, and escalate.`,
+        claimState: "unverified",
+        sourceRefs: ["program-rules"]
+      }]));
+      break;
+    case "contact-list":
+      accepted = "a JSON array of contact records";
+      example = [{
+        name: "Program security team",
+        role: "Escalation contact",
+        channel: "platform://program-inbox",
+        purpose: "Receive incident escalation and vulnerability reports.",
+        sourceRefs: ["program-rules"]
+      }];
+      break;
+    case "schedule-windows":
+      accepted = "a JSON array of day and UTC/local-time windows";
+      example = [{ days: ["monday", "tuesday"], start: "09:00", end: "17:00" }];
+      break;
+    case "structured-list":
+      accepted = question.module
+        ? "a non-empty JSON array matching the records requested by this prompt"
+        : "a JSON array matching the records requested by this prompt; use [] when the recorded answer is none and the field permits it";
+      example = exampleStructuredList(question);
+      break;
+    default:
+      accepted = question.type;
+      example = "value";
+  }
+  const rendered = typeof example === "string" ? example : JSON.stringify(example, null, 2);
+  const guidance = [
+    `Accepted format: ${accepted}.`,
+    "Example only; replace every sample value with the exact recorded facts:",
+    rendered
+  ];
+  if (question.allowNull === true) guidance.push("Alternative: null");
+  return guidance.join("\n");
+}
+
+function applicableQuestionProgress(questions, profile, index) {
+  const applicable = questions
+    .map((question, questionIndex) => ({ question, questionIndex }))
+    .filter(({ question }) => questionApplies(question, profile));
+  const position = applicable.findIndex(({ questionIndex }) => questionIndex === index);
+  return { position: position === -1 ? 0 : position + 1, total: applicable.length };
+}
+
+function questionnaireResult(status, outcome) {
+  const blockerCount = Array.isArray(status.blockers)
+    ? status.blockers.length
+    : status.profile?.blockerCount || 0;
+  return {
+    saved: true,
+    outcome,
+    id: status.id,
+    status: status.status,
+    ready: status.ready === true,
+    structuralValid: status.structuralValid === true,
+    blockerCount,
+    warningCount: Array.isArray(status.warnings) ? status.warnings.length : 0,
+    profileRef: status.profile?.profileRef || null,
+    profileSha256: status.profileSha256 || status.profile?.profileSha256 || null,
+    nextCommand: status.ready
+      ? `./bin/gate.mjs bounty profile verify ${status.id}`
+      : `./bin/gate.mjs bounty profile resume ${status.id}`
+  };
 }
 
 function newProgramProfileAnswers(id) {
@@ -451,7 +759,7 @@ async function runProgramProfileQuestionnaire(id, mode, options = {}) {
     terminalOutput.write(`Resuming at unanswered required question: ${questions[index].id}.\n`);
   }
   const terminal = createInterface({ input, output: terminalOutput, terminal: options.terminal ?? true });
-  terminalOutput.write("Commands: back, edit QUESTION_ID, why, save, quit. Structured answers use JSON.\n");
+  terminalOutput.write("Commands: back, edit QUESTION_ID, why, format, save, quit. Structured answers use JSON.\n");
 
   try {
     while (index < questions.length) {
@@ -463,25 +771,35 @@ async function runProgramProfileQuestionnaire(id, mode, options = {}) {
       const section = questionSection(question);
       const choices = (question.choices || []);
       const current = profileValueAt(profile, question.path);
+      const recorded = questionHasAnswer(question, profile, answers);
       const currentHint = current === undefined || question.sensitive
         ? ""
-        : ` [current: ${boundedTerminalValue(current)}]`;
+        : recorded
+          ? ` [current: ${boundedTerminalValue(current)}]`
+          : ` [unconfirmed draft: ${boundedTerminalValue(current)}; enter explicitly to confirm]`;
       const choiceHint = choices.length ? ` (${choices.join(" | ")})` : "";
       const requiredHint = question.required ? " [required]" : "";
       const multilineHint = question.type === "multiline" ? " [multiline; finish with . on its own line]" : "";
+      const progress = applicableQuestionProgress(questions, profile, index);
       const raw = await terminal.question(
-        `\n${section.title} · ${index + 1}/${questions.length} · ${question.id}\n${question.prompt}${choiceHint}${requiredHint}${multilineHint}${currentHint}\n> `
+        `\n${section.title} · ${progress.position}/${progress.total} applicable · ${question.id}\n${question.prompt}${choiceHint}${requiredHint}${multilineHint}${currentHint}\n> `
       );
       const command = raw.trim();
       if (command === "why") {
         terminalOutput.write(`${question.why || "This answer is required to produce an exact, bounded assessment profile."}\n`);
         continue;
       }
+      if (command === "format") {
+        terminalOutput.write(`${questionFormatGuidance(question)}\n`);
+        continue;
+      }
       if (command === "save") {
         terminalOutput.write("Saved. Every accepted answer is already persisted privately.\n");
         continue;
       }
-      if (command === "quit") return programProfileStatus(id, { paths });
+      if (command === "quit") {
+        return questionnaireResult(programProfileStatus(id, { paths }), "saved");
+      }
       if (command === "back") {
         index = Math.max(0, index - 1);
         while (index > 0 && !questionApplies(questions[index], profile)) index -= 1;
@@ -537,10 +855,18 @@ async function runProgramProfileQuestionnaire(id, mode, options = {}) {
   } finally {
     terminal.close();
   }
-  return programProfileStatus(id, { paths });
+  return questionnaireResult(programProfileStatus(id, { paths }), "questions-complete");
 }
 
-export const cliInternals = Object.freeze({ questionHasAnswer, runProgramProfileQuestionnaire, verificationQuestionIndex });
+export const cliInternals = Object.freeze({
+  applicableQuestionProgress,
+  boundedTerminalValue,
+  questionFormatGuidance,
+  questionnaireResult,
+  questionHasAnswer,
+  runProgramProfileQuestionnaire,
+  verificationQuestionIndex
+});
 
 function optionalValueFlag(flags, name) {
   if (flags[name] === undefined) return undefined;
@@ -811,17 +1137,18 @@ export async function main(argv) {
       );
       assertFlags(parsed.flags, ["engagement", "workflow", "provider-profile", "json"]);
       if (!id) throw new Error("program profile id is required");
+      const providerProfile = optionalValueFlag(parsed.flags, "provider-profile");
       const result = compileProgramProfile(
         id,
         {
           engagementId: optionalValueFlag(parsed.flags, "engagement"),
           workflowId: optionalValueFlag(parsed.flags, "workflow"),
-          providerProfile: optionalValueFlag(parsed.flags, "provider-profile")
+          providerProfile
         },
         { paths }
       );
       output(result, json);
-      if (!result.ok || !result.ready) process.exitCode = 2;
+      if (!result.ok || !result.ready || (providerProfile && !result.routeReady)) process.exitCode = 2;
       return;
     }
 

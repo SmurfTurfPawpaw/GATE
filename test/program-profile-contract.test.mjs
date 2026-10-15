@@ -581,12 +581,14 @@ test("module answer types hold for individual answers, nested answers, and store
 test("applicable required module answers contain non-empty content when ready", () => {
   const cases = [
     ["entryPoints", [], "modules.web-api.answers.entryPoints must contain at least one item when ready"],
-    ["entryPoints", [null], "modules.web-api.answers.entryPoints.0 must contain only meaningful non-empty values when ready"],
-    ["entryPoints", ["  \t"], "modules.web-api.answers.entryPoints.0 must contain only meaningful non-empty values when ready"],
-    ["entryPoints", ["\u200b\u200d"], "modules.web-api.answers.entryPoints.0 must contain only meaningful non-empty values when ready"],
-    ["entryPoints", [{}], "modules.web-api.answers.entryPoints.0 must contain only meaningful non-empty values when ready"],
-    ["entryPoints", [[]], "modules.web-api.answers.entryPoints.0 must contain only meaningful non-empty values when ready"],
-    ["entryPoints", [{ selector: "", note: null }], "modules.web-api.answers.entryPoints.0 must contain only meaningful non-empty values when ready"],
+    ["entryPoints", [null], "modules.web-api.answers.entryPoints.0 must be non-empty text or an object containing non-empty text when ready"],
+    ["entryPoints", ["  \t"], "modules.web-api.answers.entryPoints.0 must be non-empty text or an object containing non-empty text when ready"],
+    ["entryPoints", ["\u200b\u200d"], "modules.web-api.answers.entryPoints.0 must be non-empty text or an object containing non-empty text when ready"],
+    ["entryPoints", [{}], "modules.web-api.answers.entryPoints.0 must be non-empty text or an object containing non-empty text when ready"],
+    ["entryPoints", [[]], "modules.web-api.answers.entryPoints.0 must be non-empty text or an object containing non-empty text when ready"],
+    ["entryPoints", [{ selector: "", note: null }], "modules.web-api.answers.entryPoints.0 must be non-empty text or an object containing non-empty text when ready"],
+    ["entryPoints", [{ arbitrary: true }], "modules.web-api.answers.entryPoints.0 must be non-empty text or an object containing non-empty text when ready"],
+    ["entryPoints", [false], "modules.web-api.answers.entryPoints.0 must be non-empty text or an object containing non-empty text when ready"],
     ["authenticationFlows", [], "modules.web-api.answers.authenticationFlows must contain at least one item when ready"],
     ["automationRules", "", "modules.web-api.answers.automationRules must contain non-whitespace text when ready"],
     ["automationRules", " \n\t", "modules.web-api.answers.automationRules must contain non-whitespace text when ready"],
@@ -633,7 +635,9 @@ test("ready profiles reject invisible-only text outside conditional modules", ()
     mutate(value);
     const validation = validateProgramProfile(value, { repo });
     assert.equal(validation.ok, false, pathName);
-    assert.ok(validation.errors.includes(`${pathName} must contain visible text when ready`), pathName);
+    assert.ok(validation.errors.some((error) =>
+      error.includes(pathName.replaceAll(".", "/")) || error.includes(pathName)
+    ), pathName);
   }
 
   const literalPayload = readyProfile();
@@ -644,5 +648,23 @@ test("ready profiles reject invisible-only text outside conditional modules", ()
     ...decision("allowed", ["program-rules"]),
     parameters: { payload: "\u200b" }
   });
-  assert.equal(validateProgramProfile(literalPayload, { repo }).ok, true);
+  const literalValidation = validateProgramProfile(literalPayload, { repo });
+  assert.equal(literalValidation.ok, false);
+  assert.ok(literalValidation.errors.some((error) =>
+    error.includes("techniquePolicy.techniques.0.parameters.payload") && error.includes("invisible")
+  ));
+
+  const invisibleKey = readyProfile();
+  invisibleKey.techniquePolicy.techniques.push({
+    id: "invisible-key-payload",
+    name: "Invisible-key payload",
+    action: "observe",
+    ...decision("allowed", ["program-rules"]),
+    parameters: { ["safe\u001b]52;c;payload\u0007"]: "benign" }
+  });
+  const keyValidation = validateProgramProfile(invisibleKey, { repo });
+  assert.equal(keyValidation.ok, false);
+  assert.ok(keyValidation.errors.some((error) =>
+    error.includes("techniquePolicy.techniques.0.parameters property name") && error.includes("terminal control")
+  ));
 });

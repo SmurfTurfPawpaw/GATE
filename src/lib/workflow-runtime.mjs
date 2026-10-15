@@ -310,6 +310,47 @@ function ownerProvablyDead(owner) {
   return Boolean(start && start !== owner.startTimeTicks);
 }
 
+function trustedWorkflowFlock() {
+  for (const candidate of ["/usr/bin/flock", "/bin/flock"]) {
+    try {
+      const resolved = fs.realpathSync(candidate);
+      if (resolved !== candidate) continue;
+      const stat = fs.lstatSync(candidate);
+      if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o111) === 0 || (stat.mode & 0o022) !== 0) continue;
+      if (typeof process.geteuid === "function" && stat.uid === process.geteuid()) continue;
+      try {
+        fs.accessSync(candidate, fs.constants.W_OK);
+        continue;
+      } catch (error) {
+        if (!new Set(["EACCES", "EPERM", "EROFS"]).has(error.code)) throw error;
+      }
+      let current = path.dirname(candidate);
+      let protectedPath = true;
+      while (true) {
+        const currentStat = fs.statSync(current);
+        if (
+          (currentStat.mode & 0o022) !== 0 ||
+          (typeof process.geteuid === "function" && currentStat.uid === process.geteuid())
+        ) { protectedPath = false; break; }
+        try {
+          fs.accessSync(current, fs.constants.W_OK);
+          protectedPath = false;
+          break;
+        } catch (error) {
+          if (!new Set(["EACCES", "EPERM", "EROFS"]).has(error.code)) throw error;
+        }
+        const parent = path.dirname(current);
+        if (parent === current) break;
+        current = parent;
+      }
+      if (protectedPath) return candidate;
+    } catch {
+      // Try the next fixed protected system path.
+    }
+  }
+  throw new Error("workflow mutation locking requires flock from a protected system path");
+}
+
 function retireDeadLock(paths, expectedBytes, owner) {
   if (!ownerProvablyDead(owner)) throw new Error("workflow mutation lock owner is live or cannot be proven dead");
   const script = String.raw`
@@ -325,10 +366,14 @@ if(!dead){try{const now=ticks(fs.readFileSync('/proc/'+owner.pid+'/stat','utf8')
 if(!dead)process.exit(24);
 try{fs.unlinkSync(file)}catch(e){if(e.code!=='ENOENT')process.exit(25)}
 `;
-  const result = spawnSync("flock", ["--exclusive", "--timeout", "0", paths.workflowLock,
+  const result = spawnSync(trustedWorkflowFlock(), ["--exclusive", "--timeout", "0", paths.workflowLock,
     process.execPath, "-e", script, paths.workflowLock, expectedBytes.toString("base64")], {
     encoding: "utf8",
-    timeout: 10_000
+    env: { PATH: "/usr/bin:/bin", LANG: "C", LC_ALL: "C" },
+    shell: false,
+    windowsHide: true,
+    timeout: 10_000,
+    maxBuffer: 16 * 1024
   });
   if (result.error || result.status !== 0) {
     throw new Error(`stale workflow lock could not be retired safely${result.status === null ? "" : ` (status ${result.status})`}`);

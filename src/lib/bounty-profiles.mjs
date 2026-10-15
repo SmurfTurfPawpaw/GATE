@@ -11,7 +11,7 @@ import {
   syncPrivateDirectory,
   writePrivateFileExclusive
 } from "./private-fs.mjs";
-import { assertNoLikelySecret } from "./text.mjs";
+import { assertNoLikelySecret, assertNoUnsafeText, escapeUnsafeText } from "./text.mjs";
 import { validateDocument } from "./schema.mjs";
 import {
   PROGRAM_PROFILE_ACTIONS,
@@ -45,6 +45,11 @@ const MAX_PROVIDER_BYTES = 1024 * 1024;
 const MAX_STATE_BINDING_BYTES = 16 * 1024;
 const MAX_TRANSACTION_INTENT_BYTES = 32 * 1024;
 const PROFILE_SCHEMA_REF = "https://gate.local/schemas/bug-bounty-program-profile.schema.json";
+const COMPILATION_CONTRACT_VERSION = "gate.dev/program-profile-compilation/v2";
+const PROVIDER_TEMPLATE_ID = "replace-provider";
+const PROVIDER_TEMPLATE_MODEL = "replace-model";
+const PROVIDER_TEMPLATE_EFFECTIVE_AT = "2026-10-14T00:00:00Z";
+const PROVIDER_TEMPLATE_EXPIRES_AT = "2027-10-14T00:00:00Z";
 const CONTENT_BOUND_SOURCE_TYPES = new Set([
   "program-rules",
   "safe-harbor",
@@ -798,6 +803,17 @@ function normalizeProfileProgress(profile, envelope, options = {}) {
 
 function inspectSecretReferences(profile) {
   const errors = [];
+  const normalizedField = (key) => String(key).replace(/[^A-Za-z0-9]/gu, "").toLowerCase();
+  const sensitivePath = (parts) => {
+    const fields = parts.map(normalizedField);
+    if (fields.some((field) => /(?:passwords?|passwd|apikeys?|accesstokens?|refreshtokens?|clientsecrets?|privatekeys?|credentials?|credentialvalues?|secrets?|sessionid|sessionkey|sessiontoken|tokens?)$/u.test(field))) {
+      return true;
+    }
+    if (fields.some((field) => field === "auth" || field === "bearer")) return true;
+    return fields.some((field, index) =>
+      index > 0 && fields[index - 1] === "headers" && /^(?:authorization|cookie|setcookie)$/u.test(field)
+    );
+  };
   const refs = [
     ...(profile.dataEvidence?.secretRefs || []),
     ...(profile.access?.accounts || []).flatMap((account) => account.secretRefs || [])
@@ -810,12 +826,19 @@ function inspectSecretReferences(profile) {
   const visit = (value, pathParts = []) => {
     if (typeof value === "string") {
       try {
+        assertNoUnsafeText(value, pathParts.join(".") || "program profile value");
+      } catch (error) {
+        errors.push(error.message);
+      }
+      try {
         assertNoLikelySecret(value, pathParts.join(".") || "program profile value");
       } catch (error) {
         errors.push(error.message);
       }
-      const key = pathParts.at(-1) || "";
-      if (/(?:password|passwd|apiKey|accessToken|clientSecret|privateKey|credentialValue)$/iu.test(key) && !SECRET_REFERENCE.test(value)) {
+      if (
+        sensitivePath(pathParts) &&
+        !SECRET_REFERENCE.test(value)
+      ) {
         errors.push(`${pathParts.join(".")} must be a symbolic secret reference`);
       }
       return;
@@ -825,7 +848,19 @@ function inspectSecretReferences(profile) {
       return;
     }
     if (value && typeof value === "object") {
-      for (const [key, item] of Object.entries(value)) visit(item, [...pathParts, key]);
+      for (const [key, item] of Object.entries(value)) {
+        const propertyLocation = `${pathParts.join(".") || "program profile value"} property name`;
+        let safeKey = key;
+        for (const inspect of [assertNoUnsafeText, assertNoLikelySecret]) {
+          try {
+            inspect(key, propertyLocation);
+          } catch (error) {
+            errors.push(error.message);
+            safeKey = "[rejected-property-name]";
+          }
+        }
+        visit(item, [...pathParts, safeKey]);
+      }
     }
   };
   visit(profile);
@@ -835,6 +870,14 @@ function inspectSecretReferences(profile) {
 function assertProfileSafe(profile) {
   const errors = inspectSecretReferences(profile);
   if (errors.length) throw new Error(`program profile rejected: ${errors.join("; ")}`);
+}
+
+function literalSecretScan() {
+  return {
+    status: "pass",
+    finding: "no-likely-secret-detected",
+    method: "gate-heuristic-v1"
+  };
 }
 
 function assertRawAnswersSafe(input) {
@@ -851,7 +894,9 @@ function readyContractErrorPath(detail) {
 
 function semanticProfileChecks(profile, id, options = {}) {
   const now = new Date(options.now || new Date().toISOString());
+  const assessedAtMs = now.getTime();
   const sourceIds = new Set((profile.sources || []).map((source) => source.id));
+  const sourceObservedAt = new Map((profile.sources || []).map((source) => [source.id, Date.parse(source.observedAt)]));
   const checks = [];
   const blockers = [];
   const warnings = [];
@@ -893,6 +938,14 @@ function semanticProfileChecks(profile, id, options = {}) {
         `sources.${source.id}.contentSha256`
       );
     }
+    const observedAt = sourceObservedAt.get(source.id);
+    if (Number.isFinite(observedAt) && observedAt > assessedAtMs) {
+      addBlocker(
+        "source-observation-in-future",
+        `source ${source.id} was recorded after the verification time`,
+        `sources.${source.id}.observedAt`
+      );
+    }
   }
 
   if (!profile.authorization?.operatorConfirmed) {
@@ -900,6 +953,24 @@ function semanticProfileChecks(profile, id, options = {}) {
   }
   const validFrom = profile.authorization?.validFrom ? new Date(profile.authorization.validFrom) : null;
   const validUntil = profile.authorization?.validUntil ? new Date(profile.authorization.validUntil) : null;
+  const authorizationVerifiedAt = Date.parse(profile.authorization?.lastVerifiedAt);
+  if (Number.isFinite(authorizationVerifiedAt) && authorizationVerifiedAt > assessedAtMs) {
+    addBlocker(
+      "authorization-verification-in-future",
+      "authorization terms were marked verified after the verification time",
+      "authorization.lastVerifiedAt"
+    );
+  }
+  for (const sourceRef of profile.authorization?.sourceRefs || []) {
+    const observedAt = sourceObservedAt.get(sourceRef);
+    if (Number.isFinite(authorizationVerifiedAt) && Number.isFinite(observedAt) && authorizationVerifiedAt < observedAt) {
+      addBlocker(
+        "authorization-verification-predates-source",
+        `authorization verification predates cited source ${sourceRef}`,
+        "authorization.lastVerifiedAt"
+      );
+    }
+  }
   if (validFrom && validUntil && !(validFrom < validUntil)) {
     addBlocker("authorization-window-invalid", "authorization end must be later than its start", "authorization");
   }
@@ -977,6 +1048,29 @@ function semanticProfileChecks(profile, id, options = {}) {
       addBlocker("coverage-unresolved", `coverage domain ${domain} is ${item?.disposition || "missing"}`, `coverage.${domain}`);
     }
   }
+  const classificationRank = new Map([
+    ["public", 0],
+    ["internal", 1],
+    ["confidential", 2],
+    ["restricted", 3]
+  ]);
+  const releaseClassification = classificationRank.get(profile.dataEvidence?.classification);
+  for (const flow of profile.architecture?.dataFlows || []) {
+    const flowClassification = classificationRank.get(flow.dataClassification);
+    if (flow.dataClassification === "unknown") {
+      addBlocker(
+        "data-flow-classification-unknown",
+        `data flow ${flow.id} has an unknown classification`,
+        `architecture.dataFlows.${flow.id}.dataClassification`
+      );
+    } else if (flowClassification > releaseClassification) {
+      addBlocker(
+        "data-release-classification-too-low",
+        `data flow ${flow.id} is ${flow.dataClassification}, above the ${profile.dataEvidence.classification} release classification`,
+        "dataEvidence.classification"
+      );
+    }
+  }
   for (const moduleId of profile.questionnaire?.applicableModules || []) {
     const module = profile.modules?.[moduleId];
     if (!module || module.disposition === "unknown") {
@@ -998,6 +1092,30 @@ function semanticProfileChecks(profile, id, options = {}) {
       `operator attestation binds revision ${profile.attestation.attestedRevision ?? "none"}, not current revision ${profile.metadata.revision}`,
       "attestation.attestedRevision"
     );
+  }
+  const attestedAt = Date.parse(profile.attestation?.attestedAt);
+  if (Number.isFinite(attestedAt) && attestedAt > assessedAtMs) {
+    addBlocker(
+      "operator-attestation-in-future",
+      "operator attestation was recorded after the verification time",
+      "attestation.attestedAt"
+    );
+  }
+  if (Number.isFinite(attestedAt) && Number.isFinite(authorizationVerifiedAt) && attestedAt < authorizationVerifiedAt) {
+    addBlocker(
+      "operator-attestation-predates-authorization-verification",
+      "operator attestation predates the recorded authorization verification",
+      "attestation.attestedAt"
+    );
+  }
+  for (const [sourceId, observedAt] of sourceObservedAt) {
+    if (Number.isFinite(attestedAt) && Number.isFinite(observedAt) && attestedAt < observedAt) {
+      addBlocker(
+        "operator-attestation-predates-source",
+        `operator attestation predates source ${sourceId}`,
+        "attestation.attestedAt"
+      );
+    }
   }
   if (profile.metadata?.status !== "ready-to-materialize") {
     addBlocker("profile-status-not-ready", `profile status is ${profile.metadata?.status || "missing"}`, "metadata.status");
@@ -1575,7 +1693,7 @@ function operatorReview(profile, verification) {
       : ["- None."]),
     ""
   ];
-  return lines.join("\n");
+  return escapeUnsafeText(lines.join("\n"));
 }
 
 function ambiguityReport(profile, verification) {
@@ -1795,7 +1913,7 @@ function conservativeExecutableActions(profile, policy = exactExecutionPolicy(pr
   );
 }
 
-function contextTokenEnvelope(profile, policy = exactExecutionPolicy(profile)) {
+function runTokenEnvelope(profile, policy = exactExecutionPolicy(profile)) {
   const assetCeilings = policy.assets
     .filter((asset) => asset.disposition === "allowed")
     .map((asset) => ({ assetId: asset.id, maxTokens: asset.limits.maxTokens }));
@@ -1855,7 +1973,7 @@ function modelContext(profile, verification, input) {
       .map((id) => ({ id, ...profile.modules[id] }))
   };
   return {
-    apiVersion: "gate.dev/model-context/v1",
+    apiVersion: "gate.dev/model-context/v2",
     kind: "ModelContextPacket",
     metadata: {
       id: `context-${input.compilationId.slice(0, 24)}`,
@@ -1863,6 +1981,7 @@ function modelContext(profile, verification, input) {
       profileRevision: profile.metadata.revision,
       profileSha256: verification.profileSha256,
       classification: profile.dataEvidence.classification,
+      compilationContract: input.artifactContractVersion,
       issuedAt: input.assessedAt,
       expiresAt: profile.authorization.validUntil
     },
@@ -1926,7 +2045,7 @@ function modelContext(profile, verification, input) {
     conditionalPolicy,
     dataHandling: {
       ...profile.dataEvidence,
-      containsSecretValues: false
+      literalSecretScan: literalSecretScan()
     },
     unresolved: verification.blockers.map(({ code, detail, path: profilePath }) => ({ code, detail, path: profilePath })),
     modelInstructions: {
@@ -1946,6 +2065,19 @@ function providerProfileInput(input, paths, options = {}) {
   if (!profile || typeof profile !== "object" || Array.isArray(profile)) throw new Error("provider capability profile must be an object");
   const validation = validateDocument(profile, "provider-capability-profile.schema.json", { paths });
   if (!validation.ok) throw new Error(`provider capability profile validation failed: ${validation.errors.join("; ")}`);
+  if (profile.metadata.id === PROVIDER_TEMPLATE_ID) {
+    throw new Error("provider capability profile still uses the template metadata.id; replace it with the reviewed provider identity");
+  }
+  if (profile.metadata.model === PROVIDER_TEMPLATE_MODEL) {
+    throw new Error("provider capability profile still uses the template metadata.model; replace it with the exact reviewed model identity");
+  }
+  if (
+    profile.apiVersion === "gate.dev/provider-capability-profile/v2" &&
+    profile.metadata.effectiveAt === PROVIDER_TEMPLATE_EFFECTIVE_AT &&
+    profile.metadata.expiresAt === PROVIDER_TEMPLATE_EXPIRES_AT
+  ) {
+    throw new Error("provider capability profile still uses the legacy template freshness interval; replace it with reviewed effectiveAt and expiresAt values");
+  }
   const effective = profile.metadata.effectiveAt ? Date.parse(profile.metadata.effectiveAt) : null;
   const expires = profile.metadata.expiresAt ? Date.parse(profile.metadata.expiresAt) : null;
   if (effective !== null && Number.isNaN(effective)) throw new Error("provider capability effectiveAt must be a date-time");
@@ -1954,19 +2086,35 @@ function providerProfileInput(input, paths, options = {}) {
     throw new Error("provider capability expiresAt must be later than effectiveAt");
   }
   const assessedAt = Date.parse(options.now || new Date().toISOString());
-  const freshness = expires !== null && assessedAt >= expires
-    ? "stale"
-    : effective !== null && assessedAt < effective ? "stale"
-      : effective === null && expires === null ? "unknown" : "current";
+  const freshness = effective === null || expires === null
+    ? "unknown"
+    : assessedAt < effective || assessedAt >= expires ? "stale" : "current";
   return { value: profile, sha256: canonicalSha256(profile), freshness };
 }
 
 function compatibilityReport(profile, verification, packet, provider) {
-  const estimatedTokens = Math.ceil(Buffer.byteLength(canonicalText(packet), "utf8") / 4);
-  const tokenEnvelope = contextTokenEnvelope(profile);
-  const reservedOutputTokens = Math.min(16000, Math.max(1000, Math.ceil(tokenEnvelope.effectiveMaxTokens * 0.2)));
-  const totalReservedTokens = estimatedTokens + reservedOutputTokens;
-  const contextWithinBudget = totalReservedTokens <= tokenEnvelope.effectiveMaxTokens;
+  const packetBytes = artifactBytes(packet, "model-context.json");
+  const runEnvelope = runTokenEnvelope(profile);
+  const declaredContext = provider?.freshness === "current" ? provider.value.contextWindow : null;
+  const contextAccountingAvailable = Boolean(declaredContext);
+  // A provider may opt into this conservative, tokenizer-independent bound
+  // only when its tokenizer is known not to emit more than one token per
+  // input UTF-8 byte. Provider framing, system text, tools, and all other
+  // request input are covered separately by the declared overhead bound.
+  const inputTokensUpperBound = contextAccountingAvailable ? packetBytes.length : null;
+  const requestOverheadTokensUpperBound = contextAccountingAvailable
+    ? declaredContext.requestOverheadTokensUpperBound
+    : null;
+  const reservedOutputTokens = contextAccountingAvailable ? declaredContext.reservedOutputTokens : null;
+  const totalRequestTokensUpperBound = contextAccountingAvailable
+    ? inputTokensUpperBound + requestOverheadTokensUpperBound + reservedOutputTokens
+    : null;
+  const providerContextWindowStatus = !contextAccountingAvailable
+    ? "unknown"
+    : totalRequestTokensUpperBound <= declaredContext.maxTokens ? "pass" : "block";
+  const runTokenBudgetStatus = !contextAccountingAvailable
+    ? "unknown"
+    : totalRequestTokensUpperBound <= runEnvelope.effectiveMaxTokens ? "pass" : "block";
   const requestedAssistanceModes = profile.executionPolicy?.requestedAssistanceModes || [];
   const destination = provider?.value.metadata.destination || "unknown";
   const destinationStatus = destination === "unknown" || provider?.freshness !== "current"
@@ -1980,7 +2128,8 @@ function compatibilityReport(profile, verification, packet, provider) {
     { id: "technique-policy", status: verification.blockers.some((item) => item.code.startsWith("action") || item.code.startsWith("technique") || item.code === "no-allowed-actions") ? "block" : "pass" },
     { id: "data-release", status: destinationStatus },
     { id: "provider-capability", status: "unknown" },
-    { id: "context-budget", status: contextWithinBudget ? "pass" : "block" }
+    { id: "provider-context-window", status: providerContextWindowStatus },
+    { id: "run-token-budget", status: runTokenBudgetStatus }
   ];
   let providerPrediction = "unknown";
   let providerBlockers = [];
@@ -2001,59 +2150,132 @@ function compatibilityReport(profile, verification, packet, provider) {
     dimensions.find((item) => item.id === "provider-capability").status =
       providerPrediction === "compatible" ? "pass" : providerPrediction === "incompatible" ? "block" : "unknown";
   }
-  const gateBlockers = contextWithinBudget ? verification.blockers : [
-    ...verification.blockers,
-    {
-      code: "context-budget-exceeded",
-      detail: `compact model context plus reserved output needs ${totalReservedTokens} tokens (${estimatedTokens} input + ${reservedOutputTokens} output), above the strictest applicable ceiling of ${tokenEnvelope.effectiveMaxTokens}`,
-      path: "executionPolicy"
+  const routeAccountingBlockers = [];
+  if (providerContextWindowStatus === "unknown" || runTokenBudgetStatus === "unknown") {
+    routeAccountingBlockers.push({
+      code: "context-accounting-unavailable",
+      detail: "A current, finite, model-bound provider context-window declaration is required to establish the initial request bound.",
+      path: "provider.contextWindow"
+    });
+  } else {
+    if (providerContextWindowStatus === "block") {
+      routeAccountingBlockers.push({
+        code: "provider-context-window-exceeded",
+        detail: `The initial request upper bound of ${totalRequestTokensUpperBound} tokens exceeds the provider context window of ${declaredContext.maxTokens}.`,
+        path: "provider.contextWindow.maxTokens"
+      });
     }
-  ];
+    if (runTokenBudgetStatus === "block") {
+      routeAccountingBlockers.push({
+        code: "run-token-budget-exceeded",
+        detail: `The initial request upper bound of ${totalRequestTokensUpperBound} tokens exceeds the reviewed cumulative run ceiling of ${runEnvelope.effectiveMaxTokens}.`,
+        path: "executionPolicy"
+      });
+    }
+  }
+  const gateBlockers = [...verification.blockers, ...routeAccountingBlockers];
+  let routingStrategy;
+  let routingReason;
+  if (!verification.ready) {
+    routingStrategy = "operator";
+    routingReason = "Resolve the listed GATE profile blockers before selecting an execution route.";
+  } else if (destinationStatus !== "pass") {
+    routingStrategy = "operator";
+    routingReason = "Review provider destination metadata and recorded data destinations before model routing.";
+  } else if (providerContextWindowStatus === "unknown" || runTokenBudgetStatus === "unknown") {
+    routingStrategy = "operator";
+    routingReason = "Record current provider context-window accounting before model routing.";
+  } else if (providerContextWindowStatus === "block") {
+    routingStrategy = "operator";
+    routingReason = "Reduce the compact request payload or select a provider with a larger declared context window.";
+  } else if (runTokenBudgetStatus === "block") {
+    routingStrategy = "operator";
+    routingReason = "Reduce the initial request bound or raise the reviewed cumulative run-token ceiling.";
+  } else if (providerPrediction === "compatible") {
+    routingStrategy = "provider-model";
+    routingReason = "The supplied provider profile permits every compiled action and assistance mode.";
+  } else if (providerPrediction === "incompatible") {
+    routingStrategy = "reviewed-adapter";
+    routingReason = "Use an admitted reviewed adapter or a compatible local route for denied capabilities.";
+  } else {
+    routingStrategy = "provider-adjudicated";
+    routingReason = "Provider support is incomplete; make one truthful capability request without disguising intent.";
+  }
+  const routeReady = routingStrategy === "provider-model";
+  const routeBlockers = [...verification.blockers, ...routeAccountingBlockers];
+  if (destinationStatus !== "pass") {
+    routeBlockers.push({
+      code: destinationStatus === "block" ? "provider-destination-blocked" : "provider-destination-unverified",
+      detail: "The provider destination is not a current allowed data destination for this profile.",
+      path: "provider.metadata.destination"
+    });
+  }
+  if (providerPrediction !== "compatible") {
+    routeBlockers.push({
+      code: providerPrediction === "incompatible" ? "provider-capability-incompatible" : "provider-capability-unverified",
+      detail: "The provider profile does not currently allow every requested action and assistance mode.",
+      path: "provider.capabilities"
+    });
+  }
   return {
-    apiVersion: "gate.dev/model-preflight/v1",
+    apiVersion: "gate.dev/model-preflight/v2",
     kind: "ModelCompatibilityReport",
     packetId: packet.metadata.id,
-    packetSha256: canonicalSha256(packet),
+    packetSha256: sha256Bytes(packetBytes),
     assessedAt: packet.metadata.issuedAt,
-    gateDecision: verification.ready && contextWithinBudget ? "pass" : "block",
+    gateDecision: gateBlockers.length === 0 ? "pass" : "block",
     providerPrediction,
+    dataReleaseStatus: destinationStatus,
+    routeReady,
     requestedActions,
     requestedAssistanceModes,
     provider: provider ? {
+      apiVersion: provider.value.apiVersion,
       id: provider.value.metadata.id,
       model: provider.value.metadata.model || null,
       destination,
       policyProfileSha256: provider.sha256,
       policyEffectiveAt: provider.value.metadata.effectiveAt || null,
       policyExpiresAt: provider.value.metadata.expiresAt || null,
-      policyFreshness: provider.freshness
+      policyFreshness: provider.freshness,
+      contextWindow: provider.value.contextWindow || null
     } : null,
     dimensions,
     blockers: gateBlockers,
+    profileBlockers: verification.blockers,
+    routeBlockers,
     providerBlockers,
     contextBudget: {
-      estimatedInputTokens: estimatedTokens,
-      reservedOutputTokens,
-      totalReservedTokens,
-      profileTokenCeiling: profile.limits.maxTokens,
-      effectiveTokenCeiling: tokenEnvelope.effectiveMaxTokens,
-      assetCeilings: tokenEnvelope.assetCeilings,
-      phaseAssetCeilings: tokenEnvelope.phaseAssetCeilings,
-      estimation: "estimated"
+      payload: {
+        bytes: packetBytes.length,
+        serialization: "canonical-compact-json"
+      },
+      accounting: {
+        availability: contextAccountingAvailable ? "conservative-upper-bound" : "unavailable",
+        method: contextAccountingAvailable ? declaredContext.countingMethod : null,
+        inputTokensUpperBound,
+        requestOverheadTokensUpperBound,
+        reservedOutputTokens,
+        totalRequestTokensUpperBound
+      },
+      providerContextWindow: {
+        status: providerContextWindowStatus,
+        maxTokens: contextAccountingAvailable ? declaredContext.maxTokens : null
+      },
+      profileRunTokenBudget: {
+        status: runTokenBudgetStatus,
+        accounting: "cumulative-run-ceiling",
+        profileMaxTokens: profile.limits.maxTokens,
+        effectiveMaxTokens: runEnvelope.effectiveMaxTokens,
+        initialRequestTokensUpperBound: totalRequestTokensUpperBound,
+        assetCeilings: runEnvelope.assetCeilings,
+        phaseAssetCeilings: runEnvelope.phaseAssetCeilings
+      }
     },
     routing: {
-      strategy: !verification.ready || !contextWithinBudget || destinationStatus !== "pass"
-        ? "operator"
-        : providerPrediction === "compatible" ? "provider-model"
-          : providerPrediction === "incompatible" ? "reviewed-adapter"
-            : "provider-adjudicated",
-      reason: !verification.ready
-        ? "Resolve the listed GATE profile blockers before selecting an execution route."
-        : !contextWithinBudget ? "Reduce the context packet or raise the reviewed profile token ceiling before model routing."
-        : destinationStatus !== "pass" ? "Review provider destination metadata and recorded data destinations before model routing."
-        : providerPrediction === "compatible" ? "The supplied provider profile permits every compiled action and assistance mode."
-          : providerPrediction === "incompatible" ? "Use an admitted reviewed adapter or a compatible local route for denied capabilities."
-            : "Provider support is incomplete or no provider profile was supplied; make one truthful capability request without disguising intent."
+      strategy: routingStrategy,
+      reason: routingReason,
+      ready: routeReady
     }
   };
 }
@@ -2187,7 +2409,7 @@ function authorizationSummary(profile, verification) {
 
 function credentialPlan(profile, verification) {
   return {
-    apiVersion: "gate.dev/program-credential-plan/v1",
+    apiVersion: "gate.dev/program-credential-plan/v2",
     kind: "ProgramCredentialPlan",
     profileId: profile.metadata.id,
     profileSha256: verification.profileSha256,
@@ -2200,7 +2422,7 @@ function credentialPlan(profile, verification) {
       sourceRefs: account.sourceRefs
     })),
     additionalSecretRefs: profile.dataEvidence.secretRefs,
-    containsSecretValues: false,
+    literalSecretScan: literalSecretScan(),
     identityProviderNotes: profile.access.identityProviderNotes
   };
 }
@@ -2239,7 +2461,7 @@ function limitsAndSchedule(profile, verification) {
 
 function dataEvidencePlan(profile, verification) {
   return {
-    apiVersion: "gate.dev/program-data-evidence-plan/v1",
+    apiVersion: "gate.dev/program-data-evidence-plan/v2",
     kind: "ProgramDataEvidencePlan",
     profileId: profile.metadata.id,
     profileSha256: verification.profileSha256,
@@ -2250,7 +2472,7 @@ function dataEvidencePlan(profile, verification) {
     minimumProof: profile.dataEvidence.minimumProof,
     secretRefs: profile.dataEvidence.secretRefs,
     sourceRefs: profile.dataEvidence.sourceRefs,
-    containsSecretValues: false
+    literalSecretScan: literalSecretScan()
   };
 }
 
@@ -2367,8 +2589,12 @@ function compilationArtifacts(profile, verification, input, provider) {
   };
 }
 
-function artifactBytes(value) {
-  return Buffer.from(typeof value === "string" ? `${value.trimEnd()}\n` : canonicalText(value), "utf8");
+function artifactBytes(value, name = null) {
+  if (typeof value === "string") return Buffer.from(`${value.trimEnd()}\n`, "utf8");
+  const serialized = name === "model-context.json"
+    ? `${JSON.stringify(stableValue(value))}\n`
+    : canonicalText(value);
+  return Buffer.from(serialized, "utf8");
 }
 
 function verifyCompilationDirectory(directory, artifacts) {
@@ -2379,7 +2605,7 @@ function verifyCompilationDirectory(directory, artifacts) {
     throw new Error("existing compilation contains an unexpected or missing artifact");
   }
   for (const [name, value] of Object.entries(artifacts)) {
-    const expected = artifactBytes(value);
+    const expected = artifactBytes(value, name);
     const observed = readPrivateFileBounded(path.join(directory, name), Math.max(expected.length, 1), null, { label: `compiled artifact ${name}` });
     if (!observed.equals(expected)) throw new Error(`existing compilation artifact differs: ${name}`);
   }
@@ -2423,7 +2649,7 @@ function writeCompilation(paths, id, compilationId, artifacts) {
   let published = false;
   try {
     for (const [name, value] of Object.entries(artifacts)) {
-      const bytes = artifactBytes(value);
+      const bytes = artifactBytes(value, name);
       writePrivateFileExclusive(path.join(staging, name), bytes, { label: `compiled artifact ${name}` });
     }
     syncPrivateDirectory(staging, { label: "program profile compilation staging directory" });
@@ -2446,10 +2672,14 @@ export function compileProgramProfile(id, input = {}, options = {}) {
   // must describe that same instant, especially at validity boundaries.
   const assessedAt = new Date(options.now || Date.now()).toISOString();
   const profile = withProfileLock(paths, cleanId, () => loadStoredProfile(paths, cleanId));
+  // Profiles written by an older GATE release still cross the current
+  // literal-secret boundary before any derived artifact is materialized.
+  assertProfileSafe(profile);
   const verification = verifyProfileValue(profile, cleanId, { ...options, paths, now: assessedAt });
   if (!verification.structuralValid) throw new Error(`program profile is structurally invalid: ${verification.checks.filter((item) => !item.ok && item.name !== "compile-readiness").map((item) => item.detail).join("; ")}`);
   const provider = providerProfileInput(input.providerProfile, paths, { ...options, now: assessedAt });
   const compileInput = {
+    artifactContractVersion: COMPILATION_CONTRACT_VERSION,
     engagementId: cleanProfileId(input.engagementId || derivedProfileId(cleanId, "assessment")),
     workflowId: cleanProfileId(input.workflowId || derivedProfileId(cleanId, "pentest-e2e")),
     assessedAt,
@@ -2474,7 +2704,7 @@ export function compileProgramProfile(id, input = {}, options = {}) {
     return writeCompilation(paths, cleanId, compilationId, artifacts);
   });
   const artifactSummary = Object.fromEntries(Object.entries(artifacts).map(([name, value]) => {
-    const bytes = artifactBytes(value);
+    const bytes = artifactBytes(value, name);
     return [name, {
       ref: privateRef(cleanId, `${COMPILED_DIRECTORY}/${compilationId}/${name}`),
       sha256: sha256Bytes(bytes),
@@ -2490,17 +2720,27 @@ export function compileProgramProfile(id, input = {}, options = {}) {
     created: publication.created,
     id: cleanId,
     compilationId,
+    artifactContractVersion: COMPILATION_CONTRACT_VERSION,
     profileSha256: verification.profileSha256,
     gateDecision: preflight.gateDecision,
     providerPrediction: preflight.providerPrediction,
+    dataReleaseStatus: preflight.dataReleaseStatus,
+    routingStrategy: preflight.routing.strategy,
+    routingReason: preflight.routing.reason,
+    routeReady: preflight.routeReady,
     blockerCount: preflight.blockers.length,
     blockers: preflight.blockers,
+    routeBlockerCount: preflight.routeBlockers.length,
+    routeBlockers: preflight.routeBlockers,
     engagementDecision: proposal.engagementDecision,
     engagementBlockerCount: proposal.engagementBlockers.length,
     engagementBlockers: proposal.engagementBlockers,
-    contextTokensEstimated: preflight.contextBudget.estimatedInputTokens,
-    outputTokensReserved: preflight.contextBudget.reservedOutputTokens,
-    totalTokensReserved: preflight.contextBudget.totalReservedTokens,
+    contextInputTokensUpperBound: preflight.contextBudget.accounting.inputTokensUpperBound,
+    contextRequestTokensUpperBound: preflight.contextBudget.accounting.totalRequestTokensUpperBound,
+    providerContextWindowTokens: preflight.contextBudget.providerContextWindow.maxTokens,
+    providerContextWindowStatus: preflight.contextBudget.providerContextWindow.status,
+    runTokenBudgetStatus: preflight.contextBudget.profileRunTokenBudget.status,
+    effectiveRunTokenCeiling: preflight.contextBudget.profileRunTokenBudget.effectiveMaxTokens,
     artifacts: artifactSummary,
     targetContact: false,
     executionAuthority: false,
@@ -2518,7 +2758,9 @@ export function showProgramProfile(id, options = {}) {
   if (format === "json") return profile;
   if (format === "review") return operatorReview(profile, verification);
   if (format === "model-context") {
+    assertProfileSafe(profile);
     const input = {
+      artifactContractVersion: COMPILATION_CONTRACT_VERSION,
       engagementId: derivedProfileId(cleanId, "assessment"),
       workflowId: derivedProfileId(cleanId, "pentest-e2e"),
       profileSha256: verification.profileSha256,
@@ -2538,6 +2780,7 @@ export const bountyProfileInternals = Object.freeze({
   MAX_PROFILE_BYTES,
   PROFILE_FILE,
   PROFILE_ID,
+  COMPILATION_CONTRACT_VERSION,
   canonicalSha256,
   canonicalText,
   initialProfile,

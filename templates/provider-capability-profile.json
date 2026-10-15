@@ -1,14 +1,12 @@
 {
   "$schema": "https://gate.local/schemas/provider-capability-profile.schema.json",
-  "apiVersion": "gate.dev/provider-capability-profile/v1",
+  "apiVersion": "gate.dev/provider-capability-profile/v2",
   "kind": "ProviderCapabilityProfile",
   "metadata": {
     "id": "replace-provider",
-    "model": "replace-model",
-    "effectiveAt": "2026-10-14T00:00:00Z",
-    "expiresAt": "2027-10-14T00:00:00Z",
     "destination": "unknown"
   },
+  "contextWindow": null,
   "capabilities": {
     "observe": {
       "plan": "unknown",
