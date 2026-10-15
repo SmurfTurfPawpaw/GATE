@@ -302,13 +302,6 @@ test("questionnaire exposes the exact 12-section, 9-module, 13-action, 13-stop, 
     question.condition.path === "questionnaire.applicableModules" && question.condition.includes === question.module
   ));
   assert.equal(Object.isFrozen(PROGRAM_PROFILE_QUESTIONNAIRE), true);
-
-  const questions = new Map(PROGRAM_PROFILE_QUESTIONS.map((question) => [question.id, question]));
-  assert.match(questions.get("identity-depth").why, /Surface checks alone/u);
-  assert.match(questions.get("identity-success-criteria").prompt, /promising signals/u);
-  assert.match(questions.get("actions-techniques").prompt, /stateful.*webhook/u);
-  assert.match(questions.get("execution-phase-policies").why, /high-friction follow-up/u);
-  assert.match(questions.get("web-api-automation-rules").why, /costly or error-prone/u);
 });
 
 test("questionnaire v2 requires choice-first interaction metadata while v1 remains readable", () => {

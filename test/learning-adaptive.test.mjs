@@ -714,7 +714,7 @@ test("concurrent cross-ledger promotions produce exactly one winner", async (t) 
   assert.equal(fs.existsSync(`${paths.privateLearnings}.lock`), false);
 });
 
-test("consult caps record count and admits legacy public active learning only by opt-in", (t) => {
+test("consult caps record count and excludes legacy public active learning", (t) => {
   const paths = fixture(t);
   for (const domain of ["active-testing", "software-testing", "orchestration", "tooling", "general"]) {
     const candidate = addCandidate(paths, { domain });
@@ -733,10 +733,7 @@ test("consult caps record count and admits legacy public active learning only by
   assert.equal(limited.selected.length, 2);
   assert.equal(limited.truncation.truncated, true);
   assert.equal(limited.truncation.omittedLearnings, 3);
-  assert.ok(limited.selected.every((item) => item.id !== legacy.id));
-
-  const withLegacy = consultLearnings({ applicability, includeLegacyPublic: true }, { paths });
-  assert.ok(withLegacy.selected.length <= 8);
-  assert.ok(withLegacy.selected.some((item) => item.id === legacy.id && item.legacy === true));
-  assert.ok(Buffer.byteLength(JSON.stringify(withLegacy)) <= 4096);
+  const full = consultLearnings({ applicability }, { paths });
+  assert.equal(full.selected.length, 5);
+  assert.ok(full.selected.every((item) => item.id !== legacy.id));
 });

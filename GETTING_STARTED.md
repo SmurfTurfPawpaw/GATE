@@ -159,8 +159,7 @@ cat >"$GATE_HOME/input/active-surface-learning.json" <<'JSON'
     },
     { "kind": "phase", "id": "active-surface-validation" },
     { "kind": "tool", "id": "dnsx" }
-  ],
-  "includeLegacyPublic": false
+  ]
 }
 JSON
 chmod 600 "$GATE_HOME/input/active-surface-learning.json"
@@ -306,8 +305,7 @@ cat >"$GATE_HOME/input/learning-consult.json" <<'JSON'
       "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     },
     { "kind": "phase", "id": "authorization-and-roe" }
-  ],
-  "includeLegacyPublic": false
+  ]
 }
 JSON
 chmod 600 "$GATE_HOME/input/learning-consult.json"
@@ -317,7 +315,7 @@ chmod 600 "$GATE_HOME/input/learning-consult.json"
   --limit 8 --max-bytes 4096 --json
 ```
 
-Consultation returns only public, sanitized, active lessons with that exact applicability set. Replace the example workflow digest with `contract.sha256` from `workflow status`. Every test plan's applicability must equal exactly one workflow reference with its current version and digest, exactly one reference to the active phase, and the exact admitted tool reference when the active phase has one; v0.1 accepts no additional references. Retain the applicability array, `selected[].id`, `ledgerHeadSha256`, and `projectionSha256` together. Copy the selected IDs in their returned order and both returned digests into the plan even when `selected` is empty. `workflow test plan` recomputes this default 8-record, 4096-byte, non-legacy consultation and rejects stale values, unresolved conflicts, or any omitted applicable lesson.
+Consultation returns only public, sanitized, active lessons with that exact applicability set. Replace the example workflow digest with `contract.sha256` from `workflow status`. Every test plan's applicability must equal exactly one workflow reference with its current version and digest, exactly one reference to the active phase, and the exact admitted tool reference when the active phase has one; v0.1 accepts no additional references. Retain the applicability array, `selected[].id`, `ledgerHeadSha256`, and `projectionSha256` together. Copy the selected IDs in their returned order and both returned digests into the plan even when `selected` is empty. `workflow test plan` recomputes this default 8-record, 4096-byte consultation and rejects stale values, unresolved conflicts, or any omitted applicable lesson.
 
 Create the first private test plan for the active phase attempt:
 

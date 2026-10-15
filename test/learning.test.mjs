@@ -68,6 +68,22 @@ test("learning writes a single public cause-change record and event", (t) => {
   assert.match(fs.readFileSync(paths.events, "utf8"), /learning\.recorded/);
 });
 
+test("generated public ledger preserves lifecycle statuses across multiple records", (t) => {
+  const paths = fixture(t);
+  const statuses = ["active", "active", "proposed", "proposed", "superseded", "reverted"];
+  for (const [index, status] of statuses.entries()) {
+    addLearning({
+      cause: `Lifecycle observation number ${index} was recorded.`,
+      change: "Display the recorded lifecycle status.",
+      status
+    }, { paths });
+  }
+  const ledger = fs.readFileSync(paths.publicLearnings, "utf8");
+  const displayed = ledger.split("\n").filter((line) => line.startsWith("- "))
+    .map((line) => line.split(" | Status: ")[1]);
+  assert.deepEqual(displayed, statuses);
+});
+
 test("learning rejects common credential formats without writing an event", (t) => {
   const paths = fixture(t);
   const candidates = [

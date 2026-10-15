@@ -862,8 +862,8 @@ function renderLedger(learnings) {
   ));
   const active = learnings
     .filter((learning) => learning.status === "active" && !replacedIds.has(learning.id))
-    .map(learningLine);
-  const proposed = learnings.filter((learning) => learning.status === "proposed").map(learningLine);
+    .map((learning) => learningLine(learning));
+  const proposed = learnings.filter((learning) => learning.status === "proposed").map((learning) => learningLine(learning));
   const historical = learnings
     .filter((learning) => ["superseded", "reverted"].includes(learning.status) || replacedIds.has(learning.id))
     .map((learning) => learningLine(learning, replacedIds.has(learning.id) ? "superseded" : learning.status));
@@ -1183,16 +1183,6 @@ function v2Projection(record) {
   };
 }
 
-function v1Projection(record) {
-  return {
-    id: record.id,
-    apiVersion: record.apiVersion,
-    cause: record.cause,
-    change: record.change,
-    legacy: true
-  };
-}
-
 function sealConsultation(envelope) {
   return {
     ...envelope,
@@ -1215,9 +1205,6 @@ function consultLearningsWithRecords(input = {}, options = {}, suppliedRecords =
   }
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 512 || maxBytes > DEFAULT_CONSULT_BYTES) {
     throw new Error(`consult maxBytes must be between 512 and ${DEFAULT_CONSULT_BYTES}`);
-  }
-  if (input.includeLegacyPublic !== undefined && typeof input.includeLegacyPublic !== "boolean") {
-    throw new Error("includeLegacyPublic must be a boolean");
   }
 
   const records = suppliedRecords === null
@@ -1273,19 +1260,9 @@ function consultLearningsWithRecords(input = {}, options = {}, suppliedRecords =
   const conflictedIds = new Set(conflicts.flatMap((conflict) => conflict.learningIds));
   const candidates = effectiveV2.filter((record) => !conflictedIds.has(record.id)).map(v2Projection);
 
-  if (input.includeLegacyPublic === true) {
-    candidates.push(...records.filter((record) =>
-      record.apiVersion === "gate.learning/v1" &&
-      record.sensitivity === "public" &&
-      record.scope === "repository" &&
-      record.status === "active" &&
-      !record.evidence.some((ref) => ref.startsWith("private://")) &&
-      publicLearningIsSafe(record, paths)
-    ).map(v1Projection));
-  }
   candidates.sort((left, right) =>
-    String(right.validatedAt || "").localeCompare(String(left.validatedAt || "")) ||
-    String(left.domain || "legacy").localeCompare(String(right.domain || "legacy")) ||
+    right.validatedAt.localeCompare(left.validatedAt) ||
+    left.domain.localeCompare(right.domain) ||
     left.id.localeCompare(right.id)
   );
 
