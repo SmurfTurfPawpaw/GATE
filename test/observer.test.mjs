@@ -1101,6 +1101,26 @@ test("case projection is bounded and preserves the existing top-level observer l
   assert.deepEqual(projected.learnings, baseline.learnings);
 });
 
+test("fleet counters include unknown-status records from case runtimes", () => {
+  const unknownEvent = (id) => canonicalEvent({ id, status: "unknown" });
+  const projected = projectSnapshot(statusFixture({
+    events: [],
+    cases: [caseFixture({
+      projectId: null,
+      runtime: {
+        at,
+        events: [unknownEvent("evt_case_unknown")],
+        learnings: [],
+        cases: []
+      }
+    })],
+    caseScan: { discovered: 1, scanned: 1, omitted: 0, invalid: 0, complete: true, truncated: false }
+  }), paths).status;
+
+  assert.equal(projected.cases[0].counts.unknown, 1);
+  assert.equal(projected.counts.unknown, 1);
+});
+
 test("case state uses exact active execution and offline counts beyond bounded recent records", () => {
   const terminalExecution = executionFixture({
     counts: {

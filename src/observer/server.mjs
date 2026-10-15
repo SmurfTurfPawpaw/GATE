@@ -1411,7 +1411,7 @@ export function projectSnapshot(rawStatus, paths) {
   const cases = Array.isArray(raw.cases)
     ? raw.cases.slice(0, MAX_CASE_RECORDS).map((value) => summarizeCase(value, paths)).filter(Boolean)
     : [];
-  for (const key of ["queued", "running", "waiting", "blocked", "failed", "succeeded"]) {
+  for (const key of ["queued", "running", "waiting", "blocked", "failed", "succeeded", "unknown"]) {
     counts[key] += cases.reduce((total, item) => total + Number(item.counts?.[key] || 0), 0);
   }
   const workflowInputPresent = object(raw.workflows) !== null;
