@@ -81,7 +81,7 @@ The workflow records authorization and rules of engagement first, then builds th
 
 Follow the [end-to-end penetration-testing workflow](docs/pentest-workflow.md) to attach evidence, disposition each workstream, reserve closeout capacity, record target-side changes, clean up in LIFO order, retest, and close the assessment.
 
-For a bug bounty program, complete the [Program Profile wizard](docs/bug-bounty-program-profile.md) first. It records the program sources, exact asset and technique rules, limits, evidence handling, and reporting expectations in private state, then compiles no-contact model context and a compatibility preflight. A compiled profile supports planning; it does not replace the exact engagement, reviewed plan, operator receipt, workflow admission, or execution confirmation required for active target contact.
+For a bug bounty program, use the [Program Profile intake](docs/bug-bounty-program-profile.md) first: the `gate-program-profile` skill provides the preferred choice-first interview, with terminal wizard and headless fallbacks. It records the program sources, exact asset and technique rules, limits, evidence handling, and reporting expectations in private state, then compiles no-contact model context and a compatibility preflight. A compiled profile supports planning; it does not replace the exact engagement, reviewed plan, operator receipt, workflow admission, or execution confirmation required for active target contact.
 
 ## 4. Analyze a saved Windows artifact offline
 
