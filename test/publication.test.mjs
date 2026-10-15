@@ -225,6 +225,23 @@ test("publication preserves literal-looking repository strings at the gh boundar
   }
 });
 
+test("publication remains sterile when the host makes /usr/share writable", (t) => {
+  const accessSync = fs.accessSync;
+  t.mock.method(fs, "accessSync", (file, mode) => {
+    // Hosted runners may grant the test user write access to shared tool data.
+    if (file === "/usr/share" && mode === fs.constants.W_OK) return;
+    return accessSync(file, mode);
+  });
+  const fake = queuedRunner([{ stdout: publicationResponse() }]);
+  const result = checkPublication(REQUEST, { runner: fake.runner });
+  assert.equal(result.ok, true);
+  assert.equal(fake.calls.length, 1);
+  const environment = fake.calls[0].options.env;
+  assert.ok(["/etc/gate-empty-gh-config", "/var/empty/gate-empty-gh-config"].includes(environment.GH_CONFIG_DIR));
+  assert.equal(environment.HOME, environment.GH_CONFIG_DIR);
+  assert.equal(environment.XDG_CONFIG_HOME, environment.GH_CONFIG_DIR);
+});
+
 test("publication child environment keeps only reviewed authentication and network inputs", (t) => {
   if (!fs.existsSync("/etc/ssl/certs/ca-certificates.crt") || !fs.existsSync("/etc/ssl/certs")) {
     return t.skip("this host does not expose the distribution CA bundle paths used by the WSL2 contract");

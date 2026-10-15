@@ -475,7 +475,7 @@ function resolveProtectedGitHubCli() {
 }
 
 function protectedGitHubConfigDirectory() {
-  const roots = process.platform === "darwin" ? ["/var/empty", "/usr/share"] : ["/usr/share"];
+  const roots = process.platform === "darwin" ? ["/var/empty", "/etc"] : ["/etc"];
   for (const root of roots) {
     try {
       assertProtectedPathChain(root, "sterile GitHub configuration root");
