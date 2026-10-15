@@ -1216,10 +1216,10 @@ test("status failures return a generic service error without exception details",
 });
 
 
-test("schema-defined execution termination reasons survive observer and dashboard projections", () => {
+test("schema-defined execution termination reasons survive observer and dashboard projections", async (t) => {
   const schema = JSON.parse(fs.readFileSync(path.join(repo, "schemas/execution-run.schema.json"), "utf8"));
   for (const reason of [...schema.properties.terminationReason.enum, "UNKNOWN_REASON_CANARY"]) {
-    const projected = projectSnapshot(statusFixture({
+    const status = statusFixture({
       execution: executionFixture({
         recent: [{
           runId: `xrun_${"a".repeat(32)}`,
@@ -1240,10 +1240,14 @@ test("schema-defined execution termination reasons survive observer and dashboar
           }
         }]
       })
-    }), paths);
+    });
+    const { origin } = await listen(t, () => status);
+    const response = await fetch(`${origin}/api/status`);
+    assert.equal(response.status, 200);
+    const payload = await response.json();
     const expected = reason === "UNKNOWN_REASON_CANARY" ? null : reason;
-    assert.equal(projected.status.execution.recent[0].terminationReason, expected);
-    const dashboard = sanitizeStatusPayload(projected.status);
+    assert.equal(payload.execution.recent[0].terminationReason, expected);
+    const dashboard = sanitizeStatusPayload(payload);
     assert.equal(dashboard.execution.recent[0].terminationReason, expected);
   }
 });
