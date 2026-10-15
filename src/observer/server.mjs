@@ -5,6 +5,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { buildStatus } from "../lib/status.mjs";
+import { sanitizeOperatorDisplayName, terminalWelcomeBanner } from "../lib/terminal-ui.mjs";
 import { assertNoLikelySecret, redactSensitiveHeaders } from "../lib/text.mjs";
 
 const EVENT_STATUSES = new Set([
@@ -40,6 +41,15 @@ const PROJECT_STATUSES = new Set(["ready", "invalid"]);
 const PROJECT_PROVIDERS = new Set(["github", "gitlab", "forgejo", "gitea", "local"]);
 const PROJECT_ENVIRONMENTS = new Set(["host", "rootless-container", "container", "vm", "remote-lab"]);
 const PROJECT_DELIVERY_MODES = new Set(["no-mistakes", "direct-pr", "local-only"]);
+const CASE_STATUSES = new Set(["ready", "stale", "invalid"]);
+const CASE_RUNTIME_STATES = new Set([
+  "queued", "running", "waiting", "blocked", "succeeded", "failed", "cancelled", "unknown", "idle"
+]);
+const CASE_RUNTIME_HEALTH_STATUSES = new Set(["available", "unavailable"]);
+const CASE_RUNTIME_HEALTH_REASONS = new Set(["invalid-case", "runtime-observation-failed"]);
+const CASE_STATE_NAMESPACES = new Set(["isolated-directory"]);
+const CASE_PROCESS_BOUNDARIES = new Set(["shared-user"]);
+const CASE_NETWORK_BOUNDARIES = new Set(["adapter-dependent"]);
 const EXECUTION_MODES = new Set(["supervised-generic"]);
 const EXECUTION_REASONS = new Set([
   "unsupported-platform",
@@ -188,10 +198,12 @@ const WORKFLOW_EFFECTS = new Set(["P0", "P1", "A1", "A2", "A3"]);
 const WORKFLOW_CONTROLS = new Set(["enforced", "measured-only", "unavailable"]);
 const MAX_TOOL_RUNTIMES = 256;
 const MAX_WORKFLOW_RECORDS = 64;
+const MAX_CASE_RECORDS = 32;
 const ENGAGEMENT_STATUSES = new Set(["draft", "proposed", "approved", "active", "paused", "closed", "expired", "revoked"]);
 const TECHNICAL_REVIEW_STATUSES = new Set(["pending", "passed", "failed"]);
 const OPERATOR_RECEIPT_STATUSES = new Set(["pending", "approved", "revoked"]);
 const OBSERVER_API_VERSION = "gate.observer/v1";
+const PUBLIC_USAGE_SOURCES = new Set(["codex-session-jsonl", "gate-token-log"]);
 const MAX_STATIC_ASSET_BYTES = 1_048_576;
 // Pseudonyms only need to be stable for one observer process. A random HMAC
 // key prevents low-entropy private names from being recovered with an offline
@@ -260,6 +272,26 @@ function identifier(value, maximum = 160) {
 function publicName(value, maximum = 160) {
   const text = boundedString(value, maximum);
   return text && /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/u.test(text) ? text : null;
+}
+
+function publicUsageProvider(value) {
+  const text = boundedString(value, 80);
+  return text && /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/u.test(text) ? text : null;
+}
+
+function publicModelName(value) {
+  const text = boundedString(value, 80);
+  return text && /^[A-Za-z0-9][A-Za-z0-9._:+-]{0,79}$/u.test(text) ? text : null;
+}
+
+function publicUsageSource(value) {
+  return PUBLIC_USAGE_SOURCES.has(value) ? value : null;
+}
+
+function localDisplayName(value, maximum = 60) {
+  const text = boundedString(value, maximum);
+  if (!text || !/^[A-Za-z][A-Za-z0-9 .'-]*$/u.test(text)) return null;
+  return text;
 }
 
 function id(value) {
@@ -533,9 +565,9 @@ function projectScannedUsage(tokens) {
           id: opaqueId("session", session.id),
           at: timestamp(session.modifiedAt ?? session.modified_at),
           updatedAt: timestamp(session.modifiedAt ?? session.modified_at),
-          provider: identifier(session.provider) || null,
-          model: boundedString(session.model, 160),
-          source: boundedString(session.source, 160) || "codex-session-jsonl",
+          provider: publicUsageProvider(session.provider),
+          model: publicModelName(session.model),
+          source: publicUsageSource(session.source),
           availability: sessionAvailability,
           contextWindow: nonNegativeInteger(session.contextWindow ?? session.context_window),
           ...usageCounts(session.usage, sessionAvailability)
@@ -557,7 +589,7 @@ function projectScannedUsage(tokens) {
   }
   return {
     availability,
-    source: boundedString(raw.source, 160) || recorded?.source || "codex-session-jsonl",
+    source: publicUsageSource(raw.source) || recorded?.source || null,
     scannedFiles: nonNegativeInteger(raw.scannedFiles ?? raw.scanned_files),
     inputTokens: counts.inputTokens ?? recorded?.inputTokens ?? null,
     cachedInputTokens: counts.cachedInputTokens ?? recorded?.cachedInputTokens ?? null,
@@ -611,9 +643,9 @@ function usageSession(record) {
     id: opaqueId("session", [record.runId, record.taskId, record.agent, record.provider, record.model].join("\u0000")),
     at: record.at,
     updatedAt: record.at,
-    provider: publicName(record.provider),
-    model: record.model,
-    source: record.source,
+    provider: publicUsageProvider(record.provider),
+    model: publicModelName(record.model),
+    source: publicUsageSource(record.source),
     availability: record.availability,
     contextWindow: null,
     inputTokens: record.inputTokens,
@@ -819,7 +851,9 @@ function summarizeExecution(value) {
     laneAvailable,
     mode,
     reason: laneAvailable ? null : safeEnum(capability.reason, EXECUTION_REASONS, null),
+    queuedCount: counts.queued,
     runningCount: counts.running,
+    stoppingCount: counts.stopping,
     counts,
     enforced,
     bestEffort,
@@ -833,6 +867,37 @@ function summarizeExecution(value) {
         .slice(0, 30)
       : []
   };
+}
+
+function summarizeCaseUsage(value) {
+  const usage = object(value) || {};
+  const availability = safeEnum(usage.availability, USAGE_AVAILABILITY, "unavailable");
+  return {
+    availability,
+    totalTokens: availability === "unavailable" ? null : nonNegativeInteger(usage.totalTokens)
+  };
+}
+
+function summarizeCaseState(value) {
+  const status = object(value) || {};
+  const state = safeEnum(status.state, CASE_RUNTIME_STATES, "unknown");
+  // Exact aggregate counts cover active records that may be older than the
+  // bounded recent-run projection. They may promote an otherwise terminal or
+  // unknown summary to active, without hiding an existing failure, block, or
+  // wait signal.
+  if (!["failed", "blocked", "waiting"].includes(state)) {
+    const execution = object(status.execution) || {};
+    const offline = object(status.offlineAnalysis) || {};
+    const executionCounts = object(execution.counts) || {};
+    const offlineCounts = object(offline.counts) || {};
+    if (
+      Number(executionCounts.running || 0) > 0 ||
+      Number(executionCounts.stopping || 0) > 0 ||
+      Number(offlineCounts.running || 0) > 0
+    ) return "running";
+    if (Number(executionCounts.queued || 0) > 0 || Number(offlineCounts.queued || 0) > 0) return "queued";
+  }
+  return state;
 }
 
 function summarizeWorkflowInstance(value) {
@@ -1120,6 +1185,170 @@ function summarizeProject(value, execution) {
   };
 }
 
+function summarizeCaseBinding(value, prefix) {
+  const binding = object(value);
+  const privateId = id(binding?.id);
+  if (!privateId || typeof binding.current !== "boolean") return null;
+  return { id: opaqueId(prefix, privateId), current: binding.current };
+}
+
+function summarizeCaseRuntimeHealth(value, caseStatus, hasRuntime) {
+  const health = object(value);
+  const status = safeEnum(health?.status, CASE_RUNTIME_HEALTH_STATUSES, null);
+  const reason = health?.reason === null ? null : safeEnum(health?.reason, CASE_RUNTIME_HEALTH_REASONS, null);
+  if (caseStatus === "invalid") return { status: "unavailable", reason: "invalid-case" };
+  if (status === "available" && reason === null) return { status, reason };
+  if (status === "unavailable" && reason === "runtime-observation-failed") return { status, reason };
+  return hasRuntime
+    ? { status: "available", reason: null }
+    : { status: "unavailable", reason: "runtime-observation-failed" };
+}
+
+function summarizeCase(value, paths) {
+  const item = object(value);
+  const privateId = id(item?.id);
+  const status = safeEnum(item?.status, CASE_STATUSES, null);
+  if (!privateId || !status) return null;
+  if (status === "invalid") {
+    return {
+      id: opaqueId("case", privateId),
+      displayName: "Invalid case",
+      status,
+      binding: null,
+      isolation: null,
+      runtimeHealth: summarizeCaseRuntimeHealth(item?.runtimeHealth, status, false),
+      state: "blocked",
+      counts: {},
+      telemetry: { freshness: "unknown", lastActivityAt: null, ageSeconds: null },
+      usage: summarizeCaseUsage(null),
+      execution: summarizeExecution(null),
+      workflows: summarizeWorkflows(null),
+      engagementScan: summarizeEngagementScan(null),
+      offlineAnalysis: summarizeOfflineAnalysis(null),
+      activity: [],
+      learningCount: 0
+    };
+  }
+  const displayName = localDisplayName(item?.displayName);
+  const binding = object(item?.binding);
+  const program = summarizeCaseBinding(binding?.program, "program");
+  const project = binding?.project === null ? null : summarizeCaseBinding(binding?.project, "project");
+  const isolation = object(item?.isolation);
+  if (!displayName || !program || (binding?.project !== null && !project) ||
+    !isolation || !CASE_STATE_NAMESPACES.has(isolation.stateNamespace) ||
+    !CASE_PROCESS_BOUNDARIES.has(isolation.processBoundary) ||
+    !CASE_NETWORK_BOUNDARIES.has(isolation.networkBoundary)) return null;
+
+  const bindingsCurrent = program.current === true && (project === null || project.current === true);
+  const bindingStatus = status === "ready" && !bindingsCurrent
+    ? "stale"
+    : status === "stale" && bindingsCurrent
+      ? "ready"
+      : status;
+  const runtimeHealth = summarizeCaseRuntimeHealth(item?.runtimeHealth, bindingStatus, object(item.runtime) !== null);
+
+  let runtime = null;
+  if (runtimeHealth.status === "available" && object(item.runtime)) {
+    // Reuse the same strict projection used by the top-level observer and then
+    // retain a bounded per-case subset. This keeps case terminals unable to
+    // cross the raw event/argv/evidence boundary.
+    const projected = projectSnapshot({ ...item.runtime, cases: [], caseScan: null }, paths);
+    runtime = {
+      state: summarizeCaseState(projected.status),
+      counts: projected.status.counts,
+      telemetry: projected.status.telemetry,
+      usage: summarizeCaseUsage(projected.status.usage),
+      execution: {
+        ...projected.status.execution,
+        recent: projected.status.execution.recent.slice(0, 8)
+      },
+      workflows: {
+        ...projected.status.workflows,
+        instances: projected.status.workflows.instances.slice(0, 12)
+      },
+      engagementScan: summarizeEngagementScan(projected.status.engagementScan),
+      offlineAnalysis: {
+        ...projected.status.offlineAnalysis,
+        recent: projected.status.offlineAnalysis.recent.slice(0, 6)
+      },
+      activity: projected.events.events.slice(0, 20),
+      learningCount: projected.learnings.learnings.length
+    };
+  }
+  return {
+    id: opaqueId("case", privateId),
+    displayName,
+    status: bindingStatus,
+    binding: { program, project },
+    isolation: {
+      stateNamespace: isolation.stateNamespace,
+      processBoundary: isolation.processBoundary,
+      networkBoundary: isolation.networkBoundary
+    },
+    runtimeHealth,
+    state: runtime?.state || "blocked",
+    counts: runtime?.counts || {},
+    telemetry: runtime?.telemetry || { freshness: "unknown", lastActivityAt: null, ageSeconds: null },
+    usage: runtime?.usage || summarizeCaseUsage(null),
+    execution: runtime?.execution || summarizeExecution(null),
+    workflows: runtime?.workflows || summarizeWorkflows(null),
+    engagementScan: runtime?.engagementScan || summarizeEngagementScan(null),
+    offlineAnalysis: runtime?.offlineAnalysis || summarizeOfflineAnalysis(null),
+    activity: runtime?.activity || [],
+    learningCount: runtime?.learningCount ?? 0
+  };
+}
+
+function summarizeCaseScan(value, visible) {
+  const scan = object(value) || {};
+  const discovered = nonNegativeInteger(scan.discovered);
+  const scanned = nonNegativeInteger(scan.scanned);
+  const omitted = nonNegativeInteger(scan.omitted);
+  const invalid = nonNegativeInteger(scan.invalid);
+  const discoveredAtLeast = typeof scan.discoveredAtLeast === "boolean" ? scan.discoveredAtLeast : false;
+  const omittedAtLeast = typeof scan.omittedAtLeast === "boolean" ? scan.omittedAtLeast : false;
+  const complete = typeof scan.complete === "boolean" ? scan.complete : false;
+  const truncated = typeof scan.truncated === "boolean" ? scan.truncated : true;
+  return {
+    discovered: discovered ?? visible,
+    scanned: scanned ?? visible,
+    omitted: omitted ?? 0,
+    invalid: invalid ?? 0,
+    discoveredAtLeast,
+    omittedAtLeast,
+    complete,
+    truncated
+  };
+}
+
+function summarizeEngagementScan(value) {
+  const scan = object(value) || {};
+  const notLoaded = scan.availability === "not-loaded";
+  const loaded = !notLoaded && (
+    typeof scan.complete === "boolean" ||
+    nonNegativeInteger(scan.scanned) !== null ||
+    nonNegativeInteger(scan.discoveredAtLeast) !== null ||
+    nonNegativeInteger(scan.invalid) !== null
+  );
+  return {
+    availability: notLoaded ? "not-loaded" : loaded ? "loaded" : "unavailable",
+    reason: notLoaded && scan.reason === "aggregate-case-detail-elided" ? scan.reason : null,
+    limit: nonNegativeInteger(scan.limit),
+    discoveryLimit: nonNegativeInteger(scan.discoveryLimit),
+    entriesInspected: nonNegativeInteger(scan.entriesInspected),
+    discoveredAtLeast: nonNegativeInteger(scan.discoveredAtLeast),
+    scanned: nonNegativeInteger(scan.scanned),
+    omittedAtLeast: nonNegativeInteger(scan.omittedAtLeast),
+    invalid: nonNegativeInteger(scan.invalid),
+    recordsRead: nonNegativeInteger(scan.recordsRead),
+    complete: typeof scan.complete === "boolean" ? scan.complete : false,
+    truncated: loaded
+      ? typeof scan.truncated === "boolean" ? scan.truncated : true
+      : !notLoaded,
+    discoveryTruncated: typeof scan.discoveryTruncated === "boolean" ? scan.discoveryTruncated : false
+  };
+}
+
 function configuredBudget(paths) {
   try {
     const config = JSON.parse(fs.readFileSync(path.join(paths.repo, "config", "gate.config.json"), "utf8"));
@@ -1179,6 +1408,12 @@ export function projectSnapshot(rawStatus, paths) {
     agents: agents.length,
     tasks: tasks.length
   };
+  const cases = Array.isArray(raw.cases)
+    ? raw.cases.slice(0, MAX_CASE_RECORDS).map((value) => summarizeCase(value, paths)).filter(Boolean)
+    : [];
+  for (const key of ["queued", "running", "waiting", "blocked", "failed", "succeeded"]) {
+    counts[key] += cases.reduce((total, item) => total + Number(item.counts?.[key] || 0), 0);
+  }
   const workflowInputPresent = object(raw.workflows) !== null;
   const workflows = summarizeWorkflows(raw.workflows);
   const workflowBlocked = workflowInputPresent && (
@@ -1192,13 +1427,14 @@ export function projectSnapshot(rawStatus, paths) {
   const workflowWaiting = workflowInputPresent && (
     Number(workflows.counts.open || 0) > 0 || Number(workflows.counts.reported || 0) > 0
   );
-  const state = counts.failed > 0
+  const caseStates = new Set(cases.map((item) => item.state));
+  const state = counts.failed > 0 || caseStates.has("failed")
     ? "failed"
-    : counts.blocked > 0 || workflowBlocked
+    : counts.blocked > 0 || workflowBlocked || caseStates.has("blocked")
       ? "blocked"
-      : counts.waiting > 0
+      : counts.waiting > 0 || caseStates.has("waiting")
         ? "waiting"
-        : counts.running > 0 || workflowRunning
+        : counts.running > 0 || workflowRunning || caseStates.has("running")
           ? "running"
           : workflowWaiting
             ? "waiting"
@@ -1206,7 +1442,11 @@ export function projectSnapshot(rawStatus, paths) {
               ? "idle"
               : "unknown";
   const usage = projectUsage(raw.tokens);
-  const lastActivityAt = events[0]?.at || usage.sessions.map((session) => session.at).filter(Boolean).sort().at(-1) || null;
+  const lastActivityAt = [
+    events[0]?.at,
+    usage.sessions.map((session) => session.at).filter(Boolean).sort().at(-1),
+    ...cases.map((item) => item.telemetry.lastActivityAt)
+  ].filter(Boolean).sort((left, right) => Date.parse(right) - Date.parse(left))[0] || null;
   const generatedAt = timestamp(raw.at) || new Date().toISOString();
   const ageSeconds = lastActivityAt ? Math.max(0, Math.floor((Date.now() - Date.parse(lastActivityAt)) / 1000)) : null;
   const freshness = ageSeconds === null ? "unknown" : ageSeconds > 30 ? "stale" : "fresh";
@@ -1237,8 +1477,14 @@ export function projectSnapshot(rawStatus, paths) {
       telemetry: { freshness, lastActivityAt, ageSeconds },
       execution,
       workflows,
+      engagementScan: summarizeEngagementScan(raw.engagementScan),
       offlineAnalysis,
       toolRuntimes,
+      operator: {
+        displayName: sanitizeOperatorDisplayName(raw.operator?.displayName)
+      },
+      cases,
+      caseScan: summarizeCaseScan(raw.caseScan, cases.length),
       engagements: Array.isArray(raw.engagements)
         ? raw.engagements.map((value) => summarizeEngagement(value, execution)).filter(Boolean)
         : [],
@@ -1409,7 +1655,13 @@ export function createObserver(options = {}) {
         ...cached,
         status: {
           ...cached.status,
-          telemetry: { ...cached.status.telemetry, freshness: "stale" }
+          telemetry: { ...cached.status.telemetry, freshness: "stale" },
+          cases: Array.isArray(cached.status.cases)
+            ? cached.status.cases.map((item) => ({
+                ...item,
+                telemetry: { ...item.telemetry, freshness: "stale" }
+              }))
+            : []
         }
       };
       throw new Error("observer status unavailable");
@@ -1469,6 +1721,7 @@ export async function startObserver(options = {}) {
   const address = server.address();
   const listeningPort = typeof address === "object" && address ? address.port : port;
   if (options.quiet !== true) {
+    process.stdout.write(terminalWelcomeBanner({ operator: { displayName: options.operatorDisplayName } }));
     process.stdout.write(`GATE observer: http://${host.includes(":") ? `[${host}]` : host}:${listeningPort}\n`);
   }
   return server;

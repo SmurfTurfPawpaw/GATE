@@ -575,7 +575,7 @@ test("CLI reports a nonzero exit status when an executed tool fails", (t) => {
   );
   const result = spawnSync(process.execPath, [
     gate,
-    "engagement", "exec", scope.id,
+    "--unassigned", "engagement", "exec", scope.id,
     "--manifest", created.manifestId,
     "--confirm", created.confirmationRequired,
     "--json"
@@ -724,6 +724,103 @@ test("manifest invariants and launch-time executable identity fail closed", asyn
   const manifestDocument = JSON.parse(fs.readFileSync(path.join(paths.executionManifests, `${second.manifestId}.json`), "utf8"));
   manifestDocument.operation.executable.inode = "-1";
   assert.equal(validateDocument(manifestDocument, "execution-manifest.schema.json", { paths }).ok, true);
+});
+
+test("execution status keeps exact large-history counts and a deterministic bounded recent view", (t) => {
+  const { paths } = fixture(t);
+  executionStatus({ paths });
+  const records = [];
+  const supervisor = {
+    pid: 2_147_483_647,
+    pgid: 2_147_483_647,
+    sessionId: 1,
+    bootId: "00000000-0000-0000-0000-000000000000",
+    startTimeTicks: "1"
+  };
+  for (let index = 0; index < 150; index += 1) {
+    const suffix = index.toString(16).padStart(32, "0");
+    const runId = `xrun_${suffix}`;
+    const manifestId = `xmf_${suffix}`;
+    const createdAt = new Date(Date.UTC(2026, 0, 1) + Math.floor(index / 2) * 1_000).toISOString();
+    const record = {
+      $schema: "../../schemas/execution-run.schema.json",
+      apiVersion: "gate.execution-run/v1",
+      kind: "ExecutionRun",
+      runId,
+      manifestId,
+      manifestSha256: "a".repeat(64),
+      engagementId: "status-stress",
+      workflow: {
+        instanceId: "status-workflow",
+        phaseId: "active-surface-validation",
+        phaseAttemptId: `wpa_${suffix}`,
+        reservationId: `wxr_${suffix}`,
+        executionEpochSha256: "b".repeat(64)
+      },
+      status: "succeeded",
+      createdAt,
+      startedAt: createdAt,
+      finishedAt: createdAt,
+      supervisor,
+      process: null,
+      terminationReason: "completed",
+      result: { exitCode: 0, signal: null, durationMs: 0 },
+      evidence: {
+        stdout: {
+          ref: `private://evidence/execution-${runId}-stdout.bin`,
+          available: false,
+          sha256: null,
+          bytes: 0
+        },
+        stderr: {
+          ref: `private://evidence/execution-${runId}-stderr.bin`,
+          available: false,
+          sha256: null,
+          bytes: 0
+        },
+        resultRef: `private://evidence/execution-${runId}-result.json`,
+        resultAvailable: false,
+        sandboxRef: `private://executions/sandboxes/${runId}`
+      }
+    };
+    fs.writeFileSync(
+      path.join(paths.executionRuns, `${runId}.json`),
+      `${JSON.stringify(record)}\n`,
+      { mode: 0o600 }
+    );
+    records.push(record);
+  }
+
+  const originalReadFileSync = fs.readFileSync;
+  let terminalSupervisorProbes = 0;
+  fs.readFileSync = (file, ...args) => {
+    if (file === "/proc/2147483647/stat") terminalSupervisorProbes += 1;
+    return originalReadFileSync(file, ...args);
+  };
+  let status;
+  try {
+    status = executionStatus({ paths });
+  } finally {
+    fs.readFileSync = originalReadFileSync;
+  }
+
+  const expected = records.toSorted((left, right) =>
+    Date.parse(right.createdAt) - Date.parse(left.createdAt) || left.runId.localeCompare(right.runId)
+  ).slice(0, 100).map(({ runId }) => runId);
+  assert.equal(status.counts.succeeded, 150);
+  assert.equal(status.counts.unknown, 0);
+  assert.equal(status.recent.length, 100);
+  assert.deepEqual(status.recent.map(({ runId }) => runId), expected);
+  assert.equal(terminalSupervisorProbes, 0);
+});
+
+test("execution status counts malformed claim entries as unknown", (t) => {
+  const { paths } = fixture(t);
+  executionStatus({ paths });
+  fs.writeFileSync(path.join(paths.executionClaims, "unexpected.json"), "{}\n", { mode: 0o600 });
+  const status = executionStatus({ paths });
+  assert.equal(status.counts.unknown, 1);
+  assert.deepEqual(status.recent, []);
 });
 
 test("evidence limiting durably records a bounded prefix and terminal audit", async (t) => {

@@ -156,14 +156,14 @@ test("learning cycle, promotion, and bounded consultation use files without echo
 test("workflow test plan and review accept private JSON files and emit compact receipts", (t) => {
   const { root, home } = fixture(t, "gate-adaptive-workflow-");
   const instanceId = "adaptive-cli";
-  parsed(invoke(["workflow", "new", instanceId, "--json"], home));
+  parsed(invoke(["--unassigned", "workflow", "new", instanceId, "--json"], home));
   const started = parsed(invoke([
-    "workflow", "phase", "start", instanceId,
+    "--unassigned", "workflow", "phase", "start", instanceId,
     "--phase", "authorization-and-roe",
     "--json"
   ], home));
   const attemptId = started.event.details.attemptId;
-  const workflow = parsed(invoke(["workflow", "status", instanceId, "--json"], home));
+  const workflow = parsed(invoke(["--unassigned", "workflow", "status", instanceId, "--json"], home));
   const learningApplicability = [
     {
       kind: "workflow",
@@ -198,7 +198,7 @@ test("workflow test plan and review accept private JSON files and emit compact r
     adaptation: null
   });
   const plannedResult = invoke([
-    "workflow", "test", "plan", instanceId,
+    "--unassigned", "workflow", "test", "plan", instanceId,
     "--file", planFile,
     "--expected-sequence", String(started.event.sequence),
     "--expected-head", started.event.headSha256
@@ -230,7 +230,7 @@ test("workflow test plan and review accept private JSON files and emit compact r
     }
   });
   const reviewedResult = invoke([
-    "workflow", "test", "review", instanceId,
+    "--unassigned", "workflow", "test", "review", instanceId,
     "--file", reviewFile,
     "--expected-sequence", String(planned.event.sequence),
     "--expected-head", planned.event.headSha256
@@ -246,7 +246,7 @@ test("workflow test plan and review accept private JSON files and emit compact r
     /PRIVATE_(?:OBSERVATION|CAUSE|CHANGE|RATIONALE)_CANARY/u
   );
 
-  const status = parsed(invoke(["workflow", "status", instanceId, "--json"], home));
+  const status = parsed(invoke(["--unassigned", "workflow", "status", instanceId, "--json"], home));
   assert.deepEqual(status.testFeedback, {
     total: 1,
     reviewed: 1,
@@ -264,8 +264,8 @@ test("file-driven adaptive commands reject malformed JSON before mutation", (t) 
     ["learn", "cycle", "--file", file],
     ["learn", "promote", "lrn_fixture01", "--file", file],
     ["learn", "consult", "--file", file],
-    ["workflow", "test", "plan", "missing-workflow", "--file", file],
-    ["workflow", "test", "review", "missing-workflow", "--file", file]
+    ["--unassigned", "workflow", "test", "plan", "missing-workflow", "--file", file],
+    ["--unassigned", "workflow", "test", "review", "missing-workflow", "--file", file]
   ];
 
   for (const args of attempts) {

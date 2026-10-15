@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { runtimePaths } from "../src/lib/paths.mjs";
 import {
   addLearning,
   addLearningCycle,
@@ -22,16 +23,11 @@ const reviewedHead = "c".repeat(40);
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-adaptive-learning-"));
-  const home = path.join(root, "home");
-  const paths = {
-    repo,
-    home,
-    events: path.join(home, "events.jsonl"),
-    tokens: path.join(home, "tokens.jsonl"),
-    privateLearnings: path.join(home, "memory", "private", "learnings.jsonl"),
-    publicLearningRecords: path.join(root, "memory", "learnings.jsonl"),
-    publicLearnings: path.join(root, "memory", "LEARNINGS.md")
-  };
+  const fixtureRepo = path.join(root, "repository");
+  fs.mkdirSync(fixtureRepo, { recursive: true });
+  fs.cpSync(path.join(repo, "schemas"), path.join(fixtureRepo, "schemas"), { recursive: true });
+  fs.copyFileSync(path.join(repo, "package.json"), path.join(fixtureRepo, "package.json"));
+  const paths = runtimePaths({ home: path.join(root, "home"), repo: fixtureRepo });
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return paths;
 }
@@ -609,9 +605,6 @@ test("reviewed replacement chains keep history while consultation selects only n
 
 test("removed configuration files preserve replacement selection and frozen consultation", (t) => {
   const paths = fixture(t);
-  paths.repo = path.join(path.dirname(paths.home), "repository");
-  fs.mkdirSync(paths.repo, { recursive: true });
-  fs.cpSync(path.join(repo, "schemas"), path.join(paths.repo, "schemas"), { recursive: true });
   const reference = path.join(paths.repo, "reviewed.json");
   fs.writeFileSync(reference, "{}\n");
   const first = promotePublic(paths, addCandidate(paths));

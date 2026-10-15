@@ -133,7 +133,7 @@ export GATE_HOME="$HOME/.local/share/gate"
 ./scripts/bootstrap.sh
 ```
 
-Keep this directory out of cloud-synced folders and Git. It contains events, registered project contracts, private learnings, engagement records, plans, offline-analysis manifests and input snapshots, evidence, managed upstream installations, content-addressed tool archives, managed tool staging and runtimes, installation receipts, and Treehouse's private state root. Project contracts can contain repository and deployment references even though general status and observer responses omit those details.
+Keep this directory out of cloud-synced folders and Git. It contains immutable case scopes, separate per-case operational state, events, registered project contracts, private learnings, engagement records, plans, offline-analysis manifests and input snapshots, evidence, managed upstream installations, content-addressed tool archives, managed tool staging and runtimes, installation receipts, and Treehouse's private state root. Project contracts can contain repository and deployment references even though general status and observer responses omit those details.
 
 Keep upstream telemetry disabled in interactive shells as well as bootstrap runs. Add these values to the WSL shell profile used for GATE:
 
@@ -176,7 +176,7 @@ The installer uses a private content-addressed cache under `GATE_HOME/tool-cache
 
 For cheap inventory, use `gate tool list --profile core --json`. For the distinction between receipt evidence and current verification, diagnostic commands, and readiness counts, see the [managed-runtime verification boundary](security-tooling.md#managed-core-runtime).
 
-Use `gate status --summary --json` for an agent-sized operational view and `gate tool list --summary --limit 10 --cursor 0 --json` for bounded inventory pages. Follow the returned cursor and preserve filters. `gate tool show ID --json` returns one bounded detail projection. See [observation and token accounting](architecture.md#observation-and-token-accounting) for the output contract; detailed status and inventory remain available without `--summary`.
+Use `gate status --summary --json` for an agent-sized operational view and `gate tool list --summary --limit 10 --cursor 0 --json` for bounded inventory pages. Follow the returned cursor and preserve filters. `gate tool show ID --json` returns one bounded detail projection. See [observation and token accounting](architecture.md#observation-and-token-accounting) for the output contract; more detailed status and inventory remain available without `--summary`, but those views still enforce their fleet and recent-history bounds.
 
 Installing a runtime never grants target authority or execution admission. DNSx and HTTPx gain one narrow active operation only through their reviewed workflow-phase adapters; the other five core binaries and every broader DNSx or HTTPx operation remain invocation-blocked. `naabu` additionally needs a reviewed raw-network privilege adapter, and `nuclei` additionally needs its separately versioned template dependency admitted. Active adapters still require the exact engagement, tool allowlist, target/action check, workflow admission, and execution confirmation. The other 119 catalog entries remain on their documented native, GUI, hardware, OCI, Python, Node, Java, source-build, or external installation lanes.
 
@@ -199,6 +199,7 @@ From Windows PowerShell, the equivalent launcher is:
 These commands use the current package interface:
 
 ```bash
+unset GATE_CASE
 npm run doctor
 npm run validate
 npm run dashboard
@@ -218,11 +219,23 @@ codex -C "$HOME/src/GATE" --add-dir "$GATE_HOME" \
   --sandbox workspace-write --ask-for-approval on-request --search
 ```
 
-In v0.1, any process with write access to all of `GATE_HOME` can change project records, offline snapshots and manifests, engagement records, unsigned approval receipts, active-execution manifests, claims, stop records, run metadata, evidence, managed tool caches and runtimes, and installation receipts. It can therefore forge or erase local authority and execution provenance by rewriting the trust domain. Exclusive files and hashes provide workflow consistency against ordinary races and reuse; they do not protect state from its same-user owner. Managed-upstream bytes remain anchored to `locks/upstreams.lock.json`, and managed tool bytes remain anchored to `locks/tool-runtimes.lock.json` plus the bound catalog entry, rather than to writable installation receipts. Keep credential values outside this broad writable root in an OS secret store or narrowly permissioned file, and use symbolic references in GATE state.
+In v0.1, any process with write access to all of `GATE_HOME` can change case scopes, project records, offline snapshots and manifests, engagement records, unsigned approval receipts, active-execution manifests, claims, stop records, run metadata, evidence, managed tool caches and runtimes, and installation receipts. It can therefore forge or erase local authority and execution provenance by rewriting the trust domain. Per-case directories prevent accidental state mixing but do not defend against that same-user writer. Exclusive files and hashes provide workflow consistency against ordinary races and reuse; they do not protect state from its same-user owner. Managed-upstream bytes remain anchored to `locks/upstreams.lock.json`, and managed tool bytes remain anchored to `locks/tool-runtimes.lock.json` plus the bound catalog entry, rather than to writable installation receipts. Keep credential values outside this broad writable root in an OS secret store or narrowly permissioned file, and use symbolic references in GATE state.
 
 Operations that need Npcap, a debugger, a certificate store, USB, or another host capability are operator-run native operations today. Record their versions, exact commands, and bounded evidence manually. Narrow native capability providers and their event bridges are a target design; v0.1 does not supply them.
 
-The dashboard binds to `127.0.0.1:4173` by default. Open `http://127.0.0.1:4173` from Windows. WSL normally forwards the loopback port automatically. Do not bind the observer to a LAN address; it is a local view of private operational state.
+The dashboard binds to `127.0.0.1:4173` by default. Open `http://127.0.0.1:4173` from Windows. WSL normally forwards the loopback port automatically. Do not bind the observer to a LAN address; it is a local view of private operational state. `gate up` rejects `--case`, `GATE_CASE`, and `--unassigned` because it builds the bounded fleet view. A snapshot projects at most 32 cases selected from a discovery window of 1,024; lower-bound and completeness fields expose omissions.
+
+The startup banner and browser case terminals use `operator.displayName` from the merged configuration. The tracked default is `Giovanni`. To use another local display name without changing the repository, place an overlay at `$HOME/.config/gate/config.json`:
+
+```json
+{
+  "operator": {
+    "displayName": "Giovanni"
+  }
+}
+```
+
+Browser case terminals show sanitized structured lifecycle state rather than a shell. They never expose raw PTY data, stdout or stderr, argv, commands, targets, evidence, or private paths. Their spinner and progress bar remain indeterminate while active unless a producer supplies a trustworthy completed and total count. Host-wide Codex session usage remains aggregate; per-case token attribution is unavailable until case-bound token records exist.
 
 Run the smoke suite after a runtime, dependency, or host change:
 
@@ -249,6 +262,27 @@ cp templates/project.json "$HOME/.config/gate/projects/my-project.json"
 ./bin/gate.mjs project verify my-project --json
 ./bin/gate.mjs project list --json
 ```
+
+After a bug bounty Program Profile is complete and `bounty profile verify` reports it ready, create one immutable case. The project binding is optional:
+
+```bash
+./bin/gate.mjs case create example-web \
+  --program example-program \
+  --project my-project \
+  --name "Example web program" --json
+
+./bin/gate.mjs case list --json
+./bin/gate.mjs case show example-web --json
+```
+
+Creation seals the current Program Profile digest and optional project digest. A later change makes the case stale; there is no in-place update. Use a separate terminal per concurrent case. The one-shot form below avoids leaving a selector set for the shared setup commands that follow:
+
+```bash
+./bin/gate.mjs --case example-web status --summary --json
+./bin/gate.mjs --case example-web workflow status WORKFLOW_ID --json
+```
+
+Case state lives under `GATE_HOME/cases/CASE_ID/state`. Every engagement and workflow command, Program Profile compilation, and `analysis manifest`, `run`, `purge`, or `status` requires leading `--case ID`, matching `GATE_CASE`, or leading `--unassigned`. `--unassigned` selects the writable base-state compatibility namespace and can create new unscoped records; it opts out of case attribution and state separation. GATE never chooses it implicitly, so prefer a case for program work. Setup and shared-registry commands reject all three selector forms, including project, case, workspace, upstream, tool, publication, Program Profile intake, and `analysis capability`. Plain `gate status` aggregates the bounded case fleet, `gate --unassigned status` reads only base state, and selected status reads one case with its current binding health. Events and private learning without a selector also use base state; `learn promote` is the deliberate reviewed bridge from case-private learning to the shared public ledger. The directories separate program records, while processes still share the same operating-system user and host. Network containment is supplied only by the selected adapter or execution environment.
 
 The canonical record is stored at `GATE_HOME/projects/my-project.json`, with owner-only permissions on POSIX hosts. Identical registration is idempotent; changed content for an existing ID and duplicate repository identities are rejected. Local `file://` repository locators are stored as physical realpaths and later fail verification if they resolve elsewhere. There is no update or delete command in v0.1. `project show my-project --json` returns the entire private contract, including its repository URL and destination reference, while list, general status, and observer summaries omit those fields.
 
@@ -306,10 +340,10 @@ The implemented offline lane accepts one lawfully supplied Windows PE and expose
 ./bin/gate.mjs analysis capability --json
 ```
 
-The capability command performs cheap prerequisite-presence checks and launches `/usr/bin/true` through the real minimal Bubblewrap namespace shape. It proves that this host can create that shape at the time of the check, but deliberately avoids reconstructing or hashing the full managed REA npm tree. Register and verify the project first, then pass one exact absolute local path:
+The capability command performs cheap prerequisite-presence checks and launches `/usr/bin/true` through the real minimal Bubblewrap namespace shape. It proves that this host can create that shape at the time of the check, but deliberately avoids reconstructing or hashing the full managed REA npm tree. Register and verify the project, create a case bound to it, and replace `example-web` below with that case before passing one exact absolute local path:
 
 ```bash
-./bin/gate.mjs analysis manifest \
+./bin/gate.mjs --case example-web analysis manifest \
   --project my-project \
   --path "$HOME/private/client-installer.exe" \
   --minutes 15 --json
@@ -318,18 +352,18 @@ The capability command performs cheap prerequisite-presence checks and launches 
 The command performs the full reviewed-lock integrity reconstruction, hashes the runtime files, and copies and hashes at most 512 MiB into private owner-only storage. Review the returned artifact and project digests, fixed adapter, zero-network and zero-request limits, runtime identities, private evidence references, 15-minute manifest expiry, and enforced and unavailable controls. Supply the exact `confirmationRequired` string from that response:
 
 ```bash
-./bin/gate.mjs analysis run \
+./bin/gate.mjs --case example-web analysis run \
   --project my-project \
   --manifest MANIFEST_ID \
   --confirm "ANALYZE MANIFEST_ID MANIFEST_SHA256 OFFLINE" --json
 
-./bin/gate.mjs analysis status --json
+./bin/gate.mjs --case example-web analysis status --json
 ```
 
 Private artifact snapshots are capped at 64 files and 2 GiB in aggregate. Status reports retained capacity and pending or expired manifests. Manifest creation, execution claims, and purge use the same owner-only lock, so malformed lock or input-storage state blocks mutation. Retire an abandoned, expired, or terminal artifact with the exact purge confirmation returned by manifest creation:
 
 ```bash
-./bin/gate.mjs analysis purge \
+./bin/gate.mjs --case example-web analysis purge \
   --project my-project \
   --manifest MANIFEST_ID \
   --confirm "PURGE MANIFEST_ID MANIFEST_SHA256 OFFLINE ARTIFACT" --json
@@ -351,7 +385,7 @@ ExifTool illustrates this boundary. It is mapped to `local-artifact-analysis`, w
 
 ```bash
 ./bin/gate.mjs tool plan exiftool --json
-./bin/gate.mjs engagement check local-assessment \
+./bin/gate.mjs --case example-web engagement check local-assessment \
   --target "$GATE_HOME/artifacts/sample.jpg" --action observe --json
 ```
 

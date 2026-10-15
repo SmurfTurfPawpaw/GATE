@@ -2773,12 +2773,25 @@ function writeCompilation(paths, id, compilationId, artifacts) {
 export function compileProgramProfile(id, input = {}, options = {}) {
   const cleanId = cleanProfileId(id);
   const paths = bountyPaths(options);
+  const expectedProfileSha256 = options.expectedProfileSha256;
+  if (expectedProfileSha256 !== undefined && !/^[a-f0-9]{64}$/u.test(expectedProfileSha256)) {
+    throw new Error("expected program profile digest must be a lowercase SHA-256 digest");
+  }
   ensureProfileDirectory(paths, cleanId, { create: false });
   // Capture one exact decision instant. Authorization readiness, provider
   // freshness, emitted artifacts, and the content-addressed compilation ID
   // must describe that same instant, especially at validity boundaries.
   const assessedAt = new Date(options.now || Date.now()).toISOString();
-  const profile = withProfileLock(paths, cleanId, () => loadStoredProfile(paths, cleanId));
+  const profile = withProfileLock(paths, cleanId, () => {
+    const current = loadStoredProfile(paths, cleanId);
+    const currentSha256 = canonicalSha256(current);
+    if (expectedProfileSha256 !== undefined && currentSha256 !== expectedProfileSha256) {
+      throw new Error(
+        `program profile digest changed: expected ${expectedProfileSha256}, observed ${currentSha256}`
+      );
+    }
+    return current;
+  });
   // Profiles written by an older GATE release still cross the current
   // literal-secret boundary before any derived artifact is materialized.
   assertProfileSafe(profile);
@@ -2805,7 +2818,13 @@ export function compileProgramProfile(id, input = {}, options = {}) {
   const artifacts = compilationArtifacts(profile, verification, compileInput, provider);
   const publication = withProfileLock(paths, cleanId, () => {
     const current = loadStoredProfile(paths, cleanId);
-    if (canonicalSha256(current) !== verification.profileSha256) {
+    const currentSha256 = canonicalSha256(current);
+    if (expectedProfileSha256 !== undefined && currentSha256 !== expectedProfileSha256) {
+      throw new Error(
+        `program profile digest changed: expected ${expectedProfileSha256}, observed ${currentSha256}`
+      );
+    }
+    if (currentSha256 !== verification.profileSha256) {
       throw new Error("program profile changed during compilation; retry with the current revision");
     }
     return writeCompilation(paths, cleanId, compilationId, artifacts);

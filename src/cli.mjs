@@ -12,7 +12,8 @@ import {
   showProgramProfile,
   verifyProgramProfile
 } from "./lib/bounty-profiles.mjs";
-import { writeJsonAtomic } from "./lib/config.mjs";
+import { caseFleetStatus, createCase, openCaseRuntime, selectCaseRuntime, showCase } from "./lib/cases.mjs";
+import { loadConfig, writeJsonAtomic } from "./lib/config.mjs";
 import { runDoctor } from "./lib/doctor.mjs";
 import {
   approveEngagement,
@@ -50,9 +51,16 @@ import {
 } from "./lib/offline-analysis.mjs";
 import { ensureRuntime, runtimePaths } from "./lib/paths.mjs";
 import { checkPublication, publishPullRequest } from "./lib/publication.mjs";
-import { listProjects, registerProject, showProject, verifyProject } from "./lib/projects.mjs";
+import {
+  listProjects,
+  projectContractBinding,
+  registerProject,
+  showProject,
+  verifyProject
+} from "./lib/projects.mjs";
 import { buildStatus } from "./lib/status.mjs";
 import { statusSummary, toolDetailSummary, toolInventorySummary } from "./lib/summaries.mjs";
+import { readOperatorDisplayName } from "./lib/terminal-ui.mjs";
 import { escapeUnsafeText } from "./lib/text.mjs";
 import { runManagedToolOperation } from "./lib/tool-runtimes.mjs";
 import { toolInventory, toolPlan, toolShow } from "./lib/tools.mjs";
@@ -92,7 +100,7 @@ import {
 
 const help = `GATE — Gateway for Agentic Tooling & Engineering
 
-Usage: gate <command> [options]
+Usage: gate [--case ID|--unassigned] <command> [options]
 
 Core
   bootstrap                         Create private runtime directories and verify config
@@ -116,6 +124,20 @@ Projects
   project list                      List registered project summaries
   project show ID                   Show one registered project contract
   project verify ID                 Verify one registered project contract
+
+Cases
+  case create ID --program PROFILE --name NAME [--project ID]
+                                    Create a bug-program case with a separate state directory
+  case list                         List case bindings and scope health
+  case show ID                      Show one immutable private case scope
+
+Case-owned engagement, workflow, profile-compilation, and analysis commands
+require an explicit runtime: --case ID (or GATE_CASE), or leading --unassigned.
+The writable --unassigned base runtime creates unscoped state and opts out of
+case attribution. Cases separate state directories but share the operator user
+and host; network containment depends on the adapter or environment. Setup and
+shared-registry commands reject runtime selectors. Aggregate status, events,
+and private learning remain available without a selector and use base state.
 
 Bug bounty program profiles
   bounty profile create ID [--answers FILE]
@@ -199,8 +221,9 @@ Security tools
   tool remove ID|--profile ID          Remove runtimes; retain cache bytes for re-verification
 
 Publication
-  publication check|dry-run --repo OWNER/REPO --pr N --head SHA --run RUN
+  publication check|dry-run|merge --repo OWNER/REPO --pr N --head SHA --run RUN
                             [--mode squash|merge|rebase]
+                            merge requires the trusted reviewed-run attestation
 
 Use --json for machine-readable output. Active target contact needs an approved,
 digest-bound engagement. GATE never treats a worktree or container as a sandbox.
@@ -992,6 +1015,8 @@ async function runProgramProfileQuestionnaire(id, mode, options = {}) {
 export const cliInternals = Object.freeze({
   applicableQuestionProgress,
   boundedTerminalValue,
+  caseSelectorRequired,
+  caseSelectionMode,
   parseQuestionAnswer,
   questionChoicePrompt,
   questionFormatGuidance,
@@ -1151,17 +1176,168 @@ function persistPublicationEvidence(result, paths) {
   return file;
 }
 
+function parseCaseInvocation(argv, env = process.env) {
+  const args = [...argv];
+  let explicit = null;
+  let unassigned = false;
+  while (args.length > 0) {
+    if (args[0] === "--unassigned") {
+      if (unassigned) throw new Error("--unassigned may only be provided once");
+      if (explicit) throw new Error("--unassigned and --case are mutually exclusive");
+      unassigned = true;
+      args.splice(0, 1);
+      continue;
+    }
+    if (args[0] === "--case") {
+      if (explicit) throw new Error("--case may only be provided once");
+      if (unassigned) throw new Error("--unassigned and --case are mutually exclusive");
+      if (typeof args[1] !== "string" || !args[1] || args[1].startsWith("--")) {
+        throw new Error("--case requires a case id");
+      }
+      explicit = args[1];
+      args.splice(0, 2);
+      continue;
+    }
+    if (typeof args[0] === "string" && args[0].startsWith("--case=")) {
+      if (explicit) throw new Error("--case may only be provided once");
+      if (unassigned) throw new Error("--unassigned and --case are mutually exclusive");
+      explicit = args[0].slice("--case=".length);
+      if (!explicit) throw new Error("--case requires a case id");
+      args.splice(0, 1);
+      continue;
+    }
+    break;
+  }
+  const fromEnvironment = typeof env.GATE_CASE === "string" && env.GATE_CASE ? env.GATE_CASE : null;
+  if (unassigned && fromEnvironment) {
+    throw new Error("--unassigned and GATE_CASE are mutually exclusive");
+  }
+  if (explicit && fromEnvironment && explicit !== fromEnvironment) {
+    throw new Error("--case does not match GATE_CASE");
+  }
+  return { argv: args, caseId: explicit || fromEnvironment, unassigned };
+}
+
+const GLOBAL_CASE_COMMANDS = new Set([
+  "bootstrap",
+  "validate",
+  "doctor",
+  "up",
+  "case",
+  "project",
+  "workspace",
+  "upstream",
+  "publication"
+]);
+const GLOBAL_BOUNTY_PROFILE_ACTIONS = new Set(["create", "resume", "status", "show", "verify"]);
+const GLOBAL_TOOL_ACTIONS = new Set(["list", "show", "plan", "prefetch", "install", "verify", "remove"]);
+const STALE_SAFE_ENGAGEMENT_ACTIONS = new Set(["status", "stop", "revoke", "reconcile", "close"]);
+const STALE_SAFE_ANALYSIS_ACTIONS = new Set(["status", "purge"]);
+const CASE_OWNED_ANALYSIS_ACTIONS = new Set(["manifest", "run", "purge", "status"]);
+const GLOBAL_META_COMMANDS = new Set(["help", "--help", "-h", "version", "--version", "-v"]);
+
+function staleSafeWorkflowRoute(positionals) {
+  const [area, action] = positionals;
+  if (new Set(["status", "stop", "join", "report", "close"]).has(area)) return true;
+  if (area === "phase" && action === "finish") return true;
+  if (area === "test" && action === "review") return true;
+  if (area === "evidence" && action === "add") return true;
+  if (area === "coverage" && action === "set") return true;
+  if (area === "ledger" && new Set(["cleanup", "verify", "hold"]).has(action)) return true;
+  return area === "execution" && action === "cancel";
+}
+
+function caseSelectionMode(command, parsed) {
+  if (GLOBAL_META_COMMANDS.has(command) || GLOBAL_CASE_COMMANDS.has(command)) return "global";
+  if (command === "bounty") {
+    const [area, action] = parsed.positional;
+    if (area === "profile" && GLOBAL_BOUNTY_PROFILE_ACTIONS.has(action)) return "global";
+  }
+  if (command === "tool") {
+    const [action = "list"] = parsed.positional;
+    if (GLOBAL_TOOL_ACTIONS.has(action)) return "global";
+  }
+  if (command === "status" || command === "event" || command === "learn") return "stale-safe";
+  if (command === "engagement" && STALE_SAFE_ENGAGEMENT_ACTIONS.has(parsed.positional[0])) {
+    return "stale-safe";
+  }
+  if (command === "analysis" && parsed.positional[0] === "capability") return "global";
+  if (command === "analysis" && STALE_SAFE_ANALYSIS_ACTIONS.has(parsed.positional[0])) {
+    return "stale-safe";
+  }
+  if (command === "workflow" && staleSafeWorkflowRoute(parsed.positional)) return "stale-safe";
+  return "strict";
+}
+
+function caseSelectorRequired(command, parsed) {
+  if (command === "engagement" || command === "workflow") return true;
+  if (command === "bounty") {
+    const [area, action] = parsed.positional;
+    return area === "profile" && action === "compile";
+  }
+  return command === "analysis" && CASE_OWNED_ANALYSIS_ACTIONS.has(parsed.positional[0]);
+}
+
+function assertRuntimeSelectorContract(command, parsed, mode, invocation) {
+  const selected = Boolean(invocation.caseId) || invocation.unassigned;
+  if (mode === "global" && selected) {
+    throw new Error(
+      `gate ${command} uses shared state and does not accept --case, GATE_CASE, or --unassigned`
+    );
+  }
+  if (!selected && caseSelectorRequired(command, parsed)) {
+    throw new Error(
+      `gate ${command} requires --case ID (or GATE_CASE) or explicit --unassigned`
+    );
+  }
+}
+
+function assertSelectedCaseProgram(selectedCase, programId) {
+  if (selectedCase && selectedCase.case.program.id !== programId) {
+    throw new Error(`selected case is bound to program profile ${selectedCase.case.program.id}`);
+  }
+}
+
+function assertSelectedCaseProject(selectedCase, projectId) {
+  if (!selectedCase) return;
+  if (!selectedCase.case.project) {
+    throw new Error("selected case has no managed project binding for offline analysis");
+  }
+  if (selectedCase.case.project.id !== projectId) {
+    throw new Error(`selected case is bound to managed project ${selectedCase.case.project.id}`);
+  }
+}
+
+function recheckSelectedCaseBindings(selectedCase, basePaths) {
+  if (!selectedCase) return;
+  const current = selectCaseRuntime(selectedCase.case.metadata.id, { paths: basePaths });
+  if (current.case.scopeSha256 !== selectedCase.case.scopeSha256) {
+    throw new Error("selected case scope changed before command dispatch");
+  }
+}
+
 export async function main(argv) {
-  const [command = "help", ...rest] = argv;
+  const invocation = parseCaseInvocation(argv);
+  const [command = "help", ...rest] = invocation.argv;
   const parsed = parseArgs(rest);
   const json = parsed.flags.json === true;
-  const paths = runtimePaths();
+  const basePaths = runtimePaths();
+
+  const selectionMode = caseSelectionMode(command, parsed);
+  assertRuntimeSelectorContract(command, parsed, selectionMode, invocation);
 
   if (["help", "--help", "-h"].includes(command)) return output(help);
   if (["version", "--version", "-v"].includes(command)) {
-    const pkg = JSON.parse(fs.readFileSync(path.join(paths.repo, "package.json"), "utf8"));
+    const pkg = JSON.parse(fs.readFileSync(path.join(basePaths.repo, "package.json"), "utf8"));
     return output(pkg.version);
   }
+
+  const selectedCase = invocation.caseId
+    ? selectionMode === "stale-safe"
+      ? openCaseRuntime(invocation.caseId, { paths: basePaths })
+      : selectCaseRuntime(invocation.caseId, { paths: basePaths })
+    : null;
+  const paths = selectedCase?.paths || basePaths;
 
   if (command === "bootstrap") {
     assertFlags(parsed.flags, ["json"]);
@@ -1197,7 +1373,10 @@ export async function main(argv) {
     assertBooleanSwitch(parsed.flags, "summary");
     assertBooleanSwitch(parsed.flags, "json");
     assertPositionals(parsed.positional, 0, "gate status [--summary] [--json]");
-    const status = await buildStatus({ paths });
+    const status = await buildStatus({
+      paths,
+      selectionMode: invocation.caseId ? "case" : invocation.unassigned ? "unassigned" : "aggregate"
+    });
     return output(parsed.flags.summary === true ? statusSummary(status) : status, json);
   }
 
@@ -1205,12 +1384,45 @@ export async function main(argv) {
     assertFlags(parsed.flags, ["host", "port"]);
     assertPositionals(parsed.positional, 0, "gate up [--host HOST] [--port PORT]");
     const { startObserver } = await import("./observer/server.mjs");
+    const { config } = loadConfig({ paths: basePaths });
     await startObserver({
-      paths,
+      paths: basePaths,
       host: typeof parsed.flags.host === "string" ? parsed.flags.host : "127.0.0.1",
-      port: Number(parsed.flags.port || 4173)
+      port: Number(parsed.flags.port || 4173),
+      operatorDisplayName: readOperatorDisplayName(config)
     });
     return;
+  }
+
+  if (command === "case") {
+    const [action = "list", id] = parsed.positional;
+    if (action === "create") {
+      assertPositionals(parsed.positional, 2, "gate case create ID --program PROFILE --name NAME [--project ID]");
+      assertFlags(parsed.flags, ["program", "name", "project", "json"]);
+      const programId = requiredFlag(parsed.flags, "program");
+      const profile = verifyProgramProfile(programId, { paths: basePaths });
+      if (!profile.ok || !profile.structuralValid || !profile.ready || !profile.profileSha256) {
+        throw new Error(`program profile is not ready for a case: ${programId}`);
+      }
+      const projectId = optionalValueFlag(parsed.flags, "project");
+      return output(createCase(id, {
+        displayName: requiredFlag(parsed.flags, "name"),
+        program: { id: programId, profileSha256: profile.profileSha256 },
+        project: projectId ? projectContractBinding(projectId, { paths: basePaths }) : null
+      }, { paths: basePaths }), json);
+    }
+    if (action === "list") {
+      assertPositionals(parsed.positional, 1, "gate case list");
+      assertFlags(parsed.flags, ["json"]);
+      return output(caseFleetStatus({ paths: basePaths }), json);
+    }
+    if (action === "show") {
+      assertPositionals(parsed.positional, 2, "gate case show ID");
+      assertFlags(parsed.flags, ["json"]);
+      if (!id) throw new Error("case id is required");
+      return output(showCase(id, { paths: basePaths }), json);
+    }
+    throw new Error(`unknown case action: ${action}`);
   }
 
   if (command === "project") {
@@ -1302,7 +1514,9 @@ export async function main(argv) {
       );
       assertFlags(parsed.flags, ["engagement", "workflow", "provider-profile", "json"]);
       if (!id) throw new Error("program profile id is required");
+      assertSelectedCaseProgram(selectedCase, id);
       const providerProfile = optionalValueFlag(parsed.flags, "provider-profile");
+      recheckSelectedCaseBindings(selectedCase, basePaths);
       const result = compileProgramProfile(
         id,
         {
@@ -1310,7 +1524,12 @@ export async function main(argv) {
           workflowId: optionalValueFlag(parsed.flags, "workflow"),
           providerProfile
         },
-        { paths }
+        {
+          paths,
+          ...(selectedCase
+            ? { expectedProfileSha256: selectedCase.case.program.profileSha256 }
+            : {})
+        }
       );
       output(result, json);
       if (!result.ok || !result.ready || (providerProfile && !result.routeReady)) process.exitCode = 2;
@@ -1335,22 +1554,33 @@ export async function main(argv) {
     }
     if (action === "manifest") {
       assertFlags(parsed.flags, ["project", "path", "minutes", "json"]);
+      const projectId = requiredFlag(parsed.flags, "project");
+      assertSelectedCaseProject(selectedCase, projectId);
+      recheckSelectedCaseBindings(selectedCase, basePaths);
       return output(
         createOfflineAnalysisManifest(
-          requiredFlag(parsed.flags, "project"),
+          projectId,
           {
             path: requiredFlag(parsed.flags, "path"),
             maxMinutes: optionalValueFlag(parsed.flags, "minutes")
           },
-          { paths }
+          {
+            paths,
+            ...(selectedCase
+              ? { expectedProjectContractSha256: selectedCase.case.project.contractSha256 }
+              : {})
+          }
         ),
         json
       );
     }
     if (action === "run") {
       assertFlags(parsed.flags, ["project", "manifest", "confirm", "json"]);
+      const projectId = requiredFlag(parsed.flags, "project");
+      assertSelectedCaseProject(selectedCase, projectId);
+      recheckSelectedCaseBindings(selectedCase, basePaths);
       const result = await executeOfflineAnalysisManifest(
-        requiredFlag(parsed.flags, "project"),
+        projectId,
         {
           manifestId: requiredFlag(parsed.flags, "manifest"),
           confirm: requiredFlag(parsed.flags, "confirm")
@@ -1363,9 +1593,11 @@ export async function main(argv) {
     }
     if (action === "purge") {
       assertFlags(parsed.flags, ["project", "manifest", "confirm", "json"]);
+      const projectId = requiredFlag(parsed.flags, "project");
+      assertSelectedCaseProject(selectedCase, projectId);
       return output(
         purgeOfflineAnalysisArtifact(
-          requiredFlag(parsed.flags, "project"),
+          projectId,
           {
             manifestId: requiredFlag(parsed.flags, "manifest"),
             confirm: requiredFlag(parsed.flags, "confirm")
@@ -1428,6 +1660,9 @@ export async function main(argv) {
     if (!action) {
       assertFlags(parsed.flags, ["cause", "change", "private", "scope", "json"]);
       assertPositionals(parsed.positional, 0, "gate learn --cause TEXT --change TEXT");
+      if (selectedCase && parsed.flags.private !== true) {
+        throw new Error("case-scoped learning must use --private; unset GATE_CASE to record shared public learning");
+      }
       return output(
         addLearning(
           {
@@ -1477,6 +1712,7 @@ export async function main(argv) {
     const [action, id] = parsed.positional;
     if (!action || !id) throw new Error("engagement action and id are required");
     assertPositionals(parsed.positional, 2, "gate engagement ACTION ID [options]");
+    if (selectionMode === "strict") recheckSelectedCaseBindings(selectedCase, basePaths);
     if (action === "new") {
       assertFlags(parsed.flags, [
         "title", "owner", "basis", "targets", "actions", "tools", "exclude", "environment", "depth",
@@ -1703,6 +1939,7 @@ export async function main(argv) {
     assertBooleanSwitch(parsed.flags, "json");
     const [area, actionOrId, maybeId] = parsed.positional;
     const mutationFlags = ["request", "expected-sequence", "expected-head", "json"];
+    if (selectionMode === "strict") recheckSelectedCaseBindings(selectedCase, basePaths);
     if (area === "new") {
       assertPositionals(parsed.positional, 2, "gate workflow new ID [--engagement ID]");
       assertFlags(parsed.flags, ["engagement", "request", "json"]);

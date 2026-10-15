@@ -6,17 +6,151 @@ import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { cliInternals } from "../src/cli.mjs";
+
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const gate = path.join(repo, "bin", "gate.mjs");
 
-function invoke(args, home) {
+function invoke(args, home, extraEnvironment = {}) {
   return spawnSync(process.execPath, [gate, ...args], {
     cwd: repo,
-    env: { ...process.env, GATE_HOME: home },
+    env: { ...process.env, GATE_HOME: home, GATE_CASE: "", ...extraEnvironment },
     encoding: "utf8",
     timeout: 10_000
   });
 }
+
+test("case routing keeps closeout paths stale-safe and new admission strict", () => {
+  const mode = (command, positional) => cliInternals.caseSelectionMode(command, { positional, flags: {} });
+  const required = (command, positional) => cliInternals.caseSelectorRequired(command, { positional, flags: {} });
+  for (const positional of [
+    ["status", "case-workflow"],
+    ["stop", "case-workflow"],
+    ["phase", "finish", "case-workflow"],
+    ["test", "review", "case-workflow"],
+    ["evidence", "add", "case-workflow"],
+    ["coverage", "set", "case-workflow"],
+    ["ledger", "cleanup", "case-workflow"],
+    ["ledger", "verify", "case-workflow"],
+    ["ledger", "hold", "case-workflow"],
+    ["execution", "cancel", "case-workflow"],
+    ["join", "case-workflow"],
+    ["report", "case-workflow"],
+    ["close", "case-workflow"]
+  ]) {
+    assert.equal(mode("workflow", positional), "stale-safe", positional.join(" "));
+  }
+  for (const positional of [
+    ["new", "case-workflow"],
+    ["phase", "preflight", "case-workflow"],
+    ["phase", "start", "case-workflow"],
+    ["test", "plan", "case-workflow"],
+    ["ledger", "preflight", "case-workflow"],
+    ["ledger", "open", "case-workflow"]
+  ]) {
+    assert.equal(mode("workflow", positional), "strict", positional.join(" "));
+  }
+  assert.equal(mode("analysis", ["capability"]), "global");
+  assert.equal(mode("analysis", ["status"]), "stale-safe");
+  assert.equal(required("engagement", ["status", "engagement-id"]), true);
+  assert.equal(required("workflow", ["status", "workflow-id"]), true);
+  assert.equal(required("bounty", ["profile", "compile", "profile-id"]), true);
+  for (const action of ["manifest", "run", "purge", "status"]) {
+    assert.equal(required("analysis", [action]), true);
+  }
+  assert.equal(required("analysis", ["capability"]), false);
+  assert.equal(required("status", []), false);
+  assert.equal(required("event", ["operator.note"]), false);
+  assert.equal(required("learn", []), false);
+});
+
+test("shared commands reject explicit and ambient case selectors before creating state", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-cli-global-case-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const commands = [
+    ["bootstrap", "--json"],
+    ["validate", "--json"],
+    ["doctor", "--json"],
+    ["up"],
+    ["case", "list", "--json"],
+    ["project", "list", "--json"],
+    ["workspace", "status", "--json"],
+    ["upstream", "list", "--json"],
+    ["publication", "check", "--json"],
+    ["analysis", "capability", "--json"],
+    ...["create", "resume", "status", "show", "verify"].map((action) => [
+      "bounty", "profile", action, "selector-canary", "--json"
+    ]),
+    ...["list", "show", "plan", "prefetch", "install", "verify", "remove"].map((action) => [
+      "tool", action, "selector-canary", "--json"
+    ])
+  ];
+
+  commands.forEach((command, index) => {
+    const home = path.join(root, `explicit-${index}`);
+    const result = invoke(["--case", "phantom-case", ...command], home);
+    assert.notEqual(result.status, 0, command.join(" "));
+    assert.match(result.stderr, /uses shared state and does not accept --case, GATE_CASE, or --unassigned/u);
+    assert.equal(fs.existsSync(home), false, command.join(" "));
+  });
+
+  const ambientHome = path.join(root, "ambient");
+  const ambient = invoke(["project", "list", "--json"], ambientHome, { GATE_CASE: "phantom-case" });
+  assert.notEqual(ambient.status, 0);
+  assert.match(ambient.stderr, /uses shared state and does not accept --case, GATE_CASE, or --unassigned/u);
+  assert.equal(fs.existsSync(ambientHome), false);
+
+  const unassignedHome = path.join(root, "unassigned");
+  const unassigned = invoke(["--unassigned", "bootstrap", "--json"], unassignedHome);
+  assert.notEqual(unassigned.status, 0);
+  assert.match(unassigned.stderr, /uses shared state and does not accept --case, GATE_CASE, or --unassigned/u);
+  assert.equal(fs.existsSync(unassignedHome), false);
+
+  const conflictingHome = path.join(root, "conflicting");
+  const conflicting = invoke(
+    ["--unassigned", "analysis", "status", "--json"],
+    conflictingHome,
+    { GATE_CASE: "phantom-case" }
+  );
+  assert.notEqual(conflicting.status, 0);
+  assert.match(conflicting.stderr, /--unassigned and GATE_CASE are mutually exclusive/u);
+  assert.equal(fs.existsSync(conflictingHome), false);
+
+  const doubleSelectorHome = path.join(root, "double-selector");
+  const doubleSelector = invoke([
+    "--case", "phantom-case", "--unassigned", "analysis", "status", "--json"
+  ], doubleSelectorHome);
+  assert.notEqual(doubleSelector.status, 0);
+  assert.match(doubleSelector.stderr, /--unassigned and --case are mutually exclusive/u);
+  assert.equal(fs.existsSync(doubleSelectorHome), false);
+});
+
+test("case-owned commands require an explicit case or explicit unassigned lane before mutation", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-cli-required-case-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const attempts = [
+    ["engagement", "new", "selector-canary", "--targets", "app.example.test", "--actions", "scan", "--tools", "nmap"],
+    ["workflow", "new", "selector-canary"],
+    ["bounty", "profile", "compile", "selector-canary"],
+    ["analysis", "manifest", "--project", "selector-canary", "--path", "/tmp/input"],
+    ["analysis", "run", "--project", "selector-canary", "--manifest", `amf_${"a".repeat(32)}`, "--confirm", "x"],
+    ["analysis", "purge", "--project", "selector-canary", "--manifest", `amf_${"a".repeat(32)}`, "--confirm", "x"],
+    ["analysis", "status", "--json"]
+  ];
+
+  attempts.forEach((args, index) => {
+    const home = path.join(root, String(index));
+    const result = invoke(args, home);
+    assert.notEqual(result.status, 0, args.join(" "));
+    assert.match(result.stderr, /requires --case ID \(or GATE_CASE\) or explicit --unassigned/u);
+    assert.equal(fs.existsSync(home), false, args.join(" "));
+  });
+
+  const compatibilityHome = path.join(root, "compatibility");
+  const compatibility = invoke(["--unassigned", "analysis", "status", "--json"], compatibilityHome);
+  assert.equal(compatibility.status, 0, compatibility.stderr);
+  assert.equal(JSON.parse(compatibility.stdout).counts.running, 0);
+});
 
 test("raw command surfaces fail closed before spawning passthrough commands", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-cli-boundary-"));
@@ -36,7 +170,7 @@ test("raw command surfaces fail closed before spawning passthrough commands", (t
     },
     {
       args: [
-        "engagement", "exec", "demo", "--manifest", "missing-manifest",
+        "--unassigned", "engagement", "exec", "demo", "--manifest", "missing-manifest",
         "--confirm", `EXECUTE missing-manifest ${"0".repeat(64)} UNMETERED`,
         "--", process.execPath, "-e", payload
       ],
@@ -44,7 +178,7 @@ test("raw command surfaces fail closed before spawning passthrough commands", (t
     },
     {
       args: [
-        "engagement", "adapter-manifest", "demo", "--adapter", "dnsx-domain-observe",
+        "--unassigned", "engagement", "adapter-manifest", "demo", "--adapter", "dnsx-domain-observe",
         "--workflow", "demo-workflow", "--phase-attempt", `wpa_${"a".repeat(32)}`,
         "--target", "fixture.example", "--minutes", "1", "--requests", "1",
         "--parallel", "1", "--rate", "1", "--tokens", "1000", "--timeout-seconds", "5",
@@ -54,7 +188,7 @@ test("raw command surfaces fail closed before spawning passthrough commands", (t
     },
     {
       args: [
-        "engagement", "manifest", "demo", "--target", "example.test", "--action", "scan",
+        "--unassigned", "engagement", "manifest", "demo", "--target", "example.test", "--action", "scan",
         "--workflow", "demo-workflow", "--phase-attempt", `wpa_${"a".repeat(32)}`,
         "--tool", "nmap", "--requests", "1", "--parallel", "1", "--rate", "1",
         "--minutes", "1", "--tokens", "1000", "--", "{{GATE_TARGET}}", "-e", payload
@@ -77,7 +211,7 @@ test("managed adapter manifest dispatch is reachable at the engagement command l
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
 
   const result = invoke([
-    "engagement", "adapter-manifest", "demo", "--adapter", "unsupported-adapter"
+    "--unassigned", "engagement", "adapter-manifest", "demo", "--adapter", "unsupported-adapter"
   ], home);
 
   assert.notEqual(result.status, 0);
@@ -91,7 +225,7 @@ test("engagement creation rejects caller-supplied authorization evidence referen
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
 
   const result = invoke([
-    "engagement", "new", "cli-client",
+    "--unassigned", "engagement", "new", "cli-client",
     "--basis", "client-written-authorization",
     "--evidence-ref", "private://authorizations/cli-client.evidence",
     "--targets", "app.example.test",
@@ -114,43 +248,43 @@ test("offline analysis CLI rejects passthrough and ambiguous options before any 
       message: /analysis commands do not accept -- passthrough arguments/
     },
     {
-      args: ["analysis", "status", "--", "unexpected"],
+      args: ["--unassigned", "analysis", "status", "--", "unexpected"],
       message: /analysis commands do not accept -- passthrough arguments/
     },
     {
-      args: ["analysis", "manifest", "--project=alpha", "--project", "beta", "--path", "/tmp/file.exe"],
+      args: ["--unassigned", "analysis", "manifest", "--project=alpha", "--project", "beta", "--path", "/tmp/file.exe"],
       message: /analysis option must not be repeated: --project/
     },
     {
-      args: ["analysis", "manifest", "--project", "alpha", "--path=/tmp/a,  b.exe", "--path", "/tmp/c.exe"],
+      args: ["--unassigned", "analysis", "manifest", "--project", "alpha", "--path=/tmp/a,  b.exe", "--path", "/tmp/c.exe"],
       message: /analysis option must not be repeated: --path/
     },
     {
-      args: ["analysis", "run", "--project", "alpha", "--manifest", `amf_${"a".repeat(32)}`, "--confirm", "first", "--confirm=second"],
+      args: ["--unassigned", "analysis", "run", "--project", "alpha", "--manifest", `amf_${"a".repeat(32)}`, "--confirm", "first", "--confirm=second"],
       message: /analysis option must not be repeated: --confirm/
     },
     {
-      args: ["analysis", "purge", "--project", "alpha", "--project=beta", "--manifest", `amf_${"a".repeat(32)}`, "--confirm", "x"],
+      args: ["--unassigned", "analysis", "purge", "--project", "alpha", "--project=beta", "--manifest", `amf_${"a".repeat(32)}`, "--confirm", "x"],
       message: /analysis option must not be repeated: --project/
     },
     {
-      args: ["analysis", "purge", "--project", "alpha", "--manifest", `amf_${"a".repeat(32)}`, "--confirm", "x", "--contact-target"],
+      args: ["--unassigned", "analysis", "purge", "--project", "alpha", "--manifest", `amf_${"a".repeat(32)}`, "--confirm", "x", "--contact-target"],
       message: /unsupported option: --contact-target/
     },
     {
-      args: ["analysis", "purge", "--json"],
+      args: ["--unassigned", "analysis", "purge", "--json"],
       message: /--project is required/
     },
     {
-      args: ["analysis", "status", "--json=true"],
+      args: ["--unassigned", "analysis", "status", "--json=true"],
       message: /--json does not accept a value/
     },
     {
-      args: ["analysis", "manifest", "--project", "alpha", "--path", "/tmp/file.exe", "--minutes", "--json"],
+      args: ["--unassigned", "analysis", "manifest", "--project", "alpha", "--path", "/tmp/file.exe", "--minutes", "--json"],
       message: /--minutes needs a value/
     },
     {
-      args: ["analysis", "manifest", "--project", "alpha", "--path", "/tmp/file.exe", "--arguments", "--contact-target"],
+      args: ["--unassigned", "analysis", "manifest", "--project", "alpha", "--path", "/tmp/file.exe", "--arguments", "--contact-target"],
       message: /unsupported option: --arguments/
     }
   ];
@@ -168,7 +302,7 @@ test("offline analysis status commands expose metadata without requiring an inst
   const home = path.join(root, "home");
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
 
-  const statusResult = invoke(["analysis", "status", "--json"], home);
+  const statusResult = invoke(["--unassigned", "analysis", "status", "--json"], home);
   assert.equal(statusResult.status, 0, statusResult.stderr);
   const status = JSON.parse(statusResult.stdout);
   assert.equal(status.capability.configured, true);
@@ -198,7 +332,7 @@ test("workflow CLI creates a journaled instance and rejects ambiguous command su
   const instanceId = "cli-map-first";
   const requestId = `wreq_${"a".repeat(32)}`;
   const createdResult = invoke([
-    "workflow", "new", instanceId, "--request", requestId, "--json"
+    "--unassigned", "workflow", "new", instanceId, "--request", requestId, "--json"
   ], home);
   assert.equal(createdResult.status, 0, createdResult.stderr);
   const created = JSON.parse(createdResult.stdout);
@@ -213,7 +347,7 @@ test("workflow CLI creates a journaled instance and rejects ambiguous command su
   assert.equal(fs.statSync(path.join(directory, "journal.jsonl")).mode & 0o777, 0o600);
   assert.equal(fs.statSync(path.join(directory, "instance.json")).mode & 0o777, 0o600);
 
-  const statusResult = invoke(["workflow", "status", instanceId, "--json"], home);
+  const statusResult = invoke(["--unassigned", "workflow", "status", instanceId, "--json"], home);
   assert.equal(statusResult.status, 0, statusResult.stderr);
   const status = JSON.parse(statusResult.stdout);
   assert.equal(status.ok, true);
@@ -222,19 +356,19 @@ test("workflow CLI creates a journaled instance and rejects ambiguous command su
 
   const attempts = [
     {
-      args: ["workflow", "new", "duplicate-request", "--request", requestId, "--request", `wreq_${"b".repeat(32)}`],
+      args: ["--unassigned", "workflow", "new", "duplicate-request", "--request", requestId, "--request", `wreq_${"b".repeat(32)}`],
       message: /workflow option must not be repeated: --request/
     },
     {
-      args: ["workflow", "status", instanceId, "--", "unexpected"],
+      args: ["--unassigned", "workflow", "status", instanceId, "--", "unexpected"],
       message: /workflow commands do not accept passthrough arguments/
     },
     {
-      args: ["workflow", "status", instanceId, "--json=true"],
+      args: ["--unassigned", "workflow", "status", instanceId, "--json=true"],
       message: /--json does not accept a value/
     },
     {
-      args: ["workflow", "status", instanceId, "--contact-target"],
+      args: ["--unassigned", "workflow", "status", instanceId, "--contact-target"],
       message: /unsupported option: --contact-target/
     }
   ];
@@ -252,14 +386,14 @@ test("blocked workflow status uses the operational-block exit code", (t) => {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
 
   const instanceId = "cli-blocked-status";
-  const created = invoke(["workflow", "new", instanceId, "--json"], home);
+  const created = invoke(["--unassigned", "workflow", "new", instanceId, "--json"], home);
   assert.equal(created.status, 0, created.stderr);
 
   const journal = path.join(home, "workflows", instanceId, "journal.jsonl");
   const bytes = fs.readFileSync(journal);
   fs.writeFileSync(journal, bytes.subarray(0, bytes.length - 1), { mode: 0o600 });
 
-  const blockedResult = invoke(["workflow", "status", instanceId, "--json"], home);
+  const blockedResult = invoke(["--unassigned", "workflow", "status", instanceId, "--json"], home);
   assert.equal(blockedResult.status, 2, blockedResult.stderr);
   const blocked = JSON.parse(blockedResult.stdout);
   assert.equal(blocked.ok, false);

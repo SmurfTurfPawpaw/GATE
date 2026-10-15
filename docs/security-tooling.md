@@ -124,6 +124,8 @@ The same inputs must recreate the image and tool versions, and reset must remove
 
 The implemented fixed offline adapter follows the [offline-analysis operating contract](operating-model.md#offline-static-artifact-analysis). Its project binding supplies provenance, not target authority. Promotion to live work uses the `local-to-network-hypothesis` handoff in the [end-to-end workflow](pentest-workflow.md).
 
+Every engagement and workflow operation described below requires an explicit runtime selection; offline `analysis manifest`, `run`, `purge`, and `status` have the same requirement. Use leading `--case ID` or matching `GATE_CASE` for attributed program work. Leading `--unassigned` selects the writable base-state compatibility namespace, can create new unscoped records, and opts out of case attribution and separation. Shared catalog and installation commands, Program Profile intake, and `analysis capability` reject runtime selectors.
+
 A reviewed tool-specific adapter is the normal admission path. It is expressed as a small manifest and wrapper rather than a copy of the upstream implementation. Each admitted adapter must:
 
 1. Validate targets against the engagement envelope before launching a process.

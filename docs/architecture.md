@@ -1,12 +1,13 @@
 # GATE architecture
 
-GATE is a personal, single-operator control plane for software delivery and evidence-led security work. It composes pinned upstream tools and adds only the coordination that those tools do not provide: a shared policy model, a private project registry, a reviewed managed-tool runtime, a project-bound offline-analysis lane, a verified Treehouse lease bridge, an append-only observer, a publication authority, an active-security authority, and durable learning. This document describes the target architecture; [README.md](../README.md#current-limits) identifies which v0.1 paths are wired today.
+GATE is a personal, single-operator control plane for software delivery and evidence-led security work. It composes pinned upstream tools and adds only the coordination that those tools do not provide: a shared policy model, a private project registry, immutable per-program cases, a reviewed managed-tool runtime, a project-bound offline-analysis lane, a verified Treehouse lease bridge, an aggregate read-only cockpit, a publication authority, an active-security authority, and durable learning. This document describes the target architecture; [README.md](../README.md#current-limits) identifies which v0.1 paths are wired today.
 
 The version-controlled repository contains the reusable distribution. Live sessions, target details, raw evidence, credential references, and private learning stay outside Git under `GATE_HOME`. Credential values should remain in an OS secret store or narrowly permissioned file outside broad agent-writable roots.
 
 ## Design constraints
 
 - The laptop is the default execution environment.
+- Concurrent bug-program work uses separate case state directories with immutable scope bindings.
 - Codex CLI is the primary runtime harness. Firstmate does not currently support Codex App as a runtime backend.
 - A person must be able to bootstrap, inspect, start, stop, and reset GATE without an AI.
 - Upstream projects remain pinned dependencies. GATE does not combine their source trees.
@@ -41,6 +42,20 @@ flowchart TD
     L --> N
 ```
 
+Concurrent bug-program work is partitioned before operational records are written:
+
+```mermaid
+flowchart LR
+    P1[Ready Program Profile A] --> C1[Immutable case A]
+    J1[Optional managed project A] -.-> C1
+    P2[Ready Program Profile B] --> C2[Immutable case B]
+    J2[Optional managed project B] -.-> C2
+    C1 --> S1[Private state directory A]
+    C2 --> S2[Private state directory B]
+    S1 --> V[Aggregate read-only cockpit]
+    S2 --> V
+```
+
 Security work begins with separate offline and active-authority paths:
 
 ```mermaid
@@ -69,6 +84,7 @@ The offline branch is bound to a project contract and local snapshot rather than
 | Component | Owns | Does not own |
 |---|---|---|
 | GATE project registry | Private validated project contracts and canonical repository identity | Repository checkout, task dispatch, authorization, or policy-wide enforcement |
+| GATE case registry | Immutable binding of one ready Program Profile and an optional managed project to one private state directory | Process, credential, host, or network isolation; target authority; mutation of the bound records |
 | Firstmate | Intake, supervisor state, dispatch, decision inbox | Worktree lifecycle, target authorization, publication |
 | Treehouse | Development workspace allocation, durable leases, and its versioned state format | Orchestration, safe destructive cleanup, or security isolation |
 | GNHF | A bounded iterative task inside one exclusive lease | Worktree creation, push, PR, or policy |
@@ -81,7 +97,7 @@ The offline branch is bound to a project contract and local snapshot rather than
 | AXI | Agent-facing command and output conventions | Trust, policy, or orchestration |
 | Skills CLI | Installation and synchronization of reviewed skills | Deciding whether a skill is trustworthy |
 | Lavish | A local interactive plan or decision artifact | Continuous operations monitoring |
-| Observer | Read-only GATE activity, derived agent/task, learning, status, and token views | Execution |
+| Observer | Read-only aggregate case terminals, GATE activity, derived agent/task, learning, status, and token views | Execution or an interactive terminal session |
 | Learning pipeline | Correction capture and validated memory changes | Expanding authorization or releasing data |
 
 No Mistakes deliberately stops when a PR is ready. In v0.1, the publication authority can only inspect PR state, exact head, mergeability, and the complete bounded set of checks observed on that head. Branch protection is not required. A future mutation adapter must verify a No Mistakes attestation bound to that head before it can merge, deploy, or publish. GATE never reports that upstream No Mistakes performed those actions.
@@ -97,6 +113,7 @@ Tracked repository content:
 
 Private runtime content under `GATE_HOME`:
 
+- immutable case scopes and separate per-case operational state directories;
 - `events.jsonl` and `tokens.jsonl`;
 - engagement plans, authorization evidence, receipts, active and offline one-shot manifests and claims, offline input snapshots, run metadata, sandboxes, and audit trails;
 - registered project contracts, including repository and delivery references;
@@ -108,7 +125,7 @@ The default is `$HOME/.local/share/gate`. `GATE_HOME` overrides it. Machine-spec
 
 Tracked secrets may appear only as `env://`, `keychain://`, or `file://` references. v0.1 validates those shapes and redacts recognized sensitive text in supported event paths, but it has no general secret resolver or data-flow policy engine. Keep credential values in an OS secret store or narrowly permissioned file outside broad agent-writable roots.
 
-`GATE_HOME` is one local trust domain for project configuration, offline-analysis provenance, engagement authority, active-execution provenance, private evidence, and managed installations in v0.1. A process that can rewrite project, offline-analysis, or engagement state can change the local configuration or history it describes, including snapshots, manifests, claims, unsigned receipts, runs, stops, and evidence. Exclusive files and hashes coordinate trusted processes rather than protecting state from that same-user writer. Managed installation receipts are evidence only. Full npm verification reconstructs a clean tree from the repository-tracked dependency lock and integrity cache, release-upstream verification checks bytes against the reviewed upstream lock, and managed-tool verification checks the catalog-entry digest, runtime-lock entry, exact installed tree, current executable bytes, and zero-egress smoke. Reconstruction invokes the npm CLI contained by the real installation of the running Node executable through that exact Node path and a minimal environment with empty explicit user/global npm configs; it does not resolve npm from `PATH` or inherit `NODE_OPTIONS`. Source verification likewise resolves a fixed locked-down system Git and supplies only a controlled command path and Git environment. A writer limited to `GATE_HOME` cannot re-anchor altered upstream or managed-tool bytes without also changing the reviewed repository lock or catalog. Whole-root write access still belongs only to trusted operator processes.
+`GATE_HOME` is one local trust domain for case scopes, project configuration, offline-analysis provenance, engagement authority, active-execution provenance, private evidence, and managed installations in v0.1. Per-case directories prevent accidental cross-program state lookup, but a process that can rewrite the whole root can change every case and the local configuration or history it describes, including snapshots, manifests, claims, unsigned receipts, runs, stops, and evidence. Exclusive files and hashes coordinate trusted processes rather than protecting state from that same-user writer. Managed installation receipts are evidence only. Full npm verification reconstructs a clean tree from the repository-tracked dependency lock and integrity cache, release-upstream verification checks bytes against the reviewed upstream lock, and managed-tool verification checks the catalog-entry digest, runtime-lock entry, exact installed tree, current executable bytes, and zero-egress smoke. Reconstruction invokes the npm CLI contained by the real installation of the running Node executable through that exact Node path and a minimal environment with empty explicit user/global npm configs; it does not resolve npm from `PATH` or inherit `NODE_OPTIONS`. Source verification likewise resolves a fixed locked-down system Git and supplies only a controlled command path and Git environment. A writer limited to `GATE_HOME` cannot re-anchor altered upstream or managed-tool bytes without also changing the reviewed repository lock or catalog. Whole-root write access still belongs only to trusted operator processes.
 
 ### Project registry boundary
 
@@ -117,6 +134,20 @@ Tracked secrets may appear only as `env://`, `keychain://`, or `file://` referen
 `project show` is the explicit full-contract read. `project list`, general status, and the observer use summaries that omit repository URLs and deployment destinations; the observer replaces the project ID with a process-local keyed pseudonym. Invalid and unexpected entries remain visible as invalid. v0.1 has no update or delete transition, and the registry is not a source of security authorization.
 
 The registry does not yet dispatch Firstmate, clone a repository, select a project implicitly, bind a Treehouse repository path to a registered identity, or make publication and deployment adapters enforce every delivery field. Those transitions require narrow owner bridges rather than treating schema validity as runtime enforcement.
+
+### Case isolation boundary
+
+`gate case create ID --program PROFILE --name NAME [--project ID]` creates `GATE_HOME/cases/ID/scope.json` and `GATE_HOME/cases/ID/state`. The scope captures the exact current ready Program Profile digest and, when supplied, the exact current managed-project digest. It also records the implemented isolation posture: `stateNamespace: isolated-directory`, `processBoundary: shared-user`, and `networkBoundary: adapter-dependent`. The scope is immutable. There is no update or delete transition, and a changed profile or project digest makes the case stale.
+
+The Program Profile and project registries, managed tools, upstreams, and public learning remain shared under the root. A selected case redirects operational state—events, engagements, workflows, execution and offline-analysis records, evidence, canonical token records, and private learning—to its own `state` directory. `gate --case ID COMMAND` and `GATE_CASE=ID gate COMMAND` select that namespace; conflicting selectors fail. Every engagement and workflow command, Program Profile compilation, and offline-analysis manifest, run, purge, or status operation requires an explicit runtime selector. Leading `--unassigned` selects the writable base-state compatibility namespace, can create new unscoped records, and opts out of case attribution and separation. GATE never selects it implicitly, so a case is the normal program-work selection. Profile compilation checks the bound Program Profile, and offline analysis checks the bound project.
+
+Strict case commands re-read the immutable scope, state-root marker, and current shared bindings immediately before dispatch. Compilation also carries the case's expected Program Profile digest into both the locked profile read and the locked artifact-publication check. Offline manifest creation carries the expected project-contract digest through its initial read, post-snapshot preflight, and final publication preflight. The project registry has no update or delete operation, so trusted registry writers cannot revise a registered ID; a changed same-user file is still detected by those reads. Other case-state mutations use dispatch-time binding freshness plus the immutable scope and state marker for attribution. They do not hold the shared profile registry lock for the complete operation, so a concurrent profile revision can make a case stale immediately after dispatch; the in-flight record remains attributed to the sealed case scope and the next strict command fails. A same-user process that can rewrite `GATE_HOME` between a final check and a write remains outside this coordination boundary.
+
+Setup and shared-registry routes reject `--case`, `GATE_CASE`, and `--unassigned`; these include bootstrap, validation, doctor, cases, projects, workspaces, upstreams, tools, publication, Program Profile intake and inspection, and the host-wide analysis capability check. `gate up` also rejects all selectors because it builds the bounded aggregate fleet view from the base runtime. Plain `gate status` reports that aggregate, `gate --unassigned status` reports only base state, and selected status reports one case plus its binding health. Sanitized events and private learning remain available without a selector; writes then use the same base state. `learn promote` is the deliberate reviewed bridge from a selected case's private candidate into shared public learning.
+
+This boundary isolates state layout, not execution. Every case process retains the operator's user identity and host access. Cases share the kernel, host network, available credentials, managed tool installations, and any other same-user resources. Only an admitted adapter or execution environment can add process or network containment, and its exact guarantees remain authoritative.
+
+The case registry considers at most 1,024 directory entries and projects at most 32 cases, reports lower-bound omissions and invalid entries in scan metadata, and keeps stale cases visible without treating their runtime as ready. `complete: false` means the cockpit is not a complete fleet view. There is no fleet pagination in v0.1; a known omitted case remains directly retrievable with `gate case show ID --json` and `gate --case ID status --summary --json`. An unassigned `GATE_HOME` that resolves to a case state root or descendant is rejected before writes, including through parent-directory aliases; direct same-user access to that directory remains outside this selector boundary. The observer pseudonymizes case, Program Profile, and project IDs before the browser boundary. A case terminal receives only the same allowlisted lifecycle projection used by the rest of the observer; it never receives raw PTY data, stdout or stderr, argv, commands, target selectors, evidence bodies, or private paths.
 
 ## Execution environments
 
@@ -212,11 +243,17 @@ Target output, webpages, binaries, captures, and tool responses are untrusted da
 
 ## Observation and token accounting
 
-GATE commands append normalized events and the observer only reads state. Today it shows GATE activity, derived agent/task state, effect classes, learning, freshness, managed runtime counts and privacy-filtered constraints, upstream, engagement, supervised execution, offline-analysis, and privacy-filtered project summaries through the status API, and token data when available. The managed runtime projection exposes tool IDs, states, reason categories, and the bounded kind, timestamp, age, and current-check flags from verification evidence while omitting private paths, hashes, raw receipts, and raw verifier errors; its unresolved count spans all 126 catalog entries rather than only failed installs. Offline analysis emits manifest-created, queued, started, and completed events; generic execution emits queued, started, completed, and stop-requested events; Treehouse workspace state is available on demand through `gate workspace status`. Firstmate, Treehouse, GNHF, No Mistakes, ordinary Codex turns, and broader reviewed tool adapters still need complete event bridges before this is a complete fleet view.
+GATE commands append normalized events and the observer only reads state. `gate up` runs without a runtime selector, scans the bounded case registry, and builds one aggregate snapshot. Today it shows up to 32 terminal-style case cards selected from at most 1,024 discovered entries. The activity, derived agent/task, supervised-execution, offline-analysis, engagement, and project projections outside those cards describe base/unassigned state. Effect classes, learning, freshness, managed-runtime counts and privacy-filtered constraints, upstream state, and available host token data are shared or host-level views. The managed runtime projection exposes tool IDs, states, reason categories, and the bounded kind, timestamp, age, and current-check flags from verification evidence while omitting private paths, hashes, raw receipts, and raw verifier errors; its unresolved count spans all 126 catalog entries rather than only failed installs. Offline analysis emits manifest-created, queued, started, and completed events; generic execution emits queued, started, completed, and stop-requested events; Treehouse workspace state is available on demand through `gate workspace status`. Firstmate, Treehouse, GNHF, No Mistakes, ordinary Codex turns, broader reviewed tool adapters, and cases beyond the scan bounds still prevent this from being a complete fleet view.
 
-`gate status --summary --json` and `gate tool list --summary --json` emit projections below 8 KiB, including pretty-printing and the final newline. They include omitted counts and retrieval pointers. Their source SHA-256 and byte count describe compact `JSON.stringify` serialization of the complete input view, not the pretty-printed CLI output or all retained private history. Status is already a bounded recent view. Tool pages default to 10 items, accept limits from 1 to 12 and zero-based integer cursors, and may return fewer items to meet the byte cap; follow `nextCursor` with the same filters. Pages are fresh observations, not a frozen inventory snapshot. `gate tool show ID --json` also returns a bounded projection with source evidence and a planning pointer. Detailed status and inventory remain available without `--summary`.
+Browser case terminals are presentation components over structured lifecycle metadata, not shell or PTY sessions. They show bounded identities, counts, workflow phases, run states, and sanitized activity. They never carry raw stdout or stderr, argv, commands, target selectors, evidence contents, or private paths. Each terminal begins with `GATE // Welcome, NAME.`, where `NAME` comes from the validated `operator.displayName` configuration. A fresh active case may animate a spinner and indeterminate bar. GATE must not derive a percentage from elapsed time, phase position, or guessed work; determinate progress is allowed only when a source supplies a trustworthy completed count and total. The dashboard respects the browser's reduced-motion preference.
+
+`gate status --summary --json` and `gate tool list --summary --json` emit projections below 8 KiB, including pretty-printing and the final newline. They include omitted counts and retrieval pointers. Status summaries preserve the selected runtime lane, case-scan completeness, an actionable bounded case projection, and exact observed execution, workflow, and offline-analysis lane counts; omitted cases remain explicit. They never include raw evidence, targets, commands, or argv. Their source SHA-256 and byte count describe compact `JSON.stringify` serialization of the complete input view, not the pretty-printed CLI output or all retained private history. Status is already a bounded recent view. Tool pages default to 10 items, accept limits from 1 to 12 and zero-based integer cursors, and may return fewer items to meet the byte cap; follow `nextCursor` with the same filters. Pages are fresh observations, not a frozen inventory snapshot. `gate tool show ID --json` also returns a bounded projection with source evidence and a planning pointer. More detailed status and inventory remain available without `--summary`, but those views still enforce fleet and recent-history bounds.
+
+Recent-run projections are bounded, but safety-critical execution and offline-analysis status and reconciliation scan retained control state before projecting it. That prevents an old live, orphaned, or ambiguous operation from disappearing behind a display cap. Those paths remain `O(history)` in v0.1; a hard history-independent time and I/O bound requires a crash-safe active/recovery index.
 
 Token records state whether values are `exact`, `estimated`, or `unavailable`, and identify the source and whether a value is a delta or cumulative counter. Status prefers valid canonical token-log records, deduplicated by record ID in last-occurrence order, and scans host Codex session roots only when none remain; it never adds the two feeds together. Compact and observer totals group canonical records by run, task, agent, provider, and model, summing deltas when present or selecting the latest cumulative record by timestamp otherwise. Equal timestamps select the last appended record, including interleaved updates to a repeated ID. A byte- or record-truncated or malformed canonical log marks available records estimated.
+
+Case status deliberately disables the host-session fallback. Codex session files do not provide a trustworthy case binding, so an aggregate host total cannot be divided among cases. A case reports token attribution as unavailable until a reviewed producer appends canonical token records inside that case's state directory. The aggregate observer may still show the separately labelled host total.
 
 The fallback scanner reads bounded local Codex session JSONL tails and parses only lines carrying recognized usage markers, selecting the latest parseable event in file order even when counters decrease. Its bounded in-process cache reuses unchanged file identity, size, modification time, and change time with zero payload bytes read. Changed exact files are rescanned. Already truncated files may use a witnessed append only when it contains a complete newer usage event; otherwise the current tail is rescanned without seeding it from stale usage. Truncated or concurrently changed reads remain estimated, and scan metadata exposes bytes read, cache hits, incremental reads, and partial coverage. Prompt-bearing bytes can pass through the scanner, but prompt bodies are never returned by the observer. A direct harness adapter is the target design. Missing telemetry remains `unavailable` with null totals, never zero.
 
@@ -258,6 +295,7 @@ When an operator or agent finds a better tool, the operating contract requires c
 ## Authoritative contracts
 
 - [gate.config.json](../config/gate.config.json) declares the target providers and runtime defaults.
+- [case.schema.json](../schemas/case.schema.json) defines immutable Program Profile and optional managed-project case bindings and their isolation posture.
 - [autonomy.json](../policies/autonomy.json) defines action authority.
 - [data-handling.json](../policies/data-handling.json) owns classification and release.
 - [engagements.json](../policies/engagements.json) owns active-security receipts and completion.

@@ -3,6 +3,10 @@ import crypto from "node:crypto";
 export const AGENT_SUMMARY_MAX_BYTES = 8 * 1024;
 const TOOL_PAGE_DEFAULT = 10;
 const TOOL_PAGE_MAX = 12;
+const STATUS_CASE_MAX = 8;
+const EXECUTION_COUNT_KEYS = ["queued", "running", "stopping", "succeeded", "failed", "cancelled", "blocked", "unknown"];
+const OFFLINE_COUNT_KEYS = ["queued", "running", "succeeded", "failed", "cancelled", "blocked", "unknown"];
+const WORKFLOW_COUNT_KEYS = ["active", "open", "stopped", "recovery-hold", "reported", "closed", "degraded", "unknown"];
 
 function serializedEvidence(value) {
   const bytes = Buffer.from(JSON.stringify(value));
@@ -226,6 +230,238 @@ function workflowSummary(value) {
   };
 }
 
+function statusSelectionSummary(status) {
+  const source = status?.selection;
+  const mode = new Set(["aggregate", "unassigned", "case"]).has(source?.mode)
+    ? source.mode
+    : "unknown";
+  return {
+    mode,
+    caseId: mode === "case" ? boundedString(source?.caseId ?? status?.selectedCaseId, 63) : null,
+    bindingHealth: mode === "case" ? {
+      status: new Set(["ready", "stale"]).has(source?.bindingHealth?.status)
+        ? source.bindingHealth.status
+        : null,
+      programCurrent: typeof source?.bindingHealth?.programCurrent === "boolean"
+        ? source.bindingHealth.programCurrent
+        : null,
+      projectCurrent: typeof source?.bindingHealth?.projectCurrent === "boolean"
+        ? source.bindingHealth.projectCurrent
+        : null
+    } : null
+  };
+}
+
+function caseScanSummary(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return {
+    attempted: typeof value.attempted === "boolean" ? value.attempted : null,
+    limit: nonNegativeInteger(value.limit),
+    discoveryLimit: nonNegativeInteger(value.discoveryLimit),
+    discovered: nonNegativeInteger(value.discovered),
+    scanned: nonNegativeInteger(value.scanned),
+    omitted: nonNegativeInteger(value.omitted),
+    invalid: nonNegativeInteger(value.invalid),
+    discoveredAtLeast: typeof value.discoveredAtLeast === "boolean" ? value.discoveredAtLeast : null,
+    omittedAtLeast: typeof value.omittedAtLeast === "boolean" ? value.omittedAtLeast : null,
+    complete: typeof value.complete === "boolean" ? value.complete : false,
+    truncated: typeof value.truncated === "boolean" ? value.truncated : true
+  };
+}
+
+function exactLaneCounts(value, keys, totalKey = null) {
+  const input = value && typeof value === "object" && !Array.isArray(value) ? value : null;
+  const complete = input !== null && keys.every((key) => nonNegativeInteger(input[key]) !== null);
+  const counts = {};
+  let calculatedTotal = 0;
+  if (input) {
+    for (const key of keys) {
+      const count = nonNegativeInteger(input[key]);
+      if (count !== null) {
+        calculatedTotal += count;
+        if (count > 0) counts[key] = count;
+      }
+    }
+  }
+  const declaredTotal = totalKey === null ? calculatedTotal : nonNegativeInteger(input?.[totalKey]);
+  return {
+    total: complete && declaredTotal !== null ? declaredTotal : null,
+    nonzero: counts,
+    complete: complete && declaredTotal !== null
+  };
+}
+
+function engagementLaneSummary(runtime) {
+  const scan = runtime?.engagementScan;
+  if (scan?.availability === "not-loaded") {
+    return {
+      availability: "not-loaded",
+      visibleRecords: 0,
+      statuses: {},
+      scan: { complete: false, omittedAtLeast: null, invalid: null }
+    };
+  }
+  const records = Array.isArray(runtime?.engagements) ? runtime.engagements : [];
+  const statuses = categoryCounts(records, (engagement) => engagement?.metadata?.status || engagement?.status);
+  return {
+    availability: Array.isArray(runtime?.engagements) ? "loaded" : "unavailable",
+    visibleRecords: records.length,
+    statuses: statuses.counts,
+    omittedStatusKinds: statuses.omittedKinds,
+    scan: {
+      complete: typeof scan?.complete === "boolean" ? scan.complete : false,
+      omittedAtLeast: nonNegativeInteger(scan?.omittedAtLeast),
+      invalid: nonNegativeInteger(scan?.invalid)
+    }
+  };
+}
+
+function caseBindingSummary(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return {
+    id: boundedString(value.id, 80),
+    current: typeof value.current === "boolean" ? value.current : null
+  };
+}
+
+function compactCaseLaneCounts(value, keys, totalKey = null) {
+  const projection = exactLaneCounts(value, keys, totalKey);
+  if (!projection.complete) return { total: null };
+  return Object.keys(projection.nonzero).length > 0
+    ? { total: projection.total, nonzero: projection.nonzero }
+    : { total: projection.total };
+}
+
+function caseStatusProjection(value) {
+  const runtime = value?.runtime && typeof value.runtime === "object" && !Array.isArray(value.runtime)
+    ? value.runtime
+    : null;
+  const tokenUsage = usageSummary(runtime?.tokens);
+  const engagements = engagementLaneSummary(runtime);
+  return {
+    id: boundedString(value?.id, 63),
+    displayName: boundedString(value?.displayName, 60),
+    status: boundedString(value?.status, 16),
+    binding: value?.binding && typeof value.binding === "object" ? {
+      program: caseBindingSummary(value.binding.program),
+      project: value.binding.project === null ? null : caseBindingSummary(value.binding.project)
+    } : null,
+    runtimeHealth: {
+      status: new Set(["available", "unavailable"]).has(value?.runtimeHealth?.status)
+        ? value.runtimeHealth.status
+        : null,
+      reason: new Set(["invalid-case", "runtime-observation-failed"]).has(value?.runtimeHealth?.reason)
+        ? value.runtimeHealth.reason
+        : null
+    },
+    runtimeAvailable: runtime !== null,
+    lanes: {
+      engagements: engagements.availability === "loaded"
+        ? { availability: "loaded", visibleRecords: engagements.visibleRecords, statuses: engagements.statuses }
+        : { availability: engagements.availability },
+      execution: compactCaseLaneCounts(runtime?.execution?.counts, EXECUTION_COUNT_KEYS),
+      workflows: compactCaseLaneCounts(runtime?.workflows?.counts, WORKFLOW_COUNT_KEYS, "total"),
+      offlineAnalysis: compactCaseLaneCounts(runtime?.offlineAnalysis?.counts, OFFLINE_COUNT_KEYS),
+      tokens: {
+        availability: tokenUsage.availability,
+        totalTokens: tokenUsage.totals.totalTokens
+      }
+    }
+  };
+}
+
+function caseProjectionPriority(value) {
+  if (value?.runtimeHealth?.status === "unavailable") return 2;
+  const runtime = value?.runtime;
+  if (!runtime || typeof runtime !== "object" || Array.isArray(runtime)) {
+    return new Set(["stale", "invalid"]).has(value?.status) ? 1 : 0;
+  }
+  const positive = (counts, keys) => keys.some((key) => nonNegativeInteger(counts?.[key]) > 0);
+  const active = positive(runtime?.execution?.counts, ["queued", "running", "stopping", "failed", "blocked", "unknown"]) ||
+    positive(runtime?.workflows?.counts, ["active", "open", "stopped", "recovery-hold", "reported", "degraded", "unknown"]) ||
+    positive(runtime?.offlineAnalysis?.counts, ["queued", "running", "failed", "blocked", "unknown"]);
+  if (active) return 2;
+  return new Set(["stale", "invalid"]).has(value?.status) ? 1 : 0;
+}
+
+function aggregateCaseLaneCounts(cases, source, keys, totalKey = null) {
+  const totals = Object.fromEntries(keys.map((key) => [key, 0]));
+  let total = 0;
+  let caseRuntimes = 0;
+  let complete = true;
+  for (const item of cases) {
+    const runtime = item?.runtime;
+    if (!runtime || typeof runtime !== "object" || Array.isArray(runtime)) continue;
+    caseRuntimes += 1;
+    const value = source(runtime);
+    const projection = exactLaneCounts(value, keys, totalKey);
+    if (!projection.complete) complete = false;
+    if (projection.total !== null) total += projection.total;
+    for (const key of keys) {
+      const count = nonNegativeInteger(value?.[key]);
+      if (count !== null) totals[key] += count;
+    }
+  }
+  return {
+    caseRuntimes,
+    total: complete ? total : null,
+    nonzero: Object.fromEntries(Object.entries(totals).filter(([, count]) => count > 0)),
+    complete
+  };
+}
+
+function caseFleetSummary(status) {
+  if (!Array.isArray(status?.cases) && (!status?.caseScan || typeof status.caseScan !== "object")) {
+    return null;
+  }
+  const cases = Array.isArray(status?.cases) ? status.cases : [];
+  const scan = caseScanSummary(status?.caseScan);
+  const aggregateSelection = status?.selection?.mode === "aggregate" ||
+    (!status?.selection && cases.length > 0);
+  const statusCounts = categoryCounts(cases, (item) => item?.status);
+  const items = cases
+    .map((item, index) => ({ item, index, priority: caseProjectionPriority(item) }))
+    .sort((left, right) => right.priority - left.priority || left.index - right.index)
+    .slice(0, STATUS_CASE_MAX)
+    .map(({ item }) => caseStatusProjection(item));
+  const runtimeCases = cases.filter((item) => item?.runtime && typeof item.runtime === "object").length;
+  const execution = aggregateCaseLaneCounts(cases, (runtime) => runtime?.execution?.counts, EXECUTION_COUNT_KEYS);
+  const workflows = aggregateCaseLaneCounts(
+    cases,
+    (runtime) => runtime?.workflows?.counts,
+    WORKFLOW_COUNT_KEYS,
+    "total"
+  );
+  const offlineAnalysis = aggregateCaseLaneCounts(
+    cases,
+    (runtime) => runtime?.offlineAnalysis?.counts,
+    OFFLINE_COUNT_KEYS
+  );
+  return {
+    scan,
+    observedCases: cases.length,
+    runtimeCases,
+    statuses: statusCounts.counts,
+    omittedStatusKinds: statusCounts.omittedKinds,
+    observedLaneCounts: aggregateSelection ? {
+      coverageComplete: scan?.complete === true && runtimeCases === cases.length &&
+        execution.complete && workflows.complete && offlineAnalysis.complete,
+      execution,
+      workflows,
+      offlineAnalysis,
+      engagements: { availability: "not-loaded-in-aggregate", recordsRead: 0 }
+    } : null,
+    projectionOrder: "active-or-unavailable-then-binding-source-stable",
+    items,
+    omittedObservedCases: Math.max(0, cases.length - items.length),
+    retrieval: {
+      list: "gate case list --json",
+      caseStatus: "gate --case ID status --summary --json",
+      aggregateStatus: "gate status --summary --json"
+    }
+  };
+}
+
 export function statusSummary(status) {
   const source = serializedEvidence(status);
   const runtimes = status?.toolRuntimes || {};
@@ -243,10 +479,22 @@ export function statusSummary(status) {
   const executionCounts = compactCounts(status?.execution?.counts);
   const offlineCounts = compactCounts(status?.offlineAnalysis?.counts);
   const workflows = workflowSummary(status?.workflows);
+  const selection = statusSelectionSummary(status);
+  const caseFleet = caseFleetSummary(status);
+  const fullStatusCommand = selection.mode === "case"
+    ? "gate --case ID status --json"
+    : selection.mode === "unassigned"
+      ? "gate --unassigned status --json"
+      : "gate status --json";
+  const workflowDetailCommand = selection.mode === "unassigned"
+    ? "gate --unassigned workflow status ID --json"
+    : "gate --case ID workflow status ID --json";
   const result = {
     apiVersion: "gate.status-summary/v1",
     at: boundedString(status?.at, 40),
     source: { ...source, projection: "bounded-summary", complete: false },
+    selection,
+    caseFleet,
     activity: {
       visibleEvents: Array.isArray(status?.events) ? status.events.length : 0,
       eventKinds: eventKinds.counts,
@@ -308,8 +556,10 @@ export function statusSummary(status) {
       upstreamIntegrityStates: upstreamIntegrityStates.omittedKinds
     },
     retrieval: {
-      fullStatus: "gate status --json",
-      workflowDetail: "gate workflow status ID --json",
+      fullStatus: fullStatusCommand,
+      unassignedStatus: "gate --unassigned status --summary --json",
+      selectedCaseStatus: "gate --case ID status --summary --json",
+      workflowDetail: workflowDetailCommand,
       toolPage: "gate tool list --summary --limit 10 --cursor 0 --json",
       toolDetail: "gate tool show ID --json"
     }
@@ -319,6 +569,20 @@ export function statusSummary(status) {
     result.workflows.omittedInstances = result.workflows.counts.total === null
       ? null
       : Math.max(0, result.workflows.counts.total - result.workflows.instances.length);
+  }
+  while (prettyOutputBytes(result) >= AGENT_SUMMARY_MAX_BYTES && result.caseFleet?.items.length > 0) {
+    result.caseFleet.items.pop();
+    result.caseFleet.omittedObservedCases = Math.max(
+      0,
+      result.caseFleet.observedCases - result.caseFleet.items.length
+    );
+  }
+  while (prettyOutputBytes(result) >= AGENT_SUMMARY_MAX_BYTES && result.toolRuntimes.installedRuntimes.length > 0) {
+    result.toolRuntimes.installedRuntimes.pop();
+    result.toolRuntimes.omittedInstalledRuntimes = Math.max(
+      0,
+      (nonNegativeInteger(runtimes.installed) || 0) - result.toolRuntimes.installedRuntimes.length
+    );
   }
   if (prettyOutputBytes(result) >= AGENT_SUMMARY_MAX_BYTES) {
     throw new Error("status summary exceeded its 8 KiB output contract");

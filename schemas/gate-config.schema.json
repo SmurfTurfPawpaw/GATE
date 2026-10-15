@@ -33,10 +33,16 @@
     "operator": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["mode", "id"],
+      "required": ["mode", "id", "displayName"],
       "properties": {
         "mode": { "const": "single" },
-        "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$" }
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$" },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^(?=\\S)(?!.*\\s$)[^\\u0000-\\u001F\\u007F-\\u009F\\u2028\\u2029]+$"
+        }
       }
     },
     "paths": {

@@ -215,6 +215,22 @@ test("current buildStatus token shape is accepted without inferring context use"
   );
 });
 
+test("aggregate token model and source labels reject path-shaped private strings", () => {
+  const status = sanitizeStatusPayload({
+    usage: {
+      availability: "exact",
+      source: "/private/USAGE_SOURCE_CANARY",
+      model: "/private/USAGE_MODEL_CANARY",
+      totalTokens: 12
+    }
+  });
+  assert.equal(status.usage.source, null);
+  assert.equal(status.usage.model, null);
+  assert.equal(status.usage.totalTokens, 12);
+  assert.equal(JSON.stringify(status).includes("USAGE_SOURCE_CANARY"), false);
+  assert.equal(JSON.stringify(status).includes("USAGE_MODEL_CANARY"), false);
+});
+
 test("agent projection ignores task descriptions and derives stable status counts", () => {
   const status = sanitizeStatusPayload({
     at: "2026-10-13T12:00:00Z",
@@ -830,4 +846,419 @@ test("freshness and bounded percentages preserve unknown and stale states", () =
   assert.equal(boundedPercent(null, 100), null);
   assert.equal(boundedPercent(80, 100), 80);
   assert.equal(boundedPercent(120, 100), 100);
+});
+
+test("case cockpit projection keeps only bounded lifecycle metadata and an exact opaque binding", () => {
+  const status = sanitizeStatusPayload({
+    operator: { displayName: "Giovanni", command: "OPERATOR_COMMAND_CANARY" },
+    caseScan: {
+      discovered: 5,
+      scanned: 5,
+      omitted: 0,
+      invalid: 1,
+      discoveredAtLeast: false,
+      omittedAtLeast: false,
+      complete: true,
+      truncated: false,
+      path: "/private/SCAN_CANARY"
+    },
+    engagementScan: {
+      availability: "loaded",
+      limit: 64,
+      discoveryLimit: 4096,
+      entriesInspected: 70,
+      discoveredAtLeast: 66,
+      scanned: 64,
+      omittedAtLeast: 2,
+      invalid: 4,
+      recordsRead: null,
+      complete: false,
+      truncated: true,
+      discoveryTruncated: false,
+      filenames: ["PRIVATE_TOP_ENGAGEMENT_FILENAME_CANARY"]
+    },
+    cases: [
+      {
+        id: `case_${"1".repeat(16)}`,
+        displayName: "Primary assessment",
+        status: "ready",
+        binding: {
+          program: { id: `program_${"2".repeat(16)}`, current: true, title: "PROGRAM_TITLE_CANARY" },
+          project: { id: `project_${"3".repeat(16)}`, current: true, repository: "PROJECT_REPOSITORY_CANARY" }
+        },
+        isolation: {
+          stateNamespace: "isolated-directory",
+          processBoundary: "shared-user",
+          networkBoundary: "adapter-dependent",
+          path: "/private/CASE_PATH_CANARY"
+        },
+        runtimeHealth: { status: "available", reason: null, error: "RUNTIME_ERROR_CANARY" },
+        state: "running",
+        counts: { total: 2, running: 1, queued: 1, commandCount: 99 },
+        telemetry: { freshness: "fresh", lastActivityAt: "2026-10-15T08:00:00.000Z", ageSeconds: 1 },
+        usage: {
+          availability: "exact",
+          source: "gate-token-log",
+          totalTokens: 1200,
+          inputTokens: 800,
+          outputTokens: 400,
+          prompt: "TOKEN_PROMPT_CANARY"
+        },
+        execution: {
+          counts: { running: 1, stopping: 0 },
+          recent: [{
+            runId: `run_${"4".repeat(16)}`,
+            manifestId: `manifest_${"5".repeat(16)}`,
+            engagementId: `engagement_${"6".repeat(16)}`,
+            status: "running",
+            createdAt: "2026-10-15T08:00:00.000Z",
+            startedAt: "2026-10-15T08:00:01.000Z",
+            finishedAt: null,
+            terminationReason: null,
+            exitCode: null,
+            signal: null,
+            workflow: {
+              instanceId: `workflow_${"7".repeat(16)}`,
+              phaseId: "active-testing",
+              phaseAttemptId: `phase-attempt_${"8".repeat(16)}`,
+              reservationId: `reservation_${"9".repeat(16)}`
+            },
+            argv: ["RUN_ARGV_CANARY"],
+            output: "RUN_OUTPUT_CANARY",
+            target: "RUN_TARGET_CANARY"
+          }]
+        },
+        offlineAnalysis: {
+          counts: { queued: 2, running: 1, succeeded: 3, failed: 0, cancelled: 0, blocked: 0, unknown: 0 },
+          recent: []
+        },
+        engagementScan: {
+          availability: "loaded",
+          limit: 64,
+          discoveryLimit: 4096,
+          entriesInspected: 4,
+          discoveredAtLeast: 3,
+          scanned: 2,
+          omittedAtLeast: 1,
+          invalid: 1,
+          recordsRead: null,
+          complete: false,
+          truncated: true,
+          discoveryTruncated: false,
+          filename: "PRIVATE_ENGAGEMENT_FILENAME_CANARY"
+        },
+        workflows: {
+          counts: { total: 1, active: 1, open: 1 },
+          instances: [{
+            instanceId: `workflow_${"7".repeat(16)}`,
+            status: "open",
+            activePhase: {
+              id: "active-testing",
+              lane: "active-testing",
+              effectClass: "A2",
+              toolId: "httpx",
+              envelopeControls: null,
+              target: "PHASE_TARGET_CANARY"
+            },
+            journalSequence: 2,
+            reservations: 1,
+            stops: 0,
+            health: "bounded-replay-verified"
+          }],
+          scan: { discovered: 1, scanned: 1, omitted: 0, complete: true, truncated: false }
+        },
+        activity: [{
+          id: "evt_case_activity_01",
+          at: "2026-10-15T08:00:02.000Z",
+          runId: "run_activity",
+          taskId: "task_activity",
+          component: "gate-execution",
+          agent: "codex",
+          kind: "tool.started",
+          status: "running",
+          summary: "EVENT_SUMMARY_CANARY",
+          effect: { class: "network-probe", targetRef: "EVENT_TARGET_CANARY" },
+          action: { category: "tool", toolName: "httpx", command: "EVENT_COMMAND_CANARY" }
+        }],
+        command: "CASE_COMMAND_CANARY",
+        output: "CASE_OUTPUT_CANARY",
+        target: "CASE_TARGET_CANARY"
+      },
+      {
+        id: "case_not-opaque",
+        displayName: "Malformed case",
+        status: "ready",
+        binding: { program: { id: `program_${"a".repeat(16)}`, current: true }, project: null },
+        isolation: {
+          stateNamespace: "isolated-directory",
+          processBoundary: "shared-user",
+          networkBoundary: "adapter-dependent"
+        }
+      },
+      {
+        id: `case_${"b".repeat(16)}`,
+        displayName: "Plural binding rejected",
+        status: "ready",
+        bindings: { program: { id: `program_${"c".repeat(16)}`, current: true }, project: null },
+        isolation: {
+          stateNamespace: "isolated-directory",
+          processBoundary: "shared-user",
+          networkBoundary: "adapter-dependent"
+        }
+      },
+      {
+        id: `case_${"d".repeat(16)}`,
+        displayName: "Invalid case",
+        status: "invalid",
+        binding: null,
+        isolation: null,
+        state: "blocked",
+        activity: [{ output: "INVALID_ACTIVITY_CANARY" }],
+        command: "INVALID_COMMAND_CANARY",
+        path: "/private/INVALID_PATH_CANARY"
+      },
+      {
+        id: `case_${"e".repeat(16)}`,
+        displayName: "Invalid case",
+        status: "invalid",
+        binding: null,
+        isolation: {
+          stateNamespace: "isolated-directory",
+          processBoundary: "shared-user",
+          networkBoundary: "adapter-dependent"
+        },
+        state: "blocked"
+      }
+    ]
+  });
+
+  assert.deepEqual(status.operator, { displayName: "Giovanni" });
+  assert.deepEqual(status.caseScan, {
+    discovered: 5,
+    scanned: 5,
+    omitted: 0,
+    invalid: 1,
+    discoveredAtLeast: false,
+    omittedAtLeast: false,
+    complete: true,
+    truncated: false
+  });
+  assert.deepEqual(status.engagementScan, {
+    availability: "loaded",
+    reason: null,
+    limit: 64,
+    discoveryLimit: 4096,
+    entriesInspected: 70,
+    discoveredAtLeast: 66,
+    scanned: 64,
+    omittedAtLeast: 2,
+    invalid: 4,
+    recordsRead: null,
+    complete: false,
+    truncated: true,
+    discoveryTruncated: false
+  });
+  assert.equal(status.cases.length, 2);
+  const caseView = status.cases.find((item) => item.status === "ready");
+  const tombstone = status.cases.find((item) => item.status === "invalid");
+  assert.equal(caseView.id, `case_${"1".repeat(16)}`);
+  assert.equal(caseView.binding.program.id, `program_${"2".repeat(16)}`);
+  assert.equal(caseView.binding.project.id, `project_${"3".repeat(16)}`);
+  assert.deepEqual(caseView.isolation, {
+    stateNamespace: "isolated-directory",
+    processBoundary: "shared-user",
+    networkBoundary: "adapter-dependent"
+  });
+  assert.equal(caseView.telemetry.state, "live");
+  assert.deepEqual(caseView.runtimeHealth, { status: "available", reason: null });
+  assert.equal(caseView.execution.recent[0].status, "running");
+  assert.equal(caseView.offlineAnalysis.counts.queued, 2);
+  assert.equal(caseView.offlineAnalysis.counts.running, 1);
+  assert.equal(caseView.engagementScan.invalid, 1);
+  assert.equal(caseView.engagementScan.truncated, true);
+  assert.equal(caseView.workflows.instances[0].activePhase.toolId, "httpx");
+  assert.equal(caseView.activity[0].action.toolName, "httpx");
+  assert.deepEqual(tombstone, {
+    id: `case_${"d".repeat(16)}`,
+    displayName: "Invalid case",
+    status: "invalid",
+    binding: null,
+    isolation: null,
+    runtimeHealth: { status: "unavailable", reason: "invalid-case" },
+    state: "blocked",
+    counts: {
+      total: null,
+      queued: null,
+      running: null,
+      waiting: null,
+      blocked: null,
+      succeeded: null,
+      failed: null,
+      cancelled: null,
+      unknown: null,
+      idle: null
+    },
+    telemetry: { state: "unknown", lastActivityAt: null, ageSeconds: null },
+    usage: {
+      availability: "unavailable",
+      source: null,
+      updatedAt: null,
+      model: null,
+      inputTokens: null,
+      cachedInputTokens: null,
+      outputTokens: null,
+      reasoningTokens: null,
+      totalTokens: null,
+      context: { usedTokens: null, windowTokens: null },
+      budget: { usedTokens: null, limitTokens: null }
+    },
+    execution: {
+      configured: null,
+      laneAvailable: false,
+      mode: null,
+      reason: null,
+      queuedCount: null,
+      runningCount: null,
+      stoppingCount: null,
+      enforced: [],
+      bestEffort: [],
+      unavailable: [],
+      recent: []
+    },
+    workflows: {
+      counts: {
+        total: null,
+        active: null,
+        open: null,
+        stopped: null,
+        "recovery-hold": null,
+        reported: null,
+        closed: null,
+        degraded: null,
+        unknown: null
+      },
+      instances: [],
+      scan: { discovered: null, scanned: null, omitted: null, complete: false, truncated: true }
+    },
+    engagementScan: {
+      availability: "unavailable",
+      reason: null,
+      limit: null,
+      discoveryLimit: null,
+      entriesInspected: null,
+      discoveredAtLeast: null,
+      scanned: null,
+      omittedAtLeast: null,
+      invalid: null,
+      recordsRead: null,
+      complete: false,
+      truncated: true,
+      discoveryTruncated: false
+    },
+    offlineAnalysis: {
+      configured: null,
+      laneAvailable: false,
+      mode: null,
+      reason: null,
+      runningCount: null,
+      counts: {
+        queued: null,
+        running: null,
+        succeeded: null,
+        failed: null,
+        cancelled: null,
+        blocked: null,
+        unknown: null
+      },
+      retention: {
+        quotaBytes: null,
+        quotaArtifacts: null,
+        retainedBytes: null,
+        availableBytes: null,
+        retainedArtifacts: null,
+        availableArtifacts: null,
+        pendingManifests: null,
+        pendingTransactions: null,
+        invalidTransactionRecords: null,
+        creatingManifests: null,
+        invalidCreationIntents: null,
+        invalidClaimRecords: null,
+        invalidPurgeRecords: null,
+        invalidRunRecords: null,
+        blockedManifests: null,
+        expiredManifests: null,
+        activeManifests: null,
+        terminalManifests: null,
+        unknownManifests: null,
+        purgePendingManifests: null,
+        purgedManifests: null,
+        orphanedArtifacts: null,
+        orphanedBytes: null,
+        missingArtifacts: null,
+        invalidEntries: null,
+        retentionLockState: null,
+        snapshotState: null,
+        overQuota: null,
+        mutationBlocked: null
+      },
+      recent: []
+    },
+    activity: []
+  });
+
+  const serialized = JSON.stringify(status);
+  for (const canary of [
+    "OPERATOR_COMMAND_CANARY", "SCAN_CANARY", "PROGRAM_TITLE_CANARY", "PROJECT_REPOSITORY_CANARY",
+    "CASE_PATH_CANARY", "TOKEN_PROMPT_CANARY", "RUN_ARGV_CANARY", "RUN_OUTPUT_CANARY", "RUN_TARGET_CANARY",
+    "PHASE_TARGET_CANARY", "EVENT_SUMMARY_CANARY", "EVENT_TARGET_CANARY", "EVENT_COMMAND_CANARY",
+    "CASE_COMMAND_CANARY", "CASE_OUTPUT_CANARY", "CASE_TARGET_CANARY", "RUNTIME_ERROR_CANARY",
+    "PRIVATE_ENGAGEMENT_FILENAME_CANARY", "PRIVATE_TOP_ENGAGEMENT_FILENAME_CANARY", "INVALID_ACTIVITY_CANARY",
+    "INVALID_COMMAND_CANARY", "INVALID_PATH_CANARY"
+  ]) assert.equal(serialized.includes(canary), false, `case projection leaked ${canary}`);
+});
+
+test("case status is normalized from current binding metadata and runtime failures stay separate", () => {
+  const base = {
+    displayName: "Binding truth",
+    binding: {
+      program: { id: `program_${"2".repeat(16)}`, current: true },
+      project: { id: `project_${"3".repeat(16)}`, current: true }
+    },
+    isolation: {
+      stateNamespace: "isolated-directory",
+      processBoundary: "shared-user",
+      networkBoundary: "adapter-dependent"
+    },
+    runtimeHealth: { status: "available", reason: null }
+  };
+  const status = sanitizeStatusPayload({
+    cases: [
+      {
+        ...base,
+        id: `case_${"1".repeat(16)}`,
+        status: "ready",
+        binding: { ...base.binding, program: { ...base.binding.program, current: false } }
+      },
+      { ...base, id: `case_${"4".repeat(16)}`, status: "stale" },
+      {
+        ...base,
+        id: `case_${"5".repeat(16)}`,
+        status: "ready",
+        runtimeHealth: { status: "unavailable", reason: "runtime-observation-failed", detail: "PRIVATE_RUNTIME_FAILURE" },
+        state: "running",
+        execution: { counts: { running: 9 } }
+      }
+    ]
+  });
+
+  assert.equal(status.cases[0].status, "stale", "a non-current binding cannot remain ready");
+  assert.equal(status.cases[1].status, "ready", "all-current bindings cannot remain stale");
+  assert.equal(status.cases[2].status, "ready", "runtime health must not alter binding status");
+  assert.deepEqual(status.cases[2].runtimeHealth, {
+    status: "unavailable",
+    reason: "runtime-observation-failed"
+  });
+  assert.equal(status.cases[2].state, "blocked");
+  assert.equal(status.cases[2].execution.runningCount, null);
+  assert.equal(JSON.stringify(status).includes("PRIVATE_RUNTIME_FAILURE"), false);
 });

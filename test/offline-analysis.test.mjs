@@ -17,8 +17,12 @@ import {
   offlineAnalysisStatus,
   purgeOfflineAnalysisArtifact
 } from "../src/lib/offline-analysis.mjs";
+import {
+  canonicalCaseScopeText,
+  caseScopeDigest
+} from "../src/lib/case-scope.mjs";
 import { gateHome, runtimePaths } from "../src/lib/paths.mjs";
-import { registerProject } from "../src/lib/projects.mjs";
+import { projectContractBinding, registerProject } from "../src/lib/projects.mjs";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const template = JSON.parse(fs.readFileSync(path.join(repo, "templates", "project.json"), "utf8"));
@@ -108,29 +112,39 @@ function prepareManagedFixture() {
 function fixture(t) {
   if (!managedHome) throw new Error(`managed offline runtime fixture is unavailable: ${managedSetupFailure || integrationSkipReason()}`);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-offline-analysis-"));
-  const caseRoot = path.join(managedHome, "test-cases", crypto.randomBytes(12).toString("hex"));
-  const base = runtimePaths({ home: managedHome, repo });
-  const offlineAnalyses = path.join(caseRoot, "offline-analysis");
-  const paths = {
-    ...base,
-    events: path.join(caseRoot, "events.jsonl"),
-    tokens: path.join(caseRoot, "tokens.jsonl"),
-    evidence: path.join(caseRoot, "evidence"),
-    projects: path.join(caseRoot, "projects"),
-    offlineAnalyses,
-    offlineAnalysisTransactions: path.join(offlineAnalyses, "transactions"),
-    offlineAnalysisManifests: path.join(offlineAnalyses, "manifests"),
-    offlineAnalysisCreations: path.join(offlineAnalyses, "creations"),
-    offlineAnalysisClaims: path.join(offlineAnalyses, "claims"),
-    offlineAnalysisPurges: path.join(offlineAnalyses, "purges"),
-    offlineAnalysisRuns: path.join(offlineAnalyses, "runs"),
-    offlineAnalysisInputs: path.join(offlineAnalyses, "inputs"),
-    offlineAnalysisSandboxes: path.join(offlineAnalyses, "sandboxes")
+  const caseId = `fixture-${crypto.randomBytes(12).toString("hex")}`;
+  const paths = runtimePaths({ home: managedHome, repo, caseId });
+  const scope = {
+    $schema: "https://gate.local/schemas/case.schema.json",
+    apiVersion: "gate.dev/case/v1",
+    kind: "Case",
+    metadata: {
+      id: caseId,
+      displayName: `Offline fixture ${caseId}`,
+      createdAt: "2026-10-15T12:00:00.000Z"
+    },
+    program: { id: "fixture-program", profileSha256: "a".repeat(64) },
+    project: null,
+    isolation: {
+      stateNamespace: "isolated-directory",
+      processBoundary: "shared-user",
+      networkBoundary: "adapter-dependent"
+    },
+    scopeSha256: "0".repeat(64)
   };
+  scope.scopeSha256 = caseScopeDigest(scope);
+  fs.mkdirSync(paths.stateHome, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(paths.caseScope, canonicalCaseScopeText(scope), { mode: 0o600 });
+  fs.writeFileSync(
+    paths.caseBinding,
+    `${JSON.stringify({ caseId, scopeSha256: scope.scopeSha256 })}\n`,
+    { mode: 0o600 }
+  );
   registerProject(writeProjectSource(root), { paths });
   t.after(() => {
     fs.rmSync(root, { recursive: true, force: true });
-    fs.rmSync(caseRoot, { recursive: true, force: true });
+    fs.rmSync(paths.caseRoot, { recursive: true, force: true });
+    fs.rmSync(path.join(paths.projects, "offline-project.json"), { force: true });
   });
   return { root, paths, runtime: actualRuntime() };
 }
@@ -258,6 +272,87 @@ test("public APIs reject runtime and capability injection options before side ef
   }
 });
 
+managedTest("case-bound manifest creation rejects a project revision selected before preflight", (t) => {
+  const { root, paths } = fixture(t);
+  const artifact = path.join(root, "stale-case-project.exe");
+  writeMinimalPe(artifact);
+  const selected = projectContractBinding("offline-project", { paths });
+  const projectFile = path.join(paths.projects, "offline-project.json");
+  const revised = JSON.parse(fs.readFileSync(projectFile, "utf8"));
+  revised.metadata.displayName = "Revised Offline Analysis Fixture";
+  fs.writeFileSync(projectFile, `${JSON.stringify(revised, null, 2)}\n`, { mode: 0o600 });
+  const current = projectContractBinding("offline-project", { paths });
+  assert.notEqual(current.contractSha256, selected.contractSha256);
+
+  assert.throws(
+    () => createOfflineAnalysisManifest(
+      "offline-project",
+      { path: artifact, maxMinutes: 1 },
+      { paths, expectedProjectContractSha256: selected.contractSha256 }
+    ),
+    new RegExp(`managed-project contract digest changed: expected ${selected.contractSha256}, observed ${current.contractSha256}`, "u")
+  );
+  assert.deepEqual(fs.readdirSync(paths.offlineAnalysisManifests), []);
+  assert.deepEqual(fs.readdirSync(paths.offlineAnalysisInputs), []);
+});
+
+managedTest("manifest publication rechecks the case-bound project after snapshot preflight", (t) => {
+  const { root, paths } = fixture(t);
+  const artifact = path.join(root, "publication-project-race.exe");
+  writeMinimalPe(artifact);
+  const selected = projectContractBinding("offline-project", { paths });
+  const projectFile = path.join(paths.projects, "offline-project.json");
+  const revised = JSON.parse(fs.readFileSync(projectFile, "utf8"));
+  revised.metadata.displayName = "Publication Race Fixture";
+  const revisedBytes = `${JSON.stringify(revised, null, 2)}\n`;
+  const originalOpenSync = fs.openSync;
+  const originalReadSync = fs.readSync;
+  const originalCloseSync = fs.closeSync;
+  const projectDescriptors = new Set();
+  const completedProjectReads = new Set();
+  let projectReads = 0;
+  let mutated = false;
+  fs.openSync = (file, ...args) => {
+    const descriptor = originalOpenSync(file, ...args);
+    if (path.resolve(String(file)) === projectFile) projectDescriptors.add(descriptor);
+    return descriptor;
+  };
+  fs.readSync = (descriptor, ...args) => {
+    const bytesRead = originalReadSync(descriptor, ...args);
+    if (projectDescriptors.has(descriptor) && bytesRead === 0) completedProjectReads.add(descriptor);
+    return bytesRead;
+  };
+  fs.closeSync = (descriptor) => {
+    const result = originalCloseSync(descriptor);
+    if (completedProjectReads.has(descriptor)) projectReads += 1;
+    projectDescriptors.delete(descriptor);
+    completedProjectReads.delete(descriptor);
+    if (!mutated && projectReads === 2) {
+      mutated = true;
+      fs.writeFileSync(projectFile, revisedBytes, { mode: 0o600 });
+    }
+    return result;
+  };
+  try {
+    assert.throws(
+      () => createOfflineAnalysisManifest(
+        "offline-project",
+        { path: artifact, maxMinutes: 1 },
+        { paths, expectedProjectContractSha256: selected.contractSha256 }
+      ),
+      /registered project changed before offline manifest publication/u
+    );
+  } finally {
+    fs.openSync = originalOpenSync;
+    fs.readSync = originalReadSync;
+    fs.closeSync = originalCloseSync;
+  }
+  assert.equal(mutated, true);
+  assert.deepEqual(fs.readdirSync(paths.offlineAnalysisManifests), []);
+  assert.deepEqual(fs.readdirSync(paths.offlineAnalysisInputs), []);
+  assert.deepEqual(fs.readdirSync(paths.offlineAnalysisCreations), []);
+});
+
 test("prelaunch validation closes descriptors on identity and directory errors", { skip: process.platform !== "linux" }, () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-offline-descriptors-"));
   const observedFile = path.join(root, "observed.bin");
@@ -333,6 +428,45 @@ test("malformed snapshot storage blocks the shared mutation boundary and status"
   fs.unlinkSync(malformed);
   assert.equal(offlineAnalysisStatus({ paths }).retention.mutationBlocked, false);
   assert.equal(offlineAnalysisInternals.withRetentionLock(paths, () => "allowed"), "allowed");
+});
+
+test("offline status keeps complete claim counts and a deterministic bounded recent view", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-offline-status-stress-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const paths = runtimePaths({ home: root, repo });
+  offlineAnalysisStatus({ paths });
+  const records = [];
+  for (let index = 0; index < 80; index += 1) {
+    const suffix = index.toString(16).padStart(32, "0");
+    const manifestId = `amf_${suffix}`;
+    const runId = `arun_${suffix}`;
+    const claimedAt = new Date(Date.UTC(2026, 0, 1) + Math.floor(index / 2) * 1_000).toISOString();
+    const claim = {
+      apiVersion: "gate.offline-analysis-claim/v1",
+      manifestId,
+      runId,
+      manifestSha256: "a".repeat(64),
+      projectId: "status-stress",
+      claimedAt,
+      supervisorPid: 2_147_483_647,
+      supervisorIdentity: {
+        bootId: "00000000-0000-0000-0000-000000000000",
+        startTimeTicks: "1"
+      }
+    };
+    fs.writeFileSync(claimPath(paths, manifestId), `${JSON.stringify(claim)}\n`, { mode: 0o600 });
+    records.push({ runId, manifestId, createdAt: claimedAt });
+  }
+
+  const status = offlineAnalysisStatus({ paths });
+  const expected = records.toSorted((left, right) =>
+    right.createdAt.localeCompare(left.createdAt) || left.runId.localeCompare(right.runId) ||
+      left.manifestId.localeCompare(right.manifestId)
+  ).slice(0, 25).map(({ runId }) => runId);
+  assert.equal(status.counts.unknown, 80);
+  assert.equal(status.recent.length, 25);
+  assert.deepEqual(status.recent.map(({ runId }) => runId), expected);
+  assert.equal(status.retention.invalidClaimRecords, 0);
 });
 
 managedTest("retention locks recover only a definitively stale owner and fail closed otherwise", (t) => {
@@ -997,19 +1131,19 @@ managedTest("status state matrix never presents rejected manifest, claim, and ru
 managedTest("status reports an indeterminate snapshot when state mutates through every retry", (t) => {
   const { paths } = fixture(t);
   const marker = path.join(paths.offlineAnalysisInputs, "status-generation-marker");
-  const originalReaddirSync = fs.readdirSync;
-  fs.readdirSync = (directory, ...args) => {
+  const originalOpendirSync = fs.opendirSync;
+  fs.opendirSync = (directory, ...args) => {
     if (directory === paths.offlineAnalysisClaims) {
       fs.writeFileSync(marker, "x", { mode: 0o600 });
       fs.rmSync(marker);
     }
-    return originalReaddirSync(directory, ...args);
+    return originalOpendirSync(directory, ...args);
   };
   let status;
   try {
     status = offlineAnalysisStatus({ paths });
   } finally {
-    fs.readdirSync = originalReaddirSync;
+    fs.opendirSync = originalOpendirSync;
   }
   assert.equal(status.retention.snapshotState, "indeterminate");
   assert.equal(status.retention.mutationBlocked, true);

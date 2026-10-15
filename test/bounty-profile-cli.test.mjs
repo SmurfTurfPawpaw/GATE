@@ -490,7 +490,7 @@ test("profile CLI rejects ambiguous and unsupported command surfaces before muta
       message: /--format must be json, review, or model-context/u
     },
     {
-      args: ["bounty", "profile", "compile", "missing", "--contact-target"],
+      args: ["--unassigned", "bounty", "profile", "compile", "missing", "--contact-target"],
       message: /unsupported option: --contact-target/u
     },
     {
@@ -570,7 +570,7 @@ test("headless answer files create and resume a private draft without activating
   assert.equal(JSON.parse(verification.stdout).ready, false);
 
   const compileArgs = [
-    "bounty", "profile", "compile", "headless-profile",
+    "--unassigned", "bounty", "profile", "compile", "headless-profile",
     "--engagement", "headless-assessment", "--workflow", "headless-workflow", "--json"
   ];
   const compiled = invoke(compileArgs, home);

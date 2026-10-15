@@ -7,6 +7,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
+import { runtimePaths } from "../src/lib/paths.mjs";
 import { leaseWorkspace, returnWorkspace, verifyWorkspace, workspaceStatus } from "../src/lib/workspaces.mjs";
 
 const sourceRepo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -184,11 +185,7 @@ function repositoryFixture(t, { objectFormat = "sha1" } = {}) {
     repositoryRoot,
     treehouseRoot,
     poolDirectory,
-    paths: {
-      repo: sourceRepo,
-      home: path.join(root, "gate-home"),
-      events: path.join(root, "gate-home", "events.jsonl")
-    }
+    paths: runtimePaths({ home: path.join(root, "gate-home"), repo: sourceRepo })
   };
   const state = writeTreehouseState(fixture);
   writeGateLeaseBinding(fixture, state);
@@ -644,11 +641,7 @@ test("workspace operations reject a Treehouse root that upstream would environme
   const fixture = freshLeaseFixture(t);
   const unsafeHome = path.join(fixture.root, "gate-$NO_COLOR-home");
   const fake = harness(fixture);
-  fake.options.paths = {
-    ...fixture.paths,
-    home: unsafeHome,
-    events: path.join(unsafeHome, "events.jsonl")
-  };
+  fake.options.paths = runtimePaths({ home: unsafeHome, repo: sourceRepo });
 
   assert.throws(
     () => leaseWorkspace({
