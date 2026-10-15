@@ -64,7 +64,11 @@ const EXECUTION_TERMINATION_REASONS = new Set([
   "spawn-failure",
   "supervisor-signal",
   "process-group-remained",
-  "supervision-lost"
+  "supervision-lost",
+  "workflow-claim-failed",
+  "managed-runtime-invalidated",
+  "indeterminate-output",
+  "output-validation-failed"
 ]);
 const EXECUTION_SIGNALS = new Set(Object.keys(os.constants.signals || {}));
 const EXECUTION_ENFORCED = new Set([

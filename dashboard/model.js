@@ -111,7 +111,11 @@ const EXECUTION_TERMINATION_REASONS = new Set([
   "spawn-failure",
   "supervisor-signal",
   "process-group-remained",
-  "supervision-lost"
+  "supervision-lost",
+  "workflow-claim-failed",
+  "managed-runtime-invalidated",
+  "indeterminate-output",
+  "output-validation-failed"
 ]);
 const EXECUTION_SIGNALS = new Set([
   "SIGHUP", "SIGINT", "SIGQUIT", "SIGILL", "SIGTRAP", "SIGABRT", "SIGBUS", "SIGFPE", "SIGKILL",

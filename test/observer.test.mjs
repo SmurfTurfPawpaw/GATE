@@ -7,6 +7,8 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { sanitizeStatusPayload } from "../dashboard/model.js";
+
 import { buildStatus } from "../src/lib/status.mjs";
 import { runtimePaths } from "../src/lib/paths.mjs";
 
@@ -1211,4 +1213,37 @@ test("status failures return a generic service error without exception details",
   const body = await response.text();
   assert.match(body, /observer status unavailable/);
   assert.doesNotMatch(body, /SENSITIVE_BUILDER_FAILURE/);
+});
+
+
+test("schema-defined execution termination reasons survive observer and dashboard projections", () => {
+  const schema = JSON.parse(fs.readFileSync(path.join(repo, "schemas/execution-run.schema.json"), "utf8"));
+  for (const reason of [...schema.properties.terminationReason.enum, "UNKNOWN_REASON_CANARY"]) {
+    const projected = projectSnapshot(statusFixture({
+      execution: executionFixture({
+        recent: [{
+          runId: `xrun_${"a".repeat(32)}`,
+          manifestId: `xmf_${"b".repeat(32)}`,
+          engagementId: "test-engagement",
+          status: "failed",
+          createdAt: at,
+          startedAt: at,
+          finishedAt: at,
+          terminationReason: reason,
+          exitCode: 1,
+          signal: null,
+          workflow: {
+            instanceId: "test-workflow",
+            phaseId: "active-testing",
+            phaseAttemptId: `wpa_${"c".repeat(32)}`,
+            reservationId: `wxr_${"d".repeat(32)}`
+          }
+        }]
+      })
+    }), paths);
+    const expected = reason === "UNKNOWN_REASON_CANARY" ? null : reason;
+    assert.equal(projected.status.execution.recent[0].terminationReason, expected);
+    const dashboard = sanitizeStatusPayload(projected.status);
+    assert.equal(dashboard.execution.recent[0].terminationReason, expected);
+  }
 });
