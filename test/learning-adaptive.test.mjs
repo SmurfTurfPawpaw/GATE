@@ -609,7 +609,7 @@ test("reviewed replacement chains keep history while consultation selects only n
 
 test("removed configuration files preserve replacement selection and frozen consultation", (t) => {
   const paths = fixture(t);
-  paths.repo = path.join(paths.home, "repository");
+  paths.repo = path.join(path.dirname(paths.home), "repository");
   fs.mkdirSync(paths.repo, { recursive: true });
   fs.cpSync(path.join(repo, "schemas"), path.join(paths.repo, "schemas"), { recursive: true });
   const reference = path.join(paths.repo, "reviewed.json");
