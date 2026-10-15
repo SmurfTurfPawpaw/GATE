@@ -50,31 +50,34 @@ sudo apt install --yes bubblewrap build-essential ca-certificates curl git jq ta
 Install the tested official Node 24 binary under an administrator-owned path. The ownership and mode normalization matter: managed-upstream verification rejects root execution and any Node, npm file, or parent path that the normal operator can replace. These commands cover WSL on x86-64 and ARM64:
 
 ```bash
-NODE_VERSION=v24.19.0
-case "$(uname -m)" in
-  x86_64) NODE_ARCH=x64 ;;
-  aarch64|arm64) NODE_ARCH=arm64 ;;
-  *) echo "Unsupported Node architecture: $(uname -m)" >&2; exit 1 ;;
-esac
-NODE_ARCHIVE="node-${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz"
-curl --fail --show-error --location --remote-name \
-  "https://nodejs.org/dist/${NODE_VERSION}/${NODE_ARCHIVE}"
-curl --fail --show-error --location --remote-name \
-  "https://nodejs.org/dist/${NODE_VERSION}/SHASUMS256.txt"
-grep " ${NODE_ARCHIVE}\$" SHASUMS256.txt | sha256sum --check -
-sudo install -d -m 0755 /opt/nodejs
-sudo tar -xJf "${NODE_ARCHIVE}" -C /opt/nodejs --no-same-owner
-sudo chown -R root:root "/opt/nodejs/node-${NODE_VERSION}-linux-${NODE_ARCH}"
-sudo chmod -R u=rwX,go=rX "/opt/nodejs/node-${NODE_VERSION}-linux-${NODE_ARCH}"
-sudo ln -sfn "/opt/nodejs/node-${NODE_VERSION}-linux-${NODE_ARCH}" /opt/nodejs/current
-for command_name in node npm npx corepack; do
-  sudo ln -sfn "/opt/nodejs/current/bin/${command_name}" "/usr/local/bin/${command_name}"
-done
-rm "${NODE_ARCHIVE}" SHASUMS256.txt
-hash -r
-node --version
-npm --version
-node -e 'const fs=require("node:fs"); const p=fs.realpathSync(process.execPath); if (fs.statSync(p).uid===process.geteuid() || (()=>{try{fs.accessSync(p,fs.constants.W_OK);return true}catch{return false}})()) throw Error(`Node must be administrator-owned and read-only to this account: ${p}`)'
+(
+  set -euo pipefail
+  NODE_VERSION=v24.19.0
+  case "$(uname -m)" in
+    x86_64) NODE_ARCH=x64 ;;
+    aarch64|arm64) NODE_ARCH=arm64 ;;
+    *) echo "Unsupported Node architecture: $(uname -m)" >&2; exit 1 ;;
+  esac
+  NODE_ARCHIVE="node-${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz"
+  curl --fail --show-error --location --remote-name \
+    "https://nodejs.org/dist/${NODE_VERSION}/${NODE_ARCHIVE}"
+  curl --fail --show-error --location --remote-name \
+    "https://nodejs.org/dist/${NODE_VERSION}/SHASUMS256.txt"
+  grep " ${NODE_ARCHIVE}\$" SHASUMS256.txt | sha256sum --check -
+  sudo install -d -m 0755 /opt/nodejs
+  sudo tar -xJf "${NODE_ARCHIVE}" -C /opt/nodejs --no-same-owner
+  sudo chown -R root:root "/opt/nodejs/node-${NODE_VERSION}-linux-${NODE_ARCH}"
+  sudo chmod -R u=rwX,go=rX "/opt/nodejs/node-${NODE_VERSION}-linux-${NODE_ARCH}"
+  sudo ln -sfn "/opt/nodejs/node-${NODE_VERSION}-linux-${NODE_ARCH}" /opt/nodejs/current
+  for command_name in node npm npx corepack; do
+    sudo ln -sfn "/opt/nodejs/current/bin/${command_name}" "/usr/local/bin/${command_name}"
+  done
+  rm "${NODE_ARCHIVE}" SHASUMS256.txt
+  hash -r
+  node --version
+  npm --version
+  node -e 'const fs=require("node:fs"); const p=fs.realpathSync(process.execPath); if (fs.statSync(p).uid===process.geteuid() || (()=>{try{fs.accessSync(p,fs.constants.W_OK);return true}catch{return false}})()) throw Error(`Node must be administrator-owned and read-only to this account: ${p}`)'
+)
 ```
 
 Do not substitute `nvm`, Volta, a user-owned extracted archive, or another user-writable Node tree for managed upstream operations. They remain fine for unrelated development in a separate shell, but GATE deliberately refuses to launch their npm implementation.
