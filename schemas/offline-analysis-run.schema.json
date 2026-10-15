@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/offline-analysis-run.schema.json",
+  "title": "GATE offline analysis run",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "apiVersion", "kind", "runId", "manifestId", "manifestSha256", "projectId", "status", "createdAt", "startedAt", "finishedAt", "terminationReason", "result", "evidence", "isolationVerified"],
+  "properties": {
+    "$schema": { "type": "string", "minLength": 1 },
+    "apiVersion": { "const": "gate.offline-analysis-run/v1" },
+    "kind": { "const": "OfflineAnalysisRun" },
+    "runId": { "type": "string", "pattern": "^arun_[a-f0-9]{32}$" },
+    "manifestId": { "type": "string", "pattern": "^amf_[a-f0-9]{32}$" },
+    "manifestSha256": { "$ref": "#/$defs/sha256" },
+    "projectId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$" },
+    "status": { "enum": ["queued", "running", "succeeded", "failed", "cancelled", "blocked", "unknown"] },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "startedAt": { "type": ["string", "null"], "format": "date-time" },
+    "finishedAt": { "type": ["string", "null"], "format": "date-time" },
+    "terminationReason": { "type": ["string", "null"], "pattern": "^[a-z][a-z0-9-]{1,80}$" },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exitCode", "signal", "durationMs"],
+      "properties": {
+        "exitCode": { "type": ["integer", "null"], "minimum": 0, "maximum": 255 },
+        "signal": { "type": ["string", "null"], "pattern": "^SIG[A-Z0-9]+$" },
+        "durationMs": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stdout", "stderr", "resultRef", "resultAvailable", "sandboxRef"],
+      "properties": {
+        "stdout": { "$ref": "#/$defs/stream" },
+        "stderr": { "$ref": "#/$defs/stream" },
+        "resultRef": { "$ref": "#/$defs/evidenceRef" },
+        "resultAvailable": { "type": "boolean" },
+        "sandboxRef": { "type": "string", "pattern": "^private://offline-analysis/sandboxes/arun_[a-f0-9]{32}$" }
+      }
+    },
+    "isolationVerified": { "type": ["boolean", "null"] }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "evidenceRef": { "type": "string", "pattern": "^private://evidence/offline-analysis-arun_[a-f0-9]{32}-(?:stdout\\.json|stderr\\.bin|result\\.json)$" },
+    "stream": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "available", "sha256", "bytes"],
+      "properties": {
+        "ref": { "$ref": "#/$defs/evidenceRef" },
+        "available": { "type": "boolean" },
+        "sha256": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "bytes": { "type": "integer", "minimum": 0, "maximum": 67108864 }
+      }
+    }
+  }
+}

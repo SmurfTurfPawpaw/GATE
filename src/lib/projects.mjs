@@ -13,6 +13,11 @@ const MAX_PROJECT_BYTES = 128 * 1024;
 const REMOTE_PROVIDERS = new Set(["github", "gitlab", "forgejo", "gitea"]);
 const REGISTRY_LOCK = ".registry.lock";
 const REGISTRY_PENDING = ".registry.pending";
+const PROJECT_TEMPLATE_SENTINELS = Object.freeze({
+  id: "replace-project",
+  displayName: "Replace Project",
+  repositoryIdentity: "remote:github.com/replace-owner/replace-project"
+});
 const waitBuffer = new Int32Array(new SharedArrayBuffer(4));
 
 function registryPaths(options = {}) {
@@ -344,6 +349,20 @@ function verifyValue(value, paths, expectedId = null) {
   let identity = null;
   if (schema.ok) {
     checks.push(check(
+      "template-metadata-id",
+      value.metadata.id !== PROJECT_TEMPLATE_SENTINELS.id,
+      value.metadata.id === PROJECT_TEMPLATE_SENTINELS.id
+        ? "replace the project template metadata.id before registration"
+        : "project id differs from the template sentinel"
+    ));
+    checks.push(check(
+      "template-display-name",
+      value.metadata.displayName !== PROJECT_TEMPLATE_SENTINELS.displayName,
+      value.metadata.displayName === PROJECT_TEMPLATE_SENTINELS.displayName
+        ? "replace the project template metadata.displayName before registration"
+        : "project display name differs from the template sentinel"
+    ));
+    checks.push(check(
       "identity",
       expectedId === null || value.metadata.id === expectedId,
       expectedId === null || value.metadata.id === expectedId
@@ -353,6 +372,13 @@ function verifyValue(value, paths, expectedId = null) {
     try {
       identity = repositoryIdentity(value);
       checks.push(check("repository", true, "canonical repository identity established"));
+      checks.push(check(
+        "template-repository-url",
+        identity !== PROJECT_TEMPLATE_SENTINELS.repositoryIdentity,
+        identity === PROJECT_TEMPLATE_SENTINELS.repositoryIdentity
+          ? "replace the project template repository.url before registration"
+          : "project repository differs from the template sentinel"
+      ));
     } catch (error) {
       checks.push(check("repository", false, error.message));
     }
@@ -638,6 +664,22 @@ export function showProject(id, options = {}) {
     throw new Error(`project validation failed: ${verification.checks.filter((item) => !item.ok).map((item) => item.detail).join("; ")}`);
   }
   return value;
+}
+
+export function projectContractBinding(id, options = {}) {
+  const paths = registryPaths(options);
+  ensureRuntime(paths);
+  const cleanId = projectId(id);
+  if (registryUnavailable(paths)) throw new Error("project registry has an active or incomplete transaction");
+  const { value, verification } = loadEntry(paths, cleanId);
+  if (registryUnavailable(paths)) throw new Error("project registry has an active or incomplete transaction");
+  if (!verification.ok) {
+    throw new Error(`project validation failed: ${verification.checks.filter((item) => !item.ok).map((item) => item.detail).join("; ")}`);
+  }
+  return {
+    id: cleanId,
+    contractSha256: canonicalDigest(canonicalText(value))
+  };
 }
 
 export function verifyProject(id, options = {}) {

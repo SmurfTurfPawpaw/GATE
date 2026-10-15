@@ -21,20 +21,26 @@ Describe the hypotheses, tools and exact versions, manual techniques, authentica
 
 | Surface | Status | Evidence | Limitation or next test |
 |---|---|---|---|
-| Asset discovery | Planned | | |
-| Architecture | Planned | | |
-| Authentication | Planned | | |
-| Authorization | Planned | | |
-| Sessions | Planned | | |
-| Inputs | Planned | | |
-| Business logic | Planned | | |
-| Client behavior | Planned | | |
-| Data exposure | Planned | | |
-| Infrastructure | Planned | | |
-| Supply chain | Planned | | |
-| Post-exploitation impact | Planned | | |
+| Asset discovery | `untested` | | |
+| Architecture | `untested` | | |
+| Authentication | `untested` | | |
+| Authorization | `untested` | | |
+| Sessions | `untested` | | |
+| Inputs | `untested` | | |
+| Business logic | `untested` | | |
+| Client behavior | `untested` | | |
+| Data exposure | `untested` | | |
+| Infrastructure | `untested` | | |
+| Supply chain | `untested` | | |
+| Post-exploitation impact | `untested` | | |
+| Host and local privilege | `untested` | | |
+| Wireless and radio | `untested` | | |
+| Internal segmentation | `untested` | | |
+| AI and LLM systems | `untested` | | |
+| Embedded, IoT, and OT | `untested` | | |
+| Human and physical security | `untested` | | |
 
-Use Covered, Limited, or Not applicable in the final report. Every Limited row needs a reason and next test.
+Use exactly `tested`, `not-applicable`, `blocked`, or `untested` in the final report. Every `blocked` or `untested` row needs a reason and the next test that would change its disposition. Every `tested` row needs a stable evidence reference; `tested` records work performed and does not by itself claim that no weakness exists.
 
 ## Findings
 

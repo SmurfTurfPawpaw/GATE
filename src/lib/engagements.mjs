@@ -25,12 +25,19 @@ const actions = new Set([
   "exfiltration-simulation"
 ]);
 
+const WORKFLOW_CONTRACT_MAXIMUM_BYTES = 2 * 1024 * 1024;
+const mandatoryStopCache = new Map();
+
 function engagementFile(paths, id) {
   return path.join(paths.engagements, `${slug(id, "engagement id")}.json`);
 }
 
 function hashBuffer(buffer) {
   return crypto.createHash("sha256").update(buffer).digest("hex");
+}
+
+function fileIdentity(stat) {
+  return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].map(String).join(":");
 }
 
 function sameFile(left, right) {
@@ -92,6 +99,36 @@ function readRegularSource(file, label, maximumBytes) {
   }
 }
 
+function mandatoryStopConditions(paths) {
+  const file = path.join(paths.repo, "config", "workflows", "pentest-e2e.json");
+  const before = fs.lstatSync(file, { bigint: true });
+  if (!before.isFile() || before.isSymbolicLink()) {
+    throw new Error("pentest workflow contract must be a regular non-symlink file");
+  }
+  const identity = fileIdentity(before);
+  const cached = mandatoryStopCache.get(file);
+  if (cached?.identity === identity) return cached.conditions;
+
+  const { content } = readRegularSource(file, "pentest workflow contract", WORKFLOW_CONTRACT_MAXIMUM_BYTES);
+  const after = fs.lstatSync(file, { bigint: true });
+  if (!after.isFile() || after.isSymbolicLink() || fileIdentity(after) !== identity) {
+    throw new Error("pentest workflow contract changed while mandatory stops were loaded");
+  }
+  const workflow = JSON.parse(content.toString("utf8"));
+  assertValidDocument(workflow, "pentest-workflow.schema.json", { paths });
+  const conditions = Object.freeze([...new Set([...workflow.defaultStopConditions, ...workflow.phases.flatMap((phase) => phase.stopPolicy?.additional || [])])].sort());
+  mandatoryStopCache.set(file, { identity, conditions });
+  return conditions;
+}
+
+function assertMandatoryStopConditions(value, paths) {
+  const configured = new Set(value.stopOn);
+  const missing = mandatoryStopConditions(paths).filter((condition) => !configured.has(condition));
+  if (missing.length > 0) {
+    throw new Error(`engagement is missing mandatory stop conditions: ${missing.join(", ")}`);
+  }
+}
+
 function writeBufferAtomic(file, content) {
   writePrivateFileAtomic(file, content, { label: `private engagement attachment ${file}` });
 }
@@ -127,6 +164,7 @@ function load(paths, id) {
   if (!fs.existsSync(file)) throw new Error(`engagement does not exist: ${id}`);
   const value = readPrivateJson(file);
   assertValidDocument(value, "engagement.schema.json", { paths });
+  assertMandatoryStopConditions(value, paths);
   return { file, value };
 }
 
@@ -296,7 +334,10 @@ export function createEngagement(input, options = {}) {
     retentionDays: Number(input.retentionDays ?? 90),
     secretRefs: input.secretRefs || []
   };
-  if (input.stopOn?.length) value.stopOn = [...new Set(input.stopOn.map((item) => slug(item, "stop condition")))];
+  const requestedStops = input.stopOn?.length
+    ? input.stopOn.map((item) => slug(item, "stop condition"))
+    : [];
+  value.stopOn = [...new Set([...mandatoryStopConditions(paths), ...requestedStops])];
   return save(paths, file, value);
 }
 

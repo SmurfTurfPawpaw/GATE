@@ -13,9 +13,6 @@
     "apktool",
     "gitleaks",
     "osv-scanner",
-    "trivy",
-    "syft",
-    "grype",
     "semgrep",
     "bandit",
     "gosec"

@@ -1,0 +1,260 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/provider-capability-profile.schema.json",
+  "title": "GATE provider capability profile",
+  "description": "A complete, time-bounded snapshot of a provider or model route's declared support for GATE actions and assistance modes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "apiVersion",
+    "kind",
+    "metadata",
+    "capabilities"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "https://gate.local/schemas/provider-capability-profile.schema.json"
+    },
+    "apiVersion": {
+      "enum": [
+        "gate.dev/provider-capability-profile/v1",
+        "gate.dev/provider-capability-profile/v2"
+      ]
+    },
+    "kind": {
+      "const": "ProviderCapabilityProfile"
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "model": {
+          "$ref": "#/$defs/oneLine"
+        },
+        "effectiveAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "destination": {
+          "enum": [
+            "local",
+            "cloud",
+            "unknown"
+          ]
+        }
+      }
+    },
+    "contextWindow": {
+      "description": "Provider-bound per-request context accounting. Null or absent means compatibility routing must treat the context window as unknown.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/contextWindow"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observe",
+        "scan",
+        "intercept",
+        "authenticate",
+        "fuzz",
+        "exploit-safe",
+        "exploit-stateful",
+        "persist",
+        "denial-of-service",
+        "destructive-test",
+        "data-access",
+        "data-removal",
+        "exfiltration-simulation"
+      ],
+      "properties": {
+        "observe": {
+          "$ref": "#/$defs/assistanceModes"
+        },
+        "scan": {
+          "$ref": "#/$defs/assistanceModes"
+        },
+        "intercept": {
+          "$ref": "#/$defs/assistanceModes"
+        },
+        "authenticate": {
+          "$ref": "#/$defs/assistanceModes"
+        },
+        "fuzz": {
+          "$ref": "#/$defs/assistanceModes"
+        },
+        "exploit-safe": {
+          "$ref": "#/$defs/assistanceModes"
+        },
+        "exploit-stateful": {
+          "$ref": "#/$defs/assistanceModes"
+        },
+        "persist": {
+          "$ref": "#/$defs/assistanceModes"
+        },
+        "denial-of-service": {
+          "$ref": "#/$defs/assistanceModes"
+        },
+        "destructive-test": {
+          "$ref": "#/$defs/assistanceModes"
+        },
+        "data-access": {
+          "$ref": "#/$defs/assistanceModes"
+        },
+        "data-removal": {
+          "$ref": "#/$defs/assistanceModes"
+        },
+        "exfiltration-simulation": {
+          "$ref": "#/$defs/assistanceModes"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "apiVersion": {
+            "const": "gate.dev/provider-capability-profile/v1"
+          }
+        }
+      },
+      "then": {
+        "not": {
+          "properties": {
+            "contextWindow": {}
+          },
+          "required": [
+            "contextWindow"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "contextWindow"
+        ],
+        "properties": {
+          "contextWindow": {
+            "type": "object"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "metadata": {
+            "required": [
+              "model"
+            ],
+            "properties": {
+              "model": true
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,62}$"
+    },
+    "oneLine": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^(?!\\s*$)(?![\\s\\S]*[\\u0000-\\u001F\\u007F-\\u009F\\u061C\\u200B\\u200E\\u200F\\u2028-\\u202E\\u2060-\\u206F\\uFEFF\\u{E0000}-\\u{E007F}])[\\s\\S]+$"
+    },
+    "disposition": {
+      "enum": [
+        "allow",
+        "deny",
+        "unknown"
+      ]
+    },
+    "contextWindow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxTokens",
+        "reservedOutputTokens",
+        "requestOverheadTokensUpperBound",
+        "countingMethod"
+      ],
+      "properties": {
+        "maxTokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000000,
+          "description": "Provider context-window ceiling for one complete request, including input, provider framing, and reserved output."
+        },
+        "reservedOutputTokens": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 100000000,
+          "description": "Output tokens reserved for the proposed provider request."
+        },
+        "requestOverheadTokensUpperBound": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000000,
+          "description": "Conservative token upper bound for every request byte not present in model-context.json, including system instructions, tool schemas, message framing, and provider-added input."
+        },
+        "countingMethod": {
+          "const": "utf8-bytes-upper-bound",
+          "description": "Counts each transmitted UTF-8 byte of model-context.json as at most one input token. Declare this only when the provider tokenizer is known not to emit more than one token per input byte."
+        }
+      }
+    },
+    "assistanceModes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "plan",
+        "analyze",
+        "generate-command",
+        "execute",
+        "report",
+        "retest"
+      ],
+      "properties": {
+        "plan": {
+          "$ref": "#/$defs/disposition"
+        },
+        "analyze": {
+          "$ref": "#/$defs/disposition"
+        },
+        "generate-command": {
+          "$ref": "#/$defs/disposition"
+        },
+        "execute": {
+          "$ref": "#/$defs/disposition"
+        },
+        "report": {
+          "$ref": "#/$defs/disposition"
+        },
+        "retest": {
+          "$ref": "#/$defs/disposition"
+        }
+      }
+    }
+  }
+}

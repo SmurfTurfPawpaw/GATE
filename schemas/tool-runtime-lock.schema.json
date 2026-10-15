@@ -1,0 +1,217 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/tool-runtime-lock.schema.json",
+  "title": "GATE managed tool runtime lock",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "apiVersion", "kind", "updatePolicy", "runtimes"],
+  "properties": {
+    "$schema": { "type": "string", "minLength": 1 },
+    "apiVersion": { "const": "gate.dev/tool-runtime-lock/v1" },
+    "kind": { "const": "ToolRuntimeLock" },
+    "updatePolicy": { "const": "reviewed-pull-request" },
+    "runtimes": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/runtime" }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "safeRelativePath": {
+      "type": "string",
+      "pattern": "^(?!/)(?![A-Za-z]:[\\\\/])(?!.*(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$))(?!.*[\\\\])[^\\u0000-\\u001f]+$",
+      "minLength": 1,
+      "maxLength": 240
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "platform", "assetId", "assetApiUrl", "url", "size", "sha256", "archiveType", "entries",
+        "executablePath", "executableSha256"
+      ],
+      "properties": {
+        "platform": {
+          "enum": ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"]
+        },
+        "assetId": { "type": "integer", "minimum": 1 },
+        "assetApiUrl": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://api\\.github\\.com/repos/[^/]+/[^/]+/releases/assets/[0-9]+$"
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://github\\.com/[^/]+/[^/]+/releases/download/[^/]+/[^/?#]+$"
+        },
+        "size": { "type": "integer", "minimum": 1, "maximum": 268435456 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "archiveType": { "enum": ["tar.gz", "zip"] },
+        "entries": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/safeRelativePath" }
+        },
+        "executablePath": { "$ref": "#/$defs/safeRelativePath" },
+        "executableSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "smoke": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "argv", "expectedOutputContains", "timeoutMs", "maxOutputBytes",
+        "maxProcesses", "network", "sandbox"
+      ],
+      "properties": {
+        "argv": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "pattern": "^[^\\u0000\\r\\n]+$"
+          }
+        },
+        "expectedOutputContains": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 15000 },
+        "maxOutputBytes": { "type": "integer", "minimum": 1024, "maximum": 65536 },
+        "maxProcesses": { "type": "integer", "minimum": 1, "maximum": 64 },
+        "network": { "const": "none" },
+        "sandbox": { "const": "bubblewrap-prlimit-v1" }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "toolId", "catalogEntrySha256", "version", "source", "releaseEvidence", "provider",
+        "executable", "artifacts", "smoke", "effects"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "minLength": 2,
+          "maxLength": 64
+        },
+        "toolId": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "minLength": 2,
+          "maxLength": 64
+        },
+        "catalogEntrySha256": { "$ref": "#/$defs/sha256" },
+        "version": {
+          "type": "string",
+          "pattern": "^v?[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$",
+          "maxLength": 80
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["repository", "commit", "tag"],
+          "properties": {
+            "repository": {
+              "type": "string",
+              "format": "uri",
+              "pattern": "^https://github\\.com/[^/]+/[^/]+$"
+            },
+            "commit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+            "tag": {
+              "type": "string",
+              "pattern": "^v?[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$",
+              "maxLength": 80
+            }
+          }
+        },
+        "releaseEvidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "provider", "releaseId", "releaseApiUrl", "immutableObserved",
+            "sourceCommitVerification", "checksumManifest"
+          ],
+          "properties": {
+            "provider": { "const": "github" },
+            "releaseId": { "type": "integer", "minimum": 1 },
+            "releaseApiUrl": {
+              "type": "string",
+              "format": "uri",
+              "pattern": "^https://api\\.github\\.com/repos/[^/]+/[^/]+/releases/[0-9]+$"
+            },
+            "immutableObserved": { "type": "boolean" },
+            "sourceCommitVerification": { "enum": ["verified", "unverified"] },
+            "checksumManifest": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["assetId", "assetApiUrl", "url", "size", "sha256"],
+              "properties": {
+                "assetId": { "type": "integer", "minimum": 1 },
+                "assetApiUrl": {
+                  "type": "string",
+                  "format": "uri",
+                  "pattern": "^https://api\\.github\\.com/repos/[^/]+/[^/]+/releases/assets/[0-9]+$"
+                },
+                "url": {
+                  "type": "string",
+                  "format": "uri",
+                  "pattern": "^https://github\\.com/[^/]+/[^/]+/releases/download/[^/]+/[^/?#]+$"
+                },
+                "size": { "type": "integer", "minimum": 1, "maximum": 1048576 },
+                "sha256": { "$ref": "#/$defs/sha256" }
+              }
+            }
+          }
+        },
+        "provider": { "const": "verified-release" },
+        "executable": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "relativePath"],
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,79}$"
+            },
+            "relativePath": {
+              "type": "string",
+              "pattern": "^bin/[A-Za-z0-9][A-Za-z0-9._+-]{0,79}$"
+            }
+          }
+        },
+        "artifacts": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/artifact" }
+        },
+        "smoke": { "$ref": "#/$defs/smoke" },
+        "effects": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["networkDuringInstall", "hostWrites", "adminRequired", "services", "devices"],
+          "properties": {
+            "networkDuringInstall": { "const": true },
+            "hostWrites": { "const": false },
+            "adminRequired": { "const": false },
+            "services": { "const": false },
+            "devices": { "const": false }
+          }
+        }
+      }
+    }
+  }
+}

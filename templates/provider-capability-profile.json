@@ -1,0 +1,116 @@
+{
+  "$schema": "https://gate.local/schemas/provider-capability-profile.schema.json",
+  "apiVersion": "gate.dev/provider-capability-profile/v2",
+  "kind": "ProviderCapabilityProfile",
+  "metadata": {
+    "id": "replace-provider",
+    "destination": "unknown"
+  },
+  "contextWindow": null,
+  "capabilities": {
+    "observe": {
+      "plan": "unknown",
+      "analyze": "unknown",
+      "generate-command": "unknown",
+      "execute": "unknown",
+      "report": "unknown",
+      "retest": "unknown"
+    },
+    "scan": {
+      "plan": "unknown",
+      "analyze": "unknown",
+      "generate-command": "unknown",
+      "execute": "unknown",
+      "report": "unknown",
+      "retest": "unknown"
+    },
+    "intercept": {
+      "plan": "unknown",
+      "analyze": "unknown",
+      "generate-command": "unknown",
+      "execute": "unknown",
+      "report": "unknown",
+      "retest": "unknown"
+    },
+    "authenticate": {
+      "plan": "unknown",
+      "analyze": "unknown",
+      "generate-command": "unknown",
+      "execute": "unknown",
+      "report": "unknown",
+      "retest": "unknown"
+    },
+    "fuzz": {
+      "plan": "unknown",
+      "analyze": "unknown",
+      "generate-command": "unknown",
+      "execute": "unknown",
+      "report": "unknown",
+      "retest": "unknown"
+    },
+    "exploit-safe": {
+      "plan": "unknown",
+      "analyze": "unknown",
+      "generate-command": "unknown",
+      "execute": "unknown",
+      "report": "unknown",
+      "retest": "unknown"
+    },
+    "exploit-stateful": {
+      "plan": "unknown",
+      "analyze": "unknown",
+      "generate-command": "unknown",
+      "execute": "unknown",
+      "report": "unknown",
+      "retest": "unknown"
+    },
+    "persist": {
+      "plan": "unknown",
+      "analyze": "unknown",
+      "generate-command": "unknown",
+      "execute": "unknown",
+      "report": "unknown",
+      "retest": "unknown"
+    },
+    "denial-of-service": {
+      "plan": "unknown",
+      "analyze": "unknown",
+      "generate-command": "unknown",
+      "execute": "unknown",
+      "report": "unknown",
+      "retest": "unknown"
+    },
+    "destructive-test": {
+      "plan": "unknown",
+      "analyze": "unknown",
+      "generate-command": "unknown",
+      "execute": "unknown",
+      "report": "unknown",
+      "retest": "unknown"
+    },
+    "data-access": {
+      "plan": "unknown",
+      "analyze": "unknown",
+      "generate-command": "unknown",
+      "execute": "unknown",
+      "report": "unknown",
+      "retest": "unknown"
+    },
+    "data-removal": {
+      "plan": "unknown",
+      "analyze": "unknown",
+      "generate-command": "unknown",
+      "execute": "unknown",
+      "report": "unknown",
+      "retest": "unknown"
+    },
+    "exfiltration-simulation": {
+      "plan": "unknown",
+      "analyze": "unknown",
+      "generate-command": "unknown",
+      "execute": "unknown",
+      "report": "unknown",
+      "retest": "unknown"
+    }
+  }
+}

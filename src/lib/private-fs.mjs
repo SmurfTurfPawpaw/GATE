@@ -66,7 +66,7 @@ export function securePrivateDirectory(directory, options = {}) {
   const label = options.label || `private directory ${resolved}`;
   let before = lstatIfPresent(resolved);
   if (!before) {
-    if (options.create === false) throw new Error(`${label} does not exist`);
+    if (options.create === false) throw Object.assign(new Error(`${label} does not exist`), { code: "ENOENT" });
     try {
       fs.mkdirSync(resolved, { mode: PRIVATE_DIRECTORY_MODE });
     } catch (error) {

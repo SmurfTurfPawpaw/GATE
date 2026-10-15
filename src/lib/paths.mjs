@@ -4,6 +4,22 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { securePrivateDirectory, securePrivateFile } from "./private-fs.mjs";
 
+function auditPresentEntry(file, audit, options) {
+  try {
+    audit(file, options);
+  } catch (error) {
+    if ((error.code || error.cause?.code) === "ENOENT") {
+      try {
+        fs.lstatSync(file);
+      } catch (confirmation) {
+        if (confirmation.code === "ENOENT") return;
+        throw confirmation;
+      }
+    }
+    throw error;
+  }
+}
+
 const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 export function findRepoRoot() {
@@ -36,6 +52,10 @@ export function runtimePaths(options = {}) {
   const home = path.resolve(options.home || gateHome(options.env));
   const repo = path.resolve(options.repo || findRepoRoot(options.cwd));
   const executions = path.join(home, "executions");
+  const offlineAnalyses = path.join(home, "offline-analysis");
+  const toolRuntimes = path.join(home, "tool-runtimes");
+  const toolCache = path.join(home, "tool-cache");
+  const programs = path.join(home, "programs");
   return {
     repo,
     home,
@@ -46,15 +66,30 @@ export function runtimePaths(options = {}) {
     authorizations: path.join(home, "authorizations"),
     plans: path.join(home, "plans"),
     evidence: path.join(home, "evidence"),
+    programs,
+    workflows: path.join(home, "workflows"),
     executions,
     executionManifests: path.join(executions, "manifests"),
     executionClaims: path.join(executions, "claims"),
     executionRuns: path.join(executions, "runs"),
     executionStops: path.join(executions, "stops"),
     executionSandboxes: path.join(executions, "sandboxes"),
+    offlineAnalyses,
+    offlineAnalysisTransactions: path.join(offlineAnalyses, "transactions"),
+    offlineAnalysisManifests: path.join(offlineAnalyses, "manifests"),
+    offlineAnalysisCreations: path.join(offlineAnalyses, "creations"),
+    offlineAnalysisClaims: path.join(offlineAnalyses, "claims"),
+    offlineAnalysisPurges: path.join(offlineAnalyses, "purges"),
+    offlineAnalysisRuns: path.join(offlineAnalyses, "runs"),
+    offlineAnalysisInputs: path.join(offlineAnalyses, "inputs"),
+    offlineAnalysisSandboxes: path.join(offlineAnalyses, "sandboxes"),
     projects: path.join(home, "projects"),
     upstreams: path.join(home, "upstreams"),
     upstreamTools: path.join(home, "upstream-tools"),
+    toolRuntimes,
+    toolRuntimeStaging: path.join(toolRuntimes, ".staging"),
+    toolCache,
+    toolArtifactCache: path.join(toolCache, "sha256"),
     privateLearnings: path.join(home, "memory", "private", "learnings.jsonl"),
     publicLearningRecords: path.join(repo, "memory", "learnings.jsonl"),
     publicLearnings: path.join(repo, "memory", "LEARNINGS.md")
@@ -121,20 +156,41 @@ export function ensureRuntime(paths) {
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
   securePrivateDirectory(home, { create: false, label: "GATE_HOME" });
 
+  // Derive the workflow root for older callers that pass a partial paths
+  // object. Workflow operations validate individual instance directories;
+  // generic runtime bootstrap deliberately does not enumerate retained
+  // workflow history, so its cost stays bounded as that history grows.
+  const workflows = paths.workflows || path.join(home, "workflows");
+
   const directoryPaths = [
     paths.engagements,
     paths.authorizations,
     paths.plans,
     paths.evidence,
+    paths.programs,
+    workflows,
     paths.executions,
     paths.executionManifests,
     paths.executionClaims,
     paths.executionRuns,
     paths.executionStops,
     paths.executionSandboxes,
+    paths.offlineAnalyses,
+    paths.offlineAnalysisTransactions,
+    paths.offlineAnalysisManifests,
+    paths.offlineAnalysisCreations,
+    paths.offlineAnalysisClaims,
+    paths.offlineAnalysisPurges,
+    paths.offlineAnalysisRuns,
+    paths.offlineAnalysisInputs,
+    paths.offlineAnalysisSandboxes,
     paths.projects,
     paths.upstreams,
     paths.upstreamTools,
+    paths.toolRuntimes,
+    paths.toolRuntimeStaging,
+    paths.toolCache,
+    paths.toolArtifactCache,
     path.join(home, "cache"),
     path.join(home, "cache", "npm"),
     paths.privateLearnings ? path.dirname(paths.privateLearnings) : null
@@ -172,7 +228,11 @@ export function ensureRuntime(paths) {
     paths.projects,
     paths.executionManifests,
     paths.executionClaims,
-    paths.executionStops
+    paths.executionStops,
+    paths.offlineAnalysisManifests,
+    paths.offlineAnalysisCreations,
+    paths.offlineAnalysisClaims,
+    paths.offlineAnalysisPurges
   ].filter(Boolean)) {
     for (const entry of fs.readdirSync(directory)) {
       // The project writer owns these short-lived control files and project
@@ -202,6 +262,27 @@ export function ensureRuntime(paths) {
     }
   }
 
+  // Program profiles are directory-scoped private records with their own
+  // bounded file audit. Runtime bootstrap validates only the direct profile
+  // roots so it stays independent of retained compilation history.
+  if (paths.programs) {
+    for (const entry of fs.readdirSync(paths.programs)) {
+      auditPresentEntry(path.join(paths.programs, entry), securePrivateDirectory, {
+        create: false,
+        label: `private program profile ${entry}`
+      });
+    }
+  }
+
+  if (paths.offlineAnalysisSandboxes) {
+    for (const entry of fs.readdirSync(paths.offlineAnalysisSandboxes)) {
+      securePrivateDirectory(path.join(paths.offlineAnalysisSandboxes, entry), {
+        create: false,
+        label: `private offline-analysis sandbox ${entry}`
+      });
+    }
+  }
+
   // Managed upstream roots may contain complex trees, including reviewed
   // source symlinks, but each top-level installation must itself be a real
   // owner-only directory.
@@ -210,6 +291,27 @@ export function ensureRuntime(paths) {
       securePrivateDirectory(path.join(directory, entry), {
         create: false,
         label: `managed upstream directory ${entry}`
+      });
+    }
+  }
+
+  // Runtime installations are private, content-verified trees. The staging
+  // directory is internal bookkeeping rather than an installed tool.
+  if (paths.toolRuntimes) {
+    for (const entry of fs.readdirSync(paths.toolRuntimes)) {
+      if (entry === ".staging") continue;
+      auditPresentEntry(path.join(paths.toolRuntimes, entry), securePrivateDirectory, {
+        create: false,
+        label: `managed tool runtime ${entry}`
+      });
+    }
+  }
+
+  if (paths.toolArtifactCache) {
+    for (const entry of fs.readdirSync(paths.toolArtifactCache)) {
+      auditPresentEntry(path.join(paths.toolArtifactCache, entry), securePrivateFile, {
+        allowMissing: false,
+        label: `managed tool artifact ${entry}`
       });
     }
   }

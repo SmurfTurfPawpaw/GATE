@@ -1,6 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createInterface } from "node:readline/promises";
 import { parseArgs, listFlag, requiredFlag } from "./lib/args.mjs";
+import {
+  applyProgramProfileAnswers,
+  compileProgramProfile,
+  createProgramProfile,
+  loadProgramProfileAnswers,
+  programProfileStatus,
+  resumeProgramProfile,
+  showProgramProfile,
+  verifyProgramProfile
+} from "./lib/bounty-profiles.mjs";
 import { writeJsonAtomic } from "./lib/config.mjs";
 import { runDoctor } from "./lib/doctor.mjs";
 import {
@@ -16,20 +27,60 @@ import {
 } from "./lib/engagements.mjs";
 import {
   createExecutionManifest,
+  createManagedExecutionManifest,
   executeExecutionManifest,
+  reconcileExecution,
   requestEngagementStops,
   requestExecutionStop
 } from "./lib/executions.mjs";
 import { recordEvent } from "./lib/events.mjs";
 import { addLearning } from "./lib/learnings.mjs";
+import {
+  createOfflineAnalysisManifest,
+  executeOfflineAnalysisManifest,
+  offlineAnalysisCapability,
+  offlineAnalysisStatus,
+  purgeOfflineAnalysisArtifact
+} from "./lib/offline-analysis.mjs";
 import { ensureRuntime, runtimePaths } from "./lib/paths.mjs";
 import { checkPublication, publishPullRequest } from "./lib/publication.mjs";
 import { listProjects, registerProject, showProject, verifyProject } from "./lib/projects.mjs";
 import { buildStatus } from "./lib/status.mjs";
-import { toolInventory, toolPlan } from "./lib/tools.mjs";
+import { statusSummary, toolDetailSummary, toolInventorySummary } from "./lib/summaries.mjs";
+import { escapeUnsafeText } from "./lib/text.mjs";
+import { runManagedToolOperation } from "./lib/tool-runtimes.mjs";
+import { toolInventory, toolPlan, toolShow } from "./lib/tools.mjs";
 import { installUpstream, syncUpstream, upstreamStatus } from "./lib/upstreams.mjs";
 import { validateRepository } from "./lib/validation.mjs";
 import { leaseWorkspace, verifyWorkspace, workspaceStatus } from "./lib/workspaces.mjs";
+import {
+  PROGRAM_PROFILE_ACTIONS,
+  PROGRAM_PROFILE_COVERAGE_DOMAINS,
+  PROGRAM_PROFILE_EXECUTION_LIMITS,
+  PROGRAM_PROFILE_QUESTIONS,
+  PROGRAM_PROFILE_SECTIONS,
+  PROGRAM_PROFILE_STOP_CONDITIONS,
+  programProfileQuestionAnswerIsComplete
+} from "./lib/program-profile-contract.mjs";
+import {
+  addWorkflowEvidence,
+  attachWorkflowReport,
+  cancelWorkflowExecution,
+  closeWorkflow,
+  createWorkflowInstance,
+  finishWorkflowPhase,
+  holdWorkflowLedger,
+  joinWorkflowCoverage,
+  openWorkflowLedger,
+  preflightWorkflowPhase,
+  preflightWorkflowPivot,
+  recordWorkflowLedgerCleanup,
+  setWorkflowCoverage,
+  startWorkflowPhase,
+  stopWorkflow,
+  verifyWorkflowLedger,
+  workflowStatus
+} from "./lib/workflow-runtime.mjs";
 
 const help = `GATE — Gateway for Agentic Tooling & Engineering
 
@@ -38,7 +89,7 @@ Usage: gate <command> [options]
 Core
   bootstrap                         Create private runtime directories and verify config
   doctor [--full] [--json]          Inspect the host, repository, and optional integrations
-  status [--json]                   Show activity, tokens, learnings, engagements, and pins
+  status [--summary] [--json]       Show full status or an agent-sized bounded summary
   up [--host 127.0.0.1] [--port 4173]
                                     Run the read-only local cockpit
   validate [--json]                 Validate tracked configuration and pins
@@ -54,6 +105,28 @@ Projects
   project show ID                   Show one registered project contract
   project verify ID                 Verify one registered project contract
 
+Bug bounty program profiles
+  bounty profile create ID [--answers FILE]
+                                    Create a private profile interactively or from answers
+  bounty profile resume ID [--answers FILE]
+                                    Resume the questionnaire or apply another answer file
+  bounty profile status [ID]        Show one profile or the private profile index
+  bounty profile show ID [--format json|review|model-context]
+                                    Render the canonical profile or a bounded derived view
+  bounty profile verify ID          Verify sources, completeness, and compile readiness
+  bounty profile compile ID [--engagement ID] [--workflow ID] [--provider-profile FILE]
+                                    Emit a deterministic no-contact proposed assessment bundle
+
+Offline analysis
+  analysis capability               Check the zero-network Bubblewrap analysis lane
+  analysis manifest --project ID --path EXACT [--minutes N]
+                                    Snapshot one local artifact and bind an offline run
+  analysis run --project ID --manifest ID --confirm "ANALYZE ID SHA256 OFFLINE"
+                                    Execute the one-shot fixed REA adapter manifest
+  analysis purge --project ID --manifest ID --confirm "PURGE ID SHA256 OFFLINE ARTIFACT"
+                                    Purge one retained digest-bound artifact snapshot
+  analysis status                   Show capability and recent offline analysis runs
+
 Workspaces
   workspace lease --repo PATH --task ID --branch REF [--base REF]
                                     Acquire a verified Treehouse lease
@@ -68,13 +141,32 @@ Engagements
   engagement review ID --run RUN --head GIT_SHA --result passed|failed
   engagement approve ID --sha SHA256 --confirm "APPROVE ID"
   engagement check ID --target TARGET --action ACTION
-  engagement manifest ID --target TARGET --action ACTION --tool TOOL --minutes N
-                         --requests N --parallel N --rate N --tokens N -- ARGV...
+  engagement manifest ID --workflow ID --phase-attempt ID --target TARGET --action ACTION --tool TOOL --minutes N
+                         --requests N --parallel N --rate N --tokens N [--evidence-bytes N] -- ARGV...
+  engagement adapter-manifest ID --adapter dnsx-domain-observe|httpx-url-observe --workflow ID
+                         --phase-attempt ID --target TARGET --minutes N --requests 1 --parallel 1 --rate 1
+                         --tokens N [adapter operation flags]
   engagement exec ID --manifest ID --confirm "EXECUTE ID SHA256 UNMETERED"
+  engagement reconcile ID --manifest ID --confirm "RECONCILE EXECUTION ID SHA256"
   engagement stop ID --run RUN
   engagement revoke ID --confirm "REVOKE ID"
   engagement status ID
   engagement close ID
+
+Pentest workflows
+  workflow new ID [--engagement ID]  Create a private map-first workflow instance
+  workflow status ID                 Show the compact journal-derived projection
+  workflow phase preflight ID --phase PHASE --from PHASE --admission FILE [--handoff-id ID] [--handoff FILE]
+  workflow phase start ID --phase PHASE [--from PHASE] [--admission FILE]
+  workflow phase finish ID --phase PHASE --disposition DISPOSITION
+  workflow evidence add ID --phase PHASE --evidence ID --file PATH
+  workflow coverage set ID --domain DOMAIN --disposition DISPOSITION
+  workflow ledger preflight|open|cleanup|verify|hold ID [options]
+  workflow execution cancel ID --reservation ID --reason TEXT
+  workflow stop ID --condition ID --reason TEXT
+  workflow join ID                    Enforce the 18-domain and clean-ledger barrier
+  workflow report ID --file PATH      Attach a content-addressed private report
+  workflow close ID --confirm "CLOSE ID REPORT_SHA256"
 
 Upstreams
   upstream list
@@ -83,8 +175,13 @@ Upstreams
   upstream path ID                     Print its source or package directory
 
 Security tools
-  tool list [--profile ID] [--category ID]
+  tool list [--profile ID] [--category ID] [--summary] [--limit N] [--cursor N]
+  tool show ID                         Show one bounded receipt-only tool projection
   tool plan ID                         Show host, lane, risk, and admission needs
+  tool prefetch ID|--profile ID        Cache reviewed release bytes without activating them
+  tool install ID|--profile ID         Install and zero-egress-smoke reviewed runtimes
+  tool verify ID|--profile ID          Recheck current bytes, lock, platform, and smoke
+  tool remove ID|--profile ID          Remove runtimes; retain cache bytes for re-verification
 
 Publication
   publication check|dry-run --repo OWNER/REPO --pr N --head SHA --run RUN
@@ -110,6 +207,721 @@ function assertPositionals(positional, count, usage) {
   if (positional.length !== count) throw new Error(`expected ${usage}`);
 }
 
+function assertUnambiguousAnalysisArgs(argv) {
+  const seen = new Set();
+  for (const value of argv) {
+    if (value === "--") throw new Error("analysis commands do not accept -- passthrough arguments");
+    if (!value.startsWith("--")) continue;
+    const equals = value.indexOf("=");
+    const name = value.slice(2, equals === -1 ? undefined : equals);
+    if (!name) throw new Error("analysis options must have a name");
+    if (seen.has(name)) throw new Error(`analysis option must not be repeated: --${name}`);
+    seen.add(name);
+  }
+}
+
+function assertBooleanSwitch(flags, name) {
+  if (flags[name] !== undefined && flags[name] !== true) {
+    throw new Error(`--${name} does not accept a value`);
+  }
+}
+
+function assertUnambiguousToolArgs(argv) {
+  const seen = new Set();
+  for (const value of argv) {
+    if (value === "--") throw new Error("tool commands do not accept -- passthrough arguments");
+    if (!value.startsWith("--")) continue;
+    const equals = value.indexOf("=");
+    const name = value.slice(2, equals === -1 ? undefined : equals);
+    if (!name) throw new Error("tool options must have a name");
+    if (seen.has(name)) throw new Error(`tool option must not be repeated: --${name}`);
+    seen.add(name);
+  }
+}
+
+function assertUnambiguousWorkflowArgs(argv) {
+  const seen = new Set();
+  for (const value of argv) {
+    if (value === "--") throw new Error("workflow commands do not accept passthrough arguments");
+    if (!value.startsWith("--")) continue;
+    const equals = value.indexOf("=");
+    const name = value.slice(2, equals === -1 ? undefined : equals);
+    if (!name) throw new Error("workflow options must have a name");
+    if (seen.has(name)) throw new Error(`workflow option must not be repeated: --${name}`);
+    seen.add(name);
+  }
+}
+
+function assertUnambiguousBountyArgs(argv) {
+  const seen = new Set();
+  for (const value of argv) {
+    if (value === "--") throw new Error("bounty profile commands do not accept passthrough arguments");
+    if (!value.startsWith("--")) continue;
+    const equals = value.indexOf("=");
+    const name = value.slice(2, equals === -1 ? undefined : equals);
+    if (!name) throw new Error("bounty profile options must have a name");
+    if (seen.has(name)) throw new Error(`bounty profile option must not be repeated: --${name}`);
+    seen.add(name);
+  }
+}
+
+function profilePathParts(value) {
+  const parts = value.split(".");
+  if (!parts.length || parts.some((part) => !part || new Set(["__proto__", "prototype", "constructor"]).has(part))) {
+    throw new Error(`invalid program-profile question path: ${String(value)}`);
+  }
+  return parts;
+}
+
+function profileValueAt(value, fieldPath) {
+  let current = value;
+  for (const part of profilePathParts(fieldPath)) {
+    if (current === null || typeof current !== "object" || !Object.hasOwn(current, part)) return undefined;
+    current = current[part];
+  }
+  return current;
+}
+
+function questionApplies(question, profile) {
+  if (!question.condition) return true;
+  const actual = profileValueAt(profile, question.condition.path);
+  if (Object.hasOwn(question.condition, "equals")) return actual === question.condition.equals;
+  if (Object.hasOwn(question.condition, "includes")) {
+    return Array.isArray(actual)
+      ? actual.includes(question.condition.includes)
+      : typeof actual === "string" && actual.includes(question.condition.includes);
+  }
+  return false;
+}
+
+function parseQuestionAnswer(question, raw) {
+  const value = raw.trim();
+  if (!value) return undefined;
+  if (question.allowNull === true && value === "null") return null;
+  if (question.type === "boolean") {
+    if (/^(?:y|yes|true|1)$/iu.test(value)) return true;
+    if (/^(?:n|no|false|0)$/iu.test(value)) return false;
+    throw new Error("enter yes or no");
+  }
+  if (question.type === "integer") {
+    if (!/^-?\d+$/u.test(value) || !Number.isSafeInteger(Number(value))) throw new Error("enter a whole number");
+    return Number(value);
+  }
+  if (question.type === "number") {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) throw new Error("enter a finite number");
+    return numeric;
+  }
+  if (question.type === "enum") {
+    const choices = (question.choices || []);
+    if (choices.length && !choices.includes(value)) throw new Error(`choose one of: ${choices.join(", ")}`);
+    return value;
+  }
+  if (question.type === "multi-enum") {
+    const values = value.startsWith("[")
+      ? JSON.parse(value)
+      : value.split(",").map((item) => item.trim()).filter(Boolean);
+    if (!Array.isArray(values) || values.some((item) => typeof item !== "string")) {
+      throw new Error("enter a comma-separated list or JSON string array");
+    }
+    const choices = (question.choices || []);
+    const unsupported = choices.length ? values.filter((item) => !choices.includes(item)) : [];
+    if (unsupported.length) throw new Error(`unsupported choice: ${unsupported.join(", ")}`);
+    return values;
+  }
+  if (question.type === "secret-ref-list") {
+    const values = value.startsWith("[")
+      ? JSON.parse(value)
+      : value.split(",").map((item) => item.trim()).filter(Boolean);
+    if (!Array.isArray(values) || values.some((item) => typeof item !== "string")) {
+      throw new Error("enter symbolic secret references as a comma-separated list or JSON string array");
+    }
+    return values;
+  }
+  if (new Set([
+    "decision", "source-list", "selector-decisions", "action-decisions", "coverage-decisions", "stop-responses",
+    "contact-list", "schedule-windows", "structured-list"
+  ]).has(question.type)) {
+    let structured;
+    try {
+      structured = JSON.parse(value);
+    } catch (error) {
+      throw new Error(`enter valid JSON for this structured answer: ${error.message}`);
+    }
+    return structured;
+  }
+  return value;
+}
+
+async function readMultilineAnswer(terminal, firstLine, terminalOutput) {
+  const lines = [firstLine];
+  terminalOutput.write("Multiline input: enter . on its own line to finish.\n");
+  while (true) {
+    const line = await terminal.question("... ");
+    if (line === ".") return lines.join("\n");
+    lines.push(line);
+  }
+}
+
+function questionHasAnswer(question, profile, answers = null) {
+  if (answers?.answers && typeof answers.answers === "object") {
+    if (!Object.hasOwn(answers.answers, question.id)) return false;
+    return programProfileQuestionAnswerIsComplete(question, answers.answers[question.id]);
+  }
+  return programProfileQuestionAnswerIsComplete(question, profileValueAt(profile, question.path));
+}
+
+function questionSection(question) {
+  const sectionId = question.section || question.sectionId || "profile";
+  return PROGRAM_PROFILE_SECTIONS.find((section) => section.id === sectionId) || { id: sectionId, title: sectionId };
+}
+
+function verificationQuestionIndex(questions, blockers = []) {
+  const blockerPaths = blockers.map((blocker) => blocker.path).filter(Boolean);
+
+  // A broad semantic blocker can precede a more precise ready-contract
+  // blocker for the same field. Resolve the exact field first so resume does
+  // not send the operator to the first sibling below the broad path.
+  const exact = questions.findIndex((question) => blockerPaths.includes(question.path));
+  if (exact !== -1) return exact;
+
+  const nested = questions
+    .map((question, index) => ({ question, index }))
+    .filter(({ question }) => blockerPaths.some((blockerPath) => blockerPath.startsWith(`${question.path}.`)))
+    .sort((left, right) => right.question.path.length - left.question.path.length || left.index - right.index);
+  if (nested.length) return nested[0].index;
+
+  if (blockerPaths.some((blockerPath) => blockerPath === "attestation" || blockerPath.startsWith("attestation."))) {
+    const timestamp = questions.findIndex((question) => question.path === "attestation.attestedAt");
+    if (timestamp !== -1) return timestamp;
+  }
+
+  const broad = questions.findIndex((question) => blockerPaths.some((blockerPath) =>
+    question.path.startsWith(`${blockerPath}.`)
+  ));
+  return broad;
+}
+
+function boundedTerminalValue(value) {
+  const serialized = typeof value === "string" ? value : JSON.stringify(value);
+  const escaped = escapeUnsafeText(serialized ?? String(value)).replace(/[\t\n]/gu, (character) =>
+    character === "\t" ? "\\u0009" : "\\u000A"
+  );
+  return escaped.length <= 160 ? escaped : `${escaped.slice(0, 157)}...`;
+}
+
+function exampleDecision(disposition = "unknown") {
+  return {
+    disposition,
+    claimState: "unverified",
+    sourceRefs: ["program-rules"],
+    rationale: "Replace this example with the exact source-backed decision.",
+    conditions: []
+  };
+}
+
+function exampleStructuredList(question) {
+  const stringLists = {
+    "identity-deliverables": ["Technical vulnerability report"],
+    "identity-success-criteria": ["Every selected coverage domain has a sourced disposition."],
+    "authority-source-refs": ["program-rules"],
+    "limits-source-refs": ["program-rules"],
+    "architecture-unknowns": [],
+    "architecture-source-refs": ["program-rules"],
+    "data-redaction-rules": ["Remove credentials and unrelated personal data."],
+    "data-source-refs": ["program-rules"],
+    "stops-cleanup-steps": ["Remove test data and revoke temporary sessions."],
+    "stops-cleanup-source-refs": ["program-rules"],
+    "reporting-required-sections": ["Summary", "Reproduction", "Impact", "Evidence", "Remediation"],
+    "reporting-source-refs": ["program-rules"],
+    "web-api-entry-points": ["https://app.example.test/"],
+    "web-api-auth-flows": ["OIDC sign-in and account recovery for the recorded test tenant."],
+    "cloud-container-footprint": ["Example Cloud project program-test in region example-1."],
+    "cloud-container-identities": ["Workload identity program-test-runner with its recorded trust relationship."],
+    "mobile-builds": ["Android package test.example.app, version 1.2.3, from the program test channel."],
+    "desktop-artifacts": ["Windows x64 installer version 1.2.3 with the source-recorded SHA-256."],
+    "ai-llm-system-map": ["Hosted model, retrieval store, support agent, and report output consumer."],
+    "ai-llm-input-surfaces": ["Direct chat input and source-backed document ingestion in the test tenant."],
+    "network-identity-ranges": ["192.0.2.0/24 on TCP 443 from the recorded test source address."],
+    "network-identity-systems": ["Test identity provider and VPN with standard-user and administrator tiers."],
+    "wireless-radio-footprint": ["Program lab Wi-Fi on the recorded channel, location, distance, and window."],
+    "wireless-radio-equipment": ["Program-approved adapter and antenna within the recorded power limit."],
+    "human-physical-population": ["Named test site and participating role during the recorded business-hours window."],
+    "human-physical-pretexts": ["Program-approved support message sent only to the recorded participant group."],
+    "embedded-iot-ot-assets": ["Test device model, firmware version, interface, protocol, and isolated lab network."],
+    "embedded-iot-ot-safety": ["Named safety owner, isolated state, maintenance window, and emergency stop procedure."]
+  };
+  if (Object.hasOwn(stringLists, question.id)) return stringLists[question.id];
+
+  const examples = {
+    "actions-techniques": [{
+      id: "header-observation",
+      name: "Observe response headers",
+      action: "observe",
+      ...exampleDecision("allowed"),
+      parameters: { method: "GET" }
+    }],
+    "execution-phase-policies": [{
+      id: "active-web-validation",
+      phaseId: "active-surface-validation",
+      assetRefs: ["primary-web"],
+      actions: ["observe"],
+      allowedToolIds: ["httpx"],
+      deniedToolIds: [],
+      conditions: ["Use the recorded test account only."],
+      claimState: "unverified",
+      sourceRefs: ["program-rules"],
+      limits: {
+        maxMinutes: 60,
+        maxRequests: 500,
+        maxParallel: 2,
+        maxRatePerSecond: 1,
+        maxTokens: 50000,
+        maxSpendUsd: 0
+      }
+    }],
+    "accounts-personas": [{
+      id: "researcher-account",
+      persona: "Researcher",
+      role: "Standard user",
+      environment: "program test tenant",
+      secretRefs: ["env://GATE_TEST_ACCOUNT"],
+      sourceRefs: ["program-rules"]
+    }],
+    "architecture-components": [
+      {
+        id: "browser",
+        name: "Researcher browser",
+        type: "client",
+        claimState: "unverified",
+        sourceRefs: ["program-rules"]
+      },
+      {
+        id: "web-api",
+        name: "Program web API",
+        type: "service",
+        claimState: "unverified",
+        sourceRefs: ["program-rules"]
+      }
+    ],
+    "architecture-trust-boundaries": [{
+      id: "browser-to-api",
+      from: "browser",
+      to: "web-api",
+      description: "Public TLS boundary.",
+      claimState: "unverified",
+      sourceRefs: ["program-rules"]
+    }],
+    "architecture-data-flows": [{
+      id: "request-flow",
+      from: "browser",
+      to: "web-api",
+      dataClassification: "confidential",
+      description: "Research account requests and responses.",
+      claimState: "unverified",
+      sourceRefs: ["program-rules"]
+    }],
+    "ambiguities-items": []
+  };
+  if (Object.hasOwn(examples, question.id)) return examples[question.id];
+
+  return [{
+    item: "Replace this example with the exact source-backed detail requested by the prompt.",
+    sourceRefs: ["program-rules"]
+  }];
+}
+
+function questionFormatGuidance(question) {
+  let accepted;
+  let example;
+  switch (question.type) {
+    case "text": {
+      const examples = {
+        "identity-program-name": "Acme bug bounty",
+        "authority-program-url": "https://program.example.test/rules",
+        "limits-timezone": "Etc/UTC",
+        "reporting-severity-standard": "CVSS 4.0 with program-specific overrides",
+        "attestation-operator": "local-operator"
+      };
+      accepted = "plain text on one line";
+      example = examples[question.id] || "Recorded value";
+      break;
+    }
+    case "multiline":
+      accepted = "plain text; finish multiline input with . on its own line";
+      example = "Describe the exact source-backed rule.";
+      break;
+    case "boolean":
+      accepted = "yes or no (also accepts true/false or 1/0)";
+      example = "yes";
+      break;
+    case "integer": {
+      const examples = {
+        "limits-max-minutes": "60",
+        "limits-max-requests": "1000",
+        "limits-max-parallel": "2",
+        "limits-max-tokens": "50000",
+        "data-retention-days": "30"
+      };
+      accepted = question.allowNull ? "a whole number, or null" : "a whole number";
+      example = examples[question.id] || "1";
+      break;
+    }
+    case "number":
+      accepted = question.allowNull ? "a finite number, or null" : "a finite number";
+      example = "2.5";
+      break;
+    case "datetime": {
+      const examples = {
+        "authority-valid-from": "2026-01-01T00:00:00Z",
+        "authority-valid-until": "2026-12-01T00:00:00Z",
+        "authority-last-verified": "2026-10-01T00:00:00Z",
+        "attestation-at": "2026-10-01T00:00:00Z"
+      };
+      accepted = question.allowNull ? "an ISO 8601 date-time, or null" : "an ISO 8601 date-time";
+      example = examples[question.id] || "2026-10-01T00:00:00Z";
+      break;
+    }
+    case "enum":
+      accepted = `one exact value: ${(question.choices || []).join(", ")}`;
+      example = question.id === "data-classification" ? "confidential" : question.choices?.[0] || "value";
+      break;
+    case "multi-enum":
+      accepted = `a comma-separated list or JSON string array using: ${(question.choices || []).join(", ")}`;
+      example = question.choices?.length ? [question.choices[0]] : [];
+      break;
+    case "secret-ref-list":
+      accepted = "a comma-separated list or JSON string array of env://, keychain://, or file:// references";
+      example = ["env://GATE_TEST_ACCOUNT"];
+      break;
+    case "decision":
+      accepted = "a JSON decision object with disposition, claimState, sourceRefs, rationale, and conditions";
+      example = exampleDecision();
+      break;
+    case "source-list":
+      accepted = "a JSON array of source records";
+      example = [{
+        id: "program-rules",
+        type: "program-rules",
+        title: "Published program rules",
+        reference: "https://program.example.test/rules",
+        contentSha256: "a".repeat(64),
+        observedAt: "2026-10-01T00:00:00Z",
+        claimState: "observed",
+        notes: "Captured in operator-controlled private storage."
+      }];
+      break;
+    case "selector-decisions":
+      accepted = "a JSON array of exact asset selectors and their decisions";
+      example = [{
+        id: "primary-web",
+        selector: { type: "url", value: "https://app.example.test/" },
+        ...exampleDecision("allowed"),
+        actionOverrides: Object.fromEntries(PROGRAM_PROFILE_ACTIONS.map((action) => [
+          action,
+          exampleDecision(action === "observe" ? "allowed" : "unknown")
+        ])),
+        limitOverrides: Object.fromEntries(PROGRAM_PROFILE_EXECUTION_LIMITS.map((limit) => [limit, ({
+          maxMinutes: 60,
+          maxRequests: 500,
+          maxParallel: 2,
+          maxRatePerSecond: 1,
+          maxTokens: 50000,
+          maxSpendUsd: 0
+        })[limit]]))
+      }];
+      break;
+    case "action-decisions":
+      accepted = "a JSON object containing every action class and its decision";
+      example = Object.fromEntries(PROGRAM_PROFILE_ACTIONS.map((action) => [
+        action,
+        exampleDecision(action === "observe" ? "allowed" : "unknown")
+      ]));
+      break;
+    case "coverage-decisions":
+      accepted = "a JSON object containing every coverage domain and its decision";
+      example = Object.fromEntries(PROGRAM_PROFILE_COVERAGE_DOMAINS.map((domain) => [domain, exampleDecision()]));
+      break;
+    case "stop-responses":
+      accepted = "a JSON object containing every mandatory stop condition and response";
+      example = Object.fromEntries(PROGRAM_PROFILE_STOP_CONDITIONS.map((condition) => [condition, {
+        enabled: true,
+        response: `Stop affected work on ${condition}, preserve bounded evidence, and escalate.`,
+        claimState: "unverified",
+        sourceRefs: ["program-rules"]
+      }]));
+      break;
+    case "contact-list":
+      accepted = "a JSON array of contact records";
+      example = [{
+        name: "Program security team",
+        role: "Escalation contact",
+        channel: "platform://program-inbox",
+        purpose: "Receive incident escalation and vulnerability reports.",
+        sourceRefs: ["program-rules"]
+      }];
+      break;
+    case "schedule-windows":
+      accepted = "a JSON array of day and UTC/local-time windows";
+      example = [{ days: ["monday", "tuesday"], start: "09:00", end: "17:00" }];
+      break;
+    case "structured-list":
+      accepted = question.module
+        ? "a non-empty JSON array matching the records requested by this prompt"
+        : "a JSON array matching the records requested by this prompt; use [] when the recorded answer is none and the field permits it";
+      example = exampleStructuredList(question);
+      break;
+    default:
+      accepted = question.type;
+      example = "value";
+  }
+  const rendered = typeof example === "string" ? example : JSON.stringify(example, null, 2);
+  const guidance = [
+    `Accepted format: ${accepted}.`,
+    "Example only; replace every sample value with the exact recorded facts:",
+    rendered
+  ];
+  if (question.allowNull === true) guidance.push("Alternative: null");
+  return guidance.join("\n");
+}
+
+function applicableQuestionProgress(questions, profile, index) {
+  const applicable = questions
+    .map((question, questionIndex) => ({ question, questionIndex }))
+    .filter(({ question }) => questionApplies(question, profile));
+  const position = applicable.findIndex(({ questionIndex }) => questionIndex === index);
+  return { position: position === -1 ? 0 : position + 1, total: applicable.length };
+}
+
+function questionnaireResult(status, outcome) {
+  const blockerCount = Array.isArray(status.blockers)
+    ? status.blockers.length
+    : status.profile?.blockerCount || 0;
+  return {
+    saved: true,
+    outcome,
+    id: status.id,
+    status: status.status,
+    ready: status.ready === true,
+    structuralValid: status.structuralValid === true,
+    blockerCount,
+    warningCount: Array.isArray(status.warnings) ? status.warnings.length : 0,
+    profileRef: status.profile?.profileRef || null,
+    profileSha256: status.profileSha256 || status.profile?.profileSha256 || null,
+    nextCommand: status.ready
+      ? `./bin/gate.mjs bounty profile verify ${status.id}`
+      : `./bin/gate.mjs bounty profile resume ${status.id}`
+  };
+}
+
+function newProgramProfileAnswers(id) {
+  return {
+    $schema: "https://gate.local/schemas/bug-bounty-program-profile-answers.schema.json",
+    apiVersion: "gate.dev/program-profile-answers/v1",
+    kind: "BugBountyProgramProfileAnswers",
+    metadata: {
+      programId: id,
+      title: id,
+      updatedAt: new Date().toISOString()
+    },
+    answers: {}
+  };
+}
+
+async function runProgramProfileQuestionnaire(id, mode, options = {}) {
+  const input = options.input || process.stdin;
+  const terminalOutput = options.output || process.stderr;
+  const interactive = options.interactive ?? (input.isTTY === true && terminalOutput.isTTY === true);
+  if (!interactive) {
+    throw new Error("interactive bug-bounty profile questionnaire requires a TTY; pass --answers FILE for headless use");
+  }
+  const paths = options.paths;
+  if (mode === "create") createProgramProfile(id, newProgramProfileAnswers(id), { paths });
+
+  let resumed = resumeProgramProfile(id, { paths });
+  let profile = resumed.profile;
+  let answers = resumed.answers || newProgramProfileAnswers(id);
+  const questions = PROGRAM_PROFILE_QUESTIONS;
+  let index = questions.findIndex((question) =>
+    question.required && questionApplies(question, profile) && !questionHasAnswer(question, profile, answers)
+  );
+  if (index === -1) {
+    const verification = verifyProgramProfile(id, { paths });
+    index = verificationQuestionIndex(questions, verification.blockers || []);
+    if (index === -1) index = questions.findIndex((question) => question.path.startsWith("attestation."));
+    if (index === -1) index = 0;
+    terminalOutput.write(
+      verification.ready
+        ? `All required answers are recorded. Opening ${questions[index].id} for review; use edit QUESTION_ID to change another answer.\n`
+        : `All required answers are recorded. Verification still has ${verification.blockers?.length || 0} blocker(s); opening ${questions[index].id} for review.\n`
+    );
+  } else if (mode === "resume") {
+    terminalOutput.write(`Resuming at unanswered required question: ${questions[index].id}.\n`);
+  }
+  const terminal = createInterface({ input, output: terminalOutput, terminal: options.terminal ?? true });
+  terminalOutput.write("Commands: back, edit QUESTION_ID, why, format, save, quit. Structured answers use JSON.\n");
+
+  try {
+    while (index < questions.length) {
+      const question = questions[index];
+      if (!questionApplies(question, profile)) {
+        index += 1;
+        continue;
+      }
+      const section = questionSection(question);
+      const choices = (question.choices || []);
+      const current = profileValueAt(profile, question.path);
+      const recorded = questionHasAnswer(question, profile, answers);
+      const currentHint = current === undefined || question.sensitive
+        ? ""
+        : recorded
+          ? ` [current: ${boundedTerminalValue(current)}]`
+          : ` [unconfirmed draft: ${boundedTerminalValue(current)}; enter explicitly to confirm]`;
+      const choiceHint = choices.length ? ` (${choices.join(" | ")})` : "";
+      const requiredHint = question.required ? " [required]" : "";
+      const multilineHint = question.type === "multiline" ? " [multiline; finish with . on its own line]" : "";
+      const progress = applicableQuestionProgress(questions, profile, index);
+      const raw = await terminal.question(
+        `\n${section.title} · ${progress.position}/${progress.total} applicable · ${question.id}\n${question.prompt}${choiceHint}${requiredHint}${multilineHint}${currentHint}\n> `
+      );
+      const command = raw.trim();
+      if (command === "why") {
+        terminalOutput.write(`${question.why || "This answer is required to produce an exact, bounded assessment profile."}\n`);
+        continue;
+      }
+      if (command === "format") {
+        terminalOutput.write(`${questionFormatGuidance(question)}\n`);
+        continue;
+      }
+      if (command === "save") {
+        terminalOutput.write("Saved. Every accepted answer is already persisted privately.\n");
+        continue;
+      }
+      if (command === "quit") {
+        return questionnaireResult(programProfileStatus(id, { paths }), "saved");
+      }
+      if (command === "back") {
+        index = Math.max(0, index - 1);
+        while (index > 0 && !questionApplies(questions[index], profile)) index -= 1;
+        continue;
+      }
+      if (command.startsWith("edit ")) {
+        const wanted = command.slice(5).trim();
+        const editIndex = questions.findIndex((entry) => entry.id === wanted);
+        if (editIndex === -1) {
+          terminalOutput.write(`Unknown question id: ${wanted}\n`);
+          continue;
+        }
+        index = editIndex;
+        continue;
+      }
+      if (!command) {
+        if (question.required && !questionHasAnswer(question, profile, answers)) {
+          terminalOutput.write("This answer is required. Enter a value, or type save or quit.\n");
+          continue;
+        }
+        index += 1;
+        continue;
+      }
+      let answer;
+      try {
+        const answerInput = question.type === "multiline"
+          ? await readMultilineAnswer(terminal, raw, terminalOutput)
+          : raw;
+        answer = parseQuestionAnswer(question, answerInput);
+        if (question.required && !programProfileQuestionAnswerIsComplete(question, answer)) {
+          throw new Error("enter a substantive non-empty answer for this required question");
+        }
+      } catch (error) {
+        terminalOutput.write(`${error.message}\n`);
+        continue;
+      }
+      const updatedAnswers = structuredClone(answers);
+      updatedAnswers.metadata.programId = id;
+      updatedAnswers.metadata.updatedAt = new Date().toISOString();
+      updatedAnswers.answers[question.id] = answer;
+      try {
+        applyProgramProfileAnswers(id, updatedAnswers, { paths });
+      } catch (error) {
+        terminalOutput.write(`Answer was not accepted: ${error.message}\n`);
+        continue;
+      }
+      resumed = resumeProgramProfile(id, { paths });
+      profile = resumed.profile;
+      answers = resumed.answers || updatedAnswers;
+      terminalOutput.write(`Saved ${question.id}.\n`);
+      index += 1;
+    }
+  } finally {
+    terminal.close();
+  }
+  return questionnaireResult(programProfileStatus(id, { paths }), "questions-complete");
+}
+
+export const cliInternals = Object.freeze({
+  applicableQuestionProgress,
+  boundedTerminalValue,
+  questionFormatGuidance,
+  questionnaireResult,
+  questionHasAnswer,
+  runProgramProfileQuestionnaire,
+  verificationQuestionIndex
+});
+
+function optionalValueFlag(flags, name) {
+  if (flags[name] === undefined) return undefined;
+  if (typeof flags[name] !== "string" || !flags[name].trim()) throw new Error(`--${name} needs a value`);
+  return flags[name];
+}
+
+function workflowMutationOptions(flags, paths) {
+  const expectedSequence = optionalValueFlag(flags, "expected-sequence");
+  return {
+    paths,
+    requestId: optionalValueFlag(flags, "request"),
+    expectedSequence: expectedSequence === undefined ? undefined : Number(expectedSequence),
+    expectedHead: optionalValueFlag(flags, "expected-head")
+  };
+}
+
+function workflowCommit(result) {
+  const payload = result.entry.payload;
+  const details = (() => {
+    switch (result.entry.type) {
+      case "phase.started": return { phaseId: payload.phaseId, attemptId: payload.attemptId };
+      case "phase.finished": return { phaseId: payload.phaseId, disposition: payload.disposition };
+      case "evidence.added": return { evidenceId: payload.evidenceId, sha256: payload.sha256 };
+      case "coverage.set": return { domain: payload.domain, disposition: payload.disposition };
+      case "ledger.opened": return { entryId: payload.entryId };
+      case "ledger.cleanup-recorded":
+      case "ledger.verified":
+      case "ledger.held": return { entryId: payload.entryId };
+      case "execution.cancelled": return { reservationId: payload.reservationId };
+      case "stop.triggered": return { condition: payload.condition };
+      case "coverage.joined": return { coverageSha256: payload.coverageSha256 };
+      case "report.attached": return { reportSha256: payload.sha256 };
+      case "workflow.closed": return { reportSha256: payload.reportSha256 };
+      default: return {};
+    }
+  })();
+  return {
+    ok: true,
+    instanceId: result.projection.instanceId,
+    status: result.projection.status,
+    event: {
+      type: result.entry.type,
+      sequence: result.entry.sequence,
+      headSha256: result.entry.entrySha256,
+      requestId: result.entry.requestId,
+      replayed: result.replayed,
+      details
+    },
+    activePhaseId: result.projection.activePhase?.phaseId || null,
+    coverageCount: Object.keys(result.projection.coverage).length,
+    ledgerEntries: Object.keys(result.projection.ledger).length
+  };
+}
+
 function printValidation(validation, json) {
   if (json) return output(validation, true);
   for (const check of validation.checks) {
@@ -126,6 +938,11 @@ function printDoctor(doctor, json) {
     process.stdout.write(`${state}\t${tool.id}\t${tool.version || "unavailable"}\n`);
   }
   process.stdout.write(`config\t${doctor.repository.ok ? "valid" : "invalid"}\n`);
+  if (doctor.toolRuntimes) {
+    process.stdout.write(
+      `tool-runtimes\tcatalog=${doctor.toolRuntimes.catalog} locked=${doctor.toolRuntimes.locked} installed=${doctor.toolRuntimes.installed} verified=${doctor.toolRuntimes.verified} executable=${doctor.toolRuntimes.executable} unresolved=${doctor.toolRuntimes.unresolved}\n`
+    );
+  }
   if (doctor.capabilities) {
     const { capture, debugger: debuggerCapability, usb, containers } = doctor.capabilities;
     process.stdout.write(`capture\tinterfaces=${capture.nonLoopbackInterfaceCount} cap_net_raw=${capture.rawSocketCapability ?? "unknown"} cap_net_admin=${capture.networkAdminCapability ?? "unknown"}\n`);
@@ -211,9 +1028,12 @@ export async function main(argv) {
   }
 
   if (command === "status") {
-    assertFlags(parsed.flags, ["json"]);
-    assertPositionals(parsed.positional, 0, "gate status [--json]");
-    return output(await buildStatus({ paths }), json);
+    assertFlags(parsed.flags, ["summary", "json"]);
+    assertBooleanSwitch(parsed.flags, "summary");
+    assertBooleanSwitch(parsed.flags, "json");
+    assertPositionals(parsed.positional, 0, "gate status [--summary] [--json]");
+    const status = await buildStatus({ paths });
+    return output(parsed.flags.summary === true ? statusSummary(status) : status, json);
   }
 
   if (command === "up") {
@@ -256,6 +1076,145 @@ export async function main(argv) {
       return;
     }
     throw new Error(`unknown project action: ${action}`);
+  }
+
+  if (command === "bounty") {
+    assertUnambiguousBountyArgs(rest);
+    const [area, action, id] = parsed.positional;
+    if (area !== "profile") throw new Error(`unknown bounty area: ${area || "missing"}`);
+    if (!action) throw new Error("bounty profile action is required");
+    assertBooleanSwitch(parsed.flags, "json");
+
+    if (new Set(["create", "resume"]).has(action)) {
+      assertPositionals(parsed.positional, 3, `gate bounty profile ${action} ID [--answers FILE]`);
+      assertFlags(parsed.flags, ["answers", "json"]);
+      if (!id) throw new Error("program profile id is required");
+      const answersFile = optionalValueFlag(parsed.flags, "answers");
+      if (answersFile) {
+        const answers = loadProgramProfileAnswers(answersFile, { paths });
+        const result = action === "create"
+          ? createProgramProfile(id, answers, { paths })
+          : applyProgramProfileAnswers(id, answers, { paths });
+        return output(result, json);
+      }
+      return output(await runProgramProfileQuestionnaire(id, action, { paths }), json);
+    }
+
+    if (action === "status") {
+      if (parsed.positional.length < 2 || parsed.positional.length > 3) {
+        throw new Error("expected gate bounty profile status [ID]");
+      }
+      assertFlags(parsed.flags, ["json"]);
+      return output(programProfileStatus(id || null, { paths }), json);
+    }
+
+    if (action === "show") {
+      assertPositionals(parsed.positional, 3, "gate bounty profile show ID [--format json|review|model-context]");
+      assertFlags(parsed.flags, ["format", "json"]);
+      if (!id) throw new Error("program profile id is required");
+      const format = optionalValueFlag(parsed.flags, "format") || (json ? "json" : "review");
+      if (!new Set(["json", "review", "model-context"]).has(format)) {
+        throw new Error("--format must be json, review, or model-context");
+      }
+      return output(showProgramProfile(id, { paths, format }), json);
+    }
+
+    if (action === "verify") {
+      assertPositionals(parsed.positional, 3, "gate bounty profile verify ID");
+      assertFlags(parsed.flags, ["json"]);
+      if (!id) throw new Error("program profile id is required");
+      const result = verifyProgramProfile(id, { paths });
+      output(result, json);
+      if (!result.ok || !result.ready) process.exitCode = 2;
+      return;
+    }
+
+    if (action === "compile") {
+      assertPositionals(
+        parsed.positional,
+        3,
+        "gate bounty profile compile ID [--engagement ID] [--workflow ID] [--provider-profile FILE]"
+      );
+      assertFlags(parsed.flags, ["engagement", "workflow", "provider-profile", "json"]);
+      if (!id) throw new Error("program profile id is required");
+      const providerProfile = optionalValueFlag(parsed.flags, "provider-profile");
+      const result = compileProgramProfile(
+        id,
+        {
+          engagementId: optionalValueFlag(parsed.flags, "engagement"),
+          workflowId: optionalValueFlag(parsed.flags, "workflow"),
+          providerProfile
+        },
+        { paths }
+      );
+      output(result, json);
+      if (!result.ok || !result.ready || (providerProfile && !result.routeReady)) process.exitCode = 2;
+      return;
+    }
+
+    throw new Error(`unknown bounty profile action: ${action}`);
+  }
+
+  if (command === "analysis") {
+    assertUnambiguousAnalysisArgs(rest);
+    const [action] = parsed.positional;
+    if (!action) throw new Error("analysis action is required");
+    assertPositionals(parsed.positional, 1, "gate analysis capability|manifest|run|purge|status [options]");
+    assertBooleanSwitch(parsed.flags, "json");
+    if (action === "capability") {
+      assertFlags(parsed.flags, ["json"]);
+      const capability = offlineAnalysisCapability({ paths });
+      output(capability, json);
+      if (!capability.laneAvailable) process.exitCode = 2;
+      return;
+    }
+    if (action === "manifest") {
+      assertFlags(parsed.flags, ["project", "path", "minutes", "json"]);
+      return output(
+        createOfflineAnalysisManifest(
+          requiredFlag(parsed.flags, "project"),
+          {
+            path: requiredFlag(parsed.flags, "path"),
+            maxMinutes: optionalValueFlag(parsed.flags, "minutes")
+          },
+          { paths }
+        ),
+        json
+      );
+    }
+    if (action === "run") {
+      assertFlags(parsed.flags, ["project", "manifest", "confirm", "json"]);
+      const result = await executeOfflineAnalysisManifest(
+        requiredFlag(parsed.flags, "project"),
+        {
+          manifestId: requiredFlag(parsed.flags, "manifest"),
+          confirm: requiredFlag(parsed.flags, "confirm")
+        },
+        { paths }
+      );
+      output(result, json);
+      if (!result.ok) process.exitCode = 2;
+      return;
+    }
+    if (action === "purge") {
+      assertFlags(parsed.flags, ["project", "manifest", "confirm", "json"]);
+      return output(
+        purgeOfflineAnalysisArtifact(
+          requiredFlag(parsed.flags, "project"),
+          {
+            manifestId: requiredFlag(parsed.flags, "manifest"),
+            confirm: requiredFlag(parsed.flags, "confirm")
+          },
+          { paths }
+        ),
+        json
+      );
+    }
+    if (action === "status") {
+      assertFlags(parsed.flags, ["json"]);
+      return output(offlineAnalysisStatus({ paths }), json);
+    }
+    throw new Error(`unknown analysis action: ${action}`);
   }
 
   if (command === "workspace") {
@@ -415,7 +1374,10 @@ export async function main(argv) {
       return;
     }
     if (action === "manifest") {
-      assertFlags(parsed.flags, ["target", "action", "tool", "minutes", "requests", "parallel", "rate", "tokens", "json"]);
+      assertFlags(parsed.flags, [
+        "workflow", "phase-attempt", "target", "action", "tool", "minutes", "requests", "parallel", "rate",
+        "tokens", "evidence-bytes", "json"
+      ]);
       if (parsed.passthrough.length === 0) {
         throw new Error("manifest command arguments are required after --");
       }
@@ -423,6 +1385,8 @@ export async function main(argv) {
         createExecutionManifest(
           id,
           {
+            workflowId: requiredFlag(parsed.flags, "workflow"),
+            phaseAttemptId: requiredFlag(parsed.flags, "phase-attempt"),
             target: requiredFlag(parsed.flags, "target"),
             action: requiredFlag(parsed.flags, "action"),
             toolId: requiredFlag(parsed.flags, "tool"),
@@ -431,17 +1395,75 @@ export async function main(argv) {
             estimatedRequests: requiredFlag(parsed.flags, "requests"),
             maxParallel: requiredFlag(parsed.flags, "parallel"),
             maxRatePerSecond: requiredFlag(parsed.flags, "rate"),
-            maxTokens: requiredFlag(parsed.flags, "tokens")
+            maxTokens: requiredFlag(parsed.flags, "tokens"),
+            maxEvidenceBytes: optionalValueFlag(parsed.flags, "evidence-bytes")
           },
           { paths }
         ),
         json
       );
     }
+    if (action === "adapter-manifest") {
+      if (parsed.passthrough.length > 0) throw new Error("adapter-manifest does not accept raw command arguments");
+      const adapterId = requiredFlag(parsed.flags, "adapter");
+      const common = [
+        "adapter", "workflow", "phase-attempt", "target", "minutes", "requests", "parallel", "rate",
+        "tokens", "evidence-bytes", "timeout-seconds", "json"
+      ];
+      let operation;
+      if (adapterId === "dnsx-domain-observe") {
+        assertFlags(parsed.flags, [...common, "record-type", "resolver"]);
+        operation = {
+          kind: "dns-query",
+          recordType: requiredFlag(parsed.flags, "record-type"),
+          resolver: requiredFlag(parsed.flags, "resolver"),
+          timeoutSeconds: Number(requiredFlag(parsed.flags, "timeout-seconds"))
+        };
+      } else if (adapterId === "httpx-url-observe") {
+        assertFlags(parsed.flags, [...common, "method", "allowed-ip", "max-response-bytes"]);
+        operation = {
+          kind: "http-get",
+          method: requiredFlag(parsed.flags, "method"),
+          allowedIp: requiredFlag(parsed.flags, "allowed-ip"),
+          timeoutSeconds: Number(requiredFlag(parsed.flags, "timeout-seconds")),
+          maxResponseBytes: Number(requiredFlag(parsed.flags, "max-response-bytes"))
+        };
+      } else {
+        throw new Error(`unknown managed target-contact adapter: ${adapterId}`);
+      }
+      return output(createManagedExecutionManifest(id, {
+        adapterId,
+        workflowId: requiredFlag(parsed.flags, "workflow"),
+        phaseAttemptId: requiredFlag(parsed.flags, "phase-attempt"),
+        target: requiredFlag(parsed.flags, "target"),
+        operation,
+        maxMinutes: requiredFlag(parsed.flags, "minutes"),
+        estimatedRequests: requiredFlag(parsed.flags, "requests"),
+        maxParallel: requiredFlag(parsed.flags, "parallel"),
+        maxRatePerSecond: requiredFlag(parsed.flags, "rate"),
+        maxTokens: requiredFlag(parsed.flags, "tokens"),
+        maxEvidenceBytes: optionalValueFlag(parsed.flags, "evidence-bytes")
+      }, { paths }), json);
+    }
     if (action === "exec") {
       assertFlags(parsed.flags, ["manifest", "confirm", "json"]);
       if (parsed.passthrough.length > 0) throw new Error("engagement exec does not accept command arguments");
       const result = await executeExecutionManifest(
+        id,
+        {
+          manifestId: requiredFlag(parsed.flags, "manifest"),
+          confirm: requiredFlag(parsed.flags, "confirm")
+        },
+        { paths }
+      );
+      output(result, json);
+      if (!result.ok) process.exitCode = 2;
+      return;
+    }
+    if (action === "reconcile") {
+      assertFlags(parsed.flags, ["manifest", "confirm", "json"]);
+      if (parsed.passthrough.length > 0) throw new Error("engagement reconcile does not accept command arguments");
+      const result = reconcileExecution(
         id,
         {
           manifestId: requiredFlag(parsed.flags, "manifest"),
@@ -479,6 +1501,181 @@ export async function main(argv) {
       return output(closeEngagement(id, { paths }), json);
     }
     throw new Error(`unknown engagement action: ${action}`);
+  }
+
+  if (command === "workflow") {
+    assertUnambiguousWorkflowArgs(rest);
+    assertBooleanSwitch(parsed.flags, "json");
+    const [area, actionOrId, maybeId] = parsed.positional;
+    const mutationFlags = ["request", "expected-sequence", "expected-head", "json"];
+    if (area === "new") {
+      assertPositionals(parsed.positional, 2, "gate workflow new ID [--engagement ID]");
+      assertFlags(parsed.flags, ["engagement", "request", "json"]);
+      const result = createWorkflowInstance(actionOrId, {
+        engagementId: optionalValueFlag(parsed.flags, "engagement")
+      }, workflowMutationOptions(parsed.flags, paths));
+      return output(result, json);
+    }
+    if (area === "status") {
+      assertPositionals(parsed.positional, 2, "gate workflow status ID");
+      assertFlags(parsed.flags, ["json"]);
+      const result = workflowStatus(actionOrId, { paths });
+      output(result, json);
+      if (!result.ok) process.exitCode = 2;
+      return;
+    }
+    if (area === "phase" && actionOrId === "preflight") {
+      assertPositionals(parsed.positional, 3, "gate workflow phase preflight ID --phase PHASE --from PHASE --admission FILE [--handoff-id ID] [--handoff FILE]");
+      assertFlags(parsed.flags, ["phase", "from", "admission", "handoff", "handoff-id", "json"]);
+      const result = preflightWorkflowPhase(maybeId, {
+        phaseId: requiredFlag(parsed.flags, "phase"),
+        sourcePhase: optionalValueFlag(parsed.flags, "from"),
+        admissionFile: requiredFlag(parsed.flags, "admission"),
+        handoffFile: optionalValueFlag(parsed.flags, "handoff"),
+        handoffId: optionalValueFlag(parsed.flags, "handoff-id")
+      }, { paths });
+      return output(result, json);
+    }
+    if (area === "phase" && actionOrId === "start") {
+      assertPositionals(parsed.positional, 3, "gate workflow phase start ID --phase PHASE [options]");
+      assertFlags(parsed.flags, [
+        "phase", "from", "admission", "handoff", "handoff-id", "confirm", ...mutationFlags
+      ]);
+      const result = startWorkflowPhase(maybeId, {
+        phaseId: requiredFlag(parsed.flags, "phase"),
+        sourcePhase: optionalValueFlag(parsed.flags, "from"),
+        admissionFile: optionalValueFlag(parsed.flags, "admission"),
+        handoffFile: optionalValueFlag(parsed.flags, "handoff"),
+        handoffId: optionalValueFlag(parsed.flags, "handoff-id"),
+        confirm: optionalValueFlag(parsed.flags, "confirm")
+      }, workflowMutationOptions(parsed.flags, paths));
+      return output(workflowCommit(result), json);
+    }
+    if (area === "phase" && actionOrId === "finish") {
+      assertPositionals(parsed.positional, 3, "gate workflow phase finish ID --phase PHASE --disposition DISPOSITION");
+      assertFlags(parsed.flags, ["phase", "disposition", "rationale", "evidence-sha", ...mutationFlags]);
+      const result = finishWorkflowPhase(maybeId, {
+        phaseId: requiredFlag(parsed.flags, "phase"),
+        disposition: requiredFlag(parsed.flags, "disposition"),
+        rationale: optionalValueFlag(parsed.flags, "rationale"),
+        evidenceSha256: listFlag(parsed.flags, "evidence-sha")
+      }, workflowMutationOptions(parsed.flags, paths));
+      return output(workflowCommit(result), json);
+    }
+    if (area === "evidence" && actionOrId === "add") {
+      assertPositionals(parsed.positional, 3, "gate workflow evidence add ID --phase PHASE --evidence ID --file PATH");
+      assertFlags(parsed.flags, ["phase", "evidence", "file", "claim", ...mutationFlags]);
+      const result = addWorkflowEvidence(maybeId, {
+        phaseId: requiredFlag(parsed.flags, "phase"),
+        evidenceId: requiredFlag(parsed.flags, "evidence"),
+        file: requiredFlag(parsed.flags, "file"),
+        claimState: optionalValueFlag(parsed.flags, "claim")
+      }, workflowMutationOptions(parsed.flags, paths));
+      return output(workflowCommit(result), json);
+    }
+    if (area === "coverage" && actionOrId === "set") {
+      assertPositionals(parsed.positional, 3, "gate workflow coverage set ID --domain DOMAIN --disposition DISPOSITION");
+      assertFlags(parsed.flags, ["domain", "disposition", "evidence-sha", "rationale", ...mutationFlags]);
+      const result = setWorkflowCoverage(maybeId, {
+        domain: requiredFlag(parsed.flags, "domain"),
+        disposition: requiredFlag(parsed.flags, "disposition"),
+        evidenceSha256: listFlag(parsed.flags, "evidence-sha"),
+        rationale: optionalValueFlag(parsed.flags, "rationale")
+      }, workflowMutationOptions(parsed.flags, paths));
+      return output(workflowCommit(result), json);
+    }
+    if (area === "ledger" && actionOrId === "preflight") {
+      assertPositionals(parsed.positional, 3, "gate workflow ledger preflight ID --type pivot [options]");
+      assertFlags(parsed.flags, ["type", "target-sha", "before-sha", "cleanup", "pivot-admission", "json"]);
+      const result = preflightWorkflowPivot(maybeId, {
+        changeType: requiredFlag(parsed.flags, "type"),
+        targetSelectorSha256: requiredFlag(parsed.flags, "target-sha"),
+        beforeEvidenceSha256: requiredFlag(parsed.flags, "before-sha"),
+        cleanupAction: requiredFlag(parsed.flags, "cleanup"),
+        pivotAdmissionFile: requiredFlag(parsed.flags, "pivot-admission")
+      }, { paths });
+      return output(result, json);
+    }
+    if (area === "ledger" && actionOrId === "open") {
+      assertPositionals(parsed.positional, 3, "gate workflow ledger open ID [options]");
+      assertFlags(parsed.flags, [
+        "type", "target-sha", "before-sha", "cleanup", "pivot-admission", "pivot-confirm", ...mutationFlags
+      ]);
+      const result = openWorkflowLedger(maybeId, {
+        changeType: requiredFlag(parsed.flags, "type"),
+        targetSelectorSha256: requiredFlag(parsed.flags, "target-sha"),
+        beforeEvidenceSha256: requiredFlag(parsed.flags, "before-sha"),
+        cleanupAction: requiredFlag(parsed.flags, "cleanup"),
+        pivotAdmissionFile: optionalValueFlag(parsed.flags, "pivot-admission"),
+        pivotConfirm: optionalValueFlag(parsed.flags, "pivot-confirm")
+      }, workflowMutationOptions(parsed.flags, paths));
+      return output(workflowCommit(result), json);
+    }
+    if (area === "ledger" && actionOrId === "cleanup") {
+      assertPositionals(parsed.positional, 3, "gate workflow ledger cleanup ID --entry ID --evidence-sha SHA256");
+      assertFlags(parsed.flags, ["entry", "evidence-sha", ...mutationFlags]);
+      const result = recordWorkflowLedgerCleanup(maybeId, {
+        entryId: requiredFlag(parsed.flags, "entry"),
+        cleanupEvidenceSha256: requiredFlag(parsed.flags, "evidence-sha")
+      }, workflowMutationOptions(parsed.flags, paths));
+      return output(workflowCommit(result), json);
+    }
+    if (area === "ledger" && actionOrId === "verify") {
+      assertPositionals(parsed.positional, 3, "gate workflow ledger verify ID --entry ID --evidence-sha SHA256");
+      assertFlags(parsed.flags, ["entry", "evidence-sha", ...mutationFlags]);
+      const result = verifyWorkflowLedger(maybeId, {
+        entryId: requiredFlag(parsed.flags, "entry"),
+        verificationEvidenceSha256: requiredFlag(parsed.flags, "evidence-sha")
+      }, workflowMutationOptions(parsed.flags, paths));
+      return output(workflowCommit(result), json);
+    }
+    if (area === "ledger" && actionOrId === "hold") {
+      assertPositionals(parsed.positional, 3, "gate workflow ledger hold ID --entry ID --reason TEXT");
+      assertFlags(parsed.flags, ["entry", "reason", ...mutationFlags]);
+      const result = holdWorkflowLedger(maybeId, {
+        entryId: requiredFlag(parsed.flags, "entry"),
+        reason: requiredFlag(parsed.flags, "reason")
+      }, workflowMutationOptions(parsed.flags, paths));
+      return output(workflowCommit(result), json);
+    }
+    if (area === "execution" && actionOrId === "cancel") {
+      assertPositionals(parsed.positional, 3, "gate workflow execution cancel ID --reservation ID --reason TEXT");
+      assertFlags(parsed.flags, ["reservation", "reason", ...mutationFlags]);
+      const result = cancelWorkflowExecution(maybeId, {
+        reservationId: requiredFlag(parsed.flags, "reservation"),
+        reason: requiredFlag(parsed.flags, "reason")
+      }, workflowMutationOptions(parsed.flags, paths));
+      return output(workflowCommit(result), json);
+    }
+    if (area === "stop") {
+      assertPositionals(parsed.positional, 2, "gate workflow stop ID --condition CONDITION --reason TEXT");
+      assertFlags(parsed.flags, ["condition", "reason", "evidence-sha", ...mutationFlags]);
+      const result = stopWorkflow(actionOrId, {
+        condition: requiredFlag(parsed.flags, "condition"),
+        reason: requiredFlag(parsed.flags, "reason"),
+        evidenceSha256: optionalValueFlag(parsed.flags, "evidence-sha")
+      }, workflowMutationOptions(parsed.flags, paths));
+      return output(workflowCommit(result), json);
+    }
+    if (area === "join") {
+      assertPositionals(parsed.positional, 2, "gate workflow join ID");
+      assertFlags(parsed.flags, mutationFlags);
+      const result = joinWorkflowCoverage(actionOrId, {}, workflowMutationOptions(parsed.flags, paths));
+      return output(workflowCommit(result), json);
+    }
+    if (area === "report") {
+      assertPositionals(parsed.positional, 2, "gate workflow report ID --file PATH");
+      assertFlags(parsed.flags, ["file", ...mutationFlags]);
+      const result = attachWorkflowReport(actionOrId, { file: requiredFlag(parsed.flags, "file") }, workflowMutationOptions(parsed.flags, paths));
+      return output(workflowCommit(result), json);
+    }
+    if (area === "close") {
+      assertPositionals(parsed.positional, 2, "gate workflow close ID --confirm TEXT");
+      assertFlags(parsed.flags, ["confirm", ...mutationFlags]);
+      const result = closeWorkflow(actionOrId, { confirm: requiredFlag(parsed.flags, "confirm") }, workflowMutationOptions(parsed.flags, paths));
+      return output(workflowCommit(result), json);
+    }
+    throw new Error(`unknown workflow action: ${parsed.positional.join(" ") || "missing"}`);
   }
 
   if (command === "upstream") {
@@ -527,24 +1724,64 @@ export async function main(argv) {
   }
 
   if (command === "tool") {
+    assertUnambiguousToolArgs(rest);
     const [action = "list", id] = parsed.positional;
     if (action === "list") {
-      assertPositionals(parsed.positional, 1, "gate tool list [--profile ID] [--category ID]");
-      assertFlags(parsed.flags, ["profile", "category", "json"]);
+      assertPositionals(parsed.positional, 1, "gate tool list [--profile ID] [--category ID] [--summary] [--limit N] [--cursor N]");
+      assertFlags(parsed.flags, ["profile", "category", "summary", "limit", "cursor", "json"]);
+      assertBooleanSwitch(parsed.flags, "summary");
+      assertBooleanSwitch(parsed.flags, "json");
+      if ((parsed.flags.limit !== undefined || parsed.flags.cursor !== undefined) && parsed.flags.summary !== true) {
+        throw new Error("--limit and --cursor require --summary");
+      }
+      const profile = optionalValueFlag(parsed.flags, "profile");
+      const category = optionalValueFlag(parsed.flags, "category");
+      const inventory = toolInventory({
+        paths,
+        profile: profile || null,
+        category: category || null
+      });
       return output(
-        toolInventory({
-          paths,
-          profile: typeof parsed.flags.profile === "string" ? parsed.flags.profile : null,
-          category: typeof parsed.flags.category === "string" ? parsed.flags.category : null
-        }),
+        parsed.flags.summary === true
+          ? toolInventorySummary(inventory, {
+              limit: optionalValueFlag(parsed.flags, "limit"),
+              cursor: optionalValueFlag(parsed.flags, "cursor"),
+              profile: profile || null,
+              category: category || null
+            })
+          : inventory,
         json
       );
+    }
+    if (action === "show") {
+      assertPositionals(parsed.positional, 2, "gate tool show ID [--json]");
+      assertFlags(parsed.flags, ["json"]);
+      assertBooleanSwitch(parsed.flags, "json");
+      if (!id) throw new Error("security tool id is required");
+      return output(toolDetailSummary(toolShow(id, { paths })), json);
     }
     if (action === "plan") {
       assertPositionals(parsed.positional, 2, "gate tool plan ID");
       assertFlags(parsed.flags, ["json"]);
       if (!id) throw new Error("security tool id is required");
       return output(toolPlan(id, { paths }), json);
+    }
+    if (new Set(["prefetch", "install", "verify", "remove"]).has(action)) {
+      assertFlags(parsed.flags, ["profile", "json"]);
+      assertBooleanSwitch(parsed.flags, "json");
+      const profile = optionalValueFlag(parsed.flags, "profile");
+      if (Boolean(id) === Boolean(profile)) {
+        throw new Error(`gate tool ${action} requires exactly one tool id or --profile ID`);
+      }
+      assertPositionals(
+        parsed.positional,
+        id ? 2 : 1,
+        `gate tool ${action} ID|--profile ID [--json]`
+      );
+      const result = await runManagedToolOperation(action, { paths, id, profile });
+      output(result, json);
+      if (!result.ok) process.exitCode = 2;
+      return;
     }
     throw new Error(`unknown tool action: ${action}`);
   }

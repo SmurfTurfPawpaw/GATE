@@ -1,0 +1,17 @@
+{
+  "apiVersion": "gate.dev/profile/v1",
+  "kind": "SecurityToolProfile",
+  "id": "core",
+  "catalog": "../../catalog/security-tools.json",
+  "description": "Laptop-first managed mapping core: passive discovery, DNS resolution, HTTP probing, crawling, bounded port discovery, content discovery, and template-engine installation.",
+  "maxRiskClass": "A3",
+  "toolIds": [
+    "subfinder",
+    "dnsx",
+    "httpx",
+    "katana",
+    "naabu",
+    "ffuf",
+    "nuclei"
+  ]
+}

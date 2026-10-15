@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { executionPresentation, executionRunPresentation, reconcileRefreshResults } from "./app.js";
+import {
+  executionPresentation,
+  executionRunPresentation,
+  offlineAnalysisPresentation,
+  offlineAnalysisRunPresentation,
+  reconcileRefreshResults,
+  toolRuntimeItemPresentation,
+  toolRuntimePresentation
+} from "./app.js";
 
 const at = "2026-10-13T12:00:00.000Z";
 
@@ -111,4 +119,255 @@ test("execution run presentation uses lifecycle metadata only", () => {
     observedAt: "2026-10-13T12:00:02.000Z",
     result: "duration-limit"
   });
+});
+
+test("offline analysis presentation shows lane truth and opaque isolation state only", () => {
+  assert.deepEqual(offlineAnalysisPresentation({
+    configured: true,
+    laneAvailable: true,
+    mode: "bubblewrap-offline",
+    reason: null,
+    runningCount: 2,
+    retention: {
+      retainedBytes: 512,
+      quotaBytes: 2 * 1024 * 1024 * 1024,
+      retainedArtifacts: 1,
+      quotaArtifacts: 64,
+      pendingManifests: 1,
+      expiredManifests: 2,
+      overQuota: false,
+      missingArtifacts: 0,
+      invalidEntries: 0,
+      orphanedArtifacts: 0,
+      orphanedBytes: 0,
+      purgePendingManifests: 0,
+      unknownManifests: 0,
+      retentionLockState: "absent",
+      snapshotState: "consistent",
+      pendingTransactions: 0,
+      invalidTransactionRecords: 0,
+      creatingManifests: 0,
+      invalidCreationIntents: 0,
+      invalidClaimRecords: 0,
+      invalidPurgeRecords: 0,
+      invalidRunRecords: 0,
+      blockedManifests: 0,
+      mutationBlocked: false
+    }
+  }), {
+    laneState: "available",
+    laneLabel: "Available",
+    configuredLabel: "Configured",
+    modeLabel: "Bubblewrap offline",
+    reasonLabel: null,
+    runningLabel: "2",
+    retentionLabel: "512 B / 2.0 GiB retained · 1 / 64 artifacts · 1 pending · 2 expired",
+    retentionState: "healthy",
+    retentionStateLabel: "Healthy",
+    retentionOverQuotaLabel: "No",
+    retentionMissingLabel: "0",
+    retentionInvalidLabel: "0",
+    retentionOrphanedLabel: "0",
+    retentionOrphanedBytesLabel: "0 B",
+    retentionPurgePendingLabel: "0",
+    retentionUnknownLabel: "0",
+    controlState: "healthy",
+    controlStateLabel: "Controls healthy",
+    controlMutationLabel: "Available",
+    controlLockLabel: "Absent",
+    controlSnapshotLabel: "Consistent",
+    controlPendingLabel: "0",
+    controlInvalidTransactionsLabel: "0",
+    controlCreatingLabel: "0",
+    controlInvalidCreationsLabel: "0",
+    controlInvalidClaimsLabel: "0",
+    controlInvalidPurgesLabel: "0",
+    controlInvalidRunsLabel: "0",
+    controlBlockedManifestsLabel: "0"
+  });
+
+  assert.deepEqual(offlineAnalysisRunPresentation({
+    runId: "run_aaaaaaaaaaaaaaaa",
+    status: "succeeded",
+    isolationVerified: true,
+    manifestId: "manifest_PRIVATE_CANARY",
+    projectId: "project_PRIVATE_CANARY",
+    path: "/private/OFFLINE_PATH_CANARY",
+    output: "OFFLINE_OUTPUT_CANARY"
+  }), {
+    runId: "run_aaaaaaaaaaaaaaaa",
+    status: "succeeded",
+    isolationState: "verified",
+    isolationLabel: "Isolation verified"
+  });
+  assert.equal(offlineAnalysisRunPresentation({ isolationVerified: false }).isolationLabel, "Isolation not verified");
+  assert.equal(offlineAnalysisRunPresentation({}).isolationLabel, "Isolation pending");
+});
+
+test("offline analysis presentation raises aggregate retention faults without copying private details", () => {
+  const presentation = offlineAnalysisPresentation({
+    retention: {
+      overQuota: true,
+      missingArtifacts: 2,
+      invalidEntries: 3,
+      orphanedArtifacts: 4,
+      orphanedBytes: 1536,
+      purgePendingManifests: 1,
+      unknownManifests: 5,
+      retentionLockState: "invalid",
+      snapshotState: "indeterminate",
+      pendingTransactions: 6,
+      invalidTransactionRecords: 7,
+      creatingManifests: 8,
+      invalidCreationIntents: 9,
+      invalidClaimRecords: 10,
+      invalidPurgeRecords: 11,
+      invalidRunRecords: 13,
+      blockedManifests: 12,
+      mutationBlocked: true,
+      privatePath: "/private/RETENTION_PATH_CANARY",
+      manifestDigest: "RETENTION_DIGEST_CANARY"
+    }
+  });
+
+  assert.equal(presentation.retentionState, "attention");
+  assert.equal(presentation.retentionStateLabel, "Needs attention");
+  assert.equal(presentation.retentionOverQuotaLabel, "Yes");
+  assert.equal(presentation.retentionMissingLabel, "2");
+  assert.equal(presentation.retentionInvalidLabel, "3");
+  assert.equal(presentation.retentionOrphanedLabel, "4");
+  assert.equal(presentation.retentionOrphanedBytesLabel, "1.5 KiB");
+  assert.equal(presentation.retentionPurgePendingLabel, "1");
+  assert.equal(presentation.retentionUnknownLabel, "5");
+  assert.equal(presentation.controlState, "blocked");
+  assert.equal(presentation.controlStateLabel, "Mutation blocked");
+  assert.equal(presentation.controlMutationLabel, "Blocked");
+  assert.equal(presentation.controlLockLabel, "Invalid");
+  assert.equal(presentation.controlSnapshotLabel, "Indeterminate");
+  assert.equal(presentation.controlPendingLabel, "6");
+  assert.equal(presentation.controlInvalidTransactionsLabel, "7");
+  assert.equal(presentation.controlCreatingLabel, "8");
+  assert.equal(presentation.controlInvalidCreationsLabel, "9");
+  assert.equal(presentation.controlInvalidClaimsLabel, "10");
+  assert.equal(presentation.controlInvalidPurgesLabel, "11");
+  assert.equal(presentation.controlInvalidRunsLabel, "13");
+  assert.equal(presentation.controlBlockedManifestsLabel, "12");
+  assert.equal(JSON.stringify(presentation).includes("RETENTION_PATH_CANARY"), false);
+  assert.equal(JSON.stringify(presentation).includes("RETENTION_DIGEST_CANARY"), false);
+
+  const unknown = offlineAnalysisPresentation({ retention: {} });
+  assert.equal(unknown.retentionState, "unknown");
+  assert.equal(unknown.retentionMissingLabel, "—");
+  assert.equal(unknown.controlState, "unknown");
+  assert.equal(unknown.controlMutationLabel, "—");
+
+  const invalidLockText = offlineAnalysisPresentation({
+    retention: {
+      retentionLockState: "/private/LOCK_OWNER_CANARY",
+      snapshotState: "/private/SNAPSHOT_CANARY"
+    }
+  });
+  assert.equal(invalidLockText.controlLockLabel, "—");
+  assert.equal(invalidLockText.controlSnapshotLabel, "—");
+  assert.equal(JSON.stringify(invalidLockText).includes("LOCK_OWNER_CANARY"), false);
+  assert.equal(JSON.stringify(invalidLockText).includes("SNAPSHOT_CANARY"), false);
+});
+
+test("offline control presentation distinguishes active and manifest-scoped fault states", () => {
+  const base = {
+    mutationBlocked: false,
+    retentionLockState: "absent",
+    snapshotState: "consistent",
+    pendingTransactions: 0,
+    invalidTransactionRecords: 0,
+    creatingManifests: 0,
+    invalidCreationIntents: 0,
+    invalidClaimRecords: 0,
+    invalidPurgeRecords: 0,
+    invalidRunRecords: 0,
+    blockedManifests: 0
+  };
+  assert.equal(offlineAnalysisPresentation({
+    retention: { ...base, retentionLockState: "active", pendingTransactions: 1 }
+  }).controlState, "active");
+  assert.equal(offlineAnalysisPresentation({
+    retention: { ...base, invalidClaimRecords: 1, blockedManifests: 1 }
+  }).controlState, "attention");
+  assert.equal(offlineAnalysisPresentation({
+    retention: { ...base, invalidRunRecords: 1, blockedManifests: 1 }
+  }).controlState, "attention");
+  assert.equal(offlineAnalysisPresentation({
+    retention: { ...base, mutationBlocked: false, invalidTransactionRecords: 1 }
+  }).controlState, "blocked");
+  const indeterminate = offlineAnalysisPresentation({
+    retention: { ...base, mutationBlocked: false, snapshotState: "indeterminate" }
+  });
+  assert.equal(indeterminate.controlState, "blocked");
+  assert.equal(indeterminate.controlMutationLabel, "Blocked");
+});
+
+test("managed runtime presentation distinguishes aggregate health and per-tool readiness", () => {
+  assert.deepEqual(toolRuntimePresentation({
+    ok: true,
+    verificationMode: "current-bytes-and-install-smoke-evidence",
+    platform: "linux-x64",
+    catalog: 126,
+    locked: 4,
+    installed: 3,
+    verified: 2,
+    executable: 1,
+    unresolved: 125
+  }), {
+    healthState: "partial",
+    healthLabel: "125 unresolved",
+    modeLabel: "Current bytes and install smoke evidence",
+    platformLabel: "linux-x64",
+    catalogLabel: "126",
+    lockedLabel: "4",
+    installedLabel: "3",
+    verifiedLabel: "2",
+    executableLabel: "1",
+    unresolvedLabel: "125"
+  });
+  assert.equal(toolRuntimePresentation({ ok: false }).healthLabel, "Lock invalid");
+  assert.equal(toolRuntimePresentation({ ok: true, unresolved: 0 }).healthLabel, "Ready");
+  assert.deepEqual(
+    {
+      currentBytesLabel: toolRuntimePresentation({ currentBytesChecked: false, executableHashReads: 0 }).currentBytesLabel,
+      hashReadsLabel: toolRuntimePresentation({ currentBytesChecked: false, executableHashReads: 0 }).hashReadsLabel
+    },
+    { currentBytesLabel: "Receipt only", hashReadsLabel: "0" }
+  );
+  assert.deepEqual(toolRuntimeItemPresentation({
+    id: "nuclei",
+    name: "Nuclei",
+    state: "verified-install-evidence",
+    locked: true,
+    installed: true,
+    verified: true,
+    executable: true,
+    reasons: []
+  }), {
+    id: "nuclei",
+    name: "Nuclei",
+    state: "verified-install-evidence",
+    stateLabel: "Verified install evidence",
+    tone: "ready",
+    flags: ["locked yes", "installed yes", "verified yes", "executable yes"],
+    reasons: []
+  });
+  const receipt = toolRuntimeItemPresentation({
+    id: "nuclei",
+    state: "receipt-only",
+    verificationEvidence: {
+      kind: "installation-receipt",
+      lastVerifiedAt: "2026-10-14T16:00:00.000Z",
+      ageSeconds: 1,
+      currentBytesChecked: false
+    }
+  }, Date.parse("2026-10-14T16:00:12.000Z"));
+  assert.match(receipt.evidenceLabel, /Last verified/);
+  assert.match(receipt.evidenceLabel, /12s ago/);
+  assert.match(receipt.evidenceLabel, /current bytes not checked/);
+  assert.equal(toolRuntimeItemPresentation({ state: "invalid-receipt" }).tone, "invalid");
 });

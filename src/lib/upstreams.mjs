@@ -23,13 +23,186 @@ export function readUpstreamLock(options = {}) {
   return { paths, lock };
 }
 
-function controlledGitEnvironment() {
-  const env = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (!key.toUpperCase().startsWith("GIT_")) env[key] = value;
+function realPath(file) {
+  return fs.realpathSync.native ? fs.realpathSync.native(file) : fs.realpathSync(file);
+}
+
+function sameOrDescendant(root, candidate) {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
+}
+
+function sameFileIdentity(left, right) {
+  return left.dev === right.dev && left.ino === right.ino && left.size === right.size &&
+    left.mode === right.mode && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
+}
+
+function assertNotControlledByCurrentProcess(file, stat, label) {
+  if (process.platform !== "win32" && typeof process.geteuid === "function") {
+    const euid = process.geteuid();
+    if (euid === 0 || stat.uid === BigInt(euid)) {
+      throw new Error(`${label} is owned by the current process identity: ${file}`);
+    }
   }
-  return {
-    ...env,
+  try {
+    fs.accessSync(file, fs.constants.W_OK);
+  } catch (error) {
+    if (new Set(["EACCES", "EPERM", "EROFS"]).has(error.code)) return;
+    throw error;
+  }
+  throw new Error(`${label} is writable by the current process: ${file}`);
+}
+
+function assertProtectedPathChain(file, label) {
+  let current = realPath(file);
+  while (true) {
+    const stat = fs.lstatSync(current, { bigint: true });
+    if (stat.isSymbolicLink()) throw new Error(`${label} path chain contains a symbolic link: ${current}`);
+    assertNotControlledByCurrentProcess(current, stat, label);
+    const parent = path.dirname(current);
+    if (parent === current) return;
+    current = parent;
+  }
+}
+
+function assertProtectedRuntimePlatform() {
+  if (process.platform === "win32") {
+    throw new Error("protected upstream execution is unavailable on native Windows; run GATE inside WSL");
+  }
+}
+
+function observeTrustedRegularFile(file, label, options = {}) {
+  const resolved = realPath(file);
+  const before = fs.lstatSync(resolved, { bigint: true });
+  if (!before.isFile() || before.isSymbolicLink()) throw new Error(`${label} is not a regular file`);
+  if (options.executable && process.platform !== "win32" && (before.mode & 0o111n) === 0n) {
+    throw new Error(`${label} is not executable`);
+  }
+  if (!hasLockedSystemPath(resolved)) throw new Error(`${label} is reachable through a group- or other-writable path`);
+  if (options.protectedFromCurrentProcess) assertProtectedPathChain(resolved, label);
+  if (process.platform !== "win32" && !fs.constants.O_NOFOLLOW) {
+    throw new Error(`${label} cannot be opened without following links on this platform`);
+  }
+  const descriptor = fs.openSync(resolved, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+  try {
+    const opened = fs.fstatSync(descriptor, { bigint: true });
+    const after = fs.lstatSync(resolved, { bigint: true });
+    if (!opened.isFile() || !sameFileIdentity(before, opened) || !sameFileIdentity(opened, after)) {
+      throw new Error(`${label} changed while its identity was checked`);
+    }
+    return { path: resolved, identity: opened };
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+const MAX_NPM_IMPLEMENTATION_ENTRIES = 20_000;
+const MAX_NPM_IMPLEMENTATION_BYTES = 512 * 1024 * 1024;
+
+function observeProtectedTree(root, label) {
+  const resolvedRoot = realPath(root);
+  const rootStat = fs.lstatSync(resolvedRoot, { bigint: true });
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error(`${label} is not a regular directory tree`);
+  assertProtectedPathChain(resolvedRoot, label);
+  const hash = crypto.createHash("sha256");
+  let entries = 0;
+  let bytes = 0;
+  const visit = (directory, relativeDirectory = "") => {
+    const children = fs.readdirSync(directory, { withFileTypes: true })
+      .sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
+    for (const child of children) {
+      entries += 1;
+      if (entries > MAX_NPM_IMPLEMENTATION_ENTRIES) throw new Error(`${label} has too many entries`);
+      const absolute = path.join(directory, child.name);
+      const relative = relativeDirectory ? `${relativeDirectory}/${child.name}` : child.name;
+      const before = fs.lstatSync(absolute, { bigint: true });
+      if (before.isSymbolicLink()) throw new Error(`${label} contains a symbolic link: ${relative}`);
+      assertNotControlledByCurrentProcess(absolute, before, label);
+      if (before.isDirectory()) {
+        hash.update(`dir\0${relative}\0${before.mode}\0`);
+        visit(absolute, relative);
+        const after = fs.lstatSync(absolute, { bigint: true });
+        if (!sameFileIdentity(before, after)) throw new Error(`${label} changed while it was hashed: ${relative}`);
+        continue;
+      }
+      if (!before.isFile()) throw new Error(`${label} contains an unsupported file type: ${relative}`);
+      bytes += Number(before.size);
+      if (!Number.isSafeInteger(bytes) || bytes > MAX_NPM_IMPLEMENTATION_BYTES) {
+        throw new Error(`${label} exceeds its byte limit`);
+      }
+      if (process.platform !== "win32" && !fs.constants.O_NOFOLLOW) {
+        throw new Error(`${label} cannot be opened without following links on this platform`);
+      }
+      const descriptor = fs.openSync(absolute, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+      try {
+        const opened = fs.fstatSync(descriptor, { bigint: true });
+        if (!opened.isFile() || !sameFileIdentity(before, opened)) {
+          throw new Error(`${label} changed while it was opened: ${relative}`);
+        }
+        hash.update(`file\0${relative}\0${opened.mode}\0${opened.size}\0`);
+        const buffer = Buffer.allocUnsafe(1024 * 1024);
+        while (true) {
+          const read = fs.readSync(descriptor, buffer, 0, buffer.length, null);
+          if (read === 0) break;
+          hash.update(buffer.subarray(0, read));
+        }
+        hash.update("\0");
+        const afterRead = fs.fstatSync(descriptor, { bigint: true });
+        const afterPath = fs.lstatSync(absolute, { bigint: true });
+        if (!sameFileIdentity(opened, afterRead) || !sameFileIdentity(afterRead, afterPath)) {
+          throw new Error(`${label} changed while it was hashed: ${relative}`);
+        }
+      } finally {
+        fs.closeSync(descriptor);
+      }
+    }
+  };
+  visit(resolvedRoot);
+  return { path: resolvedRoot, sha256: hash.digest("hex"), entries, bytes };
+}
+
+function assertObservedFileStillMatches(observed, label, options = {}) {
+  const current = observeTrustedRegularFile(observed.path, label, options);
+  if (current.path !== observed.path || !sameFileIdentity(current.identity, observed.identity)) {
+    throw new Error(`${label} changed while it was used`);
+  }
+}
+
+let trustedGitPath;
+
+function resolveTrustedGit() {
+  assertProtectedRuntimePlatform();
+  const options = { executable: true, protectedFromCurrentProcess: true };
+  if (trustedGitPath) return observeTrustedRegularFile(trustedGitPath, "trusted system Git", options);
+  const candidates = process.platform === "win32"
+    ? ["C:\\Program Files\\Git\\cmd\\git.exe", "C:\\Program Files\\Git\\bin\\git.exe"]
+    : ["/usr/bin/git", "/bin/git"];
+  const allowed = new Set(candidates.map((candidate) => process.platform === "win32" ? candidate.toLowerCase() : candidate));
+  for (const candidate of candidates) {
+    try {
+      const observed = observeTrustedRegularFile(candidate, "trusted system Git", options);
+      const normalized = process.platform === "win32" ? observed.path.toLowerCase() : observed.path;
+      if (!allowed.has(normalized)) continue;
+      trustedGitPath = observed.path;
+      return observed;
+    } catch {
+      // Try the next fixed system location, then fail closed.
+    }
+  }
+  throw new Error(`no trusted system Git is available for ${process.platform}`);
+}
+
+function controlledGitEnvironment(executable) {
+  const safePath = [...new Set([
+    path.dirname(executable),
+    ...(process.platform === "win32" ? [] : ["/usr/bin", "/bin"])
+  ])].join(path.delimiter);
+  const environment = {
+    HOME: process.platform === "win32" ? "C:\\Windows" : "/",
+    LANG: "C",
+    LC_ALL: "C",
+    NO_COLOR: "1",
+    PATH: safePath,
     GIT_ATTR_NOSYSTEM: "1",
     GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",
@@ -37,6 +210,13 @@ function controlledGitEnvironment() {
     GIT_OPTIONAL_LOCKS: "0",
     GIT_TERMINAL_PROMPT: "0"
   };
+  if (process.platform === "win32") {
+    environment.SystemRoot = /^[A-Za-z]:\\Windows$/iu.test(process.env.SystemRoot || "")
+      ? process.env.SystemRoot
+      : "C:\\Windows";
+    environment.USERPROFILE = environment.HOME;
+  }
+  return environment;
 }
 
 function controlledGitArguments(args) {
@@ -52,13 +232,19 @@ function controlledGitArguments(args) {
 }
 
 function git(args, cwd) {
-  const result = spawnSync("git", controlledGitArguments(args), {
+  const runtime = resolveTrustedGit();
+  const result = spawnSync(runtime.path, controlledGitArguments(args), {
     cwd,
-    env: controlledGitEnvironment(),
+    env: controlledGitEnvironment(runtime.path),
     encoding: "utf8",
     timeout: 120_000,
     windowsHide: true,
+    shell: false,
     maxBuffer: 32 * 1024 * 1024
+  });
+  assertObservedFileStillMatches(runtime, "trusted system Git", {
+    executable: true,
+    protectedFromCurrentProcess: true
   });
   if (result.error || result.status !== 0) {
     throw new Error((result.stderr || result.error?.message || "git command failed").trim());
@@ -67,14 +253,20 @@ function git(args, cwd) {
 }
 
 function gitWithInput(args, cwd, input) {
-  const result = spawnSync("git", controlledGitArguments(args), {
+  const runtime = resolveTrustedGit();
+  const result = spawnSync(runtime.path, controlledGitArguments(args), {
     cwd,
-    env: controlledGitEnvironment(),
+    env: controlledGitEnvironment(runtime.path),
     input,
     encoding: "utf8",
     timeout: 120_000,
     windowsHide: true,
+    shell: false,
     maxBuffer: 32 * 1024 * 1024
+  });
+  assertObservedFileStillMatches(runtime, "trusted system Git", {
+    executable: true,
+    protectedFromCurrentProcess: true
   });
   if (result.error || result.status !== 0) {
     throw new Error((result.stderr || result.error?.message || "git command failed").trim());
@@ -252,6 +444,71 @@ function npmCache(paths) {
   return path.join(paths.home, "cache", "npm");
 }
 
+function resolveBundledNpmRuntime() {
+  assertProtectedRuntimePlatform();
+  const protectedOptions = { executable: true, protectedFromCurrentProcess: true };
+  const node = observeTrustedRegularFile(process.execPath, "current Node executable", protectedOptions);
+  const nodeDirectory = path.dirname(node.path);
+  const installationRoot = realPath(process.platform === "win32" ? nodeDirectory : path.resolve(nodeDirectory, ".."));
+  if (!hasLockedSystemPath(installationRoot)) {
+    throw new Error("the current Node installation is reachable through a group- or other-writable path");
+  }
+  const candidates = process.platform === "win32"
+    ? [path.join(nodeDirectory, "node_modules", "npm", "bin", "npm-cli.js")]
+    : [
+        path.join(installationRoot, "lib", "node_modules", "npm", "bin", "npm-cli.js"),
+        path.join(installationRoot, "share", "nodejs", "npm", "bin", "npm-cli.js"),
+        path.join(installationRoot, "node_modules", "npm", "bin", "npm-cli.js")
+      ];
+  let rejection = null;
+  for (const candidate of [...new Set(candidates)]) {
+    try {
+      const npmCli = observeTrustedRegularFile(candidate, "bundled npm CLI", { protectedFromCurrentProcess: true });
+      if (!sameOrDescendant(installationRoot, npmCli.path)) continue;
+      if (path.basename(npmCli.path) !== "npm-cli.js" || path.basename(path.dirname(npmCli.path)) !== "bin") continue;
+      const npmRoot = realPath(path.resolve(path.dirname(npmCli.path), ".."));
+      if (!sameOrDescendant(installationRoot, npmRoot)) continue;
+      const npmTree = observeProtectedTree(npmRoot, "bundled npm implementation");
+      return { node, npmCli, npmTree, installationRoot };
+    } catch (error) {
+      if (!new Set(["ENOENT", "ENOTDIR"]).has(error.code)) rejection = error;
+      // Try each layout supported by the current Node installation.
+    }
+  }
+  if (rejection) throw rejection;
+  throw new Error("the current Node installation does not contain a trusted bundled npm CLI");
+}
+
+function controlledNpmEnvironment(cache, runtimeHome, runtimeTemporary, userConfig, globalConfig, offline) {
+  const environment = {
+    HOME: runtimeHome,
+    USERPROFILE: runtimeHome,
+    TMPDIR: runtimeTemporary,
+    TMP: runtimeTemporary,
+    TEMP: runtimeTemporary,
+    LANG: "C",
+    LC_ALL: "C",
+    TZ: "UTC",
+    NO_COLOR: "1",
+    NPM_CONFIG_AUDIT: "false",
+    NPM_CONFIG_CACHE: cache,
+    NPM_CONFIG_COLOR: "false",
+    NPM_CONFIG_FUND: "false",
+    NPM_CONFIG_GLOBALCONFIG: globalConfig,
+    NPM_CONFIG_IGNORE_SCRIPTS: "true",
+    NPM_CONFIG_OFFLINE: offline ? "true" : "false",
+    NPM_CONFIG_PROGRESS: "false",
+    NPM_CONFIG_UPDATE_NOTIFIER: "false",
+    NPM_CONFIG_USERCONFIG: userConfig
+  };
+  if (process.platform === "win32") {
+    environment.SystemRoot = /^[A-Za-z]:\\Windows$/iu.test(process.env.SystemRoot || "")
+      ? process.env.SystemRoot
+      : "C:\\Windows";
+  }
+  return environment;
+}
+
 function materializeNpmTree(entry, paths, staging, options = {}) {
   const { lockFile, packageFile } = trackedNpmLock(entry, paths);
   fs.mkdirSync(staging, { recursive: true, mode: 0o700 });
@@ -259,19 +516,60 @@ function materializeNpmTree(entry, paths, staging, options = {}) {
   fs.copyFileSync(lockFile, path.join(staging, "package-lock.json"));
   const cache = npmCache(paths);
   fs.mkdirSync(cache, { recursive: true, mode: 0o700 });
-  const args = ["ci", "--ignore-scripts", "--no-audit", "--no-fund"];
+  const runtimeDirectory = path.join(staging, ".gate-npm-runtime");
+  const runtimeHome = path.join(runtimeDirectory, "home");
+  const runtimeTemporary = path.join(runtimeDirectory, "tmp");
+  const userConfig = path.join(runtimeDirectory, "user.npmrc");
+  const globalConfig = path.join(runtimeDirectory, "global.npmrc");
+  fs.mkdirSync(runtimeHome, { recursive: true, mode: 0o700 });
+  fs.mkdirSync(runtimeTemporary, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(userConfig, "", { mode: 0o600 });
+  fs.writeFileSync(globalConfig, "", { mode: 0o600 });
+  const args = [
+    "ci",
+    "--ignore-scripts",
+    "--no-audit",
+    "--no-fund",
+    "--update-notifier=false",
+    "--color=false",
+    "--progress=false",
+    `--cache=${cache}`,
+    `--userconfig=${userConfig}`,
+    `--globalconfig=${globalConfig}`
+  ];
   if (options.offline) args.push("--offline");
-  const result = spawnSync(npmCommand(), args, {
-    cwd: staging,
-    encoding: "utf8",
-    timeout: 180_000,
-    windowsHide: true,
-    env: {
-      ...process.env,
-      NPM_CONFIG_CACHE: cache,
-      NPM_CONFIG_IGNORE_SCRIPTS: "true"
-    }
-  });
+  let result;
+  try {
+    const runtime = resolveBundledNpmRuntime();
+    result = spawnSync(runtime.node.path, [runtime.npmCli.path, ...args], {
+      cwd: staging,
+      encoding: "utf8",
+      timeout: 180_000,
+      windowsHide: true,
+      shell: false,
+      maxBuffer: 32 * 1024 * 1024,
+      env: controlledNpmEnvironment(
+        cache,
+        runtimeHome,
+        runtimeTemporary,
+        userConfig,
+        globalConfig,
+        options.offline === true
+      )
+    });
+    assertObservedFileStillMatches(runtime.node, "current Node executable", {
+      executable: true,
+      protectedFromCurrentProcess: true
+    });
+    assertObservedFileStillMatches(runtime.npmCli, "bundled npm CLI", { protectedFromCurrentProcess: true });
+    const npmTree = observeProtectedTree(runtime.npmTree.path, "bundled npm implementation");
+    if (
+      npmTree.path !== runtime.npmTree.path || npmTree.sha256 !== runtime.npmTree.sha256 ||
+      npmTree.entries !== runtime.npmTree.entries || npmTree.bytes !== runtime.npmTree.bytes
+    ) throw new Error("bundled npm implementation changed while it was used");
+  } finally {
+    fs.rmSync(runtimeDirectory, { recursive: true, force: true });
+  }
   if (result.error || result.status !== 0) {
     const reason = (result.stderr || result.error?.message || `npm exited ${result.status}`).trim();
     const prefix = options.offline
@@ -481,10 +779,6 @@ export function syncUpstream(id, options = {}) {
   }
 }
 
-function npmCommand() {
-  return process.platform === "win32" ? "npm.cmd" : "npm";
-}
-
 function installNpmUpstream(entry, paths) {
   const id = entry.id;
   if (!entry.version || !entry.install.package || !entry.install.integrity) {
@@ -528,18 +822,125 @@ function installNpmUpstream(entry, paths) {
 }
 
 function runChecked(command, args, options = {}) {
+  const encoding = Object.hasOwn(options, "encoding") ? options.encoding : "utf8";
   const result = spawnSync(command, args, {
-    encoding: "utf8",
+    encoding,
     env: options.env || process.env,
+    input: options.input,
+    maxBuffer: options.maxBuffer || 32 * 1024 * 1024,
     timeout: options.timeout || 180_000,
     windowsHide: true,
     cwd: options.cwd,
-    stdio: ["ignore", "pipe", "pipe"]
+    shell: false,
+    stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"]
   });
   if (result.error || result.status !== 0) {
-    throw new Error((result.stderr || result.error?.message || `${command} exited ${result.status}`).trim());
+    const stderr = Buffer.isBuffer(result.stderr) ? result.stderr.toString("utf8") : result.stderr;
+    throw new Error((stderr || result.error?.message || `${command} exited ${result.status}`).trim());
   }
-  return result.stdout.trim();
+  return Buffer.isBuffer(result.stdout) ? result.stdout : result.stdout.trim();
+}
+
+let trustedGitHubCliPath;
+
+function allowedGitHubCliLocation(file) {
+  const normalized = process.platform === "win32" ? file.toLowerCase() : file;
+  if (process.platform === "win32") return normalized === "c:\\program files\\github cli\\gh.exe";
+  if (new Set(["/usr/bin/gh", "/bin/gh", "/usr/local/bin/gh"]).has(normalized)) return true;
+  if (process.platform !== "darwin") return false;
+  return /^\/(?:opt\/homebrew|usr\/local)\/Cellar\/gh\/[^/]+\/bin\/gh$/u.test(normalized);
+}
+
+function resolveTrustedGitHubCli() {
+  assertProtectedRuntimePlatform();
+  const options = { executable: true, protectedFromCurrentProcess: true };
+  if (trustedGitHubCliPath) {
+    return observeTrustedRegularFile(trustedGitHubCliPath, "trusted system GitHub CLI", options);
+  }
+  const candidates = process.platform === "win32"
+    ? ["C:\\Program Files\\GitHub CLI\\gh.exe"]
+    : process.platform === "darwin"
+      ? ["/opt/homebrew/bin/gh", "/usr/local/bin/gh", "/usr/bin/gh"]
+      : ["/usr/bin/gh", "/bin/gh", "/usr/local/bin/gh"];
+  for (const candidate of candidates) {
+    try {
+      const observed = observeTrustedRegularFile(candidate, "trusted system GitHub CLI", options);
+      if (!allowedGitHubCliLocation(observed.path)) continue;
+      trustedGitHubCliPath = observed.path;
+      return observed;
+    } catch {
+      // Try the next fixed system location, then fail closed.
+    }
+  }
+  throw new Error(`no trusted system GitHub CLI is available for ${process.platform}`);
+}
+
+function controlledGitHubEnvironment(runtimeHome, runtimeTemporary, configDirectory) {
+  const environment = {
+    HOME: runtimeHome,
+    USERPROFILE: runtimeHome,
+    XDG_CONFIG_HOME: path.join(runtimeHome, ".config"),
+    GH_CONFIG_DIR: configDirectory,
+    GH_PROMPT_DISABLED: "1",
+    GH_NO_UPDATE_NOTIFIER: "1",
+    LANG: "C",
+    LC_ALL: "C",
+    NO_COLOR: "1",
+    TMPDIR: runtimeTemporary,
+    TMP: runtimeTemporary,
+    TEMP: runtimeTemporary
+  };
+  for (const name of [
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy"
+  ]) {
+    if (typeof process.env[name] === "string") environment[name] = process.env[name];
+  }
+  if (process.platform === "win32") {
+    environment.SystemRoot = /^[A-Za-z]:\\Windows$/iu.test(process.env.SystemRoot || "")
+      ? process.env.SystemRoot
+      : "C:\\Windows";
+  }
+  return environment;
+}
+
+function runGitHubCli(args, staging) {
+  if (![process.env.GH_TOKEN, process.env.GITHUB_TOKEN].some((value) => typeof value === "string" && value.length)) {
+    throw new Error("GitHub release installation requires GH_TOKEN or GITHUB_TOKEN in the environment");
+  }
+  const runtime = resolveTrustedGitHubCli();
+  const runtimeDirectory = path.join(staging, ".gate-gh-runtime");
+  const runtimeHome = path.join(runtimeDirectory, "home");
+  const runtimeTemporary = path.join(runtimeDirectory, "tmp");
+  const configDirectory = path.join(runtimeDirectory, "config");
+  fs.mkdirSync(runtimeHome, { recursive: true, mode: 0o700 });
+  fs.mkdirSync(runtimeTemporary, { recursive: true, mode: 0o700 });
+  fs.mkdirSync(configDirectory, { recursive: true, mode: 0o700 });
+  let output;
+  let failure = null;
+  try {
+    try {
+      output = runChecked(runtime.path, args, {
+        env: controlledGitHubEnvironment(runtimeHome, runtimeTemporary, configDirectory)
+      });
+    } catch (error) {
+      failure = error;
+    }
+    assertObservedFileStillMatches(runtime, "trusted system GitHub CLI", {
+      executable: true,
+      protectedFromCurrentProcess: true
+    });
+    if (failure) throw failure;
+    return output;
+  } finally {
+    fs.rmSync(runtimeDirectory, { recursive: true, force: true });
+  }
 }
 
 let trustedTarPath;
@@ -557,7 +958,9 @@ function hasLockedSystemPath(file) {
 }
 
 function resolveTrustedTar() {
-  if (trustedTarPath) return trustedTarPath;
+  assertProtectedRuntimePlatform();
+  const options = { executable: true, protectedFromCurrentProcess: true };
+  if (trustedTarPath) return observeTrustedRegularFile(trustedTarPath, "trusted system tar", options);
   const candidates = process.platform === "win32"
     ? ["C:\\Windows\\System32\\tar.exe"]
     : process.platform === "darwin"
@@ -565,14 +968,13 @@ function resolveTrustedTar() {
       : ["/usr/bin/tar", "/bin/tar"];
   for (const candidate of candidates) {
     try {
-      const resolved = fs.realpathSync(candidate);
-      const stat = fs.statSync(resolved);
+      const observed = observeTrustedRegularFile(candidate, "trusted system tar", options);
       const trustedLocation = process.platform === "win32"
-        ? resolved.toLowerCase() === "c:\\windows\\system32\\tar.exe"
-        : resolved === "/usr/bin/tar" || resolved === "/bin/tar";
-      if (stat.isFile() && trustedLocation && hasLockedSystemPath(resolved)) {
-        trustedTarPath = resolved;
-        return trustedTarPath;
+        ? observed.path.toLowerCase() === "c:\\windows\\system32\\tar.exe"
+        : observed.path === "/usr/bin/tar" || observed.path === "/bin/tar";
+      if (trustedLocation) {
+        trustedTarPath = observed.path;
+        return observed;
       }
     } catch {
       // Try the next fixed system location, then fail closed.
@@ -589,7 +991,20 @@ function controlledArchiveEnvironment() {
 }
 
 function runTar(args, options = {}) {
-  return runChecked(resolveTrustedTar(), args, { ...options, env: controlledArchiveEnvironment() });
+  const runtime = resolveTrustedTar();
+  let output;
+  let failure = null;
+  try {
+    output = runChecked(runtime.path, args, { ...options, env: controlledArchiveEnvironment() });
+  } catch (error) {
+    failure = error;
+  }
+  assertObservedFileStillMatches(runtime, "trusted system tar", {
+    executable: true,
+    protectedFromCurrentProcess: true
+  });
+  if (failure) throw failure;
+  return output;
 }
 
 function repositoryName(url) {
@@ -602,9 +1017,42 @@ function digestFile(file) {
   return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }
 
-export function inspectReleaseArchive(archive) {
-  const entries = runTar(["-tf", archive]).split(/\r?\n/).filter(Boolean);
-  const details = runTar(["-tvf", archive]).split(/\r?\n/).filter(Boolean);
+const MAX_RELEASE_ARCHIVE_BYTES = 256 * 1024 * 1024;
+const MAX_RELEASE_EXECUTABLE_BYTES = 256 * 1024 * 1024;
+
+function readBoundedRegularFile(file, label, maximumBytes) {
+  const before = fs.lstatSync(file, { bigint: true });
+  if (!before.isFile() || before.isSymbolicLink()) throw new Error(`${label} is not a regular file`);
+  if (before.size > BigInt(maximumBytes)) throw new Error(`${label} exceeds its byte limit`);
+  if (process.platform !== "win32" && !fs.constants.O_NOFOLLOW) {
+    throw new Error(`${label} cannot be opened without following links on this platform`);
+  }
+  const descriptor = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+  try {
+    const opened = fs.fstatSync(descriptor, { bigint: true });
+    if (!opened.isFile() || !sameFileIdentity(before, opened)) throw new Error(`${label} changed while it was opened`);
+    const bytes = Buffer.allocUnsafe(Number(opened.size));
+    let offset = 0;
+    while (offset < bytes.length) {
+      const read = fs.readSync(descriptor, bytes, offset, bytes.length - offset, null);
+      if (read === 0) throw new Error(`${label} changed while it was read`);
+      offset += read;
+    }
+    const afterRead = fs.fstatSync(descriptor, { bigint: true });
+    const afterPath = fs.lstatSync(file, { bigint: true });
+    if (
+      !sameFileIdentity(opened, afterRead) || !sameFileIdentity(afterRead, afterPath)
+    ) throw new Error(`${label} changed while it was read`);
+    return bytes;
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+function inspectReleaseArchiveBytes(bytes, label) {
+  const gzip = bytes[0] === 0x1f && bytes[1] === 0x8b;
+  const entries = runTar([gzip ? "-tzf" : "-tf", "-"], { input: bytes }).split(/\r?\n/).filter(Boolean);
+  const details = runTar([gzip ? "-tzvf" : "-tvf", "-"], { input: bytes }).split(/\r?\n/).filter(Boolean);
   const unsafeName = (name) => (
     path.isAbsolute(name) || /^[A-Za-z]:[\\/]/u.test(name) || name.split(/[\\/]/).includes("..")
   );
@@ -612,9 +1060,39 @@ export function inspectReleaseArchive(archive) {
     !entries.length || entries.some(unsafeName) || details.length !== entries.length ||
     details.some((line) => line[0] !== "-" && line[0] !== "d")
   ) {
-    throw new Error(`release archive has unsafe paths or entry types: ${path.basename(archive)}`);
+    throw new Error(`release archive has unsafe paths or entry types: ${label}`);
   }
   return entries;
+}
+
+export function inspectReleaseArchive(archive) {
+  const bytes = readBoundedRegularFile(archive, "release archive", MAX_RELEASE_ARCHIVE_BYTES);
+  return inspectReleaseArchiveBytes(bytes, path.basename(archive));
+}
+
+export function readVerifiedReleaseExecutable(archive, artifact, binaryName) {
+  if (
+    !artifact?.name || !/^[a-f0-9]{64}$/u.test(artifact.sha256 || "") ||
+    !/^[a-f0-9]{64}$/u.test(artifact.executableSha256 || "") ||
+    !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(binaryName || "")
+  ) throw new Error("release executable verification requires reviewed artifact metadata");
+  const bytes = readBoundedRegularFile(archive, "release archive", MAX_RELEASE_ARCHIVE_BYTES);
+  const actualDigest = crypto.createHash("sha256").update(bytes).digest("hex");
+  if (actualDigest !== artifact.sha256) throw new Error(`SHA-256 verification failed for ${artifact.name}`);
+  const entries = inspectReleaseArchiveBytes(bytes, artifact.name);
+  const candidates = entries.filter((name) => path.basename(name) === binaryName);
+  if (candidates.length !== 1) throw new Error(`release archive must contain exactly one ${binaryName}`);
+  const gzip = bytes[0] === 0x1f && bytes[1] === 0x8b;
+  const executable = runTar([gzip ? "-xzOf" : "-xOf", "-", "--", candidates[0]], {
+    input: bytes,
+    encoding: null,
+    maxBuffer: MAX_RELEASE_EXECUTABLE_BYTES
+  });
+  const executableDigest = crypto.createHash("sha256").update(executable).digest("hex");
+  if (executableDigest !== artifact.executableSha256) {
+    throw new Error(`executable SHA-256 verification failed for ${binaryName}`);
+  }
+  return { archiveSha256: actualDigest, executableSha256: executableDigest, executable };
 }
 
 function installReleaseUpstream(entry, paths) {
@@ -632,35 +1110,18 @@ function installReleaseUpstream(entry, paths) {
   fs.mkdirSync(paths.upstreamTools, { recursive: true, mode: 0o700 });
   const staging = fs.mkdtempSync(path.join(paths.upstreamTools, `.${entry.id}-install-`));
   try {
-    runChecked(
-      "gh",
-      ["release", "download", install.tag, "--repo", repositoryName(entry.repository), "--pattern", artifact.name, "--dir", staging, "--clobber"]
+    runGitHubCli(
+      ["release", "download", install.tag, "--repo", repositoryName(entry.repository), "--pattern", artifact.name, "--dir", staging, "--clobber"],
+      staging
     );
     const archive = path.join(staging, artifact.name);
-    const actualDigest = digestFile(archive);
-    if (actualDigest !== artifact.sha256) throw new Error(`SHA-256 verification failed for ${artifact.name}`);
-    const entries = inspectReleaseArchive(archive);
-    const extracted = path.join(staging, "extracted");
-    fs.mkdirSync(extracted, { mode: 0o700 });
-    runTar(["-xf", archive, "-C", extracted]);
     const binaryName = `${install.binary}${process.platform === "win32" ? ".exe" : ""}`;
-    const candidates = entries.filter((name) => path.basename(name) === binaryName);
-    if (candidates.length !== 1) throw new Error(`release archive must contain exactly one ${binaryName}`);
-    const source = path.resolve(extracted, candidates[0]);
-    const extractedPrefix = `${path.resolve(extracted)}${path.sep}`;
-    const stat = fs.lstatSync(source);
-    if (!source.startsWith(extractedPrefix) || !stat.isFile() || stat.isSymbolicLink()) {
-      throw new Error(`release executable is not a regular file: ${binaryName}`);
-    }
+    const archiveResult = readVerifiedReleaseExecutable(archive, artifact, binaryName);
     const binDirectory = path.join(staging, "bin");
     fs.mkdirSync(binDirectory, { recursive: true, mode: 0o700 });
     const destination = path.join(binDirectory, binaryName);
-    fs.copyFileSync(source, destination);
+    fs.writeFileSync(destination, archiveResult.executable, { flag: "wx", mode: 0o700 });
     if (process.platform !== "win32") fs.chmodSync(destination, 0o700);
-    const executableDigest = digestFile(destination);
-    if (executableDigest !== artifact.executableSha256) {
-      throw new Error(`executable SHA-256 verification failed for ${binaryName}`);
-    }
     const receipt = {
       apiVersion: "gate.upstream-install/v2",
       id: entry.id,
@@ -669,7 +1130,7 @@ function installReleaseUpstream(entry, paths) {
       tag: install.tag,
       platform: platformKey,
       artifact: artifact.name,
-      sha256: actualDigest,
+      sha256: archiveResult.archiveSha256,
       executableSha256: artifact.executableSha256,
       executable: `bin/${binaryName}`,
       versionSource: "reviewed-lock",

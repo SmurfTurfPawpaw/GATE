@@ -64,11 +64,17 @@ const EXECUTION_TERMINATION_REASONS = new Set([
   "spawn-failure",
   "supervisor-signal",
   "process-group-remained",
-  "supervision-lost"
+  "supervision-lost",
+  "workflow-claim-failed",
+  "managed-runtime-invalidated",
+  "indeterminate-output",
+  "output-validation-failed"
 ]);
 const EXECUTION_SIGNALS = new Set(Object.keys(os.constants.signals || {}));
 const EXECUTION_ENFORCED = new Set([
   "engagement-binding",
+  "workflow-phase-binding",
+  "workflow-reservation",
   "target-argument-binding",
   "declared-action-label-binding",
   "tool-allowlist",
@@ -100,6 +106,85 @@ const EXECUTION_UNAVAILABLE = new Set([
   "supervisor-crash-containment",
   "immutable-executable-snapshot"
 ]);
+const OFFLINE_ANALYSIS_MODES = new Set(["bubblewrap-offline"]);
+const OFFLINE_ANALYSIS_STATUSES = new Set([
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+  "cancelled",
+  "blocked",
+  "unknown"
+]);
+const OFFLINE_ANALYSIS_ENFORCED = new Set([
+  "project-contract-binding",
+  "typed-path-binding",
+  "artifact-snapshot-sha256",
+  "pinned-upstream-integrity",
+  "fixed-adapter-argv",
+  "bubblewrap-network-namespace",
+  "read-only-runtime-mounts",
+  "ephemeral-sandbox-writes",
+  "shell-disabled",
+  "cleared-environment",
+  "private-bounded-evidence",
+  "one-shot-claim",
+  "wall-duration"
+]);
+const OFFLINE_ANALYSIS_UNAVAILABLE = new Set([
+  "cpu-limit",
+  "memory-limit",
+  "immutable-managed-upstream-snapshot",
+  "same-uid-gate-home-tamper-resistance",
+  "unix-socket-system-call-denial"
+]);
+const OFFLINE_RETENTION_LOCK_STATES = new Set(["absent", "active", "stale", "invalid", "indeterminate"]);
+const OFFLINE_SNAPSHOT_STATES = new Set(["stable", "consistent", "mutation-active", "indeterminate"]);
+const TOOL_RUNTIME_VERIFICATION_MODES = new Set([
+  "current-bytes-and-live-zero-egress-smoke",
+  "current-bytes-and-install-smoke-evidence",
+  "receipt-only"
+]);
+const TOOL_RUNTIME_PLATFORMS = new Set(["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"]);
+const TOOL_RUNTIME_STATES = new Set([
+  "absent",
+  "invalid",
+  "invalid-lock",
+  "invalid-receipt",
+  "receipt-only",
+  "unmanaged",
+  "unsupported-platform",
+  "verified",
+  "verified-install-evidence"
+]);
+const TOOL_RUNTIME_REASONS = new Set([
+  "explicit-integrity-and-smoke-verification-required",
+  "external-or-licensed-runtime-unavailable",
+  "hardware-runtime-unavailable",
+  "java-runtime-unavailable",
+  "language-runtime-unavailable",
+  "managed-runtime-absent",
+  "native-runtime-unavailable",
+  "oci-runtime-unavailable",
+  "reviewed-data-dependencies-unavailable",
+  "reviewed-platform-artifact-unavailable",
+  "reviewed-runtime-lock-unavailable",
+  "runtime-integrity-invalid",
+  "runtime-lock-invalid",
+  "runtime-privilege-adapter-unavailable",
+  "workflow-phase-admission-unavailable",
+  "zero-egress-smoke-sandbox-unavailable"
+]);
+const WORKFLOW_STATUSES = new Set(["open", "stopped", "recovery-hold", "reported", "closed", "unknown"]);
+const WORKFLOW_HEALTH = new Set(["bounded-replay-verified", "degraded"]);
+const WORKFLOW_LANES = new Set([
+  "governance", "offline-static", "offline-dynamic", "passive-research", "active-observation",
+  "active-testing", "high-impact-controlled", "closure"
+]);
+const WORKFLOW_EFFECTS = new Set(["P0", "P1", "A1", "A2", "A3"]);
+const WORKFLOW_CONTROLS = new Set(["enforced", "measured-only", "unavailable"]);
+const MAX_TOOL_RUNTIMES = 256;
+const MAX_WORKFLOW_RECORDS = 64;
 const ENGAGEMENT_STATUSES = new Set(["draft", "proposed", "approved", "active", "paused", "closed", "expired", "revoked"]);
 const TECHNICAL_REVIEW_STATUSES = new Set(["pending", "passed", "failed"]);
 const OPERATOR_RECEIPT_STATUSES = new Set(["pending", "approved", "revoked"]);
@@ -394,6 +479,13 @@ function sumKnown(records, key) {
   return values.length ? values.reduce((sum, value) => sum + value, 0) : null;
 }
 
+function latestUsageRecord(records) {
+  return records.reduce((selected, record) => {
+    if (!selected) return record;
+    return Date.parse(record.at) >= Date.parse(selected.at) ? record : selected;
+  }, null);
+}
+
 function usageSession(record) {
   return {
     id: opaqueId("session", [record.runId, record.taskId, record.agent, record.provider, record.model].join("\u0000")),
@@ -428,9 +520,8 @@ function projectRecordedUsage(records) {
   const selected = [];
   for (const group of groups.values()) {
     if (group.deltas.length) {
-      group.deltas.sort((left, right) => Date.parse(right.at) - Date.parse(left.at));
       selected.push({
-        ...group.deltas[0],
+        ...latestUsageRecord(group.deltas),
         availability: group.deltas.some((record) => record.availability === "estimated") ? "estimated" : "exact",
         inputTokens: sumKnown(group.deltas, "inputTokens"),
         cachedInputTokens: sumKnown(group.deltas, "cachedInputTokens"),
@@ -439,11 +530,9 @@ function projectRecordedUsage(records) {
         totalTokens: sumKnown(group.deltas, "totalTokens")
       });
     } else if (group.cumulative.length) {
-      group.cumulative.sort((left, right) => Date.parse(right.at) - Date.parse(left.at));
-      selected.push(group.cumulative[0]);
+      selected.push(latestUsageRecord(group.cumulative));
     } else if (group.unavailable.length) {
-      group.unavailable.sort((left, right) => Date.parse(right.at) - Date.parse(left.at));
-      selected.push(group.unavailable[0]);
+      selected.push(latestUsageRecord(group.unavailable));
     }
   }
   const available = selected.filter((record) => record.availability !== "unavailable");
@@ -554,6 +643,16 @@ function summarizeExecutionRun(value) {
     : null;
   const privateEngagementId = id(run.engagementId);
   if (!privateRunId || !privateManifestId || !privateEngagementId) return null;
+  const workflow = object(run.workflow);
+  const workflowInstanceId = id(workflow?.instanceId);
+  const phaseId = publicName(workflow?.phaseId, 80);
+  const phaseAttemptId = typeof workflow?.phaseAttemptId === "string" && /^wpa_[a-f0-9]{32}$/u.test(workflow.phaseAttemptId)
+    ? workflow.phaseAttemptId
+    : null;
+  const reservationId = typeof workflow?.reservationId === "string" && /^wxr_[a-f0-9]{32}$/u.test(workflow.reservationId)
+    ? workflow.reservationId
+    : null;
+  if (!workflowInstanceId || !phaseId || !phaseAttemptId || !reservationId) return null;
   return {
     runId: opaqueId("run", privateRunId),
     manifestId: opaqueId("manifest", privateManifestId),
@@ -564,7 +663,13 @@ function summarizeExecutionRun(value) {
     finishedAt: timestamp(run.finishedAt),
     terminationReason: safeEnum(run.terminationReason, EXECUTION_TERMINATION_REASONS, null),
     exitCode: signedInteger(run.exitCode),
-    signal: safeEnum(run.signal, EXECUTION_SIGNALS, null)
+    signal: safeEnum(run.signal, EXECUTION_SIGNALS, null),
+    workflow: {
+      instanceId: opaqueId("workflow", workflowInstanceId),
+      phaseId,
+      phaseAttemptId: opaqueId("phase-attempt", phaseAttemptId),
+      reservationId: opaqueId("reservation", reservationId)
+    }
   };
 }
 
@@ -601,6 +706,224 @@ function summarizeExecution(value) {
         .filter(Boolean)
         .sort((left, right) => Date.parse(right.createdAt || 0) - Date.parse(left.createdAt || 0))
         .slice(0, 30)
+      : []
+  };
+}
+
+function summarizeWorkflowInstance(value) {
+  const workflow = object(value);
+  if (!workflow) return null;
+  const privateInstanceId = id(workflow.instanceId);
+  const status = safeEnum(workflow.status, WORKFLOW_STATUSES, "unknown");
+  const health = safeEnum(workflow.health, WORKFLOW_HEALTH, "degraded");
+  if (!privateInstanceId) return null;
+  const active = object(workflow.activePhase);
+  let activePhase = null;
+  if (active) {
+    const phaseId = publicName(active.id, 80);
+    const lane = safeEnum(active.lane, WORKFLOW_LANES, null);
+    const effectClass = safeEnum(active.effectClass, WORKFLOW_EFFECTS, null);
+    const toolId = active.toolId === null ? null : publicName(active.toolId, 80);
+    const controls = object(active.envelopeControls);
+    if (!phaseId || !lane || !effectClass || (active.toolId !== null && !toolId)) return null;
+    activePhase = {
+      id: phaseId,
+      lane,
+      effectClass,
+      toolId,
+      envelopeControls: controls ? Object.fromEntries([
+        "wallTime", "requests", "rate", "parallel", "tokens", "evidenceBytes", "spend"
+      ].map((key) => [key, safeEnum(controls[key], WORKFLOW_CONTROLS, null)])) : null
+    };
+  }
+  return {
+    instanceId: opaqueId("workflow", privateInstanceId),
+    status,
+    activePhase,
+    journalSequence: nonNegativeInteger(workflow.journalSequence),
+    reservations: nonNegativeInteger(workflow.reservations),
+    stops: nonNegativeInteger(workflow.stops),
+    health
+  };
+}
+
+function summarizeWorkflows(value) {
+  const workflows = object(value) || {};
+  const rawCounts = object(workflows.counts) || {};
+  const rawScan = object(workflows.scan) || {};
+  const counts = Object.fromEntries([
+    "total", "active", "open", "stopped", "recovery-hold", "reported", "closed", "degraded", "unknown"
+  ].map((key) => [key, nonNegativeInteger(rawCounts[key])]));
+  return {
+    counts,
+    instances: Array.isArray(workflows.instances)
+      ? workflows.instances.slice(0, MAX_WORKFLOW_RECORDS).map(summarizeWorkflowInstance).filter(Boolean)
+      : [],
+    scan: {
+      discovered: nonNegativeInteger(rawScan.discovered),
+      scanned: nonNegativeInteger(rawScan.scanned),
+      omitted: nonNegativeInteger(rawScan.omitted),
+      complete: typeof rawScan.complete === "boolean" ? rawScan.complete : false,
+      truncated: typeof rawScan.truncated === "boolean" ? rawScan.truncated : true
+    }
+  };
+}
+
+function summarizeOfflineAnalysisRun(value) {
+  const run = object(value);
+  if (!run) return null;
+  const status = safeEnum(run.status, OFFLINE_ANALYSIS_STATUSES, null);
+  const privateRunId = typeof run.runId === "string" && /^arun_[a-f0-9]{32}$/u.test(run.runId)
+    ? run.runId
+    : null;
+  if (!status || !privateRunId) return null;
+  return {
+    runId: opaqueId("run", privateRunId),
+    status,
+    isolationVerified: typeof run.isolationVerified === "boolean" ? run.isolationVerified : null
+  };
+}
+
+function summarizeOfflineRetention(value) {
+  const retention = object(value) || {};
+  const projected = {};
+  for (const field of [
+    "quotaBytes", "quotaArtifacts", "retainedBytes", "availableBytes", "retainedArtifacts", "availableArtifacts", "pendingManifests",
+    "pendingTransactions", "invalidTransactionRecords", "creatingManifests", "invalidCreationIntents",
+    "invalidClaimRecords", "invalidPurgeRecords", "invalidRunRecords", "blockedManifests",
+    "expiredManifests", "activeManifests", "terminalManifests", "unknownManifests",
+    "purgePendingManifests", "purgedManifests", "orphanedArtifacts", "orphanedBytes",
+    "missingArtifacts", "invalidEntries"
+  ]) projected[field] = nonNegativeInteger(retention[field]);
+  projected.retentionLockState = safeEnum(retention.retentionLockState, OFFLINE_RETENTION_LOCK_STATES, null);
+  projected.snapshotState = safeEnum(retention.snapshotState, OFFLINE_SNAPSHOT_STATES, null);
+  projected.overQuota = typeof retention.overQuota === "boolean" ? retention.overQuota : null;
+  projected.mutationBlocked = typeof retention.mutationBlocked === "boolean" ? retention.mutationBlocked : null;
+  return projected;
+}
+
+function summarizeOfflineAnalysis(value) {
+  const analysis = object(value) || {};
+  const capability = object(analysis.capability) || {};
+  const rawCounts = object(analysis.counts) || {};
+  const configured = typeof capability.configured === "boolean" ? capability.configured : null;
+  const mode = safeEnum(capability.mode, OFFLINE_ANALYSIS_MODES, null);
+  const enforced = executionCapabilityList(capability.enforced, OFFLINE_ANALYSIS_ENFORCED);
+  const unavailable = executionCapabilityList(capability.unavailable, OFFLINE_ANALYSIS_UNAVAILABLE);
+  const completeCapability = enforced.length === OFFLINE_ANALYSIS_ENFORCED.size &&
+    unavailable.length === OFFLINE_ANALYSIS_UNAVAILABLE.size;
+  const laneAvailable = configured === true && capability.laneAvailable === true && mode !== null && completeCapability;
+  const counts = Object.fromEntries(
+    [...OFFLINE_ANALYSIS_STATUSES].map((status) => [status, nonNegativeInteger(rawCounts[status])])
+  );
+  return {
+    configured,
+    laneAvailable,
+    mode,
+    reason: laneAvailable ? null : "unavailable",
+    runningCount: counts.running,
+    counts,
+    retention: summarizeOfflineRetention(analysis.retention),
+    enforced,
+    unavailable,
+    recent: Array.isArray(analysis.recent)
+      ? analysis.recent
+        .slice(0, 100)
+        .map(summarizeOfflineAnalysisRun)
+        .filter(Boolean)
+        .slice(0, 25)
+      : []
+  };
+}
+
+function toolRuntimeName(value) {
+  const text = boundedString(value, 80);
+  if (!text || text.includes("://") || text.includes("\\")) return null;
+  return /^[A-Za-z0-9][A-Za-z0-9+._ -]*(?: \/ [A-Za-z0-9][A-Za-z0-9+._ -]*)?$/u.test(text) ? text : null;
+}
+
+function toolRuntimeReason(value) {
+  if (TOOL_RUNTIME_REASONS.has(value)) return value;
+  // Runtime verification can return filesystem-derived exception text. Keep
+  // the fault visible without exposing that text across the observer boundary.
+  return boundedString(value, 500) ? "runtime-integrity-invalid" : null;
+}
+
+function toolRuntimeReasons(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.slice(0, 32).map(toolRuntimeReason).filter(Boolean))];
+}
+
+function summarizeToolRuntime(value) {
+  const runtime = object(value);
+  const rawId = boundedString(runtime?.id, 128);
+  const toolId = rawId && /^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(rawId)
+    ? rawId
+    : null;
+  if (!toolId) return null;
+  const evidence = object(runtime.verificationEvidence);
+  return {
+    id: toolId,
+    name: toolRuntimeName(runtime.name),
+    state: safeEnum(runtime.state, TOOL_RUNTIME_STATES, "unknown"),
+    locked: typeof runtime.locked === "boolean" ? runtime.locked : null,
+    installed: typeof runtime.installed === "boolean" ? runtime.installed : null,
+    verified: typeof runtime.verified === "boolean" ? runtime.verified : null,
+    executable: typeof runtime.executable === "boolean" ? runtime.executable : null,
+    ...(evidence ? { verificationEvidence: {
+      kind: safeEnum(evidence.kind, new Set([
+        "installation-receipt",
+        "current-bytes-and-install-smoke-evidence",
+        "current-bytes-and-live-zero-egress-smoke"
+      ]), null),
+      lastVerifiedAt: timestamp(evidence.lastVerifiedAt),
+      ageSeconds: nonNegativeInteger(evidence.ageSeconds),
+      current: typeof evidence.current === "boolean" ? evidence.current : null,
+      currentBytesChecked: typeof evidence.currentBytesChecked === "boolean" ? evidence.currentBytesChecked : null,
+      liveSmokeExecutedNow: typeof evidence.liveSmokeExecutedNow === "boolean" ? evidence.liveSmokeExecutedNow : null
+    } } : {}),
+    reasons: toolRuntimeReasons(runtime.reasons)
+  };
+}
+
+/**
+ * Project managed runtime status through an explicit metadata allowlist. Raw
+ * verification exceptions may contain private paths, so unknown reason text is
+ * represented by one generic integrity signal rather than copied verbatim.
+ */
+export function summarizeToolRuntimes(value) {
+  const summary = object(value) || {};
+  const reasonCounts = new Map();
+  if (Array.isArray(summary.unresolvedConstraints)) {
+    for (const raw of summary.unresolvedConstraints.slice(0, MAX_TOOL_RUNTIMES)) {
+      const constraint = object(raw);
+      const reason = toolRuntimeReason(constraint?.reason);
+      const count = nonNegativeInteger(constraint?.count);
+      if (!reason || count === null) continue;
+      reasonCounts.set(reason, Math.min(Number.MAX_SAFE_INTEGER, (reasonCounts.get(reason) || 0) + count));
+    }
+  }
+  return {
+    ok: typeof summary.ok === "boolean" ? summary.ok : null,
+    verificationMode: safeEnum(summary.verificationMode, TOOL_RUNTIME_VERIFICATION_MODES, null),
+    ...(typeof summary.currentBytesChecked === "boolean"
+      ? { currentBytesChecked: summary.currentBytesChecked }
+      : {}),
+    ...(nonNegativeInteger(summary.executableHashReads) !== null
+      ? { executableHashReads: nonNegativeInteger(summary.executableHashReads) }
+      : {}),
+    platform: safeEnum(summary.platform, TOOL_RUNTIME_PLATFORMS, null),
+    catalog: nonNegativeInteger(summary.catalog),
+    locked: nonNegativeInteger(summary.locked),
+    installed: nonNegativeInteger(summary.installed),
+    verified: nonNegativeInteger(summary.verified),
+    executable: nonNegativeInteger(summary.executable),
+    unresolved: nonNegativeInteger(summary.unresolved),
+    unresolvedConstraints: [...reasonCounts]
+      .map(([reason, count]) => ({ reason, count }))
+      .sort((left, right) => right.count - left.count || left.reason.localeCompare(right.reason)),
+    tools: Array.isArray(summary.tools)
+      ? summary.tools.slice(0, MAX_TOOL_RUNTIMES).map(summarizeToolRuntime).filter(Boolean)
       : []
   };
 }
@@ -714,17 +1037,32 @@ export function projectSnapshot(rawStatus, paths) {
     agents: agents.length,
     tasks: tasks.length
   };
+  const workflowInputPresent = object(raw.workflows) !== null;
+  const workflows = summarizeWorkflows(raw.workflows);
+  const workflowBlocked = workflowInputPresent && (
+    workflows.scan.complete !== true ||
+    Number(workflows.counts.stopped || 0) > 0 ||
+    Number(workflows.counts["recovery-hold"] || 0) > 0 ||
+    Number(workflows.counts.degraded || 0) > 0 ||
+    Number(workflows.counts.unknown || 0) > 0
+  );
+  const workflowRunning = workflowInputPresent && Number(workflows.counts.active || 0) > 0;
+  const workflowWaiting = workflowInputPresent && (
+    Number(workflows.counts.open || 0) > 0 || Number(workflows.counts.reported || 0) > 0
+  );
   const state = counts.failed > 0
     ? "failed"
-    : counts.blocked > 0
+    : counts.blocked > 0 || workflowBlocked
       ? "blocked"
       : counts.waiting > 0
         ? "waiting"
-        : counts.running > 0
+        : counts.running > 0 || workflowRunning
           ? "running"
-          : members.length
-            ? "idle"
-            : "unknown";
+          : workflowWaiting
+            ? "waiting"
+            : members.length || workflowInputPresent
+              ? "idle"
+              : "unknown";
   const usage = projectUsage(raw.tokens);
   const lastActivityAt = events[0]?.at || usage.sessions.map((session) => session.at).filter(Boolean).sort().at(-1) || null;
   const generatedAt = timestamp(raw.at) || new Date().toISOString();
@@ -742,6 +1080,8 @@ export function projectSnapshot(rawStatus, paths) {
     budget: { usedTokens: null, limitTokens: budget.limitTokens }
   };
   const execution = summarizeExecution(raw.execution);
+  const offlineAnalysis = summarizeOfflineAnalysis(raw.offlineAnalysis);
+  const toolRuntimes = summarizeToolRuntimes(raw.toolRuntimes);
   return {
     status: {
       apiVersion: OBSERVER_API_VERSION,
@@ -754,6 +1094,9 @@ export function projectSnapshot(rawStatus, paths) {
       budget,
       telemetry: { freshness, lastActivityAt, ageSeconds },
       execution,
+      workflows,
+      offlineAnalysis,
+      toolRuntimes,
       engagements: Array.isArray(raw.engagements)
         ? raw.engagements.map((value) => summarizeEngagement(value, execution)).filter(Boolean)
         : [],

@@ -33,9 +33,11 @@ npm test
 npm run check
 ```
 
-No Mistakes owns the branch after handoff through review, tests, documentation, lint, push, pull request, and CI. Do not mutate the branch concurrently. GATE v0.1 provides read-only exact-head and required-check preflight. Merge or publication remains blocked until a trusted adapter verifies a No Mistakes attestation bound to that head and enforces project policy.
+No Mistakes owns the branch after handoff through review, tests, documentation, lint, push, pull request, and CI. Do not mutate the branch concurrently. GATE v0.1 provides read-only exact-head and observed-check preflight without requiring branch protection. Merge or publication remains blocked until a trusted adapter verifies a No Mistakes attestation bound to that head and enforces project policy.
 
 Tests should cover meaningful contracts and failure modes. Receipt invalidation, target and exclusion matching, redaction, schema rejection, private/public storage, command invocation, cancellation, and recovery deserve direct tests. Do not add tests that only repeat implementation text.
+
+The offline-analysis integration tests need Linux/WSL2, a working Bubblewrap namespace, and the locked managed REA installation and npm cache. Follow the [runtime setup](docs/setup.md#run-a-zero-network-offline-artifact-analysis) first. Local tests skip this integration when prerequisites are unavailable; use `GATE_REQUIRE_OFFLINE_INTEGRATION=1 npm test` to make missing prerequisites fail instead. The [CI workflow](.github/workflows/validate.yml) prepares that runtime and requires the integration rather than accepting skips.
 
 ## Change schemas and policies
 
@@ -58,7 +60,7 @@ Upstream source remains external. Prefer a small adapter over copying or forking
 
 ## Add a security tool
 
-A catalog entry is an admission record, not an installation or authority grant. A new tool needs:
+A catalog entry describes a capability candidate; admission is a separate reviewed process described in [security tooling](docs/security-tooling.md#installation-lanes). A new tool needs:
 
 1. a concrete capability gap and comparison with current entries;
 2. canonical source, maintenance evidence, and license;
@@ -73,7 +75,7 @@ A catalog entry is an admission record, not an installation or authority grant. 
 
 Tool and target output is untrusted data. Adapters must use argument arrays without a shell, reject unknown flags, validate scope, enforce resource limits, preserve raw evidence and hashes, and redact secrets.
 
-v0.1 does not yet define a per-tool lock or admission-record store. A catalog-only addition therefore remains a capability candidate. Put the evaluated version, commit, artifact digest, signature result, and smoke evidence in the reviewed change, and do not call the tool admitted or installed until its adapter and immutable lock record are added under an approved contract.
+A catalog-only addition remains a capability candidate. Follow the [managed runtime and installation contracts](docs/security-tooling.md#managed-core-runtime) for exact locks, verification, and separate invocation admission; include the evaluated provenance and smoke evidence in the reviewed change.
 
 ## Add a skill
 

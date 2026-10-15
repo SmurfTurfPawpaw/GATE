@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/offline-analysis-purge.schema.json",
+  "title": "GATE offline analysis artifact purge",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "apiVersion", "kind", "manifestId", "runId", "manifestSha256", "projectId", "transition", "status", "requestedAt", "completedAt", "artifact", "bytesFreed"],
+  "properties": {
+    "$schema": { "type": "string", "minLength": 1 },
+    "apiVersion": { "const": "gate.offline-analysis-purge/v1" },
+    "kind": { "const": "OfflineAnalysisArtifactPurge" },
+    "manifestId": { "type": "string", "pattern": "^amf_[a-f0-9]{32}$" },
+    "runId": { "type": "string", "pattern": "^arun_[a-f0-9]{32}$" },
+    "manifestSha256": { "$ref": "#/$defs/sha256" },
+    "projectId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$" },
+    "transition": { "enum": ["abandoned", "expired", "terminal"] },
+    "status": { "enum": ["claimed", "purged"] },
+    "requestedAt": { "type": "string", "format": "date-time" },
+    "completedAt": { "type": ["string", "null"], "format": "date-time" },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["snapshotRef", "sha256", "bytes"],
+      "properties": {
+        "snapshotRef": { "type": "string", "pattern": "^private://offline-analysis/inputs/arun_[a-f0-9]{32}\\.bin$" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "bytes": { "type": "integer", "minimum": 1, "maximum": 536870912 }
+      }
+    },
+    "bytesFreed": { "type": "integer", "minimum": 0, "maximum": 536870912 }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

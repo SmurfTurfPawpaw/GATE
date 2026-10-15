@@ -3,7 +3,12 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { readJson } from "./config.mjs";
 import { runtimePaths } from "./paths.mjs";
+import { pentestWorkflowSemanticErrors } from "./pentest-workflow.mjs";
+import { validateManagedAdapterRegistry } from "./managed-adapters.mjs";
 import { validateDocument } from "./schema.mjs";
+import { validateToolRuntimeContract } from "./tool-runtimes.mjs";
+
+const riskClassOrder = new Map(["P0", "P1", "A1", "A2", "A3"].map((value, index) => [value, index]));
 
 function walk(directory) {
   if (!fs.existsSync(directory)) return [];
@@ -27,6 +32,7 @@ export function validateRepository(options = {}) {
     "README.md",
     "SECURITY.md",
     "locks/upstreams.lock.json",
+    "locks/tool-runtimes.lock.json",
     "catalog/security-tools.json"
   ];
   for (const relative of required) {
@@ -89,12 +95,14 @@ export function validateRepository(options = {}) {
 
   const catalogFile = path.join(paths.repo, "catalog", "security-tools.json");
   let catalogIds = new Set();
+  let catalogToolsById = new Map();
   if (fs.existsSync(catalogFile)) {
     try {
       const catalog = readJson(catalogFile);
       const tools = catalog.tools || [];
       const ids = tools.map((tool) => tool.id);
       catalogIds = new Set(ids);
+      catalogToolsById = new Map(tools.map((tool) => [tool.id, tool]));
       checks.push(result("catalog:unique-ids", new Set(ids).size === ids.length, `${ids.length} tools`));
       for (const tool of tools) {
         checks.push(
@@ -114,13 +122,36 @@ export function validateRepository(options = {}) {
   for (const file of profileFiles) {
     try {
       const profile = readJson(file);
+      const expectedId = path.basename(file, ".json");
       const ids = Array.isArray(profile.toolIds) ? profile.toolIds : [];
       const missing = ids.filter((id) => !catalogIds.has(id));
+      const invalidCeiling = !riskClassOrder.has(profile.maxRiskClass);
+      const invalidRisk = ids.filter((id) => {
+        const tool = catalogToolsById.get(id);
+        return tool && !riskClassOrder.has(tool.riskClass);
+      });
+      const overCeiling = invalidCeiling || invalidRisk.length ? [] : ids.filter((id) => {
+        const tool = catalogToolsById.get(id);
+        return tool && riskClassOrder.get(tool.riskClass) > riskClassOrder.get(profile.maxRiskClass);
+      });
+      const valid = profile.id === expectedId && ids.length > 0 && new Set(ids).size === ids.length && missing.length === 0 &&
+        !invalidCeiling && invalidRisk.length === 0 && overCeiling.length === 0;
+      const detail = profile.id !== expectedId
+        ? `profile id ${profile.id || "missing"} does not match filename ${expectedId}`
+        : missing.length
+          ? `unknown tools: ${missing.join(", ")}`
+          : invalidCeiling
+            ? `invalid maxRiskClass: ${profile.maxRiskClass || "missing"}`
+            : invalidRisk.length
+              ? `tools have invalid riskClass: ${invalidRisk.join(", ")}`
+              : overCeiling.length
+                ? `tools exceed ${profile.maxRiskClass}: ${overCeiling.map((id) => `${id} (${catalogToolsById.get(id).riskClass})`).join(", ")}`
+                : `${ids.length} resolved tools at or below ${profile.maxRiskClass}`;
       checks.push(
         result(
-          `profile:${profile.id || path.basename(file)}`,
-          ids.length > 0 && new Set(ids).size === ids.length && missing.length === 0,
-          missing.length ? `unknown tools: ${missing.join(", ")}` : `${ids.length} resolved tools`
+          `profile:${expectedId}`,
+          valid,
+          detail
         )
       );
     } catch (error) {
@@ -147,14 +178,19 @@ export function validateRepository(options = {}) {
   const documents = [
     ["config/gate.config.json", "gate-config.schema.json"],
     ["locks/upstreams.lock.json", "upstream-lock.schema.json"],
+    ["locks/tool-runtimes.lock.json", "tool-runtime-lock.schema.json"],
+    ["config/managed-adapters.json", "managed-adapter-registry.schema.json"],
     ["policies/autonomy.json", "autonomy-policy.schema.json"],
     ["policies/data-handling.json", "data-policy.schema.json"],
     ["policies/engagements.json", "engagement-policy.schema.json"],
     ["policies/learning.json", "learning-policy.schema.json"],
     ["policies/updates.json", "update-policy.schema.json"],
     ["catalog/security-tools.json", "tool-catalog.schema.json"],
+    ["config/workflows/pentest-e2e.json", "pentest-workflow.schema.json"],
+    ["config/questionnaires/bug-bounty-program-profile.json", "program-profile-questionnaire.schema.json"],
     ["templates/engagement.json", "engagement.schema.json"],
     ["templates/learning.json", "learning.schema.json"],
+    ["templates/provider-capability-profile.json", "provider-capability-profile.schema.json"],
     ["templates/project.json", "project.schema.json"]
   ];
   for (const [relative, schema] of documents) {
@@ -164,12 +200,23 @@ export function validateRepository(options = {}) {
       continue;
     }
     try {
-      const validation = validateDocument(readJson(file), schema, { paths });
-      checks.push(result(`contract:${relative}`, validation.ok, validation.ok ? schema : validation.errors.join("; ")));
+      const document = readJson(file);
+      const validation = validateDocument(document, schema, { paths });
+      const errors = [...validation.errors];
+      if (validation.ok && relative === "config/workflows/pentest-e2e.json") {
+        errors.push(...pentestWorkflowSemanticErrors(document, {
+          catalog: readJson(path.join(paths.repo, "catalog", "security-tools.json")),
+          engagementPolicy: readJson(path.join(paths.repo, "policies", "engagements.json"))
+        }));
+      }
+      checks.push(result(`contract:${relative}`, errors.length === 0, errors.length ? errors.join("; ") : schema));
     } catch (error) {
       checks.push(result(`contract:${relative}`, false, error.message));
     }
   }
+
+  checks.push(...validateToolRuntimeContract({ paths }));
+  checks.push(...validateManagedAdapterRegistry({ paths }));
 
 
   const learningLog = path.join(paths.repo, "memory", "learnings.jsonl");

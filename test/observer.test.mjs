@@ -7,16 +7,60 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { sanitizeStatusPayload } from "../dashboard/model.js";
+
+import { buildStatus } from "../src/lib/status.mjs";
+import { runtimePaths } from "../src/lib/paths.mjs";
+
 import {
   createObserver,
   isLoopbackHost,
   projectSnapshot,
-  startObserver
+  projectUsage,
+  startObserver,
+  summarizeToolRuntimes
 } from "../src/observer/server.mjs";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const paths = { repo };
 const at = "2026-10-13T12:00:00.000Z";
+
+test("observer usage preserves last occurrence order for duplicate usage IDs", async (t) => {
+  const usage = (id, totalTokens) => ({
+    apiVersion: "gate.usage/v1",
+    id,
+    at,
+    runId: "run_observer",
+    taskId: null,
+    agent: "codex",
+    provider: "openai",
+    model: "gpt-6",
+    availability: "exact",
+    measure: "cumulative",
+    inputTokens: null,
+    cachedInputTokens: null,
+    outputTokens: null,
+    reasoningTokens: null,
+    totalTokens,
+    source: "gate-token-log"
+  });
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-observer-usage-order-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const runtime = runtimePaths({ repo, home: path.join(root, "home") });
+  fs.mkdirSync(runtime.home, { recursive: true, mode: 0o700 });
+  const records = [
+    usage("use_observer_first", 10),
+    usage("use_observer_second", 20),
+    usage("use_observer_first", 30)
+  ];
+  fs.writeFileSync(runtime.tokens, `${records.map((value) => JSON.stringify(value)).join("\n")}\n`, { mode: 0o600 });
+  const status = await buildStatus({ paths: runtime });
+  assert.equal(projectUsage(records.slice(0, 2)).totalTokens, 20);
+  const projected = projectUsage(status.tokens);
+  assert.equal(projected.totalTokens, 30);
+  assert.equal(projected.sessions.length, 1);
+  assert.equal(projected.sessions[0].totalTokens, 30);
+});
 
 function canonicalEvent(overrides = {}) {
   return {
@@ -68,6 +112,8 @@ function executionFixture(overrides = {}) {
       reason: null,
       enforced: [
         "engagement-binding",
+        "workflow-phase-binding",
+        "workflow-reservation",
         "target-argument-binding",
         "declared-action-label-binding",
         "tool-allowlist",
@@ -119,6 +165,12 @@ function executionFixture(overrides = {}) {
         terminationReason: null,
         exitCode: null,
         signal: null,
+        workflow: {
+          instanceId: "workflow-canary",
+          phaseId: "active-testing",
+          phaseAttemptId: `wpa_${"3".repeat(32)}`,
+          reservationId: `wxr_${"4".repeat(32)}`
+        },
         targetArgument: "TARGET_ARGUMENT_CANARY",
         argv: ["ARGV_CANARY"],
         executablePath: "/private/EXECUTABLE_PATH_CANARY",
@@ -126,6 +178,96 @@ function executionFixture(overrides = {}) {
         evidence: "EVIDENCE_CONTENT_CANARY"
       }
     ],
+    ...overrides
+  };
+}
+
+function offlineAnalysisFixture(overrides = {}) {
+  return {
+    capability: {
+      configured: true,
+      laneAvailable: true,
+      mode: "bubblewrap-offline",
+      reason: "PRIVATE_OFFLINE_REASON_CANARY",
+      enforced: [
+        "project-contract-binding",
+        "typed-path-binding",
+        "artifact-snapshot-sha256",
+        "pinned-upstream-integrity",
+        "fixed-adapter-argv",
+        "bubblewrap-network-namespace",
+        "read-only-runtime-mounts",
+        "ephemeral-sandbox-writes",
+        "shell-disabled",
+        "cleared-environment",
+        "private-bounded-evidence",
+        "one-shot-claim",
+        "wall-duration",
+        "PRIVATE_OFFLINE_CAPABILITY_CANARY"
+      ],
+      unavailable: [
+        "cpu-limit",
+        "memory-limit",
+        "immutable-managed-upstream-snapshot",
+        "same-uid-gate-home-tamper-resistance",
+        "unix-socket-system-call-denial"
+      ]
+    },
+    counts: {
+      queued: 0,
+      running: 1,
+      succeeded: 2,
+      failed: 0,
+      cancelled: 0,
+      blocked: 0,
+      unknown: 0
+    },
+    retention: {
+      quotaBytes: 2_147_483_648,
+      quotaArtifacts: 64,
+      retainedBytes: 512,
+      availableBytes: 2_147_483_136,
+      overQuota: false,
+      retainedArtifacts: 1,
+      availableArtifacts: 63,
+      retentionLockState: "absent",
+      snapshotState: "consistent",
+      pendingTransactions: 0,
+      invalidTransactionRecords: 0,
+      creatingManifests: 0,
+      invalidCreationIntents: 0,
+      invalidClaimRecords: 0,
+      invalidPurgeRecords: 0,
+      invalidRunRecords: 0,
+      blockedManifests: 0,
+      mutationBlocked: false,
+      pendingManifests: 1,
+      expiredManifests: 0,
+      activeManifests: 0,
+      terminalManifests: 0,
+      unknownManifests: 0,
+      purgePendingManifests: 0,
+      purgedManifests: 0,
+      orphanedArtifacts: 0,
+      orphanedBytes: 0,
+      missingArtifacts: 0,
+      invalidEntries: 0,
+      privatePath: "/private/OFFLINE_RETENTION_CANARY"
+    },
+    recent: [{
+      runId: `arun_${"3".repeat(32)}`,
+      manifestId: `amf_${"4".repeat(32)}`,
+      projectId: "private-project-canary",
+      status: "running",
+      createdAt: at,
+      startedAt: at,
+      finishedAt: null,
+      terminationReason: null,
+      isolationVerified: null,
+      artifactPath: "/private/OFFLINE_ARTIFACT_PATH_CANARY.exe",
+      artifactSha256: "OFFLINE_ARTIFACT_HASH_CANARY",
+      evidence: "OFFLINE_EVIDENCE_CANARY"
+    }],
     ...overrides
   };
 }
@@ -166,6 +308,82 @@ function statusFixture(overrides = {}) {
       }
     ],
     execution: executionFixture(),
+    workflows: {
+      counts: {
+        total: 1,
+        active: 1,
+        open: 1,
+        stopped: 0,
+        "recovery-hold": 0,
+        reported: 0,
+        closed: 0,
+        degraded: 0,
+        unknown: 0
+      },
+      instances: [{
+        instanceId: "workflow-canary",
+        status: "open",
+        activePhase: {
+          id: "active-testing",
+          lane: "active-testing",
+          effectClass: "A2",
+          toolId: "nuclei",
+          envelopeControls: {
+            wallTime: "enforced",
+            requests: "measured-only",
+            rate: "unavailable",
+            parallel: "enforced",
+            tokens: "measured-only",
+            evidenceBytes: "enforced",
+            spend: "unavailable"
+          }
+        },
+        journalSequence: 7,
+        reservations: 1,
+        stops: 0,
+        health: "bounded-replay-verified",
+        privateBody: "WORKFLOW_PRIVATE_CANARY"
+      }],
+      scan: { discovered: 1, scanned: 1, omitted: 0, complete: true, truncated: false }
+    },
+    offlineAnalysis: offlineAnalysisFixture(),
+    toolRuntimes: {
+      ok: true,
+      verificationMode: "current-bytes-and-install-smoke-evidence",
+      platform: "linux-x64",
+      catalog: 2,
+      locked: 1,
+      installed: 1,
+      verified: 1,
+      executable: 1,
+      unresolved: 1,
+      unresolvedConstraints: [{ reason: "managed-runtime-absent", count: 1 }],
+      tools: [
+        {
+          id: "nuclei",
+          name: "Nuclei",
+          state: "verified-install-evidence",
+          locked: true,
+          installed: true,
+          verified: true,
+          executable: true,
+          reasons: [],
+          path: "/private/TOOL_RUNTIME_PATH_CANARY",
+          sha256: "TOOL_RUNTIME_HASH_CANARY",
+          url: "https://example.invalid/TOOL_RUNTIME_URL_CANARY"
+        },
+        {
+          id: "wireshark",
+          name: "Wireshark",
+          state: "unmanaged",
+          locked: false,
+          installed: false,
+          verified: false,
+          executable: false,
+          reasons: ["native-runtime-unavailable"]
+        }
+      ]
+    },
     projects: [
       {
         id: "project_CUSTOMER_PROJECT_CANARY",
@@ -322,16 +540,73 @@ test("observer endpoints coalesce status reads and expose metadata-only projecti
   assert.equal(status.execution.mode, "supervised-generic");
   assert.equal(status.execution.runningCount, 1);
   assert.equal(status.execution.counts.succeeded, 2);
+  assert.ok(status.execution.enforced.includes("workflow-phase-binding"));
+  assert.ok(status.execution.enforced.includes("workflow-reservation"));
   assert.equal(status.execution.bestEffort.length, 3);
   assert.equal(status.execution.unavailable.length, 13);
   assert.match(status.execution.recent[0].runId, /^run_[a-f0-9]{16}$/);
   assert.match(status.execution.recent[0].manifestId, /^manifest_[a-f0-9]{16}$/);
   assert.match(status.execution.recent[0].engagementId, /^engagement_[a-f0-9]{16}$/);
   assert.equal(status.execution.recent[0].status, "running");
+  assert.match(status.execution.recent[0].workflow.instanceId, /^workflow_[a-f0-9]{16}$/);
+  assert.equal(status.execution.recent[0].workflow.phaseId, "active-testing");
+  assert.match(status.execution.recent[0].workflow.phaseAttemptId, /^phase-attempt_[a-f0-9]{16}$/);
+  assert.match(status.execution.recent[0].workflow.reservationId, /^reservation_[a-f0-9]{16}$/);
   assert.notEqual(
     status.execution.recent[0].runId,
     `run_${crypto.createHash("sha256").update(`xrun_${"1".repeat(32)}`).digest("hex").slice(0, 16)}`
   );
+  assert.equal(status.workflows.counts.total, 1);
+  assert.equal(status.workflows.counts.active, 1);
+  assert.equal(status.workflows.scan.complete, true);
+  assert.equal(status.workflows.instances.length, 1);
+  assert.match(status.workflows.instances[0].instanceId, /^workflow_[a-f0-9]{16}$/);
+  assert.equal(status.workflows.instances[0].activePhase.id, "active-testing");
+  assert.equal(status.workflows.instances[0].health, "bounded-replay-verified");
+  assert.equal(JSON.stringify(status).includes("WORKFLOW_PRIVATE_CANARY"), false);
+  assert.equal(status.offlineAnalysis.configured, true);
+  assert.equal(status.offlineAnalysis.laneAvailable, true);
+  assert.equal(status.offlineAnalysis.mode, "bubblewrap-offline");
+  assert.equal(status.offlineAnalysis.reason, null);
+  assert.equal(status.offlineAnalysis.runningCount, 1);
+  assert.equal(status.offlineAnalysis.counts.succeeded, 2);
+  assert.equal(status.offlineAnalysis.retention.retainedBytes, 512);
+  assert.equal(status.offlineAnalysis.retention.quotaArtifacts, 64);
+  assert.equal(status.offlineAnalysis.retention.pendingManifests, 1);
+  assert.equal(status.offlineAnalysis.retention.availableArtifacts, 63);
+  assert.equal(status.offlineAnalysis.retention.expiredManifests, 0);
+  assert.equal(status.offlineAnalysis.retention.overQuota, false);
+  assert.equal(status.offlineAnalysis.retention.retentionLockState, "absent");
+  assert.equal(status.offlineAnalysis.retention.snapshotState, "consistent");
+  assert.equal(status.offlineAnalysis.retention.mutationBlocked, false);
+  assert.equal(status.offlineAnalysis.retention.pendingTransactions, 0);
+  assert.equal(status.offlineAnalysis.retention.blockedManifests, 0);
+  assert.equal(status.offlineAnalysis.enforced.length, 13);
+  assert.equal(status.offlineAnalysis.unavailable.length, 5);
+  assert.match(status.offlineAnalysis.recent[0].runId, /^run_[a-f0-9]{16}$/);
+  assert.equal(status.offlineAnalysis.recent[0].status, "running");
+  assert.equal(status.offlineAnalysis.recent[0].isolationVerified, null);
+  assert.deepEqual(Object.keys(status.offlineAnalysis.recent[0]).sort(), ["isolationVerified", "runId", "status"]);
+  assert.notEqual(
+    status.offlineAnalysis.recent[0].runId,
+    `run_${crypto.createHash("sha256").update(`arun_${"3".repeat(32)}`).digest("hex").slice(0, 16)}`
+  );
+  assert.equal(status.toolRuntimes.ok, true);
+  assert.equal(status.toolRuntimes.verificationMode, "current-bytes-and-install-smoke-evidence");
+  assert.equal(status.toolRuntimes.platform, "linux-x64");
+  assert.equal(status.toolRuntimes.catalog, 2);
+  assert.equal(status.toolRuntimes.executable, 1);
+  assert.deepEqual(status.toolRuntimes.unresolvedConstraints, [{ reason: "managed-runtime-absent", count: 1 }]);
+  assert.deepEqual(status.toolRuntimes.tools[0], {
+    id: "nuclei",
+    name: "Nuclei",
+    state: "verified-install-evidence",
+    locked: true,
+    installed: true,
+    verified: true,
+    executable: true,
+    reasons: []
+  });
   assert.match(status.projects[0].id, /^project_[a-f0-9]{16}$/);
   assert.equal(status.projects[0].status, "ready");
   assert.equal(status.projects[0].provider, "github");
@@ -381,6 +656,18 @@ test("observer endpoints coalesce status reads and expose metadata-only projecti
     "REPOSITORY_CANARY",
     "GATE_HOME_CANARY",
     "PRIVATE_CAPABILITY_CANARY",
+    "PRIVATE_OFFLINE_REASON_CANARY",
+    "PRIVATE_OFFLINE_CAPABILITY_CANARY",
+    "OFFLINE_ARTIFACT_PATH_CANARY",
+    "OFFLINE_ARTIFACT_HASH_CANARY",
+    "OFFLINE_EVIDENCE_CANARY",
+    "OFFLINE_RETENTION_CANARY",
+    "TOOL_RUNTIME_PATH_CANARY",
+    "TOOL_RUNTIME_HASH_CANARY",
+    "TOOL_RUNTIME_URL_CANARY",
+    "private-project-canary",
+    `arun_${"3".repeat(32)}`,
+    `amf_${"4".repeat(32)}`,
     "TARGET_ARGUMENT_CANARY",
     "ARGV_CANARY",
     "EXECUTABLE_PATH_CANARY",
@@ -398,6 +685,81 @@ test("observer endpoints coalesce status reads and expose metadata-only projecti
     assert.equal(response.headers.get("access-control-allow-origin"), null);
     assert.equal(response.headers.get("x-content-type-options"), "nosniff");
   }
+});
+
+test("tool runtime observer summary allowlists metadata and withholds raw verification errors", () => {
+  const summary = summarizeToolRuntimes({
+    ok: false,
+    verificationMode: "receipt-only",
+    platform: "darwin-arm64",
+    catalog: 2,
+    locked: 2,
+    installed: 1,
+    verified: 0,
+    executable: 0,
+    unresolved: 2,
+    unresolvedConstraints: [
+      { reason: "managed-runtime-absent", count: 1 },
+      { reason: "failed at /private/AGGREGATE_PATH_CANARY https://target.invalid", count: 1 }
+    ],
+    tools: [
+      {
+        id: "searchsploit",
+        name: "SearchSploit / ExploitDB",
+        state: "invalid",
+        locked: true,
+        installed: true,
+        verified: false,
+        executable: false,
+        reasons: ["receipt at /private/TOOL_PATH_CANARY contains TOOL_SECRET_CANARY"],
+        executablePath: "/private/EXECUTABLE_CANARY",
+        artifactSha256: "ARTIFACT_HASH_CANARY",
+        source: { url: "https://target.invalid/SOURCE_URL_CANARY" }
+      },
+      {
+        id: "bad/id",
+        name: "/private/NAME_CANARY",
+        state: "verified",
+        locked: true,
+        installed: true,
+        verified: true,
+        executable: true,
+        reasons: []
+      }
+    ],
+    error: "LOCK_ERROR_CANARY /private/lock"
+  });
+
+  assert.deepEqual(summary, {
+    ok: false,
+    verificationMode: "receipt-only",
+    platform: "darwin-arm64",
+    catalog: 2,
+    locked: 2,
+    installed: 1,
+    verified: 0,
+    executable: 0,
+    unresolved: 2,
+    unresolvedConstraints: [
+      { reason: "managed-runtime-absent", count: 1 },
+      { reason: "runtime-integrity-invalid", count: 1 }
+    ],
+    tools: [{
+      id: "searchsploit",
+      name: "SearchSploit / ExploitDB",
+      state: "invalid",
+      locked: true,
+      installed: true,
+      verified: false,
+      executable: false,
+      reasons: ["runtime-integrity-invalid"]
+    }]
+  });
+  const serialized = JSON.stringify(summary);
+  for (const canary of [
+    "AGGREGATE_PATH_CANARY", "target.invalid", "TOOL_PATH_CANARY", "TOOL_SECRET_CANARY",
+    "EXECUTABLE_CANARY", "ARTIFACT_HASH_CANARY", "SOURCE_URL_CANARY", "NAME_CANARY", "LOCK_ERROR_CANARY"
+  ]) assert.equal(serialized.includes(canary), false, `observer leaked ${canary}`);
 });
 
 test("missing token telemetry remains unavailable instead of becoming zero", () => {
@@ -430,6 +792,9 @@ test("execution metadata keeps opaque joins while excluding command and evidence
   const rawRunId = `xrun_${"a".repeat(32)}`;
   const rawManifestId = `xmf_${"b".repeat(32)}`;
   const rawEngagementId = "safe-test-engagement";
+  const rawWorkflowId = "workflow-metadata-test";
+  const rawPhaseAttemptId = `wpa_${"c".repeat(32)}`;
+  const rawReservationId = `wxr_${"d".repeat(32)}`;
   const projected = projectSnapshot(statusFixture({
     events: [canonicalEvent({ runId: rawRunId })],
     engagements: [{
@@ -451,6 +816,12 @@ test("execution metadata keeps opaque joins while excluding command and evidence
         terminationReason: "process-group-remained",
         exitCode: null,
         signal: null,
+        workflow: {
+          instanceId: rawWorkflowId,
+          phaseId: "active-testing",
+          phaseAttemptId: rawPhaseAttemptId,
+          reservationId: rawReservationId
+        },
         argv: ["JOIN_ARGV_CANARY"],
         target: "JOIN_TARGET_CANARY",
         evidence: "JOIN_EVIDENCE_CANARY"
@@ -463,9 +834,16 @@ test("execution metadata keeps opaque joins while excluding command and evidence
   assert.equal(run.engagementId, projected.status.engagements[0].id);
   assert.equal(run.status, "cancelled");
   assert.equal(run.terminationReason, "process-group-remained");
+  assert.match(run.workflow.instanceId, /^workflow_[a-f0-9]{16}$/);
+  assert.equal(run.workflow.phaseId, "active-testing");
+  assert.match(run.workflow.phaseAttemptId, /^phase-attempt_[a-f0-9]{16}$/);
+  assert.match(run.workflow.reservationId, /^reservation_[a-f0-9]{16}$/);
   assert.notEqual(run.runId, `run_${crypto.createHash("sha256").update(rawRunId).digest("hex").slice(0, 16)}`);
   const serialized = JSON.stringify(projected);
-  for (const forbidden of [rawRunId, rawManifestId, rawEngagementId, "JOIN_ARGV_CANARY", "JOIN_TARGET_CANARY", "JOIN_EVIDENCE_CANARY"]) {
+  for (const forbidden of [
+    rawRunId, rawManifestId, rawEngagementId, rawWorkflowId, rawPhaseAttemptId, rawReservationId,
+    "JOIN_ARGV_CANARY", "JOIN_TARGET_CANARY", "JOIN_EVIDENCE_CANARY"
+  ]) {
     assert.equal(serialized.includes(forbidden), false, `observer leaked ${forbidden}`);
   }
 });
@@ -500,6 +878,171 @@ test("execution availability fails closed on incomplete capabilities and malform
   assert.equal(unavailable.status.execution.configured, null);
   assert.equal(unavailable.status.execution.laneAvailable, false);
   assert.equal(unavailable.status.execution.runningCount, null);
+});
+
+test("execution availability requires every workflow enforcement control", () => {
+  for (const required of ["workflow-phase-binding", "workflow-reservation"]) {
+    const execution = executionFixture();
+    execution.capability.enforced = execution.capability.enforced.filter((value) => value !== required);
+
+    const projected = projectSnapshot(statusFixture({ execution }), paths);
+
+    assert.equal(projected.status.execution.laneAvailable, false, `missing ${required} must fail closed`);
+    assert.equal(projected.status.execution.enforced.includes(required), false);
+  }
+});
+
+test("workflow faults make observer state blocked without leaking private workflow state", () => {
+  const raw = statusFixture({
+    events: [],
+    workflows: {
+      counts: {
+        total: 2,
+        active: 0,
+        open: 0,
+        stopped: 1,
+        "recovery-hold": 0,
+        reported: 0,
+        closed: 0,
+        degraded: 1,
+        unknown: 1
+      },
+      instances: [{
+        instanceId: "faulted-workflow",
+        status: "unknown",
+        activePhase: null,
+        journalSequence: null,
+        reservations: null,
+        stops: null,
+        health: "degraded",
+        blocker: "PRIVATE_WORKFLOW_BLOCKER"
+      }],
+      scan: { discovered: 2, scanned: 1, omitted: 1, complete: false, truncated: true }
+    }
+  });
+  const projected = projectSnapshot(raw, paths);
+
+  assert.equal(projected.status.state, "blocked");
+  assert.equal(projected.status.workflows.counts.degraded, 1);
+  assert.equal(projected.status.workflows.scan.complete, false);
+  assert.equal(projected.status.workflows.scan.truncated, true);
+  assert.equal(JSON.stringify(projected).includes("PRIVATE_WORKFLOW_BLOCKER"), false);
+});
+
+test("offline analysis projection fails closed and withholds artifact and evidence details", () => {
+  const analysis = offlineAnalysisFixture();
+  analysis.capability.enforced = analysis.capability.enforced.filter((value) => value !== "shell-disabled");
+  analysis.capability.reason = "/private/OFFLINE_FAILURE_DETAIL_CANARY";
+  analysis.recent = [{
+    runId: "/private/OFFLINE_RUN_CANARY",
+    manifestId: `amf_${"4".repeat(32)}`,
+    projectId: "private-project-canary",
+    status: "running",
+    createdAt: at,
+    artifactPath: "/private/OFFLINE_PATH_CANARY",
+    artifactSha256: "OFFLINE_HASH_CANARY",
+    evidence: "OFFLINE_OUTPUT_CANARY"
+  }];
+  const projected = projectSnapshot(statusFixture({ offlineAnalysis: analysis }), paths);
+
+  assert.equal(projected.status.offlineAnalysis.configured, true);
+  assert.equal(projected.status.offlineAnalysis.laneAvailable, false);
+  assert.equal(projected.status.offlineAnalysis.reason, "unavailable");
+  assert.equal(projected.status.offlineAnalysis.recent.length, 0);
+  const serialized = JSON.stringify(projected.status.offlineAnalysis);
+  for (const forbidden of [
+    "OFFLINE_FAILURE_DETAIL_CANARY",
+    "OFFLINE_RUN_CANARY",
+    "private-project-canary",
+    "OFFLINE_PATH_CANARY",
+    "OFFLINE_HASH_CANARY",
+    "OFFLINE_OUTPUT_CANARY"
+  ]) assert.equal(serialized.includes(forbidden), false, `observer leaked ${forbidden}`);
+
+  const absent = projectSnapshot(statusFixture({ offlineAnalysis: undefined }), paths);
+  assert.equal(absent.status.offlineAnalysis.configured, null);
+  assert.equal(absent.status.offlineAnalysis.laneAvailable, false);
+  assert.equal(absent.status.offlineAnalysis.reason, "unavailable");
+  assert.equal(absent.status.offlineAnalysis.runningCount, null);
+});
+
+test("observer exposes only aggregate offline retention fault signals", () => {
+  const analysis = offlineAnalysisFixture();
+  Object.assign(analysis.retention, {
+    overQuota: true,
+    missingArtifacts: 2,
+    invalidEntries: 3,
+    orphanedArtifacts: 4,
+    orphanedBytes: 1536,
+    purgePendingManifests: 1,
+    unknownManifests: 5,
+    retentionLockState: "invalid",
+    snapshotState: "indeterminate",
+    pendingTransactions: 6,
+    invalidTransactionRecords: 7,
+    creatingManifests: 8,
+    invalidCreationIntents: 9,
+    invalidClaimRecords: 10,
+    invalidPurgeRecords: 11,
+    invalidRunRecords: 13,
+    blockedManifests: 12,
+    mutationBlocked: true,
+    privatePath: "/private/RETENTION_PATH_CANARY",
+    manifestDigest: "RETENTION_DIGEST_CANARY"
+  });
+  const projected = projectSnapshot(statusFixture({ offlineAnalysis: analysis }), paths);
+  const retention = projected.status.offlineAnalysis.retention;
+
+  assert.deepEqual({
+    overQuota: retention.overQuota,
+    missingArtifacts: retention.missingArtifacts,
+    invalidEntries: retention.invalidEntries,
+    orphanedArtifacts: retention.orphanedArtifacts,
+    orphanedBytes: retention.orphanedBytes,
+    purgePendingManifests: retention.purgePendingManifests,
+    unknownManifests: retention.unknownManifests,
+    retentionLockState: retention.retentionLockState,
+    snapshotState: retention.snapshotState,
+    pendingTransactions: retention.pendingTransactions,
+    invalidTransactionRecords: retention.invalidTransactionRecords,
+    creatingManifests: retention.creatingManifests,
+    invalidCreationIntents: retention.invalidCreationIntents,
+    invalidClaimRecords: retention.invalidClaimRecords,
+    invalidPurgeRecords: retention.invalidPurgeRecords,
+    invalidRunRecords: retention.invalidRunRecords,
+    blockedManifests: retention.blockedManifests,
+    mutationBlocked: retention.mutationBlocked
+  }, {
+    overQuota: true,
+    missingArtifacts: 2,
+    invalidEntries: 3,
+    orphanedArtifacts: 4,
+    orphanedBytes: 1536,
+    purgePendingManifests: 1,
+    unknownManifests: 5,
+    retentionLockState: "invalid",
+    snapshotState: "indeterminate",
+    pendingTransactions: 6,
+    invalidTransactionRecords: 7,
+    creatingManifests: 8,
+    invalidCreationIntents: 9,
+    invalidClaimRecords: 10,
+    invalidPurgeRecords: 11,
+    invalidRunRecords: 13,
+    blockedManifests: 12,
+    mutationBlocked: true
+  });
+  const serialized = JSON.stringify(retention);
+  assert.equal(serialized.includes("RETENTION_PATH_CANARY"), false);
+  assert.equal(serialized.includes("RETENTION_DIGEST_CANARY"), false);
+
+  analysis.retention.retentionLockState = "/private/LOCK_OWNER_CANARY";
+  analysis.retention.snapshotState = "/private/SNAPSHOT_CANARY";
+  const invalidLockText = projectSnapshot(statusFixture({ offlineAnalysis: analysis }), paths);
+  assert.equal(invalidLockText.status.offlineAnalysis.retention.retentionLockState, null);
+  assert.equal(invalidLockText.status.offlineAnalysis.retention.snapshotState, null);
+  assert.equal(JSON.stringify(invalidLockText).includes("LOCK_OWNER_CANARY"), false);
+  assert.equal(JSON.stringify(invalidLockText).includes("SNAPSHOT_CANARY"), false);
 });
 
 test("observer retains an opaque invalid project for filesystem-valid corrupt names", () => {
@@ -670,4 +1213,41 @@ test("status failures return a generic service error without exception details",
   const body = await response.text();
   assert.match(body, /observer status unavailable/);
   assert.doesNotMatch(body, /SENSITIVE_BUILDER_FAILURE/);
+});
+
+
+test("schema-defined execution termination reasons survive observer and dashboard projections", async (t) => {
+  const schema = JSON.parse(fs.readFileSync(path.join(repo, "schemas/execution-run.schema.json"), "utf8"));
+  for (const reason of [...schema.properties.terminationReason.enum, "UNKNOWN_REASON_CANARY"]) {
+    const status = statusFixture({
+      execution: executionFixture({
+        recent: [{
+          runId: `xrun_${"a".repeat(32)}`,
+          manifestId: `xmf_${"b".repeat(32)}`,
+          engagementId: "test-engagement",
+          status: "failed",
+          createdAt: at,
+          startedAt: at,
+          finishedAt: at,
+          terminationReason: reason,
+          exitCode: 1,
+          signal: null,
+          workflow: {
+            instanceId: "test-workflow",
+            phaseId: "active-testing",
+            phaseAttemptId: `wpa_${"c".repeat(32)}`,
+            reservationId: `wxr_${"d".repeat(32)}`
+          }
+        }]
+      })
+    });
+    const { origin } = await listen(t, () => status);
+    const response = await fetch(`${origin}/api/status`);
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    const expected = reason === "UNKNOWN_REASON_CANARY" ? null : reason;
+    assert.equal(payload.execution.recent[0].terminationReason, expected);
+    const dashboard = sanitizeStatusPayload(payload);
+    assert.equal(dashboard.execution.recent[0].terminationReason, expected);
+  }
 });

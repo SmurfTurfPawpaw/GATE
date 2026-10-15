@@ -40,6 +40,7 @@ test("runtime setup remediates private directories to 0700 and state files to 06
     paths.authorizations,
     paths.plans,
     paths.evidence,
+    paths.workflows,
     paths.projects,
     paths.upstreams,
     paths.upstreamTools,
@@ -51,6 +52,21 @@ test("runtime setup remediates private directories to 0700 and state files to 06
   }
   assert.equal(permissions(paths.events), 0o600);
   assert.equal(permissions(engagement), 0o600);
+});
+
+test("runtime setup creates the workflow root without scanning retained instances", {
+  skip: process.platform === "win32" && "creating symlinks can require elevated Windows privileges"
+}, (t) => {
+  const { root, home, paths } = fixture(t);
+  ensureRuntime({ home, repo: paths.repo });
+  const workflows = path.join(home, "workflows");
+  assert.equal(permissions(workflows), 0o700);
+
+  const outside = path.join(root, "outside-workflow");
+  fs.mkdirSync(outside);
+  fs.symlinkSync(outside, path.join(workflows, "retained-entry"), "dir");
+
+  assert.doesNotThrow(() => ensureRuntime(paths));
 });
 
 test("runtime setup rejects a filesystem-root GATE_HOME before changing it", () => {
@@ -221,3 +237,97 @@ test("runtime setup rejects private state owned by another account", {
     fs.chownSync(paths.events, process.geteuid(), process.getegid());
   }
 });
+
+for (const kind of ["runtime", "artifact"]) {
+  test(`${kind} audit tolerates a listed entry removed by concurrent mutation`, (t) => {
+    const { paths } = fixture(t);
+    ensureRuntime(paths);
+    const directory = kind === "runtime" ? paths.toolRuntimes : paths.toolArtifactCache;
+    const entry = path.join(directory, "retiring-entry");
+    if (kind === "runtime") fs.mkdirSync(entry, { mode: 0o700 });
+    else fs.writeFileSync(entry, "fixture", { mode: 0o600 });
+    const readdir = fs.readdirSync;
+    fs.readdirSync = (file, ...args) => {
+      const entries = readdir(file, ...args);
+      if (file === directory && fs.existsSync(entry)) fs.rmSync(entry, { recursive: true });
+      return entries;
+    };
+    try {
+      assert.doesNotThrow(() => ensureRuntime(paths));
+      assert.equal(fs.existsSync(entry), false);
+    } finally {
+      fs.readdirSync = readdir;
+    }
+  });
+
+  test(`${kind} audit rejects ENOENT when the listed entry remains present`, (t) => {
+    const { paths } = fixture(t);
+    ensureRuntime(paths);
+    const directory = kind === "runtime" ? paths.toolRuntimes : paths.toolArtifactCache;
+    const entry = path.join(directory, "present-entry");
+    if (kind === "runtime") fs.mkdirSync(entry, { mode: 0o700 });
+    else fs.writeFileSync(entry, "fixture", { mode: 0o600 });
+    const open = fs.openSync;
+    fs.openSync = (file, ...args) => {
+      if (file === entry) throw Object.assign(new Error("transient open failure"), { code: "ENOENT" });
+      return open(file, ...args);
+    };
+    try {
+      assert.throws(() => ensureRuntime(paths), /transient open failure/);
+      assert.equal(fs.existsSync(entry), true);
+    } finally {
+      fs.openSync = open;
+    }
+  });
+
+  test(`${kind} audit still rejects a present symlink`, { skip: process.platform === "win32" }, (t) => {
+    const { root, paths } = fixture(t);
+    ensureRuntime(paths);
+    const directory = kind === "runtime" ? paths.toolRuntimes : paths.toolArtifactCache;
+    fs.symlinkSync(root, path.join(directory, "invalid-entry"));
+    assert.throws(() => ensureRuntime(paths), /symbolic link/);
+  });
+}
+
+for (const kind of ["runtime", "artifact"]) {
+  for (const stage of ["open", "final identity check"]) {
+    test(`${kind} audit tolerates confirmed disappearance during ${stage}`, {
+      skip: process.platform === "win32" && "directory descriptor audit requires POSIX"
+    }, (t) => {
+      const { paths } = fixture(t);
+      ensureRuntime(paths);
+      const directory = kind === "runtime" ? paths.toolRuntimes : paths.toolArtifactCache;
+      const entry = path.join(directory, "retiring-entry");
+      if (kind === "runtime") fs.mkdirSync(entry, { mode: 0o700 });
+      else fs.writeFileSync(entry, "fixture", { mode: 0o600 });
+      const open = fs.openSync;
+      const lstat = fs.lstatSync;
+      let opened = false;
+      let retired = false;
+      fs.openSync = (file, ...args) => {
+        if (file === entry && stage === "open") {
+          fs.rmSync(entry, { recursive: true });
+          retired = true;
+        }
+        const descriptor = open(file, ...args);
+        if (file === entry) opened = true;
+        return descriptor;
+      };
+      fs.lstatSync = (file, ...args) => {
+        if (file === entry && stage === "final identity check" && opened && !retired) {
+          retired = true;
+          fs.rmSync(entry, { recursive: true });
+        }
+        return lstat(file, ...args);
+      };
+      try {
+        assert.doesNotThrow(() => ensureRuntime(paths));
+        assert.equal(retired, true, "the audit must reach the raced boundary");
+        assert.equal(fs.existsSync(entry), false);
+      } finally {
+        fs.openSync = open;
+        fs.lstatSync = lstat;
+      }
+    });
+  }
+}

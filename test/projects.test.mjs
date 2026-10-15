@@ -8,7 +8,14 @@ import { promisify } from "node:util";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { listProjects, projectRegistryStatus, registerProject, showProject, verifyProject } from "../src/lib/projects.mjs";
+import {
+  listProjects,
+  projectContractBinding,
+  projectRegistryStatus,
+  registerProject,
+  showProject,
+  verifyProject
+} from "../src/lib/projects.mjs";
 import { runtimePaths } from "../src/lib/paths.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -83,11 +90,61 @@ test("project registry validates, stores, lists, shows, and verifies a private c
   const storedBytes = fs.readFileSync(stored);
   const event = JSON.parse(fs.readFileSync(paths.events, "utf8"));
   const contractSha256 = crypto.createHash("sha256").update(storedBytes).digest("hex");
+  assert.deepEqual(projectContractBinding("demo-project", { paths }), {
+    id: "demo-project",
+    contractSha256
+  });
   assert.equal(event.kind, "project.registered");
   assert.ok(event.evidenceRefs.some((reference) => reference.endsWith(`/${contractSha256}`)));
   if (process.platform !== "win32") {
     assert.equal(mode(paths.projects), 0o700);
     assert.equal(mode(stored), 0o600);
+  }
+});
+
+test("project template sentinels cannot register or verify as ready", (t) => {
+  const { root, paths } = fixture(t);
+  const template = JSON.parse(fs.readFileSync(path.join(repo, "templates", "project.json"), "utf8"));
+  assert.equal(template.$schema, "https://gate.local/schemas/project.schema.json");
+
+  const sentinels = [
+    {
+      id: "replace-project",
+      check: "template-metadata-id",
+      error: /replace the project template metadata\.id before registration/u,
+      value: project("sentinel-id", { metadata: { id: "replace-project" } })
+    },
+    {
+      id: "sentinel-display",
+      check: "template-display-name",
+      error: /replace the project template metadata\.displayName before registration/u,
+      value: project("sentinel-display", { metadata: { displayName: "Replace Project" } })
+    },
+    {
+      id: "sentinel-repository",
+      check: "template-repository-url",
+      error: /replace the project template repository\.url before registration/u,
+      value: project("sentinel-repository", {
+        repository: { url: "https://github.com/replace-owner/replace-project" }
+      })
+    }
+  ];
+
+  for (const sentinel of sentinels) {
+    assert.throws(
+      () => registerProject(writeSource(root, sentinel.value, `${sentinel.id}-source.json`), { paths }),
+      sentinel.error
+    );
+
+    const stored = path.join(paths.projects, `${sentinel.id}.json`);
+    fs.writeFileSync(stored, `${JSON.stringify(sentinel.value, null, 2)}\n`, { mode: 0o600 });
+    const verification = verifyProject(sentinel.id, { paths });
+    assert.equal(verification.ok, false);
+    assert.equal(verification.status, "invalid");
+    assert.equal(verification.project, null);
+    assert.ok(verification.checks.some((item) =>
+      item.name === sentinel.check && item.ok === false && sentinel.error.test(item.detail)
+    ));
   }
 });
 

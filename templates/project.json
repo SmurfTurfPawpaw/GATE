@@ -1,5 +1,5 @@
 {
-  "$schema": "../schemas/project.schema.json",
+  "$schema": "https://gate.local/schemas/project.schema.json",
   "apiVersion": "gate.dev/project/v1",
   "kind": "Project",
   "metadata": {

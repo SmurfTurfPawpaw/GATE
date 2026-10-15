@@ -16,7 +16,9 @@ jobs:
   test:
     name: Node ${{ matrix.node }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
+    env:
+      GATE_REQUIRE_OFFLINE_INTEGRATION: "1"
     strategy:
       fail-fast: false
       matrix:
@@ -31,8 +33,34 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
 
+      - name: Make the selected Node runtime read-only to the test user
+        run: |
+          node_root="$(dirname "$(dirname "$(node -p 'process.execPath')")")"
+          protected_node_root=/usr/lib/gate-ci-node
+          sudo mkdir "$protected_node_root"
+          sudo cp -a "$node_root/." "$protected_node_root/"
+          sudo chown -R root:root "$protected_node_root"
+          sudo chmod -R u=rwX,go=rX "$protected_node_root"
+          echo "$protected_node_root/bin" >> "$GITHUB_PATH"
+
+      - name: Initialize private runtime path
+        run: echo "GATE_HOME=$RUNNER_TEMP/gate" >> "$GITHUB_ENV"
+
       - name: Install exact dependencies
         run: npm ci --ignore-scripts
+
+      - name: Install the offline-lane system prerequisite
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap
+
+      - name: Allow unprivileged namespaces on the disposable CI runner
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Prepare the exact managed REA runtime
+        run: |
+          node ./bin/gate.mjs bootstrap --json
+          node ./bin/gate.mjs upstream install rea-stable --json
 
       - name: Run tests
         run: npm test

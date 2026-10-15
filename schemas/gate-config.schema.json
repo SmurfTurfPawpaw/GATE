@@ -123,10 +123,10 @@
               "type": "array",
               "minItems": 3,
               "uniqueItems": true,
-              "items": { "enum": ["no-mistakes-success", "protected-checks-pass", "exact-head-match"] },
+              "items": { "enum": ["no-mistakes-success", "exact-head-checks-pass", "exact-head-match"] },
               "allOf": [
                 { "contains": { "const": "no-mistakes-success" } },
-                { "contains": { "const": "protected-checks-pass" } },
+                { "contains": { "const": "exact-head-checks-pass" } },
                 { "contains": { "const": "exact-head-match" } }
               ]
             }

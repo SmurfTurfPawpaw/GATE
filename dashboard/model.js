@@ -6,6 +6,7 @@
  */
 
 const RECORD_LIMIT = 100;
+const TOOL_RUNTIME_LIMIT = 256;
 const STRING_LIMIT = 160;
 const MAX_COUNT = Number.MAX_SAFE_INTEGER;
 
@@ -56,6 +57,8 @@ const EXECUTION_REASONS = new Set([
 ]);
 const EXECUTION_ENFORCED = new Set([
   "engagement-binding",
+  "workflow-phase-binding",
+  "workflow-reservation",
   "target-argument-binding",
   "declared-action-label-binding",
   "tool-allowlist",
@@ -108,7 +111,11 @@ const EXECUTION_TERMINATION_REASONS = new Set([
   "spawn-failure",
   "supervisor-signal",
   "process-group-remained",
-  "supervision-lost"
+  "supervision-lost",
+  "workflow-claim-failed",
+  "managed-runtime-invalidated",
+  "indeterminate-output",
+  "output-validation-failed"
 ]);
 const EXECUTION_SIGNALS = new Set([
   "SIGHUP", "SIGINT", "SIGQUIT", "SIGILL", "SIGTRAP", "SIGABRT", "SIGBUS", "SIGFPE", "SIGKILL",
@@ -116,6 +123,82 @@ const EXECUTION_SIGNALS = new Set([
   "SIGTSTP", "SIGTTIN", "SIGTTOU", "SIGURG", "SIGXCPU", "SIGXFSZ", "SIGVTALRM", "SIGPROF", "SIGWINCH",
   "SIGIO", "SIGPWR", "SIGSYS", "SIGBREAK"
 ]);
+const OFFLINE_ANALYSIS_MODES = new Set(["bubblewrap-offline"]);
+const OFFLINE_ANALYSIS_REASONS = new Set(["unavailable"]);
+const OFFLINE_ANALYSIS_STATUSES = new Set([
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+  "cancelled",
+  "blocked",
+  "unknown"
+]);
+const OFFLINE_ANALYSIS_ENFORCED = new Set([
+  "project-contract-binding",
+  "typed-path-binding",
+  "artifact-snapshot-sha256",
+  "pinned-upstream-integrity",
+  "fixed-adapter-argv",
+  "bubblewrap-network-namespace",
+  "read-only-runtime-mounts",
+  "ephemeral-sandbox-writes",
+  "shell-disabled",
+  "cleared-environment",
+  "private-bounded-evidence",
+  "one-shot-claim",
+  "wall-duration"
+]);
+const OFFLINE_ANALYSIS_UNAVAILABLE = new Set([
+  "cpu-limit",
+  "memory-limit",
+  "immutable-managed-upstream-snapshot",
+  "same-uid-gate-home-tamper-resistance",
+  "unix-socket-system-call-denial"
+]);
+const OFFLINE_RETENTION_LOCK_STATES = new Set(["absent", "active", "stale", "invalid", "indeterminate"]);
+const OFFLINE_SNAPSHOT_STATES = new Set(["stable", "consistent", "mutation-active", "indeterminate"]);
+const TOOL_RUNTIME_VERIFICATION_MODES = new Set([
+  "current-bytes-and-live-zero-egress-smoke",
+  "current-bytes-and-install-smoke-evidence",
+  "receipt-only"
+]);
+const TOOL_RUNTIME_EVIDENCE_KINDS = new Set([
+  "installation-receipt",
+  "current-bytes-and-install-smoke-evidence",
+  "current-bytes-and-live-zero-egress-smoke"
+]);
+const TOOL_RUNTIME_PLATFORMS = new Set(["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"]);
+const TOOL_RUNTIME_STATES = new Set([
+  "absent", "invalid", "invalid-lock", "invalid-receipt", "receipt-only", "unmanaged",
+  "unsupported-platform", "verified", "verified-install-evidence", "unknown"
+]);
+const TOOL_RUNTIME_REASONS = new Set([
+  "explicit-integrity-and-smoke-verification-required",
+  "external-or-licensed-runtime-unavailable",
+  "hardware-runtime-unavailable",
+  "java-runtime-unavailable",
+  "language-runtime-unavailable",
+  "managed-runtime-absent",
+  "native-runtime-unavailable",
+  "oci-runtime-unavailable",
+  "reviewed-data-dependencies-unavailable",
+  "reviewed-platform-artifact-unavailable",
+  "reviewed-runtime-lock-unavailable",
+  "runtime-integrity-invalid",
+  "runtime-lock-invalid",
+  "runtime-privilege-adapter-unavailable",
+  "workflow-phase-admission-unavailable",
+  "zero-egress-smoke-sandbox-unavailable"
+]);
+const WORKFLOW_STATUSES = new Set(["open", "stopped", "recovery-hold", "reported", "closed", "unknown"]);
+const WORKFLOW_HEALTH = new Set(["bounded-replay-verified", "degraded"]);
+const WORKFLOW_LANES = new Set([
+  "governance", "offline-static", "offline-dynamic", "passive-research", "active-observation",
+  "active-testing", "high-impact-controlled", "closure"
+]);
+const WORKFLOW_EFFECTS = new Set(["P0", "P1", "A1", "A2", "A3"]);
+const WORKFLOW_CONTROLS = new Set(["enforced", "measured-only", "unavailable"]);
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/;
 const EVENT_KIND = /^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+$/;
 
@@ -268,7 +351,23 @@ function executionRunShape(input) {
     : null;
   const runStatus = enumValue(value.status, EXECUTION_RUN_STATUSES, null);
   const createdAt = timestamp(value.createdAt);
-  if (!runId || !manifestId || !engagementId || !runStatus || !createdAt) return null;
+  const workflow = record(value.workflow);
+  const workflowInstanceId = typeof workflow.instanceId === "string" && /^workflow_[a-f0-9]{16}$/.test(workflow.instanceId)
+    ? workflow.instanceId
+    : null;
+  const phaseId = typeof workflow.phaseId === "string" && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$/.test(workflow.phaseId)
+    ? workflow.phaseId
+    : null;
+  const phaseAttemptId = typeof workflow.phaseAttemptId === "string" && /^phase-attempt_[a-f0-9]{16}$/.test(workflow.phaseAttemptId)
+    ? workflow.phaseAttemptId
+    : null;
+  const reservationId = typeof workflow.reservationId === "string" && /^reservation_[a-f0-9]{16}$/.test(workflow.reservationId)
+    ? workflow.reservationId
+    : null;
+  if (
+    !runId || !manifestId || !engagementId || !runStatus || !createdAt ||
+    !workflowInstanceId || !phaseId || !phaseAttemptId || !reservationId
+  ) return null;
   const exitCode = Number.isInteger(value.exitCode) && value.exitCode >= -2_147_483_648 && value.exitCode <= 2_147_483_647
     ? value.exitCode
     : null;
@@ -282,7 +381,8 @@ function executionRunShape(input) {
     finishedAt: timestamp(value.finishedAt),
     terminationReason: enumValue(value.terminationReason, EXECUTION_TERMINATION_REASONS, null),
     exitCode,
-    signal: enumValue(value.signal, EXECUTION_SIGNALS, null)
+    signal: enumValue(value.signal, EXECUTION_SIGNALS, null),
+    workflow: { instanceId: workflowInstanceId, phaseId, phaseAttemptId, reservationId }
   };
 }
 
@@ -315,6 +415,206 @@ function executionShape(input) {
         .filter(Boolean)
         .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
         .slice(0, 30)
+      : []
+  };
+}
+
+function workflowInstanceShape(input) {
+  const value = record(input);
+  const instanceId = typeof value.instanceId === "string" && /^workflow_[a-f0-9]{16}$/.test(value.instanceId)
+    ? value.instanceId
+    : null;
+  if (!instanceId) return null;
+  const active = record(value.activePhase);
+  const hasActive = Object.keys(active).length > 0;
+  let activePhase = null;
+  if (hasActive) {
+    const id = identifier(active.id, null, 80);
+    const lane = enumValue(active.lane, WORKFLOW_LANES, null);
+    const effectClass = enumValue(active.effectClass, WORKFLOW_EFFECTS, null);
+    const toolId = active.toolId === null ? null : identifier(active.toolId, null, 80);
+    if (!id || !lane || !effectClass || (active.toolId !== null && !toolId)) return null;
+    const rawControls = record(active.envelopeControls);
+    activePhase = {
+      id,
+      lane,
+      effectClass,
+      toolId,
+      envelopeControls: Object.keys(rawControls).length ? Object.fromEntries([
+        "wallTime", "requests", "rate", "parallel", "tokens", "evidenceBytes", "spend"
+      ].map((key) => [key, enumValue(rawControls[key], WORKFLOW_CONTROLS, null)])) : null
+    };
+  }
+  return {
+    instanceId,
+    status: enumValue(value.status, WORKFLOW_STATUSES, "unknown"),
+    activePhase,
+    journalSequence: count(value.journalSequence),
+    reservations: count(value.reservations),
+    stops: count(value.stops),
+    health: enumValue(value.health, WORKFLOW_HEALTH, "degraded")
+  };
+}
+
+function workflowsShape(input) {
+  const value = record(input);
+  const rawCounts = record(value.counts);
+  const rawScan = record(value.scan);
+  return {
+    counts: Object.fromEntries([
+      "total", "active", "open", "stopped", "recovery-hold", "reported", "closed", "degraded", "unknown"
+    ].map((key) => [key, count(rawCounts[key])])),
+    instances: Array.isArray(value.instances)
+      ? value.instances.slice(0, RECORD_LIMIT).map(workflowInstanceShape).filter(Boolean)
+      : [],
+    scan: {
+      discovered: count(rawScan.discovered),
+      scanned: count(rawScan.scanned),
+      omitted: count(rawScan.omitted),
+      complete: typeof rawScan.complete === "boolean" ? rawScan.complete : false,
+      truncated: typeof rawScan.truncated === "boolean" ? rawScan.truncated : true
+    }
+  };
+}
+
+function offlineAnalysisRunShape(input) {
+  const value = record(input);
+  const runId = typeof value.runId === "string" && /^run_[a-f0-9]{16}$/.test(value.runId) ? value.runId : null;
+  const runStatus = enumValue(value.status, OFFLINE_ANALYSIS_STATUSES, null);
+  if (!runId || !runStatus) return null;
+  return {
+    runId,
+    status: runStatus,
+    isolationVerified: typeof value.isolationVerified === "boolean" ? value.isolationVerified : null
+  };
+}
+
+function offlineRetentionShape(input) {
+  const value = record(input);
+  const retention = {};
+  for (const field of [
+    "quotaBytes", "quotaArtifacts", "retainedBytes", "availableBytes", "retainedArtifacts", "availableArtifacts", "pendingManifests",
+    "pendingTransactions", "invalidTransactionRecords", "creatingManifests", "invalidCreationIntents",
+    "invalidClaimRecords", "invalidPurgeRecords", "invalidRunRecords", "blockedManifests",
+    "expiredManifests", "activeManifests", "terminalManifests", "unknownManifests",
+    "purgePendingManifests", "purgedManifests", "orphanedArtifacts", "orphanedBytes",
+    "missingArtifacts", "invalidEntries"
+  ]) retention[field] = count(value[field]);
+  retention.retentionLockState = enumValue(value.retentionLockState, OFFLINE_RETENTION_LOCK_STATES, null);
+  retention.snapshotState = enumValue(value.snapshotState, OFFLINE_SNAPSHOT_STATES, null);
+  retention.overQuota = typeof value.overQuota === "boolean" ? value.overQuota : null;
+  retention.mutationBlocked = typeof value.mutationBlocked === "boolean" ? value.mutationBlocked : null;
+  return retention;
+}
+
+function offlineAnalysisShape(input) {
+  const value = record(input);
+  const rawCounts = record(value.counts);
+  const configured = typeof value.configured === "boolean" ? value.configured : null;
+  const mode = enumValue(value.mode, OFFLINE_ANALYSIS_MODES, null);
+  const enforced = capabilityList(value.enforced, OFFLINE_ANALYSIS_ENFORCED);
+  const unavailable = capabilityList(value.unavailable, OFFLINE_ANALYSIS_UNAVAILABLE);
+  const completeCapability = enforced.length === OFFLINE_ANALYSIS_ENFORCED.size &&
+    unavailable.length === OFFLINE_ANALYSIS_UNAVAILABLE.size;
+  const laneAvailable = configured === true && value.laneAvailable === true && mode !== null && completeCapability;
+  const counts = Object.fromEntries(
+    [...OFFLINE_ANALYSIS_STATUSES].map((runStatus) => [runStatus, count(rawCounts[runStatus])])
+  );
+  return {
+    configured,
+    laneAvailable,
+    mode,
+    reason: laneAvailable ? null : enumValue(value.reason, OFFLINE_ANALYSIS_REASONS, null),
+    runningCount: count(firstDefined(value.runningCount, rawCounts.running)),
+    counts,
+    retention: offlineRetentionShape(value.retention),
+    recent: Array.isArray(value.recent)
+      ? value.recent
+        .slice(0, RECORD_LIMIT)
+        .map(offlineAnalysisRunShape)
+        .filter(Boolean)
+        .slice(0, 25)
+      : []
+  };
+}
+
+function toolRuntimeName(value) {
+  if (typeof value !== "string" || value.length > 80 || value.includes("://") || value.includes("\\")) return null;
+  return /^[A-Za-z0-9][A-Za-z0-9+._ -]*(?: \/ [A-Za-z0-9][A-Za-z0-9+._ -]*)?$/.test(value)
+    ? value
+    : null;
+}
+
+function toolRuntimeReasons(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.slice(0, 32).filter((reason) => TOOL_RUNTIME_REASONS.has(reason)))];
+}
+
+function toolRuntimeEvidenceShape(input) {
+  const value = record(input);
+  const kind = enumValue(value.kind, TOOL_RUNTIME_EVIDENCE_KINDS, null);
+  const lastVerifiedAt = timestamp(value.lastVerifiedAt);
+  if (!kind || !lastVerifiedAt) return null;
+  return {
+    kind,
+    lastVerifiedAt,
+    ageSeconds: count(value.ageSeconds),
+    current: typeof value.current === "boolean" ? value.current : null,
+    currentBytesChecked: typeof value.currentBytesChecked === "boolean" ? value.currentBytesChecked : null,
+    liveSmokeExecutedNow: typeof value.liveSmokeExecutedNow === "boolean" ? value.liveSmokeExecutedNow : null
+  };
+}
+
+function toolRuntimeShape(input) {
+  const value = record(input);
+  const toolId = typeof value.id === "string" && value.id.length <= 128 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.id)
+    ? value.id
+    : null;
+  if (!toolId) return null;
+  const verificationEvidence = toolRuntimeEvidenceShape(value.verificationEvidence);
+  return {
+    id: toolId,
+    name: toolRuntimeName(value.name),
+    state: enumValue(value.state, TOOL_RUNTIME_STATES, "unknown"),
+    locked: typeof value.locked === "boolean" ? value.locked : null,
+    installed: typeof value.installed === "boolean" ? value.installed : null,
+    verified: typeof value.verified === "boolean" ? value.verified : null,
+    executable: typeof value.executable === "boolean" ? value.executable : null,
+    ...(verificationEvidence ? { verificationEvidence } : {}),
+    reasons: toolRuntimeReasons(value.reasons)
+  };
+}
+
+function toolRuntimesShape(input) {
+  const value = record(input);
+  const reasonCounts = new Map();
+  if (Array.isArray(value.unresolvedConstraints)) {
+    for (const raw of value.unresolvedConstraints.slice(0, TOOL_RUNTIME_LIMIT)) {
+      const constraint = record(raw);
+      const reason = TOOL_RUNTIME_REASONS.has(constraint.reason) ? constraint.reason : null;
+      const total = count(constraint.count);
+      if (!reason || total === null) continue;
+      reasonCounts.set(reason, Math.min(MAX_COUNT, (reasonCounts.get(reason) || 0) + total));
+    }
+  }
+  const executableHashReads = count(value.executableHashReads);
+  return {
+    ok: typeof value.ok === "boolean" ? value.ok : null,
+    verificationMode: enumValue(value.verificationMode, TOOL_RUNTIME_VERIFICATION_MODES, null),
+    ...(typeof value.currentBytesChecked === "boolean" ? { currentBytesChecked: value.currentBytesChecked } : {}),
+    ...(executableHashReads !== null ? { executableHashReads } : {}),
+    platform: enumValue(value.platform, TOOL_RUNTIME_PLATFORMS, null),
+    catalog: count(value.catalog),
+    locked: count(value.locked),
+    installed: count(value.installed),
+    verified: count(value.verified),
+    executable: count(value.executable),
+    unresolved: count(value.unresolved),
+    unresolvedConstraints: [...reasonCounts]
+      .map(([reason, total]) => ({ reason, count: total }))
+      .sort((left, right) => right.count - left.count || left.reason.localeCompare(right.reason)),
+    tools: Array.isArray(value.tools)
+      ? value.tools.slice(0, TOOL_RUNTIME_LIMIT).map(toolRuntimeShape).filter(Boolean)
       : []
   };
 }
@@ -364,6 +664,9 @@ export function sanitizeStatusPayload(input) {
     counts: safeCounts(value.counts),
     agents,
     execution: executionShape(value.execution),
+    workflows: workflowsShape(value.workflows),
+    offlineAnalysis: offlineAnalysisShape(value.offlineAnalysis),
+    toolRuntimes: toolRuntimesShape(value.toolRuntimes),
     usage: usageShape(firstDefined(value.usage, value.tokenUsage, value.tokens)),
     telemetry: {
       state: telemetryState === "fresh" ? "live" : telemetryState,

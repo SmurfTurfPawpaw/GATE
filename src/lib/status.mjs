@@ -3,11 +3,14 @@ import path from "node:path";
 import { readPrivateJson } from "./config.mjs";
 import { executionStatus } from "./executions.mjs";
 import { readJsonLines } from "./jsonl.mjs";
+import { offlineAnalysisStatus } from "./offline-analysis.mjs";
 import { ensureRuntime, runtimePaths } from "./paths.mjs";
 import { projectRegistryStatus } from "./projects.mjs";
 import { validateDocument } from "./schema.mjs";
 import { scanCodexUsage } from "./tokens.mjs";
+import { managedToolSummary } from "./tool-runtimes.mjs";
 import { upstreamStatus } from "./upstreams.mjs";
+import { workflowFleetStatus } from "./workflow-runtime.mjs";
 
 function canonicalUsageRecords(values, paths, partial = false) {
   const records = new Map();
@@ -15,6 +18,7 @@ function canonicalUsageRecords(values, paths, partial = false) {
     if (!validateDocument(value, "token-usage.schema.json", { paths }).ok) continue;
     // Repeated reads or retries can append the same canonical record. Its ID is
     // the idempotency boundary, so retain one copy rather than counting it twice.
+    records.delete(value.id);
     records.set(
       value.id,
       partial && value.availability !== "unavailable" ? { ...value, availability: "estimated" } : value
@@ -24,8 +28,11 @@ function canonicalUsageRecords(values, paths, partial = false) {
 }
 
 export async function buildStatus(options = {}) {
-  const paths = options.paths || runtimePaths(options);
+  const paths = options.paths
+    ? { ...runtimePaths({ home: options.paths.home, repo: options.paths.repo }), ...options.paths }
+    : runtimePaths(options);
   ensureRuntime(paths);
+  const observedAt = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
   const tokenRead = {};
   const [events, publicLearnings, privateLearnings, tokenLog] = await Promise.all([
     readJsonLines(paths.events, { limit: 100, privateFile: true }),
@@ -50,7 +57,7 @@ export async function buildStatus(options = {}) {
       })
     : [];
   return {
-    at: new Date().toISOString(),
+    at: observedAt.toISOString(),
     repository: paths.repo,
     gate_home: paths.home,
     events: events.slice(-30).reverse(),
@@ -60,8 +67,19 @@ export async function buildStatus(options = {}) {
       .reverse(),
     engagements,
     execution: executionStatus({ paths }),
+    workflows: workflowFleetStatus({ paths, runtimeEnsured: true }),
+    offlineAnalysis: offlineAnalysisStatus({ paths }),
     projects: projectRegistryStatus({ paths }),
     tokens,
-    upstreams: upstreamStatus({ paths, verifyIntegrity: false })
+    upstreams: upstreamStatus({ paths, verifyIntegrity: false }),
+    // Observer/status refreshes use validated installation receipts. They do
+    // not reread large executables and never present that cached evidence as a
+    // current verification. Explicit tool verify, doctor --full, planning and
+    // pre-execution paths retain exact current-byte checks.
+    toolRuntimes: managedToolSummary({
+      paths,
+      staticIntegrity: false,
+      now: observedAt
+    })
   };
 }

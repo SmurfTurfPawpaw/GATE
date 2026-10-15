@@ -44,7 +44,18 @@ test("raw command surfaces fail closed before spawning passthrough commands", (t
     },
     {
       args: [
+        "engagement", "adapter-manifest", "demo", "--adapter", "dnsx-domain-observe",
+        "--workflow", "demo-workflow", "--phase-attempt", `wpa_${"a".repeat(32)}`,
+        "--target", "fixture.example", "--minutes", "1", "--requests", "1",
+        "--parallel", "1", "--rate", "1", "--tokens", "1000", "--timeout-seconds", "5",
+        "--record-type", "A", "--resolver", "127.0.0.1:5353", "--", "-unsafe"
+      ],
+      message: /adapter-manifest does not accept raw command arguments/
+    },
+    {
+      args: [
         "engagement", "manifest", "demo", "--target", "example.test", "--action", "scan",
+        "--workflow", "demo-workflow", "--phase-attempt", `wpa_${"a".repeat(32)}`,
         "--tool", "nmap", "--requests", "1", "--parallel", "1", "--rate", "1",
         "--minutes", "1", "--tokens", "1000", "--", "{{GATE_TARGET}}", "-e", payload
       ],
@@ -58,6 +69,20 @@ test("raw command surfaces fail closed before spawning passthrough commands", (t
     assert.match(result.stderr, attempt.message);
     assert.equal(fs.existsSync(marker), false);
   }
+});
+
+test("managed adapter manifest dispatch is reachable at the engagement command level", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-cli-adapter-dispatch-"));
+  const home = path.join(root, "home");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const result = invoke([
+    "engagement", "adapter-manifest", "demo", "--adapter", "unsupported-adapter"
+  ], home);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /unknown managed target-contact adapter: unsupported-adapter/u);
+  assert.doesNotMatch(result.stderr, /id is not defined|unknown engagement action/u);
 });
 
 test("engagement creation rejects caller-supplied authorization evidence references", (t) => {
@@ -76,4 +101,168 @@ test("engagement creation rejects caller-supplied authorization evidence referen
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /unsupported option: --evidence-ref/);
   assert.equal(fs.existsSync(path.join(home, "engagements", "cli-client.json")), false);
+});
+
+test("offline analysis CLI rejects passthrough and ambiguous options before any run", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-cli-analysis-boundary-"));
+  const home = path.join(root, "home");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const attempts = [
+    {
+      args: ["analysis", "capability", "--"],
+      message: /analysis commands do not accept -- passthrough arguments/
+    },
+    {
+      args: ["analysis", "status", "--", "unexpected"],
+      message: /analysis commands do not accept -- passthrough arguments/
+    },
+    {
+      args: ["analysis", "manifest", "--project=alpha", "--project", "beta", "--path", "/tmp/file.exe"],
+      message: /analysis option must not be repeated: --project/
+    },
+    {
+      args: ["analysis", "manifest", "--project", "alpha", "--path=/tmp/a,  b.exe", "--path", "/tmp/c.exe"],
+      message: /analysis option must not be repeated: --path/
+    },
+    {
+      args: ["analysis", "run", "--project", "alpha", "--manifest", `amf_${"a".repeat(32)}`, "--confirm", "first", "--confirm=second"],
+      message: /analysis option must not be repeated: --confirm/
+    },
+    {
+      args: ["analysis", "purge", "--project", "alpha", "--project=beta", "--manifest", `amf_${"a".repeat(32)}`, "--confirm", "x"],
+      message: /analysis option must not be repeated: --project/
+    },
+    {
+      args: ["analysis", "purge", "--project", "alpha", "--manifest", `amf_${"a".repeat(32)}`, "--confirm", "x", "--contact-target"],
+      message: /unsupported option: --contact-target/
+    },
+    {
+      args: ["analysis", "purge", "--json"],
+      message: /--project is required/
+    },
+    {
+      args: ["analysis", "status", "--json=true"],
+      message: /--json does not accept a value/
+    },
+    {
+      args: ["analysis", "manifest", "--project", "alpha", "--path", "/tmp/file.exe", "--minutes", "--json"],
+      message: /--minutes needs a value/
+    },
+    {
+      args: ["analysis", "manifest", "--project", "alpha", "--path", "/tmp/file.exe", "--arguments", "--contact-target"],
+      message: /unsupported option: --arguments/
+    }
+  ];
+
+  for (const attempt of attempts) {
+    const result = invoke(attempt.args, home);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, attempt.message);
+  }
+  assert.equal(fs.existsSync(path.join(home, "offline-analysis", "claims")), false);
+});
+
+test("offline analysis status commands expose metadata without requiring an installed lane", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-cli-analysis-status-"));
+  const home = path.join(root, "home");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const statusResult = invoke(["analysis", "status", "--json"], home);
+  assert.equal(statusResult.status, 0, statusResult.stderr);
+  const status = JSON.parse(statusResult.stdout);
+  assert.equal(status.capability.configured, true);
+  assert.equal(status.capability.mode, "bubblewrap-offline");
+  assert.equal(typeof status.capability.laneAvailable, "boolean");
+  assert.deepEqual(status.recent, []);
+  assert.equal(status.counts.running, 0);
+  assert.equal(status.retention.quotaBytes, 2 * 1024 * 1024 * 1024);
+  assert.equal(status.retention.quotaArtifacts, 64);
+  assert.equal(status.retention.retainedBytes, 0);
+  assert.equal(status.retention.availableArtifacts, 64);
+  assert.equal(status.retention.pendingManifests, 0);
+  assert.equal(status.retention.expiredManifests, 0);
+
+  const overallResult = invoke(["status", "--json"], home);
+  assert.equal(overallResult.status, 0, overallResult.stderr);
+  const overall = JSON.parse(overallResult.stdout);
+  assert.deepEqual(overall.offlineAnalysis.counts, status.counts);
+  assert.equal(overall.offlineAnalysis.capability.mode, "bubblewrap-offline");
+});
+
+test("workflow CLI creates a journaled instance and rejects ambiguous command surfaces", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-cli-workflow-boundary-"));
+  const home = path.join(root, "home");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const instanceId = "cli-map-first";
+  const requestId = `wreq_${"a".repeat(32)}`;
+  const createdResult = invoke([
+    "workflow", "new", instanceId, "--request", requestId, "--json"
+  ], home);
+  assert.equal(createdResult.status, 0, createdResult.stderr);
+  const created = JSON.parse(createdResult.stdout);
+  assert.equal(created.ok, true);
+  assert.equal(created.instanceId, instanceId);
+  assert.equal(created.status, "open");
+  assert.equal(created.journal.sequence, 0);
+  assert.equal(created.contract.coverageDomainCount, 18);
+
+  const directory = path.join(home, "workflows", instanceId);
+  assert.equal(fs.statSync(directory).mode & 0o777, 0o700);
+  assert.equal(fs.statSync(path.join(directory, "journal.jsonl")).mode & 0o777, 0o600);
+  assert.equal(fs.statSync(path.join(directory, "instance.json")).mode & 0o777, 0o600);
+
+  const statusResult = invoke(["workflow", "status", instanceId, "--json"], home);
+  assert.equal(statusResult.status, 0, statusResult.stderr);
+  const status = JSON.parse(statusResult.stdout);
+  assert.equal(status.ok, true);
+  assert.equal(status.instanceId, instanceId);
+  assert.equal(status.status, "open");
+
+  const attempts = [
+    {
+      args: ["workflow", "new", "duplicate-request", "--request", requestId, "--request", `wreq_${"b".repeat(32)}`],
+      message: /workflow option must not be repeated: --request/
+    },
+    {
+      args: ["workflow", "status", instanceId, "--", "unexpected"],
+      message: /workflow commands do not accept passthrough arguments/
+    },
+    {
+      args: ["workflow", "status", instanceId, "--json=true"],
+      message: /--json does not accept a value/
+    },
+    {
+      args: ["workflow", "status", instanceId, "--contact-target"],
+      message: /unsupported option: --contact-target/
+    }
+  ];
+  for (const attempt of attempts) {
+    const result = invoke(attempt.args, home);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, attempt.message);
+  }
+  assert.equal(fs.existsSync(path.join(home, "workflows", "duplicate-request")), false);
+});
+
+test("blocked workflow status uses the operational-block exit code", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-cli-workflow-status-"));
+  const home = path.join(root, "home");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const instanceId = "cli-blocked-status";
+  const created = invoke(["workflow", "new", instanceId, "--json"], home);
+  assert.equal(created.status, 0, created.stderr);
+
+  const journal = path.join(home, "workflows", instanceId, "journal.jsonl");
+  const bytes = fs.readFileSync(journal);
+  fs.writeFileSync(journal, bytes.subarray(0, bytes.length - 1), { mode: 0o600 });
+
+  const blockedResult = invoke(["workflow", "status", instanceId, "--json"], home);
+  assert.equal(blockedResult.status, 2, blockedResult.stderr);
+  const blocked = JSON.parse(blockedResult.stdout);
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.status, "blocked");
+  assert.match(blocked.blocker, /truncated tail/);
 });

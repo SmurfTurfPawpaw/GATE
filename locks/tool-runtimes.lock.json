@@ -1,0 +1,840 @@
+{
+  "$schema": "../schemas/tool-runtime-lock.schema.json",
+  "apiVersion": "gate.dev/tool-runtime-lock/v1",
+  "kind": "ToolRuntimeLock",
+  "updatePolicy": "reviewed-pull-request",
+  "runtimes": [
+    {
+      "id": "subfinder",
+      "toolId": "subfinder",
+      "catalogEntrySha256": "45de32fbb1aa887d75319d71c915fe295c3bff9bc60d60fa1fcfc7f2ecefb612",
+      "version": "2.17.0",
+      "source": {
+        "repository": "https://github.com/projectdiscovery/subfinder",
+        "commit": "c97f25802892093060f0fc424bfc3f39e273693a",
+        "tag": "v2.17.0"
+      },
+      "releaseEvidence": {
+        "provider": "github",
+        "releaseId": 406526961,
+        "releaseApiUrl": "https://api.github.com/repos/projectdiscovery/subfinder/releases/406526961",
+        "immutableObserved": false,
+        "sourceCommitVerification": "verified",
+        "checksumManifest": {
+          "assetId": 621057188,
+          "assetApiUrl": "https://api.github.com/repos/projectdiscovery/subfinder/releases/assets/621057188",
+          "url": "https://github.com/projectdiscovery/subfinder/releases/download/v2.17.0/subfinder_2.17.0_checksums.txt",
+          "size": 891,
+          "sha256": "115acad346b14570ba1fbc98adb49bce97f9ed7e451de226d4c5b0b2087e495c"
+        }
+      },
+      "provider": "verified-release",
+      "executable": {
+        "name": "subfinder",
+        "relativePath": "bin/subfinder"
+      },
+      "artifacts": [
+        {
+          "platform": "linux-x64",
+          "assetId": 621057185,
+          "assetApiUrl": "https://api.github.com/repos/projectdiscovery/subfinder/releases/assets/621057185",
+          "url": "https://github.com/projectdiscovery/subfinder/releases/download/v2.17.0/subfinder_2.17.0_linux_amd64.zip",
+          "size": 10308162,
+          "sha256": "a39c3e5c7a26ef3c430915c4d6cbf7716a00f26769a75e9405aba796142eba37",
+          "archiveType": "zip",
+          "entries": [
+            "LICENSE.md",
+            "README.md",
+            "subfinder"
+          ],
+          "executablePath": "subfinder",
+          "executableSha256": "bf4ad8590702b0bb92be9b3be185f96a230b047c9b97f2831cf8914344f0b15a"
+        },
+        {
+          "platform": "linux-arm64",
+          "assetId": 621057186,
+          "assetApiUrl": "https://api.github.com/repos/projectdiscovery/subfinder/releases/assets/621057186",
+          "url": "https://github.com/projectdiscovery/subfinder/releases/download/v2.17.0/subfinder_2.17.0_linux_arm64.zip",
+          "size": 9378288,
+          "sha256": "24913d49dddc1d3a5e99a4a7580da5be980959b9415b96f52c4f7f4124392190",
+          "archiveType": "zip",
+          "entries": [
+            "LICENSE.md",
+            "README.md",
+            "subfinder"
+          ],
+          "executablePath": "subfinder",
+          "executableSha256": "e6a8fb863f26315b8ab79a956d79847fd91970045979c374874e0755cabe7588"
+        },
+        {
+          "platform": "darwin-x64",
+          "assetId": 621057197,
+          "assetApiUrl": "https://api.github.com/repos/projectdiscovery/subfinder/releases/assets/621057197",
+          "url": "https://github.com/projectdiscovery/subfinder/releases/download/v2.17.0/subfinder_2.17.0_macOS_amd64.zip",
+          "size": 10584491,
+          "sha256": "75bf5990b409c6fd1116c81cd64fbdfd2cfd5bfb1f43542035b42344cb9fdffa",
+          "archiveType": "zip",
+          "entries": [
+            "LICENSE.md",
+            "README.md",
+            "subfinder"
+          ],
+          "executablePath": "subfinder",
+          "executableSha256": "d955da837d78dfdc0736a3b7c20f0566b95a248ce047f4e34395a050394aa6b2"
+        },
+        {
+          "platform": "darwin-arm64",
+          "assetId": 621057199,
+          "assetApiUrl": "https://api.github.com/repos/projectdiscovery/subfinder/releases/assets/621057199",
+          "url": "https://github.com/projectdiscovery/subfinder/releases/download/v2.17.0/subfinder_2.17.0_macOS_arm64.zip",
+          "size": 9883401,
+          "sha256": "012d6ff91ef932ac6d1a321fb5735cf1412168d163e6adbc6cbe5fc42fe03c3b",
+          "archiveType": "zip",
+          "entries": [
+            "LICENSE.md",
+            "README.md",
+            "subfinder"
+          ],
+          "executablePath": "subfinder",
+          "executableSha256": "ddef1d9d1eb6659987d3685b49fdf4a8680be4b4dbf14545d5c25a8aba436f92"
+        }
+      ],
+      "smoke": {
+        "argv": [
+          "-version",
+          "-nc"
+        ],
+        "expectedOutputContains": "2.17.0",
+        "timeoutMs": 15000,
+        "maxOutputBytes": 65536,
+        "maxProcesses": 32,
+        "network": "none",
+        "sandbox": "bubblewrap-prlimit-v1"
+      },
+      "effects": {
+        "networkDuringInstall": true,
+        "hostWrites": false,
+        "adminRequired": false,
+        "services": false,
+        "devices": false
+      }
+    },
+    {
+      "id": "httpx",
+      "toolId": "httpx",
+      "catalogEntrySha256": "38b5530e56ef698f92ba3d5942d9bfa0cb48bfac3490ca515f323666ed66100b",
+      "version": "1.12.0",
+      "source": {
+        "repository": "https://github.com/projectdiscovery/httpx",
+        "commit": "4b6a9a9d476f94a4f3a630f37051f5671ecfb1f8",
+        "tag": "v1.12.0"
+      },
+      "releaseEvidence": {
+        "provider": "github",
+        "releaseId": 384760174,
+        "releaseApiUrl": "https://api.github.com/repos/projectdiscovery/httpx/releases/384760174",
+        "immutableObserved": false,
+        "sourceCommitVerification": "verified",
+        "checksumManifest": {
+          "assetId": 550577473,
+          "assetApiUrl": "https://api.github.com/repos/projectdiscovery/httpx/releases/assets/550577473",
+          "url": "https://github.com/projectdiscovery/httpx/releases/download/v1.12.0/httpx_1.12.0_checksums.txt",
+          "size": 758,
+          "sha256": "541586a8d1bc7e30f3f31ff954baca6ac3e02cd74363378b7773375a78259c02"
+        }
+      },
+      "provider": "verified-release",
+      "executable": {
+        "name": "httpx",
+        "relativePath": "bin/httpx"
+      },
+      "artifacts": [
+        {
+          "platform": "linux-x64",
+          "assetId": 550577479,
+          "assetApiUrl": "https://api.github.com/repos/projectdiscovery/httpx/releases/assets/550577479",
+          "url": "https://github.com/projectdiscovery/httpx/releases/download/v1.12.0/httpx_1.12.0_linux_amd64.zip",
+          "size": 19200026,
+          "sha256": "9d8439e8b6c9aa7d1e2314817a392e00d5178da3af5652f7475f88868f418f76",
+          "archiveType": "zip",
+          "entries": [
+            "LICENSE.md",
+            "README.md",
+            "httpx"
+          ],
+          "executablePath": "httpx",
+          "executableSha256": "6d78b83b4da452a7e0bd3613c4fae04cbf523209f083904b563f4d4406a680b0"
+        },
+        {
+          "platform": "linux-arm64",
+          "assetId": 550577476,
+          "assetApiUrl": "https://api.github.com/repos/projectdiscovery/httpx/releases/assets/550577476",
+          "url": "https://github.com/projectdiscovery/httpx/releases/download/v1.12.0/httpx_1.12.0_linux_arm64.zip",
+          "size": 17927774,
+          "sha256": "fd7b123c1dfbc3d69f19f524e4eebcd6ec06b9a6cbd56813c76f11645197331e",
+          "archiveType": "zip",
+          "entries": [
+            "LICENSE.md",
+            "README.md",
+            "httpx"
+          ],
+          "executablePath": "httpx",
+          "executableSha256": "28dec1033bf23c29bd2b3b0c65589f01efc8d726f3eb056ef5ce6bc19566ef7c"
+        },
+        {
+          "platform": "darwin-x64",
+          "assetId": 550577477,
+          "assetApiUrl": "https://api.github.com/repos/projectdiscovery/httpx/releases/assets/550577477",
+          "url": "https://github.com/projectdiscovery/httpx/releases/download/v1.12.0/httpx_1.12.0_macOS_amd64.zip",
+          "size": 19702544,
+          "sha256": "16760b5e2122b66f57b9fbdb59f564b1181507c093d6a36066f40e5de38e8fa9",
+          "archiveType": "zip",
+          "entries": [
+            "LICENSE.md",
+            "README.md",
+            "httpx"
+          ],
+          "executablePath": "httpx",
+          "executableSha256": "782ae2efd1e33ae5a67640df16f8fb9698b28d351c4959b67e222849423e9005"
+        },
+        {
+          "platform": "darwin-arm64",
+          "assetId": 550577478,
+          "assetApiUrl": "https://api.github.com/repos/projectdiscovery/httpx/releases/assets/550577478",
+          "url": "https://github.com/projectdiscovery/httpx/releases/download/v1.12.0/httpx_1.12.0_macOS_arm64.zip",
+          "size": 18856626,
+          "sha256": "21d60328b383dba8a9fe249ac76b12edda4ec2e52a9cb21876c0a79123675569",
+          "archiveType": "zip",
+          "entries": [
+            "LICENSE.md",
+            "README.md",
+            "httpx"
+          ],
+          "executablePath": "httpx",
+          "executableSha256": "34c76faace5657d2deb7e9ae4060e6a15c95c0b8311fcfb268d68f37dab0f67e"
+        }
+      ],
+      "smoke": {
+        "argv": [
+          "-version",
+          "-nc"
+        ],
+        "expectedOutputContains": "1.12.0",
+        "timeoutMs": 15000,
+        "maxOutputBytes": 65536,
+        "maxProcesses": 32,
+        "network": "none",
+        "sandbox": "bubblewrap-prlimit-v1"
+      },
+      "effects": {
+        "networkDuringInstall": true,
+        "hostWrites": false,
+        "adminRequired": false,
+        "services": false,
+        "devices": false
+      }
+    },
+    {
+      "id": "dnsx",
+      "toolId": "dnsx",
+      "catalogEntrySha256": "a59d0e3df6ecb6b4d687ecbcfd1324d9541e83f0b89f99f998ba10a9e485bcfc",
+      "version": "1.3.1",
+      "source": {
+        "repository": "https://github.com/projectdiscovery/dnsx",
+        "commit": "01e315f216db7d36198ec326fac13dd7846b1bec",
+        "tag": "v1.3.1"
+      },
+      "releaseEvidence": {
+        "provider": "github",
+        "releaseId": 379526662,
+        "releaseApiUrl": "https://api.github.com/repos/projectdiscovery/dnsx/releases/379526662",
+        "immutableObserved": false,
+        "sourceCommitVerification": "verified",
+        "checksumManifest": {
+          "assetId": 537497996,
+          "assetApiUrl": "https://api.github.com/repos/projectdiscovery/dnsx/releases/assets/537497996",
+          "url": "https://github.com/projectdiscovery/dnsx/releases/download/v1.3.1/dnsx_1.3.1_checksums.txt",
+          "size": 742,
+          "sha256": "f8e6af7efa743a506ec18b0c0b7b8c3f562dc7832b369101c3ad0fbd6e166085"
+        }
+      },
+      "provider": "verified-release",
+      "executable": {
+        "name": "dnsx",
+        "relativePath": "bin/dnsx"
+      },
+      "artifacts": [
+        {
+          "platform": "linux-x64",
+          "assetId": 537497998,
+          "assetApiUrl": "https://api.github.com/repos/projectdiscovery/dnsx/releases/assets/537497998",
+          "url": "https://github.com/projectdiscovery/dnsx/releases/download/v1.3.1/dnsx_1.3.1_linux_amd64.zip",
+          "size": 9829391,
+          "sha256": "438b964653056dd51dcfe614b1a16f8bced3cc48a1d27bc07cc6fdf2ef2a9533",
+          "archiveType": "zip",
+          "entries": [
+            "LICENSE.md",
+            "README.md",
+            "dnsx"
+          ],
+          "executablePath": "dnsx",
+          "executableSha256": "5fca43ddfe95922d8d88a859c1fcc59fee327bf39ae574db66d391c6675b8ba3"
+        },
+        {
+          "platform": "linux-arm64",
+          "assetId": 537497997,
+          "assetApiUrl": "https://api.github.com/repos/projectdiscovery/dnsx/releases/assets/537497997",
+          "url": "https://github.com/projectdiscovery/dnsx/releases/download/v1.3.1/dnsx_1.3.1_linux_arm64.zip",
+          "size": 8943209,
+          "sha256": "dd657dd1ccee5e137eca2dbad0e97dbd067555f744adb97efcda774f1b2fbde1",
+          "archiveType": "zip",
+          "entries": [
+            "LICENSE.md",
+            "README.md",
+            "dnsx"
+          ],
+          "executablePath": "dnsx",
+          "executableSha256": "bdeb1329494b124c35076196811b33df54c7aa95838ba5165bc3921899fa1d6a"
+        },
+        {
+          "platform": "darwin-x64",
+          "assetId": 537497993,
+          "assetApiUrl": "https://api.github.com/repos/projectdiscovery/dnsx/releases/assets/537497993",
+          "url": "https://github.com/projectdiscovery/dnsx/releases/download/v1.3.1/dnsx_1.3.1_macOS_amd64.zip",
+          "size": 10061835,
+          "sha256": "ade8207185467df3768f08993a1b0140cdec5b5d2b735dc2213b90de5a2d3a1c",
+          "archiveType": "zip",
+          "entries": [
+            "LICENSE.md",
+            "README.md",
+            "dnsx"
+          ],
+          "executablePath": "dnsx",
+          "executableSha256": "d4d4165a699f339ce9ef2039b30ee39d7be1ccf521a8e9abcb66b90115391dc2"
+        },
+        {
+          "platform": "darwin-arm64",
+          "assetId": 537497994,
+          "assetApiUrl": "https://api.github.com/repos/projectdiscovery/dnsx/releases/assets/537497994",
+          "url": "https://github.com/projectdiscovery/dnsx/releases/download/v1.3.1/dnsx_1.3.1_macOS_arm64.zip",
+          "size": 9397450,
+          "sha256": "6b1681e4168cf6175facea723e16fca4ca2f99c3f9f83dea8c2b79ed20a3f417",
+          "archiveType": "zip",
+          "entries": [
+            "LICENSE.md",
+            "README.md",
+            "dnsx"
+          ],
+          "executablePath": "dnsx",
+          "executableSha256": "b4144a903cca006ce888bbc6973af9dedded2231bfde953dc1f6d2bec422a3f0"
+        }
+      ],
+      "smoke": {
+        "argv": [
+          "-version"
+        ],
+        "expectedOutputContains": "1.3.1",
+        "timeoutMs": 15000,
+        "maxOutputBytes": 65536,
+        "maxProcesses": 32,
+        "network": "none",
+        "sandbox": "bubblewrap-prlimit-v1"
+      },
+      "effects": {
+        "networkDuringInstall": true,
+        "hostWrites": false,
+        "adminRequired": false,
+        "services": false,
+        "devices": false
+      }
+    },
+    {
+      "id": "naabu",
+      "toolId": "naabu",
+      "catalogEntrySha256": "6fda7c1d6456b2f54696cd02a09170cc8ce70341703b38c8d0b3bf800fb6c7ad",
+      "version": "2.6.1",
+      "source": {
+        "repository": "https://github.com/projectdiscovery/naabu",
+        "commit": "5a0ca8bde91b5bb16213e9e8b5c6871eac954bd8",
+        "tag": "v2.6.1"
+      },
+      "releaseEvidence": {
+        "provider": "github",
+        "releaseId": 317897083,
+        "releaseApiUrl": "https://api.github.com/repos/projectdiscovery/naabu/releases/317897083",
+        "immutableObserved": false,
+        "sourceCommitVerification": "verified",
+        "checksumManifest": {
+          "assetId": 412774974,
+          "assetApiUrl": "https://api.github.com/repos/projectdiscovery/naabu/releases/assets/412774974",
+          "url": "https://github.com/projectdiscovery/naabu/releases/download/v2.6.1/naabu-checksums.txt",
+          "size": 566,
+          "sha256": "9f973d15c20f415565ecd7a40a4c563a414a1ec0a34d28cd514a6598cec64b5d"
+        }
+      },
+      "provider": "verified-release",
+      "executable": {
+        "name": "naabu",
+        "relativePath": "bin/naabu"
+      },
+      "artifacts": [
+        {
+          "platform": "linux-x64",
+          "assetId": 412774972,
+          "assetApiUrl": "https://api.github.com/repos/projectdiscovery/naabu/releases/assets/412774972",
+          "url": "https://github.com/projectdiscovery/naabu/releases/download/v2.6.1/naabu_2.6.1_linux_amd64.zip",
+          "size": 11858775,
+          "sha256": "018c4c9884dea971eda860435ede3021d1150732f34cfd245498c6726d8cab90",
+          "archiveType": "zip",
+          "entries": [
+            "LICENSE.md",
+            "README.md",
+            "naabu"
+          ],
+          "executablePath": "naabu",
+          "executableSha256": "6c0aac4253aebe95bbc13d4712a5f8caf7db9c9b62d6bc1fb4c56594cfa45165"
+        },
+        {
+          "platform": "linux-arm64",
+          "assetId": 412774971,
+          "assetApiUrl": "https://api.github.com/repos/projectdiscovery/naabu/releases/assets/412774971",
+          "url": "https://github.com/projectdiscovery/naabu/releases/download/v2.6.1/naabu_2.6.1_linux_arm64.zip",
+          "size": 10945734,
+          "sha256": "3adc2bb2395c3efff89623499b20eea66ef54924c485d3ae86762393a31736ea",
+          "archiveType": "zip",
+          "entries": [
+            "LICENSE.md",
+            "README.md",
+            "naabu"
+          ],
+          "executablePath": "naabu",
+          "executableSha256": "635d93e16b2e6423434b361c017d8fd12f354eaebbf04bcf062c97a9d4e2addc"
+        },
+        {
+          "platform": "darwin-x64",
+          "assetId": 412774976,
+          "assetApiUrl": "https://api.github.com/repos/projectdiscovery/naabu/releases/assets/412774976",
+          "url": "https://github.com/projectdiscovery/naabu/releases/download/v2.6.1/naabu_2.6.1_macOS_amd64.zip",
+          "size": 12104192,
+          "sha256": "b26e2d7fb91b833ac38cb7abb810cb8af6e7f6489a1c298cb63e584cd1f890a2",
+          "archiveType": "zip",
+          "entries": [
+            "LICENSE.md",
+            "README.md",
+            "naabu"
+          ],
+          "executablePath": "naabu",
+          "executableSha256": "cbd279216a07553590a5a410dc480bc55dcf182040787ba37e7081320361b3b9"
+        },
+        {
+          "platform": "darwin-arm64",
+          "assetId": 412774973,
+          "assetApiUrl": "https://api.github.com/repos/projectdiscovery/naabu/releases/assets/412774973",
+          "url": "https://github.com/projectdiscovery/naabu/releases/download/v2.6.1/naabu_2.6.1_macOS_arm64.zip",
+          "size": 11443993,
+          "sha256": "2f3a100210ddd42d8cf49ae30210c9823488b4687e2b7a869ab0ffc64b26cfba",
+          "archiveType": "zip",
+          "entries": [
+            "LICENSE.md",
+            "README.md",
+            "naabu"
+          ],
+          "executablePath": "naabu",
+          "executableSha256": "b76f173c3a3787513bfb3a95827e262b7e2a3fd6864e8a4346410acd1e889a3a"
+        }
+      ],
+      "smoke": {
+        "argv": [
+          "-version"
+        ],
+        "expectedOutputContains": "2.6.1",
+        "timeoutMs": 15000,
+        "maxOutputBytes": 65536,
+        "maxProcesses": 32,
+        "network": "none",
+        "sandbox": "bubblewrap-prlimit-v1"
+      },
+      "effects": {
+        "networkDuringInstall": true,
+        "hostWrites": false,
+        "adminRequired": false,
+        "services": false,
+        "devices": false
+      }
+    },
+    {
+      "id": "nuclei",
+      "toolId": "nuclei",
+      "catalogEntrySha256": "6bad65a6f8a00ed2ece6372339225e49b8d727340d65108ab95b79e5750f6ace",
+      "version": "3.11.1",
+      "source": {
+        "repository": "https://github.com/projectdiscovery/nuclei",
+        "commit": "a8c88feb4a1c8e961b7902534ce3af97e9d524a4",
+        "tag": "v3.11.1"
+      },
+      "releaseEvidence": {
+        "provider": "github",
+        "releaseId": 367195598,
+        "releaseApiUrl": "https://api.github.com/repos/projectdiscovery/nuclei/releases/367195598",
+        "immutableObserved": false,
+        "sourceCommitVerification": "verified",
+        "checksumManifest": {
+          "assetId": 506379672,
+          "assetApiUrl": "https://api.github.com/repos/projectdiscovery/nuclei/releases/assets/506379672",
+          "url": "https://github.com/projectdiscovery/nuclei/releases/download/v3.11.1/nuclei_3.11.1_checksums.txt",
+          "size": 766,
+          "sha256": "8c55f4113c54dfa4a202e32eaaa8b78abc741a13ed7941651322748fb233a05e"
+        }
+      },
+      "provider": "verified-release",
+      "executable": {
+        "name": "nuclei",
+        "relativePath": "bin/nuclei"
+      },
+      "artifacts": [
+        {
+          "platform": "linux-x64",
+          "assetId": 506379676,
+          "assetApiUrl": "https://api.github.com/repos/projectdiscovery/nuclei/releases/assets/506379676",
+          "url": "https://github.com/projectdiscovery/nuclei/releases/download/v3.11.1/nuclei_3.11.1_linux_amd64.zip",
+          "size": 46148343,
+          "sha256": "ea63d4ae232808cd7c6bc00d0142428e231fab59dae01042246097d195835ab6",
+          "archiveType": "zip",
+          "entries": [
+            "LICENSE.md",
+            "README.md",
+            "README_CN.md",
+            "README_ES.md",
+            "README_ID.md",
+            "README_JP.md",
+            "README_KR.md",
+            "README_PT-BR.md",
+            "README_TR.md",
+            "nuclei"
+          ],
+          "executablePath": "nuclei",
+          "executableSha256": "c49588140f357cbdddd5436dec11201953a4c5390faeec90777f9ee2cfd70251"
+        },
+        {
+          "platform": "linux-arm64",
+          "assetId": 506379678,
+          "assetApiUrl": "https://api.github.com/repos/projectdiscovery/nuclei/releases/assets/506379678",
+          "url": "https://github.com/projectdiscovery/nuclei/releases/download/v3.11.1/nuclei_3.11.1_linux_arm64.zip",
+          "size": 41431918,
+          "sha256": "8044e3d9768ba0a744b2872c1a87e813006f013da97ca9f50f7661a4203bec07",
+          "archiveType": "zip",
+          "entries": [
+            "LICENSE.md",
+            "README.md",
+            "README_CN.md",
+            "README_ES.md",
+            "README_ID.md",
+            "README_JP.md",
+            "README_KR.md",
+            "README_PT-BR.md",
+            "README_TR.md",
+            "nuclei"
+          ],
+          "executablePath": "nuclei",
+          "executableSha256": "f27098e0be0cc370af52274611608ad61896d7f0a024e35b136327d39e725477"
+        },
+        {
+          "platform": "darwin-x64",
+          "assetId": 506379679,
+          "assetApiUrl": "https://api.github.com/repos/projectdiscovery/nuclei/releases/assets/506379679",
+          "url": "https://github.com/projectdiscovery/nuclei/releases/download/v3.11.1/nuclei_3.11.1_macOS_amd64.zip",
+          "size": 47219687,
+          "sha256": "75c47ce11e9dbd4288a1c895ed85e3c4df9f4acb8237d6d178da6dccd1628f2a",
+          "archiveType": "zip",
+          "entries": [
+            "LICENSE.md",
+            "README.md",
+            "README_CN.md",
+            "README_ES.md",
+            "README_ID.md",
+            "README_JP.md",
+            "README_KR.md",
+            "README_PT-BR.md",
+            "README_TR.md",
+            "nuclei"
+          ],
+          "executablePath": "nuclei",
+          "executableSha256": "210c3a197ff53659af7905e2363391664c41755d0569a0ab0566e9884b811ad1"
+        },
+        {
+          "platform": "darwin-arm64",
+          "assetId": 506379673,
+          "assetApiUrl": "https://api.github.com/repos/projectdiscovery/nuclei/releases/assets/506379673",
+          "url": "https://github.com/projectdiscovery/nuclei/releases/download/v3.11.1/nuclei_3.11.1_macOS_arm64.zip",
+          "size": 43571292,
+          "sha256": "7d7e291addd1fc29a9bf8d089afe878a9799b20229cbea2fb1693fc40fd4c5f0",
+          "archiveType": "zip",
+          "entries": [
+            "LICENSE.md",
+            "README.md",
+            "README_CN.md",
+            "README_ES.md",
+            "README_ID.md",
+            "README_JP.md",
+            "README_KR.md",
+            "README_PT-BR.md",
+            "README_TR.md",
+            "nuclei"
+          ],
+          "executablePath": "nuclei",
+          "executableSha256": "f427ae885dcd60be25cf27c34a416ef18a803b29e153d5568057d7b6012a454d"
+        }
+      ],
+      "smoke": {
+        "argv": [
+          "-version"
+        ],
+        "expectedOutputContains": "3.11.1",
+        "timeoutMs": 15000,
+        "maxOutputBytes": 65536,
+        "maxProcesses": 32,
+        "network": "none",
+        "sandbox": "bubblewrap-prlimit-v1"
+      },
+      "effects": {
+        "networkDuringInstall": true,
+        "hostWrites": false,
+        "adminRequired": false,
+        "services": false,
+        "devices": false
+      }
+    },
+    {
+      "id": "katana",
+      "toolId": "katana",
+      "catalogEntrySha256": "b77c3be101707e68cf7c6a48041895502a7e42063309d962a51a6416e1418caa",
+      "version": "1.8.0",
+      "source": {
+        "repository": "https://github.com/projectdiscovery/katana",
+        "commit": "35267ac5c8ff1db9694a319d0eb466ed97b0969f",
+        "tag": "v1.8.0"
+      },
+      "releaseEvidence": {
+        "provider": "github",
+        "releaseId": 403742774,
+        "releaseApiUrl": "https://api.github.com/repos/projectdiscovery/katana/releases/403742774",
+        "immutableObserved": false,
+        "sourceCommitVerification": "verified",
+        "checksumManifest": {
+          "assetId": 612665202,
+          "assetApiUrl": "https://api.github.com/repos/projectdiscovery/katana/releases/assets/612665202",
+          "url": "https://github.com/projectdiscovery/katana/releases/download/v1.8.0/katana-1.8.0-checksums.txt",
+          "size": 762,
+          "sha256": "e937745b6dd4bd9c657b2f27399c1479e72b5ba3ca384a24ef4ed34e1d666a33"
+        }
+      },
+      "provider": "verified-release",
+      "executable": {
+        "name": "katana",
+        "relativePath": "bin/katana"
+      },
+      "artifacts": [
+        {
+          "platform": "linux-x64",
+          "assetId": 612665207,
+          "assetApiUrl": "https://api.github.com/repos/projectdiscovery/katana/releases/assets/612665207",
+          "url": "https://github.com/projectdiscovery/katana/releases/download/v1.8.0/katana_1.8.0_linux_amd64.zip",
+          "size": 31910234,
+          "sha256": "cb027ae99d0757061b70c07a15c7a80f62c5a535ab52c4a329f80c4b0a7309d2",
+          "archiveType": "zip",
+          "entries": [
+            "LICENSE.md",
+            "README.md",
+            "katana"
+          ],
+          "executablePath": "katana",
+          "executableSha256": "3214c11a0548667b37ec17bbb691706b7e0de1f0f24b3ead2ee12c301ebc1bbc"
+        },
+        {
+          "platform": "linux-arm64",
+          "assetId": 612665199,
+          "assetApiUrl": "https://api.github.com/repos/projectdiscovery/katana/releases/assets/612665199",
+          "url": "https://github.com/projectdiscovery/katana/releases/download/v1.8.0/katana_1.8.0_linux_arm64.zip",
+          "size": 30527878,
+          "sha256": "80e269210727a855511ffac8dfb01297b2344742acec71a35e8ba4a67a90f0f2",
+          "archiveType": "zip",
+          "entries": [
+            "LICENSE.md",
+            "README.md",
+            "katana"
+          ],
+          "executablePath": "katana",
+          "executableSha256": "d1cad5684a2561ede5d79844cbe5fc18ab783742c215df7c53a89baddd5800c7"
+        },
+        {
+          "platform": "darwin-x64",
+          "assetId": 612665198,
+          "assetApiUrl": "https://api.github.com/repos/projectdiscovery/katana/releases/assets/612665198",
+          "url": "https://github.com/projectdiscovery/katana/releases/download/v1.8.0/katana_1.8.0_macOS_amd64.zip",
+          "size": 32433462,
+          "sha256": "806256316dd45e0fe0e3985fd7283ddffc376c95cbaa3dcfd14cde6e1de61aaf",
+          "archiveType": "zip",
+          "entries": [
+            "LICENSE.md",
+            "README.md",
+            "katana"
+          ],
+          "executablePath": "katana",
+          "executableSha256": "43fde4839457fa08cf6d5f4a48fc0a5270c625e6001d1eb2f2239c23d7b0bf52"
+        },
+        {
+          "platform": "darwin-arm64",
+          "assetId": 612665197,
+          "assetApiUrl": "https://api.github.com/repos/projectdiscovery/katana/releases/assets/612665197",
+          "url": "https://github.com/projectdiscovery/katana/releases/download/v1.8.0/katana_1.8.0_macOS_arm64.zip",
+          "size": 31574229,
+          "sha256": "52e9802e9f83012a089fe57fb1ac476b936f181ac033c71bfa55f913c07cede6",
+          "archiveType": "zip",
+          "entries": [
+            "LICENSE.md",
+            "README.md",
+            "katana"
+          ],
+          "executablePath": "katana",
+          "executableSha256": "380ee5fe18551a68d84f040ac0bd24f56817166df2a1c0d11216ede49b6337e7"
+        }
+      ],
+      "smoke": {
+        "argv": [
+          "-version"
+        ],
+        "expectedOutputContains": "1.8.0",
+        "timeoutMs": 15000,
+        "maxOutputBytes": 65536,
+        "maxProcesses": 32,
+        "network": "none",
+        "sandbox": "bubblewrap-prlimit-v1"
+      },
+      "effects": {
+        "networkDuringInstall": true,
+        "hostWrites": false,
+        "adminRequired": false,
+        "services": false,
+        "devices": false
+      }
+    },
+    {
+      "id": "ffuf",
+      "toolId": "ffuf",
+      "catalogEntrySha256": "20ccf3142c299d929cd6f92d6e09a8e741c7120f00743ba8024a753b2baa6360",
+      "version": "2.3.0",
+      "source": {
+        "repository": "https://github.com/ffuf/ffuf",
+        "commit": "256c1b02499f5f8672af965d4ad7a321d606bc65",
+        "tag": "v2.3.0"
+      },
+      "releaseEvidence": {
+        "provider": "github",
+        "releaseId": 385781396,
+        "releaseApiUrl": "https://api.github.com/repos/ffuf/ffuf/releases/385781396",
+        "immutableObserved": false,
+        "sourceCommitVerification": "unverified",
+        "checksumManifest": {
+          "assetId": 553406523,
+          "assetApiUrl": "https://api.github.com/repos/ffuf/ffuf/releases/assets/553406523",
+          "url": "https://github.com/ffuf/ffuf/releases/download/v2.3.0/ffuf_2.3.0_checksums.txt",
+          "size": 1539,
+          "sha256": "e23603e903d40453c8bd477561466d494db0e502f2dccbd93926378fead9d0f0"
+        }
+      },
+      "provider": "verified-release",
+      "executable": {
+        "name": "ffuf",
+        "relativePath": "bin/ffuf"
+      },
+      "artifacts": [
+        {
+          "platform": "linux-x64",
+          "assetId": 553406445,
+          "assetApiUrl": "https://api.github.com/repos/ffuf/ffuf/releases/assets/553406445",
+          "url": "https://github.com/ffuf/ffuf/releases/download/v2.3.0/ffuf_2.3.0_linux_amd64.tar.gz",
+          "size": 4367536,
+          "sha256": "b2a3c725fcb9da175159682f54d6e9149f2905b00d84d155e7efc5d599975ceb",
+          "archiveType": "tar.gz",
+          "entries": [
+            "CHANGELOG.md",
+            "LICENSE",
+            "README.md",
+            "ffuf"
+          ],
+          "executablePath": "ffuf",
+          "executableSha256": "4b52c335d166cfb9a7ed0f1d8c5626f00d0c8510c3aeb4097bd60acba94ea52f"
+        },
+        {
+          "platform": "linux-arm64",
+          "assetId": 553406486,
+          "assetApiUrl": "https://api.github.com/repos/ffuf/ffuf/releases/assets/553406486",
+          "url": "https://github.com/ffuf/ffuf/releases/download/v2.3.0/ffuf_2.3.0_linux_arm64.tar.gz",
+          "size": 3950470,
+          "sha256": "e2d712615d53da797ee929006e41f2df5a7960a5353133db9c150ddaa22ae4e8",
+          "archiveType": "tar.gz",
+          "entries": [
+            "CHANGELOG.md",
+            "LICENSE",
+            "README.md",
+            "ffuf"
+          ],
+          "executablePath": "ffuf",
+          "executableSha256": "1bbed6c9768962f3ce58068e2a6b685d411e16ccc1bf7168f9dc371705b5c7f3"
+        },
+        {
+          "platform": "darwin-x64",
+          "assetId": 553406463,
+          "assetApiUrl": "https://api.github.com/repos/ffuf/ffuf/releases/assets/553406463",
+          "url": "https://github.com/ffuf/ffuf/releases/download/v2.3.0/ffuf_2.3.0_macOS_amd64.tar.gz",
+          "size": 4432897,
+          "sha256": "c1d1a0320b299d2c7f3a62163b336fe861954ea865bab13b9e80f128eb985997",
+          "archiveType": "tar.gz",
+          "entries": [
+            "CHANGELOG.md",
+            "LICENSE",
+            "README.md",
+            "ffuf"
+          ],
+          "executablePath": "ffuf",
+          "executableSha256": "defdbb5d76216a57526038b534197a4eede5ebeb2a673a0cbca4b842feb51198"
+        },
+        {
+          "platform": "darwin-arm64",
+          "assetId": 553406488,
+          "assetApiUrl": "https://api.github.com/repos/ffuf/ffuf/releases/assets/553406488",
+          "url": "https://github.com/ffuf/ffuf/releases/download/v2.3.0/ffuf_2.3.0_macOS_arm64.tar.gz",
+          "size": 4103832,
+          "sha256": "891e6358f7c72c951ce6fcef82a3736e91b34034e95edbd305505c9d31cfff13",
+          "archiveType": "tar.gz",
+          "entries": [
+            "CHANGELOG.md",
+            "LICENSE",
+            "README.md",
+            "ffuf"
+          ],
+          "executablePath": "ffuf",
+          "executableSha256": "e550d4c517867e584188cf1706de909302fb5ef017bf67caca26b426b45d79af"
+        }
+      ],
+      "smoke": {
+        "argv": [
+          "-V"
+        ],
+        "expectedOutputContains": "2.3.0",
+        "timeoutMs": 15000,
+        "maxOutputBytes": 65536,
+        "maxProcesses": 32,
+        "network": "none",
+        "sandbox": "bubblewrap-prlimit-v1"
+      },
+      "effects": {
+        "networkDuringInstall": true,
+        "hostWrites": false,
+        "adminRequired": false,
+        "services": false,
+        "devices": false
+      }
+    }
+  ]
+}

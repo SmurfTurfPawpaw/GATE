@@ -2,7 +2,8 @@
 param(
     [string]$Distribution = "",
     [switch]$CheckOnly,
-    [switch]$InstallUpstreams
+    [switch]$InstallUpstreams,
+    [switch]$InstallCoreTools
 )
 
 $ErrorActionPreference = "Stop"
@@ -40,6 +41,7 @@ if ($wslRepo.StartsWith("/mnt/")) {
 $scriptArguments = @()
 if ($CheckOnly) { $scriptArguments += "--check-only" }
 if ($InstallUpstreams) { $scriptArguments += "--install-upstreams" }
+if ($InstallCoreTools) { $scriptArguments += "--install-core-tools" }
 
 Write-Host "bootstrap: launching GATE in WSL at $wslRepo"
 & $wsl.Source @wslBase --cd $wslRepo -- bash ./scripts/bootstrap.sh @scriptArguments

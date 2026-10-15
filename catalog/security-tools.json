@@ -178,7 +178,12 @@
       "privileges": [
         "user"
       ],
-      "notes": "Decode copied artifacts and preserve the original package hash."
+      "notes": "Decode copied artifacts and preserve the original package hash.",
+      "commandIdentity": {
+        "pathDiscovery": "command-name",
+        "genericLaneAdmission": "path-discovery",
+        "reason": "This unambiguous single-command CLI is approved for PATH discovery without claiming version, integrity, provenance, or adapter readiness."
+      }
     },
     {
       "id": "arkime",
@@ -252,7 +257,12 @@
       "privileges": [
         "user"
       ],
-      "notes": "Static Python analysis with a pinned configuration and baseline."
+      "notes": "Static Python analysis with a pinned configuration and baseline.",
+      "commandIdentity": {
+        "pathDiscovery": "command-name",
+        "genericLaneAdmission": "path-discovery",
+        "reason": "This unambiguous single-command CLI is approved for PATH discovery without claiming version, integrity, provenance, or adapter readiness."
+      }
     },
     {
       "id": "bettercap",
@@ -396,7 +406,12 @@
       "privileges": [
         "user"
       ],
-      "notes": "Use read-only evidence images and quotas for output, recursion, and workers."
+      "notes": "Use read-only evidence images and quotas for output, recursion, and workers.",
+      "commandIdentity": {
+        "pathDiscovery": "command-name",
+        "genericLaneAdmission": "path-discovery",
+        "reason": "This unambiguous single-command CLI is approved for PATH discovery without claiming version, integrity, provenance, or adapter readiness."
+      }
     },
     {
       "id": "burp-suite",
@@ -445,14 +460,26 @@
       "privileges": [
         "user"
       ],
-      "notes": "Pin the rule repository revision with every result."
+      "notes": "Pin the rule repository revision with every result.",
+      "dataDependencies": [
+        {
+          "id": "capa-rules",
+          "kind": "ruleset",
+          "source": "https://github.com/mandiant/capa-rules",
+          "pinPolicy": "full-commit-and-tree-digest",
+          "requiredFor": [
+            "rule-matching"
+          ],
+          "notes": "Admit the rule repository independently from the capa executable and record its exact tree digest."
+        }
+      ]
     },
     {
       "id": "cartography",
       "name": "Cartography",
       "category": "cloud",
-      "riskClass": "P1",
-      "approval": "declared-source",
+      "riskClass": "A1",
+      "approval": "engagement",
       "license": "Apache-2.0",
       "openSource": true,
       "upstream": "https://github.com/lyft/cartography",
@@ -471,7 +498,7 @@
         "cloud-read",
         "service"
       ],
-      "notes": "Use read-only APIs and a local graph database; protect graph exports as private evidence."
+      "notes": "Live graph collection is A1 and requires exact read-only cloud identities, accounts, regions, API budgets, and a private local graph database."
     },
     {
       "id": "chainsaw",
@@ -495,7 +522,19 @@
       "privileges": [
         "user"
       ],
-      "notes": "Pin Sigma and mapping revisions with each offline event-log result."
+      "notes": "Pin Sigma and mapping revisions with each offline event-log result.",
+      "dataDependencies": [
+        {
+          "id": "sigma-rules",
+          "kind": "ruleset",
+          "source": "https://github.com/SigmaHQ/sigma",
+          "pinPolicy": "full-commit-and-tree-digest",
+          "requiredFor": [
+            "sigma-detection"
+          ],
+          "notes": "Admit only the reviewed Sigma rule subset and preserve its full commit and deterministic tree digest."
+        }
+      ]
     },
     {
       "id": "checkov",
@@ -526,8 +565,8 @@
       "id": "cloudfox",
       "name": "CloudFox",
       "category": "cloud",
-      "riskClass": "P1",
-      "approval": "declared-source",
+      "riskClass": "A1",
+      "approval": "engagement",
       "license": "MIT",
       "openSource": true,
       "upstream": "https://github.com/BishopFox/cloudfox",
@@ -544,7 +583,7 @@
       "privileges": [
         "cloud-read"
       ],
-      "notes": "Enumeration only with a named account, role, regions, and local private output directory."
+      "notes": "Live enumeration is A1 and requires a named read-only account or role, exact regions and services, an API budget, and private output."
     },
     {
       "id": "commix",
@@ -666,14 +705,19 @@
       "privileges": [
         "user"
       ],
-      "notes": "Operate on copied artifacts; metadata writes are disabled in the analysis adapter."
+      "notes": "Operate on copied artifacts; metadata writes are disabled in the analysis adapter.",
+      "commandIdentity": {
+        "pathDiscovery": "command-name",
+        "genericLaneAdmission": "path-discovery",
+        "reason": "This unambiguous single-command CLI is approved for PATH discovery without claiming version, integrity, provenance, or adapter readiness."
+      }
     },
     {
       "id": "falco",
       "name": "Falco",
       "category": "container-kubernetes",
-      "riskClass": "P1",
-      "approval": "declared-source",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
       "license": "Apache-2.0",
       "openSource": true,
       "upstream": "https://github.com/falcosecurity/falco",
@@ -689,7 +733,7 @@
         "kernel",
         "service"
       ],
-      "notes": "Detection only by default; response hooks and automatic containment are disabled."
+      "notes": "Loading sensors or running the service changes the host and uses A2. Pin rules, privileges, kernel or eBPF mode, retention, and keep response hooks disabled."
     },
     {
       "id": "feroxbuster",
@@ -766,6 +810,35 @@
       "notes": "Observation hooks can be P1; method replacement, bypasses, and state changes use A2. Match client and server versions exactly."
     },
     {
+      "id": "garak",
+      "name": "garak",
+      "category": "ai-systems",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "Apache-2.0",
+      "openSource": true,
+      "upstream": "https://github.com/NVIDIA/garak",
+      "command": "garak",
+      "commandIdentity": {
+        "pathDiscovery": "command-name",
+        "genericLaneAdmission": "reviewed-admission",
+        "reason": "Probe selection, model providers, credentials, requests, spend, and generated content require a reviewed AI testing adapter."
+      },
+      "installLanes": [
+        "isolated-python",
+        "oci"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Candidate only. Bind the exact model endpoint and model, probe set, credentials, prompt and token counts, rate, spend, data handling, stop conditions, and private output."
+    },
+    {
       "id": "gdb",
       "name": "GNU Debugger",
       "category": "reverse-engineering",
@@ -835,14 +908,19 @@
       "privileges": [
         "user"
       ],
-      "notes": "Never render detected secret values into model context or normal terminal logs."
+      "notes": "Never render detected secret values into model context or normal terminal logs.",
+      "commandIdentity": {
+        "pathDiscovery": "command-name",
+        "genericLaneAdmission": "path-discovery",
+        "reason": "This unambiguous single-command CLI is approved for PATH discovery without claiming version, integrity, provenance, or adapter readiness."
+      }
     },
     {
       "id": "gnuradio",
       "name": "GNU Radio",
       "category": "wireless-radio",
-      "riskClass": "A2",
-      "approval": "no-mistakes",
+      "riskClass": "A3",
+      "approval": "operator-receipt",
       "license": "GPL-3.0",
       "openSource": true,
       "upstream": "https://github.com/gnuradio/gnuradio",
@@ -860,7 +938,7 @@
       "privileges": [
         "device"
       ],
-      "notes": "Offline flowgraphs are P0 and receive is P1; any transmitter block uses A2."
+      "notes": "Offline flowgraphs are P0 and receive-only use can be P1. A flowgraph with transmitter blocks is A3 and requires exact frequency, power, duration, and hardware bounds."
     },
     {
       "id": "gosec",
@@ -884,7 +962,12 @@
       "privileges": [
         "user"
       ],
-      "notes": "Static Go analysis with a pinned configuration and rule set."
+      "notes": "Static Go analysis with a pinned configuration and rule set.",
+      "commandIdentity": {
+        "pathDiscovery": "command-name",
+        "genericLaneAdmission": "path-discovery",
+        "reason": "This unambiguous single-command CLI is approved for PATH discovery without claiming version, integrity, provenance, or adapter readiness."
+      }
     },
     {
       "id": "gowitness",
@@ -932,14 +1015,26 @@
       "privileges": [
         "service"
       ],
-      "notes": "Keep safe and intrusive checks in separate policies; use the official community container stack pinned by digest."
+      "notes": "Keep safe and intrusive checks in separate policies; use the official community container stack pinned by digest.",
+      "dataDependencies": [
+        {
+          "id": "greenbone-community-feed",
+          "kind": "feed",
+          "source": "https://feed.community.greenbone.net/",
+          "pinPolicy": "snapshot-and-sha256",
+          "requiredFor": [
+            "vulnerability-testing"
+          ],
+          "notes": "Stage a compatible immutable feed snapshot and bind every feed component digest before scanner readiness."
+        }
+      ]
     },
     {
       "id": "grype",
       "name": "Grype",
       "category": "container-kubernetes",
-      "riskClass": "P1",
-      "approval": "declared-source",
+      "riskClass": "A1",
+      "approval": "engagement",
       "license": "Apache-2.0",
       "openSource": true,
       "upstream": "https://github.com/anchore/grype",
@@ -958,14 +1053,26 @@
         "user",
         "cloud-read"
       ],
-      "notes": "Record vulnerability database and source artifact digests with every result."
+      "notes": "Local artifact matching can be P0. Registry reads are A1; bind exact image selectors and credentials and record source artifact and database digests.",
+      "dataDependencies": [
+        {
+          "id": "grype-database",
+          "kind": "database",
+          "source": "https://github.com/anchore/grype-db",
+          "pinPolicy": "version-and-sha256",
+          "requiredFor": [
+            "vulnerability-matching"
+          ],
+          "notes": "Bind the vulnerability database schema, build version, source timestamp, and archive digest to each run."
+        }
+      ]
     },
     {
       "id": "hackrf-tools",
       "name": "HackRF Tools",
       "category": "wireless-radio",
-      "riskClass": "A2",
-      "approval": "no-mistakes",
+      "riskClass": "A3",
+      "approval": "operator-receipt",
       "license": "GPL-2.0",
       "openSource": true,
       "upstream": "https://github.com/greatscottgadgets/hackrf",
@@ -983,7 +1090,7 @@
       "privileges": [
         "device"
       ],
-      "notes": "Receive is P1; transmission uses A2 and must remain within approved frequencies and power."
+      "notes": "Receive-only capture can be P1. Arbitrary transmission can interfere with unrelated or safety-critical systems and is A3; bind frequency, power, duration, and hardware."
     },
     {
       "id": "hashcat",
@@ -1033,7 +1140,19 @@
       "privileges": [
         "user"
       ],
-      "notes": "Pin rule revision and keep event-log evidence private."
+      "notes": "Pin rule revision and keep event-log evidence private.",
+      "dataDependencies": [
+        {
+          "id": "hayabusa-rules",
+          "kind": "ruleset",
+          "source": "https://github.com/Yamato-Security/hayabusa-rules",
+          "pinPolicy": "full-commit-and-tree-digest",
+          "requiredFor": [
+            "event-detection"
+          ],
+          "notes": "Admit the detection rules separately and record their full commit and deterministic tree digest."
+        }
+      ]
     },
     {
       "id": "hcxdumptool",
@@ -1080,7 +1199,12 @@
       "privileges": [
         "user"
       ],
-      "notes": "Offline conversion and analysis of authorized capture files."
+      "notes": "Offline conversion and analysis of authorized capture files.",
+      "commandIdentity": {
+        "pathDiscovery": "command-name",
+        "genericLaneAdmission": "path-discovery",
+        "reason": "This unambiguous single-command CLI is approved for PATH discovery without claiming version, integrity, provenance, or adapter readiness."
+      }
     },
     {
       "id": "honggfuzz",
@@ -1116,6 +1240,11 @@
       "openSource": true,
       "upstream": "https://github.com/projectdiscovery/httpx",
       "command": "httpx",
+      "commandIdentity": {
+        "pathDiscovery": "ambiguous-command-name",
+        "genericLaneAdmission": "reviewed-admission",
+        "reason": "The command name is also published by the unrelated Python HTTPX client, so PATH discovery cannot identify this product."
+      },
       "installLanes": [
         "pinned-release"
       ],
@@ -1155,6 +1284,36 @@
       "notes": "Parsers are P0 and enumeration can be A1; remote execution, relay, and secret dumping require the A3 receipt."
     },
     {
+      "id": "inspect-ai",
+      "name": "Inspect AI",
+      "category": "ai-systems",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "MIT",
+      "openSource": true,
+      "upstream": "https://github.com/UKGovernmentBEIS/inspect_ai",
+      "command": "inspect",
+      "commandIdentity": {
+        "pathDiscovery": "command-name",
+        "genericLaneAdmission": "reviewed-admission",
+        "reason": "Evaluation tasks, solvers, model providers, credentials, tool calls, requests, and spend require a reviewed AI testing adapter."
+      },
+      "installLanes": [
+        "isolated-python",
+        "oci"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Candidate only. Pin tasks, solvers, tools, exact model endpoints, prompt and token budgets, rate, spend, sandbox policy, data destinations, and private logs."
+    },
+    {
       "id": "jadx",
       "name": "JADX",
       "category": "mobile",
@@ -1176,7 +1335,12 @@
       "privileges": [
         "user"
       ],
-      "notes": "Static decompilation only; preserve the original APK hash."
+      "notes": "Static decompilation only; preserve the original APK hash.",
+      "commandIdentity": {
+        "pathDiscovery": "command-name",
+        "genericLaneAdmission": "path-discovery",
+        "reason": "This unambiguous single-command CLI is approved for PATH discovery without claiming version, integrity, provenance, or adapter readiness."
+      }
     },
     {
       "id": "john-the-ripper",
@@ -1258,8 +1422,8 @@
       "id": "killerbee",
       "name": "KillerBee",
       "category": "wireless-radio",
-      "riskClass": "A2",
-      "approval": "no-mistakes",
+      "riskClass": "A3",
+      "approval": "operator-receipt",
       "license": "BSD-3-Clause",
       "openSource": true,
       "upstream": "https://github.com/riverloopsec/killerbee",
@@ -1275,7 +1439,7 @@
         "device",
         "raw-network"
       ],
-      "notes": "Zigbee sniffing is P1; replay, injection, and active interaction use A2."
+      "notes": "Zigbee sniffing can be P1. Replay, injection, device control, and interference modes are A3 and require exact channels, devices, frame and duration limits."
     },
     {
       "id": "kismet",
@@ -1304,8 +1468,8 @@
       "id": "kube-bench",
       "name": "kube-bench",
       "category": "container-kubernetes",
-      "riskClass": "P1",
-      "approval": "declared-source",
+      "riskClass": "A1",
+      "approval": "engagement",
       "license": "Apache-2.0",
       "openSource": true,
       "upstream": "https://github.com/aquasecurity/kube-bench",
@@ -1324,7 +1488,7 @@
         "cloud-read",
         "admin"
       ],
-      "notes": "Use audit-only access and name the benchmark revision and cluster."
+      "notes": "Saved configuration analysis can be P0. Node or cluster inspection is A1 and requires an exact cluster, benchmark revision, read-only access, and API budget."
     },
     {
       "id": "kube-hunter",
@@ -1356,8 +1520,8 @@
       "id": "kubeaudit",
       "name": "kubeaudit",
       "category": "container-kubernetes",
-      "riskClass": "P1",
-      "approval": "declared-source",
+      "riskClass": "A1",
+      "approval": "engagement",
       "license": "MIT",
       "openSource": true,
       "upstream": "https://github.com/Shopify/kubeaudit",
@@ -1375,14 +1539,14 @@
       "privileges": [
         "cloud-read"
       ],
-      "notes": "Manifest analysis is P0; live cluster audit uses a read-only service account."
+      "notes": "Manifest analysis is P0. Live cluster audit is A1 and requires an exact cluster, namespaces, read-only service account, and API budget."
     },
     {
       "id": "kubescape",
       "name": "Kubescape",
       "category": "container-kubernetes",
-      "riskClass": "P1",
-      "approval": "declared-source",
+      "riskClass": "A1",
+      "approval": "engagement",
       "license": "Apache-2.0",
       "openSource": true,
       "upstream": "https://github.com/kubescape/kubescape",
@@ -1400,7 +1564,7 @@
       "privileges": [
         "cloud-read"
       ],
-      "notes": "Manifest analysis is P0; live posture analysis uses a read-only service account."
+      "notes": "Manifest analysis is P0. Live posture analysis is A1 and requires an exact cluster, namespaces, read-only identity, API budget, and telemetry disabled."
     },
     {
       "id": "libimobiledevice",
@@ -1601,8 +1765,8 @@
       "id": "naabu",
       "name": "Naabu",
       "category": "network",
-      "riskClass": "A1",
-      "approval": "engagement",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
       "license": "MIT",
       "openSource": true,
       "upstream": "https://github.com/projectdiscovery/naabu",
@@ -1620,7 +1784,7 @@
         "user",
         "raw-network"
       ],
-      "notes": "Enforce approved CIDRs, ports, host count, and packet rate. Raw SYN mode needs a capability broker."
+      "notes": "High-concurrency and raw SYN scanning use A2. Require exact CIDRs, hosts, ports, exclusions, packet rate, host count, duration, and a capability-aware adapter."
     },
     {
       "id": "netexec",
@@ -1674,8 +1838,8 @@
       "id": "nmap",
       "name": "Nmap",
       "category": "network",
-      "riskClass": "A2",
-      "approval": "no-mistakes",
+      "riskClass": "A3",
+      "approval": "operator-receipt",
       "license": "NPSL-0.95",
       "openSource": false,
       "upstream": "https://github.com/nmap/nmap",
@@ -1693,14 +1857,14 @@
         "user",
         "raw-network"
       ],
-      "notes": "NPSL is source-available and non-standard. Connect scans can be A1; raw scans and intrusive, exploit, or broadcast NSE scripts stay A2."
+      "notes": "The full command surface is A3 because NSE, spoofing, relay, brute-force, exploit, and broadcast modes can exceed enumeration. Admit narrower scan modes through reviewed adapters."
     },
     {
       "id": "nuclei",
       "name": "Nuclei",
       "category": "web-api",
-      "riskClass": "A2",
-      "approval": "no-mistakes",
+      "riskClass": "A3",
+      "approval": "operator-receipt",
       "license": "MIT",
       "openSource": true,
       "upstream": "https://github.com/projectdiscovery/nuclei",
@@ -1717,7 +1881,19 @@
       "privileges": [
         "user"
       ],
-      "notes": "Pin the template repository commit and admit signed templates by protocol and effect; code, headless, fuzz, and intrusive templates remain A2."
+      "notes": "The full command surface is A3 because code, headless, fuzz, out-of-band, and intrusive templates can exceed scanning. Pin and admit templates by protocol and effect.",
+      "dataDependencies": [
+        {
+          "id": "nuclei-templates",
+          "kind": "template-pack",
+          "source": "https://github.com/projectdiscovery/nuclei-templates",
+          "pinPolicy": "full-commit-and-tree-digest",
+          "requiredFor": [
+            "template-scanning"
+          ],
+          "notes": "Admit a signed reviewed subset by protocol and effect; code, headless, fuzz, and intrusive templates remain blocked unless separately approved."
+        }
+      ]
     },
     {
       "id": "objection",
@@ -1889,7 +2065,12 @@
       "privileges": [
         "user"
       ],
-      "notes": "Bound parser set, image size, worker count, and output storage."
+      "notes": "Bound parser set, image size, worker count, and output storage.",
+      "commandIdentity": {
+        "pathDiscovery": "command-name",
+        "genericLaneAdmission": "path-discovery",
+        "reason": "This unambiguous single-command CLI is approved for PATH discovery without claiming version, integrity, provenance, or adapter readiness."
+      }
     },
     {
       "id": "playwright",
@@ -1914,6 +2095,36 @@
         "user"
       ],
       "notes": "Read-only navigation can be P1. Form submission, upload, purchase, or account changes stay A2."
+    },
+    {
+      "id": "promptfoo",
+      "name": "Promptfoo",
+      "category": "ai-systems",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "MIT",
+      "openSource": true,
+      "upstream": "https://github.com/promptfoo/promptfoo",
+      "command": "promptfoo",
+      "commandIdentity": {
+        "pathDiscovery": "command-name",
+        "genericLaneAdmission": "reviewed-admission",
+        "reason": "Provider configuration, plug-ins, model credentials, red-team probes, requests, and spend require a reviewed AI testing adapter."
+      },
+      "installLanes": [
+        "isolated-node",
+        "oci"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Candidate only. Pin provider and plug-in configuration, exact model endpoints, test cases, prompt and token budgets, rate, spend, data destinations, and private evidence."
     },
     {
       "id": "prowler",
@@ -1945,8 +2156,8 @@
       "id": "proxmark3",
       "name": "Proxmark3",
       "category": "wireless-radio",
-      "riskClass": "A2",
-      "approval": "no-mistakes",
+      "riskClass": "A3",
+      "approval": "operator-receipt",
       "license": "GPL-3.0",
       "openSource": true,
       "upstream": "https://github.com/RfidResearchGroup/proxmark3",
@@ -1964,7 +2175,7 @@
       "privileges": [
         "device"
       ],
-      "notes": "Offline decode is P0 and reads can be P1; emulation, writes, and credential operations use A2."
+      "notes": "Offline decode can be P0 and reads can be P1. Emulation, writes, cloning, and credential operations are A3 and require exact device and proof limits."
     },
     {
       "id": "pwndbg",
@@ -2011,6 +2222,35 @@
         "user"
       ],
       "notes": "Parsing and payload construction are P0; remote exploit interaction and shell handling require the A3 receipt."
+    },
+    {
+      "id": "pyrit",
+      "name": "PyRIT",
+      "category": "ai-systems",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
+      "license": "MIT",
+      "openSource": true,
+      "upstream": "https://github.com/microsoft/PyRIT",
+      "command": "pyrit_scan",
+      "commandIdentity": {
+        "pathDiscovery": "command-name",
+        "genericLaneAdmission": "reviewed-admission",
+        "reason": "Orchestrators, converters, targets, credentials, generated attacks, requests, and spend require a reviewed AI testing adapter."
+      },
+      "installLanes": [
+        "isolated-python"
+      ],
+      "supportedHosts": [
+        "linux",
+        "macos",
+        "windows",
+        "wsl2"
+      ],
+      "privileges": [
+        "user"
+      ],
+      "notes": "Candidate only. Bind the exact target and model, orchestrator and converter set, credentials, prompt and token budgets, rate, spend, content policy, and private memory and evidence."
     },
     {
       "id": "qemu",
@@ -2074,6 +2314,27 @@
       "openSource": true,
       "upstream": "https://github.com/morluto/rea",
       "command": "rea",
+      "commandIdentity": {
+        "pathDiscovery": "command-name",
+        "genericLaneAdmission": "reviewed-admission",
+        "reason": "The reviewed offline adapter grants one static operation and does not admit REA's broader A2 command surface to the generic lane."
+      },
+      "managedAdapters": [
+        {
+          "id": "rea-inspect-pe-resources-v1",
+          "mode": "offline-static-pe-resources",
+          "upstreamId": "rea-stable",
+          "binary": "rea",
+          "upstreamEntrypoint": "node_modules/rea-agents/scripts/rea.mjs",
+          "entrypoint": "src/adapters/rea-pe-resources.mjs",
+          "sandboxCommand": "bwrap",
+          "supportedHosts": [
+            "linux",
+            "wsl2"
+          ],
+          "capability": "Project-bound, zero-network PE resource inspection through the fixed offline-analysis adapter."
+        }
+      ],
       "installLanes": [
         "isolated-node"
       ],
@@ -2191,8 +2452,8 @@
       "id": "rustscan",
       "name": "RustScan",
       "category": "network",
-      "riskClass": "A1",
-      "approval": "engagement",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
       "license": "GPL-3.0",
       "openSource": true,
       "upstream": "https://github.com/bee-san/RustScan",
@@ -2209,14 +2470,14 @@
       "privileges": [
         "user"
       ],
-      "notes": "Use only as a bounded discovery front end for an admitted Nmap command."
+      "notes": "High-concurrency discovery uses A2. Require exact hosts, ports, exclusions, batch size, timeout, and rate, and bind any downstream Nmap invocation separately."
     },
     {
       "id": "scapy",
       "name": "Scapy",
       "category": "network",
-      "riskClass": "A2",
-      "approval": "no-mistakes",
+      "riskClass": "A3",
+      "approval": "operator-receipt",
       "license": "GPL-2.0",
       "openSource": true,
       "upstream": "https://github.com/secdev/scapy",
@@ -2234,7 +2495,7 @@
         "user",
         "raw-network"
       ],
-      "notes": "Packet decoding is P0. Sending, spoofing, replay, and protocol fuzzing use the A2 gate."
+      "notes": "Packet decoding is P0. The full interpreter can spoof, poison, replay, fuzz, or disrupt traffic and is A3; active use requires a fixed reviewed script or adapter."
     },
     {
       "id": "schemathesis",
@@ -2264,8 +2525,8 @@
       "id": "scoutsuite",
       "name": "ScoutSuite",
       "category": "cloud",
-      "riskClass": "P1",
-      "approval": "declared-source",
+      "riskClass": "A1",
+      "approval": "engagement",
       "license": "GPL-2.0",
       "openSource": true,
       "upstream": "https://github.com/nccgroup/ScoutSuite",
@@ -2282,7 +2543,7 @@
       "privileges": [
         "cloud-read"
       ],
-      "notes": "Use dedicated read-only cloud credentials and an API request budget."
+      "notes": "Live enumeration is A1. Use a dedicated read-only cloud identity with named accounts and regions, an API request budget, and private output."
     },
     {
       "id": "scrcpy",
@@ -2314,8 +2575,8 @@
       "id": "searchsploit",
       "name": "SearchSploit / ExploitDB",
       "category": "exploitation",
-      "riskClass": "A3",
-      "approval": "operator-receipt",
+      "riskClass": "P0",
+      "approval": "automatic",
       "license": "GPL-2.0",
       "openSource": true,
       "upstream": "https://github.com/offensive-security/exploitdb",
@@ -2332,7 +2593,19 @@
       "privileges": [
         "user"
       ],
-      "notes": "Searching is P0; compiling or executing a proof of concept requires the A3 receipt."
+      "notes": "Search and copy only from a pinned local Exploit Database snapshot. Compiling or executing a proof of concept is a separate A3 operation and tool plan.",
+      "dataDependencies": [
+        {
+          "id": "exploit-database",
+          "kind": "database",
+          "source": "https://gitlab.com/exploit-database/exploitdb",
+          "pinPolicy": "full-commit-and-tree-digest",
+          "requiredFor": [
+            "exploit-reference-search"
+          ],
+          "notes": "SearchSploit readiness requires an independently pinned local Exploit Database tree and license record."
+        }
+      ]
     },
     {
       "id": "semgrep",
@@ -2357,7 +2630,19 @@
       "privileges": [
         "user"
       ],
-      "notes": "Use local pinned rules unless registry access and source disclosure are explicitly allowed."
+      "notes": "Use local pinned rules unless registry access and source disclosure are explicitly allowed.",
+      "dataDependencies": [
+        {
+          "id": "semgrep-rules",
+          "kind": "ruleset",
+          "source": "https://github.com/semgrep/semgrep-rules",
+          "pinPolicy": "full-commit-and-tree-digest",
+          "requiredFor": [
+            "community-rule-analysis"
+          ],
+          "notes": "Admit each selected rule pack at an exact commit and keep registry retrieval disabled during offline runs."
+        }
+      ]
     },
     {
       "id": "sherlock",
@@ -2406,7 +2691,12 @@
       "privileges": [
         "user"
       ],
-      "notes": "Analyze verified read-only image copies and record source hashes."
+      "notes": "Analyze verified read-only image copies and record source hashes.",
+      "commandIdentity": {
+        "pathDiscovery": "command-name",
+        "genericLaneAdmission": "path-discovery",
+        "reason": "This unambiguous single-command CLI is approved for PATH discovery without claiming version, integrity, provenance, or adapter readiness."
+      }
     },
     {
       "id": "sliver",
@@ -2530,14 +2820,26 @@
         "kernel",
         "service"
       ],
-      "notes": "Offline IDS is P0 and live IDS is P1. Inline IPS, blocking, and NFQUEUE actions stay A2."
+      "notes": "Offline IDS is P0 and live IDS is P1. Inline IPS, blocking, and NFQUEUE actions stay A2.",
+      "dataDependencies": [
+        {
+          "id": "suricata-rules",
+          "kind": "ruleset",
+          "source": "https://rules.emergingthreats.net/open/",
+          "pinPolicy": "snapshot-and-sha256",
+          "requiredFor": [
+            "network-detection"
+          ],
+          "notes": "Bind an exact licensed rule snapshot and its digest; runtime rule updates are not part of readiness."
+        }
+      ]
     },
     {
       "id": "syft",
       "name": "Syft",
       "category": "container-kubernetes",
-      "riskClass": "P1",
-      "approval": "declared-source",
+      "riskClass": "A1",
+      "approval": "engagement",
       "license": "Apache-2.0",
       "openSource": true,
       "upstream": "https://github.com/anchore/syft",
@@ -2556,7 +2858,7 @@
         "user",
         "cloud-read"
       ],
-      "notes": "Local SBOM generation is P0; authenticated registry reads are P1."
+      "notes": "Local SBOM generation is P0. Authenticated registry reads are A1 and require an exact registry or image selector, read-only credentials, and request bounds."
     },
     {
       "id": "tcpdump",
@@ -2585,8 +2887,8 @@
       "id": "testssl-sh",
       "name": "testssl.sh",
       "category": "web-api",
-      "riskClass": "A1",
-      "approval": "engagement",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
       "license": "GPL-2.0",
       "openSource": true,
       "upstream": "https://github.com/testssl/testssl.sh",
@@ -2602,7 +2904,7 @@
       "privileges": [
         "user"
       ],
-      "notes": "Restrict operation to engagement TLS endpoints and cap connections."
+      "notes": "Protocol and vulnerability probes use A2. Restrict operation to exact TLS endpoints, pin bundled data, and cap connections, parallelism, and duration."
     },
     {
       "id": "thc-hydra",
@@ -2680,8 +2982,8 @@
       "id": "trivy",
       "name": "Trivy",
       "category": "container-kubernetes",
-      "riskClass": "P1",
-      "approval": "declared-source",
+      "riskClass": "A1",
+      "approval": "engagement",
       "license": "Apache-2.0",
       "openSource": true,
       "upstream": "https://github.com/aquasecurity/trivy",
@@ -2700,14 +3002,36 @@
         "user",
         "cloud-read"
       ],
-      "notes": "Local files and images are P0; registries, clusters, and cloud APIs are P1. Record database revision."
+      "notes": "Local files and images can be P0. Registry, cluster, and cloud API modes are A1; bind exact selectors and credentials and record every database revision.",
+      "dataDependencies": [
+        {
+          "id": "trivy-database",
+          "kind": "database",
+          "source": "https://github.com/aquasecurity/trivy-db",
+          "pinPolicy": "oci-digest",
+          "requiredFor": [
+            "vulnerability-matching"
+          ],
+          "notes": "Bind the official database artifact by immutable OCI digest and record its schema and build time."
+        },
+        {
+          "id": "trivy-java-database",
+          "kind": "database",
+          "source": "https://github.com/aquasecurity/trivy-java-db",
+          "pinPolicy": "oci-digest",
+          "requiredFor": [
+            "java-vulnerability-matching"
+          ],
+          "notes": "Bind the Java database artifact independently by immutable OCI digest when Java scanning is selected."
+        }
+      ]
     },
     {
       "id": "trufflehog",
       "name": "TruffleHog",
       "category": "source-security",
-      "riskClass": "P1",
-      "approval": "declared-source",
+      "riskClass": "A2",
+      "approval": "no-mistakes",
       "license": "AGPL-3.0",
       "openSource": true,
       "upstream": "https://github.com/trufflesecurity/trufflehog",
@@ -2726,7 +3050,7 @@
         "user",
         "cloud-read"
       ],
-      "notes": "Local scanning is P0; remote repositories and verification APIs are P1. Seal discovered values."
+      "notes": "Local detection can be P0 and remote collection can be P1. Live secret verification is a credential check at A2; disable it unless separately approved and seal values."
     },
     {
       "id": "tshark",
@@ -2845,7 +3169,19 @@
       "privileges": [
         "user"
       ],
-      "notes": "VSL is a non-standard source-available license. Pin symbols and preserve the memory image hash."
+      "notes": "VSL is a non-standard source-available license. Pin symbols and preserve the memory image hash.",
+      "dataDependencies": [
+        {
+          "id": "volatility-symbols",
+          "kind": "symbol-pack",
+          "source": "https://downloads.volatilityfoundation.org/volatility3/symbols/",
+          "pinPolicy": "version-and-sha256",
+          "requiredFor": [
+            "memory-symbol-resolution"
+          ],
+          "notes": "Bind every symbol archive by source version and digest; local symbol generation is a separate admission."
+        }
+      ]
     },
     {
       "id": "wapiti",

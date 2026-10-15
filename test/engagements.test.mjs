@@ -87,6 +87,38 @@ test("engagement creation requires and normalizes an explicit tool scope", (t) =
   assert.deepEqual(engagement.scope.permittedTools, ["nmap", "ffuf"]);
 });
 
+test("engagements retain every mandatory workflow stop on creation and load", (t) => {
+  const { paths } = fixture(t);
+  const workflow = JSON.parse(
+    fs.readFileSync(path.join(paths.repo, "config", "workflows", "pentest-e2e.json"), "utf8")
+  );
+  const mandatory = [...new Set([
+    ...workflow.defaultStopConditions,
+    ...workflow.phases.flatMap((phase) => phase.stopPolicy?.additional || [])
+  ])].sort();
+  assert.equal(mandatory.length, 13);
+  const engagement = createEngagement(
+    {
+      id: "mandatory-stops",
+      targets: ["app.example.test"],
+      actions: ["scan"],
+      tools: ["nmap"],
+      stopOn: ["operator-stop"]
+    },
+    { paths }
+  );
+  assert.deepEqual(engagement.stopOn, mandatory);
+
+  const file = path.join(paths.engagements, "mandatory-stops.json");
+  const weakened = JSON.parse(fs.readFileSync(file, "utf8"));
+  weakened.stopOn = ["operator-stop"];
+  fs.writeFileSync(file, `${JSON.stringify(weakened, null, 2)}\n`, { mode: 0o600 });
+  assert.throws(
+    () => getEngagement("mandatory-stops", { paths }),
+    /engagement is missing mandatory stop conditions/
+  );
+});
+
 test("URL query constraints apply to engagement inclusions and exclusions", (t) => {
   const { root, paths } = fixture(t);
   const plan = path.join(root, "plan.md");
