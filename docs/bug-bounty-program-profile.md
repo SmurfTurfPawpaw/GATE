@@ -141,6 +141,8 @@ Provider metadata may declare `destination` as `local`, `cloud`, or `unknown`. L
 
 Preflight checks every raw action requested by a phase against every requested assistance mode, including actions whose execution is conditional or denied by a module ceiling. `profileReady` reports questionnaire and profile readiness. Compile `ready` and `gateDecision: pass` additionally require current bounded provider context accounting within both the provider window and the reviewed run budget; omission, stale bounds, or `contextWindow: null` leaves accounting unknown and exits with status 2 after creating the no-contact bundle. Inspect `providerPrediction`, `dataReleaseStatus`, both token dimensions, and `routing` separately. The compile summary exposes `dataReleaseStatus`, `routingStrategy`, `routingReason`, and `routeReady`; `routeReady: true` means only that this compiled provider-model route passed those no-contact checks. Compilation sends no packet to a provider.
 
+When `--provider-profile` is supplied, `compile` also exits with status 2 if `routeReady` is false, even when compile `ready` is true. Inspect `routeBlockers` for destination or capability failures as well as profile and accounting blockers.
+
 Recompile after changing the profile or a cited source. The change produces a new profile digest and bundle. Older bundles remain bound to their prior profile revision and must not be reused as current context.
 
 ## Bind an exact engagement before target contact
