@@ -11,6 +11,7 @@ import { runtimePaths } from "../src/lib/paths.mjs";
 import {
   addWorkflowEvidence,
   attachWorkflowReport,
+  checkWorkflowExecution,
   closeWorkflow,
   createWorkflowInstance,
   finishWorkflowPhase,
@@ -214,6 +215,21 @@ test("projection recovery validates the current workflow contract before writing
   const blockedMissingRepair = workflowStatus(id, { paths });
   assert.equal(blockedMissingRepair.ok, false);
   assert.match(blockedMissingRepair.blocker, /no longer matches the installed contract/u);
+  assert.equal(fs.existsSync(files.projection), false);
+
+  assert.throws(
+    () => setWorkflowCoverage(id, {
+      domain: PENTEST_COVERAGE_DOMAINS[0],
+      disposition: "untested",
+      rationale: "Contract drift must block mutation before projection recovery."
+    }, { paths }),
+    /no longer matches the installed contract/u
+  );
+  assert.equal(fs.existsSync(files.projection), false);
+  assert.throws(
+    () => checkWorkflowExecution(id, {}, { paths }),
+    /no longer matches the installed contract/u
+  );
   assert.equal(fs.existsSync(files.projection), false);
 });
 
