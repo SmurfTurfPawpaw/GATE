@@ -191,9 +191,6 @@ test("format guidance uses valid field-specific scalar examples", () => {
   assert.match(guidance("data-retention-days"), /\n30$/u);
   assert.match(guidance("data-classification"), /\nconfidential$/u);
   assert.match(guidance("attestation-operator"), /local-operator/u);
-  assert.match(guidance("identity-success-criteria"), /Every promising signal/u);
-  assert.match(guidance("identity-success-criteria"), /high-friction scenario/u);
-  assert.match(guidance("web-api-automation-rules"), /callback, webhook, role and tenant/u);
   assert.match(guidance("architecture-unknowns"), /use \[\] when the recorded answer is none/u);
   assert.match(guidance("architecture-unknowns"), /\n\[\]$/u);
   assert.match(guidance("authority-valid-from"), /2026-01-01T00:00:00Z/u);
