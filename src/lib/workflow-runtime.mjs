@@ -661,6 +661,17 @@ function loadProjection(paths, {
 } = {}) {
   const entries = parseJournal(paths, journalMaximumBytes);
   const played = replay(entries, paths);
+  if (requireCurrentContract) {
+    const definition = loadDefinition(paths);
+    if (played.projection.definition.sha256 !== definition.contractSha256 ||
+      played.projection.definition.workflowSha256 !== definition.workflowSha256 ||
+      played.projection.definition.catalogSha256 !== definition.catalogSha256 ||
+      played.projection.definition.engagementPolicySha256 !== definition.engagementPolicySha256 ||
+      JSON.stringify(played.projection.definition.coverageDomains) !== JSON.stringify(PENTEST_COVERAGE_DOMAINS) ||
+      JSON.stringify([...played.projection.definition.mandatoryStops].sort()) !== JSON.stringify(definition.mandatoryStops)) {
+      throw new Error("workflow instance definition no longer matches the installed contract");
+    }
+  }
   let observed;
   try {
     observed = JSON.parse(readPrivateFileBounded(
@@ -697,17 +708,6 @@ function loadProjection(paths, {
     if (!repair) throw new Error("workflow projection is behind the authoritative journal");
     persistProjection(paths, played.projection);
     repaired = true;
-  }
-  if (requireCurrentContract) {
-    const definition = loadDefinition(paths);
-    if (played.projection.definition.sha256 !== definition.contractSha256 ||
-      played.projection.definition.workflowSha256 !== definition.workflowSha256 ||
-      played.projection.definition.catalogSha256 !== definition.catalogSha256 ||
-      played.projection.definition.engagementPolicySha256 !== definition.engagementPolicySha256 ||
-      JSON.stringify(played.projection.definition.coverageDomains) !== JSON.stringify(PENTEST_COVERAGE_DOMAINS) ||
-      JSON.stringify([...played.projection.definition.mandatoryStops].sort()) !== JSON.stringify(definition.mandatoryStops)) {
-      throw new Error("workflow instance definition no longer matches the installed contract");
-    }
   }
   return { ...played, entries, repaired };
 }

@@ -184,6 +184,39 @@ test("an exact projection prefix is repaired but a validly resealed same-head mi
   assert.match(blocked.blocker, /differs from the journal at the same head/u);
 });
 
+test("projection recovery validates the current workflow contract before writing repairs", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-workflow-contract-recovery-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const isolatedRepo = path.join(root, "repo");
+  for (const directory of ["catalog", "config", "policies", "schemas"]) {
+    fs.cpSync(path.join(repo, directory), path.join(isolatedRepo, directory), { recursive: true });
+  }
+  const paths = runtimePaths({ home: path.join(root, "home"), repo: isolatedRepo });
+  const id = "contract-recovery";
+  createWorkflowInstance(id, {}, { paths });
+  const files = instanceFiles(paths, id);
+  const genesisProjection = fs.readFileSync(files.projection);
+
+  startWorkflowPhase(id, { phaseId: "authorization-and-roe" }, { paths });
+  fs.writeFileSync(files.projection, genesisProjection, { mode: 0o600 });
+
+  const workflowFile = path.join(isolatedRepo, "config", "workflows", "pentest-e2e.json");
+  const upgraded = JSON.parse(fs.readFileSync(workflowFile, "utf8"));
+  upgraded.metadata.version += 1;
+  fs.writeFileSync(workflowFile, `${JSON.stringify(upgraded, null, 2)}\n`);
+
+  const blockedPrefixRepair = workflowStatus(id, { paths });
+  assert.equal(blockedPrefixRepair.ok, false);
+  assert.match(blockedPrefixRepair.blocker, /no longer matches the installed contract/u);
+  assert.equal(JSON.parse(fs.readFileSync(files.projection, "utf8")).appliedSequence, 0);
+
+  fs.unlinkSync(files.projection);
+  const blockedMissingRepair = workflowStatus(id, { paths });
+  assert.equal(blockedMissingRepair.ok, false);
+  assert.match(blockedMissingRepair.blocker, /no longer matches the installed contract/u);
+  assert.equal(fs.existsSync(files.projection), false);
+});
+
 test("a truncated authoritative journal blocks status", (t) => {
   const { paths } = fixture(t, "gate-workflow-truncated-");
   const id = "truncated-journal";
