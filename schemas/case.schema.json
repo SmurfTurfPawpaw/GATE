@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/case.schema.json",
+  "title": "GATE isolated program case",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "apiVersion",
+    "kind",
+    "metadata",
+    "program",
+    "project",
+    "isolation",
+    "scopeSha256"
+  ],
+  "properties": {
+    "$schema": { "const": "https://gate.local/schemas/case.schema.json" },
+    "apiVersion": { "const": "gate.dev/case/v1" },
+    "kind": { "const": "Case" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "displayName", "createdAt"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "pattern": "^[A-Za-z][A-Za-z0-9 .'-]*$"
+        },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "program": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "profileSha256"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "profileSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "project": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "contractSha256"],
+          "properties": {
+            "id": { "$ref": "#/$defs/id" },
+            "contractSha256": { "$ref": "#/$defs/sha256" }
+          }
+        }
+      ]
+    },
+    "isolation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stateNamespace", "processBoundary", "networkBoundary"],
+      "properties": {
+        "stateNamespace": { "const": "isolated-directory" },
+        "processBoundary": { "const": "shared-user" },
+        "networkBoundary": { "const": "adapter-dependent" }
+      }
+    },
+    "scopeSha256": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

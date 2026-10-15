@@ -2,7 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { securePrivateDirectory, securePrivateFile } from "./private-fs.mjs";
+import { assertCaseStateBinding } from "./case-scope.mjs";
+import {
+  readPrivateFileBounded,
+  securePrivateDirectory,
+  securePrivateFile
+} from "./private-fs.mjs";
 
 function auditPresentEntry(file, audit, options) {
   try {
@@ -20,7 +25,32 @@ function auditPresentEntry(file, audit, options) {
   }
 }
 
+function* directoryEntries(directory) {
+  const handle = fs.opendirSync(directory);
+  try {
+    while (true) {
+      const entry = handle.readSync();
+      if (entry === null) return;
+      yield entry.name;
+    }
+  } finally {
+    handle.closeSync();
+  }
+}
+
 const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const CASE_ID = /^[a-z][a-z0-9-]{1,62}$/u;
+const MAX_CASE_BINDING_BYTES = 1024;
+const MAX_CASE_SCOPE_BYTES = 64 * 1024;
+const RUNTIME_PATH_KEYS = Object.freeze([
+  "stateHome", "cases", "caseRoot", "caseScope", "caseBinding",
+  "events", "tokens", "engagements", "authorizations", "plans", "evidence", "programs", "workflows",
+  "executions", "executionManifests", "executionClaims", "executionRuns", "executionStops", "executionSandboxes",
+  "offlineAnalyses", "offlineAnalysisTransactions", "offlineAnalysisManifests", "offlineAnalysisCreations",
+  "offlineAnalysisClaims", "offlineAnalysisPurges", "offlineAnalysisRuns", "offlineAnalysisInputs",
+  "offlineAnalysisSandboxes", "projects", "upstreams", "upstreamTools", "toolRuntimes", "toolRuntimeStaging",
+  "toolCache", "toolArtifactCache", "privateLearnings", "publicLearningRecords", "publicLearnings"
+]);
 
 export function findRepoRoot() {
   // Executable assets, policies, schemas, and locks are always loaded from the
@@ -49,25 +79,52 @@ export function gateConfigHome(env = process.env) {
 }
 
 export function runtimePaths(options = {}) {
+  for (const key of RUNTIME_PATH_KEYS) {
+    if (Object.hasOwn(options, key) && key !== "stateHome") {
+      throw new Error(`runtime path override is not allowed: ${key}`);
+    }
+  }
   const home = path.resolve(options.home || gateHome(options.env));
   const repo = path.resolve(options.repo || findRepoRoot(options.cwd));
-  const executions = path.join(home, "executions");
-  const offlineAnalyses = path.join(home, "offline-analysis");
+  const cases = path.join(home, "cases");
+  let caseId = null;
+  if (options.caseId !== undefined && options.caseId !== null) {
+    if (typeof options.caseId !== "string" || !CASE_ID.test(options.caseId)) {
+      throw new Error("case id must start with a letter and contain only lowercase letters, numbers, or dashes");
+    }
+    caseId = options.caseId;
+  }
+  const expectedCaseStateHome = caseId ? path.join(cases, caseId, "state") : null;
+  const stateHome = path.resolve(options.stateHome || expectedCaseStateHome || home);
+  const expectedStateHome = path.resolve(expectedCaseStateHome || home);
+  if (stateHome !== expectedStateHome) {
+    throw new Error(caseId
+      ? "case stateHome must match GATE_HOME/cases/CASE_ID/state"
+      : "base stateHome must match GATE_HOME");
+  }
+  const executions = path.join(stateHome, "executions");
+  const offlineAnalyses = path.join(stateHome, "offline-analysis");
   const toolRuntimes = path.join(home, "tool-runtimes");
   const toolCache = path.join(home, "tool-cache");
   const programs = path.join(home, "programs");
   return {
     repo,
     home,
+    stateHome,
+    caseId,
+    cases,
+    caseRoot: caseId ? path.join(cases, caseId) : null,
+    caseScope: caseId ? path.join(cases, caseId, "scope.json") : null,
+    caseBinding: caseId ? path.join(stateHome, ".case-binding.json") : null,
     configHome: gateConfigHome(options.env),
-    events: path.join(home, "events.jsonl"),
-    tokens: path.join(home, "tokens.jsonl"),
-    engagements: path.join(home, "engagements"),
-    authorizations: path.join(home, "authorizations"),
-    plans: path.join(home, "plans"),
-    evidence: path.join(home, "evidence"),
+    events: path.join(stateHome, "events.jsonl"),
+    tokens: path.join(stateHome, "tokens.jsonl"),
+    engagements: path.join(stateHome, "engagements"),
+    authorizations: path.join(stateHome, "authorizations"),
+    plans: path.join(stateHome, "plans"),
+    evidence: path.join(stateHome, "evidence"),
     programs,
-    workflows: path.join(home, "workflows"),
+    workflows: path.join(stateHome, "workflows"),
     executions,
     executionManifests: path.join(executions, "manifests"),
     executionClaims: path.join(executions, "claims"),
@@ -90,10 +147,64 @@ export function runtimePaths(options = {}) {
     toolRuntimeStaging: path.join(toolRuntimes, ".staging"),
     toolCache,
     toolArtifactCache: path.join(toolCache, "sha256"),
-    privateLearnings: path.join(home, "memory", "private", "learnings.jsonl"),
+    privateLearnings: path.join(stateHome, "memory", "private", "learnings.jsonl"),
     publicLearningRecords: path.join(repo, "memory", "learnings.jsonl"),
     publicLearnings: path.join(repo, "memory", "LEARNINGS.md")
   };
+}
+
+function sameResolvedPath(left, right) {
+  return typeof left === "string" && typeof right === "string" && path.resolve(left) === path.resolve(right);
+}
+
+function exactRuntimePaths(supplied) {
+  if (!supplied?.home) throw new Error("GATE_HOME is required");
+  const suppliedHome = path.resolve(supplied.home);
+  if (suppliedHome === path.parse(suppliedHome).root) throw new Error("GATE_HOME cannot be a filesystem root");
+  if (!supplied.repo) throw new Error("the GATE repository path is required");
+  const expected = runtimePaths({
+    home: supplied.home,
+    repo: supplied.repo,
+    caseId: supplied.caseId,
+    stateHome: supplied.stateHome
+  });
+  if (supplied.caseId !== undefined && supplied.caseId !== null && supplied.caseId !== expected.caseId) {
+    throw new Error("runtime case id does not match its derived path table");
+  }
+  for (const key of RUNTIME_PATH_KEYS) {
+    if (!Object.hasOwn(supplied, key)) continue;
+    const actual = supplied[key];
+    const derived = expected[key];
+    const matches = actual === null || derived === null
+      ? actual === derived
+      : sameResolvedPath(actual, derived);
+    if (!matches) {
+      throw new Error(`runtime path does not match its derived location: ${key} (override escapes GATE_HOME or another case)`);
+    }
+  }
+  return expected;
+}
+
+function readJsonBounded(file, maximumBytes, label) {
+  let value;
+  try {
+    value = JSON.parse(readPrivateFileBounded(file, maximumBytes, "utf8", { label }));
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new Error(`${label} is not valid JSON`, { cause: error });
+    throw error;
+  }
+  return value;
+}
+
+function assertScopedStateBinding(paths) {
+  if (!paths.caseId) return;
+  securePrivateDirectory(paths.caseRoot, { create: false, label: `private case ${paths.caseId}` });
+  securePrivateDirectory(paths.stateHome, { create: false, label: `private case state ${paths.caseId}` });
+  securePrivateFile(paths.caseScope, { allowMissing: false, label: `private case scope ${paths.caseId}` });
+  securePrivateFile(paths.caseBinding, { allowMissing: false, label: `private case state binding ${paths.caseId}` });
+  const scope = readJsonBounded(paths.caseScope, MAX_CASE_SCOPE_BYTES, `private case scope ${paths.caseId}`);
+  const marker = readJsonBounded(paths.caseBinding, MAX_CASE_BINDING_BYTES, `private case state binding ${paths.caseId}`);
+  assertCaseStateBinding(marker, scope, { expectedId: paths.caseId });
 }
 
 function lstatIfPresent(file) {
@@ -132,8 +243,25 @@ function prospectiveRealPath(candidate) {
   }
 }
 
+function assertUnscopedHomeOutsideCaseState(home, canonicalHome) {
+  const visited = new Set();
+  for (const candidate of [path.resolve(home), path.resolve(canonicalHome)]) {
+    let current = candidate;
+    while (!visited.has(current)) {
+      visited.add(current);
+      const marker = path.join(current, ".case-binding.json");
+      if (lstatIfPresent(marker)) {
+        throw new Error("unassigned GATE_HOME must not be a case state root or its descendant");
+      }
+      const parent = path.dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+  }
+}
+
 export function ensureRuntime(paths) {
-  if (!paths?.home) throw new Error("GATE_HOME is required");
+  paths = exactRuntimePaths(paths);
   const home = path.resolve(paths.home);
   if (home === path.parse(home).root) throw new Error("GATE_HOME cannot be a filesystem root");
 
@@ -150,11 +278,22 @@ export function ensureRuntime(paths) {
   if (pathsOverlap(canonicalHome, canonicalRepo)) {
     throw new Error("GATE_HOME and the GATE repository must not overlap after resolving parent links");
   }
+  if (!paths.caseId) assertUnscopedHomeOutsideCaseState(home, canonicalHome);
+
+  const stateHome = path.resolve(paths.stateHome || home);
+  if (!sameOrDescendant(home, stateHome)) {
+    throw new Error("runtime stateHome must remain inside GATE_HOME");
+  }
+  const canonicalStateHome = prospectiveRealPath(stateHome);
+  if (!sameOrDescendant(canonicalHome, canonicalStateHome)) {
+    throw new Error("runtime stateHome must remain inside GATE_HOME after resolving parent links");
+  }
 
   // Only create private state after both the lexical and physical locations
   // are proven separate from the repository's Git-managed tree.
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
   securePrivateDirectory(home, { create: false, label: "GATE_HOME" });
+  if (paths.caseId) assertScopedStateBinding(paths);
 
   // Derive the workflow root for older callers that pass a partial paths
   // object. Workflow operations validate individual instance directories;
@@ -163,6 +302,8 @@ export function ensureRuntime(paths) {
   const workflows = paths.workflows || path.join(home, "workflows");
 
   const directoryPaths = [
+    paths.cases || path.join(home, "cases"),
+    stateHome,
     paths.engagements,
     paths.authorizations,
     paths.plans,
@@ -234,7 +375,7 @@ export function ensureRuntime(paths) {
     paths.offlineAnalysisClaims,
     paths.offlineAnalysisPurges
   ].filter(Boolean)) {
-    for (const entry of fs.readdirSync(directory)) {
+    for (const entry of directoryEntries(directory)) {
       // The project writer owns these short-lived control files and project
       // readers validate them without following links. Skipping them here
       // prevents status/bootstrap calls from racing their unlink after readdir.
@@ -254,7 +395,7 @@ export function ensureRuntime(paths) {
   // direct roots are part of GATE's control plane; their contents are opaque
   // private evidence and are never traversed during bootstrap.
   if (paths.executionSandboxes) {
-    for (const entry of fs.readdirSync(paths.executionSandboxes)) {
+    for (const entry of directoryEntries(paths.executionSandboxes)) {
       securePrivateDirectory(path.join(paths.executionSandboxes, entry), {
         create: false,
         label: `private execution sandbox ${entry}`
@@ -266,7 +407,7 @@ export function ensureRuntime(paths) {
   // bounded file audit. Runtime bootstrap validates only the direct profile
   // roots so it stays independent of retained compilation history.
   if (paths.programs) {
-    for (const entry of fs.readdirSync(paths.programs)) {
+    for (const entry of directoryEntries(paths.programs)) {
       auditPresentEntry(path.join(paths.programs, entry), securePrivateDirectory, {
         create: false,
         label: `private program profile ${entry}`
@@ -275,8 +416,8 @@ export function ensureRuntime(paths) {
   }
 
   if (paths.offlineAnalysisSandboxes) {
-    for (const entry of fs.readdirSync(paths.offlineAnalysisSandboxes)) {
-      securePrivateDirectory(path.join(paths.offlineAnalysisSandboxes, entry), {
+    for (const entry of directoryEntries(paths.offlineAnalysisSandboxes)) {
+      auditPresentEntry(path.join(paths.offlineAnalysisSandboxes, entry), securePrivateDirectory, {
         create: false,
         label: `private offline-analysis sandbox ${entry}`
       });
@@ -287,7 +428,7 @@ export function ensureRuntime(paths) {
   // source symlinks, but each top-level installation must itself be a real
   // owner-only directory.
   for (const directory of [paths.upstreams, paths.upstreamTools].filter(Boolean)) {
-    for (const entry of fs.readdirSync(directory)) {
+    for (const entry of directoryEntries(directory)) {
       securePrivateDirectory(path.join(directory, entry), {
         create: false,
         label: `managed upstream directory ${entry}`
@@ -298,7 +439,7 @@ export function ensureRuntime(paths) {
   // Runtime installations are private, content-verified trees. The staging
   // directory is internal bookkeeping rather than an installed tool.
   if (paths.toolRuntimes) {
-    for (const entry of fs.readdirSync(paths.toolRuntimes)) {
+    for (const entry of directoryEntries(paths.toolRuntimes)) {
       if (entry === ".staging") continue;
       auditPresentEntry(path.join(paths.toolRuntimes, entry), securePrivateDirectory, {
         create: false,
@@ -308,11 +449,12 @@ export function ensureRuntime(paths) {
   }
 
   if (paths.toolArtifactCache) {
-    for (const entry of fs.readdirSync(paths.toolArtifactCache)) {
+    for (const entry of directoryEntries(paths.toolArtifactCache)) {
       auditPresentEntry(path.join(paths.toolArtifactCache, entry), securePrivateFile, {
         allowMissing: false,
         label: `managed tool artifact ${entry}`
       });
     }
   }
+  if (paths.caseId) assertScopedStateBinding(paths);
 }

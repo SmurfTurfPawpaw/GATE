@@ -1,11 +1,20 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
+import {
+  canonicalCaseScopeText,
+  caseScopeDigest
+} from "../src/lib/case-scope.mjs";
 import { writeJsonAtomic } from "../src/lib/config.mjs";
 import { ensureRuntime, runtimePaths } from "../src/lib/paths.mjs";
 import { readPrivateFileBounded } from "../src/lib/private-fs.mjs";
+
+const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const gate = path.join(repo, "bin", "gate.mjs");
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-runtime-"));
@@ -18,6 +27,46 @@ function fixture(t) {
 function permissions(file) {
   return fs.statSync(file).mode & 0o777;
 }
+
+function seedCaseBinding(paths) {
+  const scope = {
+    $schema: "https://gate.local/schemas/case.schema.json",
+    apiVersion: "gate.dev/case/v1",
+    kind: "Case",
+    metadata: {
+      id: paths.caseId,
+      displayName: paths.caseId === "alpha-case" ? "Alpha case" : "Beta case",
+      createdAt: "2026-10-15T12:00:00.000Z"
+    },
+    program: { id: "fixture-program", profileSha256: "a".repeat(64) },
+    project: null,
+    isolation: {
+      stateNamespace: "isolated-directory",
+      processBoundary: "shared-user",
+      networkBoundary: "adapter-dependent"
+    },
+    scopeSha256: "0".repeat(64)
+  };
+  scope.scopeSha256 = caseScopeDigest(scope);
+  fs.mkdirSync(paths.stateHome, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(paths.caseScope, canonicalCaseScopeText(scope), { mode: 0o600 });
+  fs.writeFileSync(
+    paths.caseBinding,
+    `${JSON.stringify({ caseId: paths.caseId, scopeSha256: scope.scopeSha256 })}\n`,
+    { mode: 0o600 }
+  );
+  return scope;
+}
+
+const derivedRuntimePathKeys = [
+  "stateHome", "cases", "caseRoot", "caseScope", "caseBinding",
+  "events", "tokens", "engagements", "authorizations", "plans", "evidence", "programs", "workflows",
+  "executions", "executionManifests", "executionClaims", "executionRuns", "executionStops", "executionSandboxes",
+  "offlineAnalyses", "offlineAnalysisTransactions", "offlineAnalysisManifests", "offlineAnalysisCreations",
+  "offlineAnalysisClaims", "offlineAnalysisPurges", "offlineAnalysisRuns", "offlineAnalysisInputs",
+  "offlineAnalysisSandboxes", "projects", "upstreams", "upstreamTools", "toolRuntimes", "toolRuntimeStaging",
+  "toolCache", "toolArtifactCache", "privateLearnings", "publicLearningRecords", "publicLearnings"
+];
 
 test("runtime setup remediates private directories to 0700 and state files to 0600", {
   skip: process.platform === "win32" && "Windows uses profile ACLs instead of POSIX mode bits"
@@ -52,6 +101,157 @@ test("runtime setup remediates private directories to 0700 and state files to 06
   }
   assert.equal(permissions(paths.events), 0o600);
   assert.equal(permissions(engagement), 0o600);
+});
+
+test("case runtime paths isolate mutable state while retaining shared registries and tool roots", (t) => {
+  const { home, paths } = fixture(t);
+  const first = runtimePaths({ home, repo: paths.repo, caseId: "alpha-case" });
+  const second = runtimePaths({ home, repo: paths.repo, caseId: "beta-case" });
+
+  assert.equal(first.stateHome, path.join(home, "cases", "alpha-case", "state"));
+  assert.equal(second.stateHome, path.join(home, "cases", "beta-case", "state"));
+  for (const key of [
+    "events", "tokens", "engagements", "authorizations", "plans", "evidence", "workflows",
+    "executions", "offlineAnalyses", "privateLearnings"
+  ]) {
+    assert.notEqual(first[key], second[key], key);
+    assert.equal(first[key].startsWith(`${first.stateHome}${path.sep}`), true, key);
+    assert.equal(second[key].startsWith(`${second.stateHome}${path.sep}`), true, key);
+  }
+  for (const key of [
+    "projects", "programs", "upstreams", "upstreamTools", "toolRuntimes", "toolCache", "toolArtifactCache"
+  ]) {
+    assert.equal(first[key], second[key], key);
+    assert.equal(first[key], paths[key], key);
+  }
+
+  seedCaseBinding(first);
+  seedCaseBinding(second);
+  ensureRuntime(first);
+  ensureRuntime(second);
+  if (process.platform !== "win32") {
+    assert.equal(permissions(first.stateHome), 0o700);
+    assert.equal(permissions(second.stateHome), 0o700);
+  }
+});
+
+test("case selection rejects mismatched and escaping state roots", (t) => {
+  const { root, home, paths } = fixture(t);
+  assert.throws(
+    () => runtimePaths({
+      home,
+      repo: paths.repo,
+      caseId: "alpha-case",
+      stateHome: path.join(home, "cases", "beta-case", "state")
+    }),
+    /case stateHome must match/u
+  );
+
+  assert.throws(
+    () => runtimePaths({ home, repo: paths.repo, stateHome: path.join(root, "escaped") }),
+    /base stateHome must match GATE_HOME/u
+  );
+  assert.equal(fs.existsSync(path.join(root, "escaped")), false);
+});
+
+test("runtime path tables reject every mutable and shared path override", (t) => {
+  const { home, paths } = fixture(t);
+  ensureRuntime(paths);
+  for (const key of derivedRuntimePathKeys) {
+    const redirected = path.join(home, "redirected", key);
+    assert.throws(
+      () => runtimePaths({ home, repo: paths.repo, [key]: redirected }),
+      /runtime path override is not allowed|base stateHome must match/u,
+      `runtimePaths must reject ${key}`
+    );
+    assert.throws(
+      () => ensureRuntime({ ...paths, [key]: redirected }),
+      /runtime path does not match its derived location|base stateHome must match/u,
+      `ensureRuntime must reject ${key}`
+    );
+  }
+});
+
+test("scoped runtime setup requires the exact immutable state-root binding", (t) => {
+  const { home, paths } = fixture(t);
+  const scoped = runtimePaths({ home, repo: paths.repo, caseId: "alpha-case" });
+  assert.throws(() => ensureRuntime(scoped), /private case alpha-case does not exist/u);
+
+  const scope = seedCaseBinding(scoped);
+  assert.doesNotThrow(() => ensureRuntime(scoped));
+  fs.writeFileSync(scoped.caseBinding, `${JSON.stringify({
+    caseId: "other-case",
+    scopeSha256: scope.scopeSha256
+  })}\n`, { mode: 0o600 });
+  assert.throws(() => ensureRuntime(scoped), /state-root binding does not match/u);
+});
+
+test("scoped runtime setup verifies the complete immutable scope and recomputes its digest", (t) => {
+  const { home, paths } = fixture(t);
+  const scoped = runtimePaths({ home, repo: paths.repo, caseId: "alpha-case" });
+  const scope = seedCaseBinding(scoped);
+
+  fs.writeFileSync(scoped.caseScope, `${JSON.stringify({
+    metadata: { id: scoped.caseId },
+    scopeSha256: scope.scopeSha256
+  })}\n`, { mode: 0o600 });
+  assert.throws(() => ensureRuntime(scoped), /case scope must contain exactly/u);
+
+  fs.writeFileSync(scoped.caseScope, canonicalCaseScopeText({
+    ...scope,
+    metadata: { ...scope.metadata, displayName: "Changed without a new digest" }
+  }), { mode: 0o600 });
+  assert.throws(() => ensureRuntime(scoped), /case scope digest changed/u);
+});
+
+test("unassigned runtime rejects a case state root before writing into it", (t) => {
+  const { home, paths } = fixture(t);
+  const scoped = runtimePaths({ home, repo: paths.repo, caseId: "alpha-case" });
+  seedCaseBinding(scoped);
+  const before = fs.readdirSync(scoped.stateHome).sort();
+
+  const result = spawnSync(process.execPath, [
+    gate,
+    "--unassigned",
+    "engagement",
+    "new",
+    "aliased-case",
+    "--targets",
+    "app.example.test",
+    "--actions",
+    "scan",
+    "--tools",
+    "nmap",
+    "--json"
+  ], {
+    cwd: repo,
+    env: { ...process.env, GATE_HOME: scoped.stateHome, GATE_CASE: "" },
+    encoding: "utf8",
+    timeout: 10_000
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /must not be a case state root or its descendant/u);
+  assert.deepEqual(fs.readdirSync(scoped.stateHome).sort(), before);
+  assert.equal(fs.existsSync(path.join(scoped.stateHome, "cases")), false);
+  assert.equal(fs.existsSync(path.join(scoped.stateHome, "engagements", "aliased-case.json")), false);
+});
+
+test("unassigned runtime rejects a symlink-parent alias below a case state root before writing", {
+  skip: process.platform === "win32" && "creating symlinks can require elevated Windows privileges"
+}, (t) => {
+  const { root, home, paths } = fixture(t);
+  const scoped = runtimePaths({ home, repo: paths.repo, caseId: "alpha-case" });
+  seedCaseBinding(scoped);
+  const alias = path.join(root, "case-state-alias");
+  fs.symlinkSync(scoped.stateHome, alias, "dir");
+  const nestedHome = path.join(alias, "nested-unassigned");
+
+  assert.throws(
+    () => ensureRuntime(runtimePaths({ home: nestedHome, repo: paths.repo })),
+    /must not be a case state root or its descendant/u
+  );
+  assert.equal(fs.existsSync(path.join(scoped.stateHome, "nested-unassigned")), false);
 });
 
 test("runtime setup creates the workflow root without scanning retained instances", {
@@ -174,7 +374,21 @@ test("runtime setup rejects planted engagement entries and paths outside GATE_HO
 
   fs.unlinkSync(path.join(paths.engagements, "planted.json"));
   const escaped = { ...paths, plans: path.join(root, "escaped-plans") };
-  assert.throws(() => ensureRuntime(escaped), /private directory escapes GATE_HOME/);
+  assert.throws(() => ensureRuntime(escaped), /runtime path does not match its derived location: plans/u);
+});
+
+test("runtime setup streams retained state beyond 4096 direct entries", (t) => {
+  const { paths } = fixture(t);
+  ensureRuntime(paths);
+  for (let index = 0; index < 4097; index += 1) {
+    fs.writeFileSync(
+      path.join(paths.engagements, `entry-${String(index).padStart(4, "0")}.json`),
+      "{}\n",
+      { mode: 0o600 }
+    );
+  }
+
+  assert.doesNotThrow(() => ensureRuntime(paths));
 });
 
 test("runtime setup rejects linked project registry entries", {
@@ -246,17 +460,28 @@ for (const kind of ["runtime", "artifact"]) {
     const entry = path.join(directory, "retiring-entry");
     if (kind === "runtime") fs.mkdirSync(entry, { mode: 0o700 });
     else fs.writeFileSync(entry, "fixture", { mode: 0o600 });
-    const readdir = fs.readdirSync;
-    fs.readdirSync = (file, ...args) => {
-      const entries = readdir(file, ...args);
-      if (file === directory && fs.existsSync(entry)) fs.rmSync(entry, { recursive: true });
-      return entries;
+    const opendir = fs.opendirSync;
+    fs.opendirSync = (file, ...args) => {
+      const handle = opendir(file, ...args);
+      if (file !== directory) return handle;
+      return {
+        readSync(...readArgs) {
+          const directoryEntry = handle.readSync(...readArgs);
+          if (directoryEntry?.name === path.basename(entry) && fs.existsSync(entry)) {
+            fs.rmSync(entry, { recursive: true });
+          }
+          return directoryEntry;
+        },
+        closeSync(...closeArgs) {
+          return handle.closeSync(...closeArgs);
+        }
+      };
     };
     try {
       assert.doesNotThrow(() => ensureRuntime(paths));
       assert.equal(fs.existsSync(entry), false);
     } finally {
-      fs.readdirSync = readdir;
+      fs.opendirSync = opendir;
     }
   });
 
@@ -288,6 +513,36 @@ for (const kind of ["runtime", "artifact"]) {
     assert.throws(() => ensureRuntime(paths), /symbolic link/);
   });
 }
+
+test("offline sandbox audit tolerates a listed root removed by concurrent purge", (t) => {
+  const { paths } = fixture(t);
+  ensureRuntime(paths);
+  const entry = path.join(paths.offlineAnalysisSandboxes, "retiring-sandbox");
+  fs.mkdirSync(entry, { mode: 0o700 });
+  const opendir = fs.opendirSync;
+  fs.opendirSync = (file, ...args) => {
+    const handle = opendir(file, ...args);
+    if (file !== paths.offlineAnalysisSandboxes) return handle;
+    return {
+      readSync(...readArgs) {
+        const directoryEntry = handle.readSync(...readArgs);
+        if (directoryEntry?.name === path.basename(entry) && fs.existsSync(entry)) {
+          fs.rmSync(entry, { recursive: true });
+        }
+        return directoryEntry;
+      },
+      closeSync(...closeArgs) {
+        return handle.closeSync(...closeArgs);
+      }
+    };
+  };
+  try {
+    assert.doesNotThrow(() => ensureRuntime(paths));
+    assert.equal(fs.existsSync(entry), false);
+  } finally {
+    fs.opendirSync = opendir;
+  }
+});
 
 for (const kind of ["runtime", "artifact"]) {
   for (const stage of ["open", "final identity check"]) {

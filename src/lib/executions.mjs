@@ -40,6 +40,7 @@ const DEFAULT_MAX_EVIDENCE_BYTES = 256 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 2 * 1024 * 1024;
 const MAX_RUN_BYTES = 512 * 1024;
 const MAX_EXECUTABLE_BYTES = 4 * 1024 * 1024 * 1024;
+const MAX_RECENT_EXECUTIONS = 100;
 
 export const EXECUTION_ENFORCED = Object.freeze([
   "engagement-binding",
@@ -2029,10 +2030,10 @@ export function requestEngagementStops(engagementId, options = {}) {
 
 function publicRunMetadata(run) {
   let status = run.status;
-  const supervised = liveProcessIdentity(run.supervisor);
-  if (status === "queued" && !supervised) status = "unknown";
-  if (new Set(["running", "stopping"]).has(status) && (!supervised || !liveProcessIdentity(run.process))) {
-    status = "unknown";
+  if (status === "queued") {
+    if (!liveProcessIdentity(run.supervisor)) status = "unknown";
+  } else if (status === "running" || status === "stopping") {
+    if (!liveProcessIdentity(run.supervisor) || !liveProcessIdentity(run.process)) status = "unknown";
   }
   return {
     runId: run.runId,
@@ -2054,45 +2055,86 @@ function publicRunMetadata(run) {
   };
 }
 
+function compareRecentExecutions(left, right) {
+  const created = Date.parse(right.createdAt) - Date.parse(left.createdAt);
+  if (created !== 0) return created;
+  const run = left.runId.localeCompare(right.runId);
+  if (run !== 0) return run;
+  return left.manifestId.localeCompare(right.manifestId);
+}
+
+function retainRecentExecution(recent, metadata) {
+  let lower = 0;
+  let upper = recent.length;
+  while (lower < upper) {
+    const middle = Math.floor((lower + upper) / 2);
+    if (compareRecentExecutions(metadata, recent[middle]) < 0) upper = middle;
+    else lower = middle + 1;
+  }
+  recent.splice(lower, 0, metadata);
+  if (recent.length > MAX_RECENT_EXECUTIONS) recent.pop();
+}
+
+function* directoryEntries(directory) {
+  const handle = fs.opendirSync(directory);
+  try {
+    let entry;
+    while ((entry = handle.readSync()) !== null) yield entry;
+  } finally {
+    handle.closeSync();
+  }
+}
+
 export function executionStatus(options = {}) {
   const paths = executionPaths(options.paths || runtimePaths(options));
   ensureRuntime(paths);
   const recent = [];
   const seenRuns = new Set();
+  const counts = {
+    queued: 0,
+    running: 0,
+    stopping: 0,
+    succeeded: 0,
+    failed: 0,
+    cancelled: 0,
+    blocked: 0,
+    unknown: 0
+  };
   let invalid = 0;
-  for (const entry of fs.readdirSync(paths.executionRuns).filter((name) => name.endsWith(".json"))) {
+  for (const directoryEntry of directoryEntries(paths.executionRuns)) {
+    const entry = directoryEntry.name;
+    if (!entry.endsWith(".json")) continue;
     const id = entry.slice(0, -5);
     if (/^xrun_[a-f0-9]{32}$/u.test(id)) seenRuns.add(id);
     try {
       const metadata = publicRunMetadata(readRun(paths, id));
-      recent.push(metadata);
+      counts[metadata.status] += 1;
+      retainRecentExecution(recent, metadata);
     } catch {
       invalid += 1;
     }
   }
-  for (const entry of fs.readdirSync(paths.executionClaims).filter((name) => /^xmf_[a-f0-9]{32}\.json$/u.test(name))) {
+  for (const directoryEntry of directoryEntries(paths.executionClaims)) {
+    const entry = directoryEntry.name;
+    if (!/^xmf_[a-f0-9]{32}\.json$/u.test(entry)) {
+      invalid += 1;
+      continue;
+    }
     try {
       const metadata = readClaimMetadata(paths, entry.slice(0, -5));
-      if (!seenRuns.has(metadata.runId)) recent.push(metadata);
+      if (!seenRuns.has(metadata.runId)) {
+        counts[metadata.status] += 1;
+        retainRecentExecution(recent, metadata);
+      }
     } catch {
       invalid += 1;
     }
   }
-  recent.sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
-  const count = (status) => recent.filter((run) => run.status === status).length;
+  counts.unknown += invalid;
   return {
     capability: executionCapability(),
-    counts: {
-      queued: count("queued"),
-      running: count("running"),
-      stopping: count("stopping"),
-      succeeded: count("succeeded"),
-      failed: count("failed"),
-      cancelled: count("cancelled"),
-      blocked: count("blocked"),
-      unknown: count("unknown") + invalid
-    },
-    recent: recent.slice(0, 100)
+    counts,
+    recent
   };
 }
 

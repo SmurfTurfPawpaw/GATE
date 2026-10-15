@@ -58,11 +58,11 @@ function sha256(bytes) {
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-workflow-feedback-"));
-  const paths = {
-    ...runtimePaths({ home: path.join(root, "home"), repo }),
-    publicLearningRecords: path.join(root, "memory", "learnings.jsonl"),
-    publicLearnings: path.join(root, "memory", "LEARNINGS.md")
-  };
+  const fixtureRepo = path.join(root, "repository");
+  for (const directory of ["catalog", "config", "policies", "schemas", "templates"]) {
+    fs.cpSync(path.join(repo, directory), path.join(fixtureRepo, directory), { recursive: true });
+  }
+  const paths = runtimePaths({ home: path.join(root, "home"), repo: fixtureRepo });
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return { root, paths };
 }

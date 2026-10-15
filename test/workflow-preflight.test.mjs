@@ -433,7 +433,7 @@ test("A3 and pivot preflights expose exact confirmations without persisting pros
   assert.equal(fs.existsSync(path.join(handoffDirectory, `${handoffFile.sha256}.json`)), false);
 
   const cliPreflight = invoke([
-    "workflow", "phase", "preflight", workflowId,
+    "--unassigned", "workflow", "phase", "preflight", workflowId,
     "--phase", "controlled-exploitation",
     "--from", "network-service-enumeration",
     "--handoff-id", "high-impact-handoff-07",
@@ -530,7 +530,7 @@ test("A3 and pivot preflights expose exact confirmations without persisting pros
     handoffFile: handoffFile.file
   }, { paths });
   const phaseStartCli = invoke([
-    "workflow", "phase", "start", workflowId,
+    "--unassigned", "workflow", "phase", "start", workflowId,
     "--phase", "controlled-exploitation",
     "--from", "network-service-enumeration",
     "--handoff-id", "high-impact-handoff-07",
@@ -596,7 +596,7 @@ test("A3 and pivot preflights expose exact confirmations without persisting pros
   assert.equal(fs.existsSync(path.join(admissionDirectory, `${pivotAdmission.sha256}.json`)), false);
 
   const pivotCli = invoke([
-    "workflow", "ledger", "preflight", workflowId,
+    "--unassigned", "workflow", "ledger", "preflight", workflowId,
     "--type", "pivot",
     "--target-sha", pivotInput.targetSelectorSha256,
     "--before-sha", pivotInput.beforeEvidenceSha256,
@@ -671,7 +671,7 @@ test("A3 and pivot preflights expose exact confirmations without persisting pros
 
   const refreshedPivot = preflightWorkflowPivot(workflowId, pivotInput, { paths });
   const pivotOpenCli = invoke([
-    "workflow", "ledger", "open", workflowId,
+    "--unassigned", "workflow", "ledger", "open", workflowId,
     "--type", "pivot",
     "--target-sha", pivotInput.targetSelectorSha256,
     "--before-sha", pivotInput.beforeEvidenceSha256,

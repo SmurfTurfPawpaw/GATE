@@ -9,12 +9,13 @@ The working v0.1 non-AI lifecycle is:
 ```bash
 ./scripts/bootstrap.sh
 ./bin/gate.mjs doctor --full
+unset GATE_CASE
 ./bin/gate.mjs up
 # In a second terminal:
 ./bin/gate.mjs status
 ```
 
-`scripts/bootstrap.sh` installs the repository lock with lifecycle scripts disabled, creates private runtime directories, validates the repository, and runs the smoke suite. The CLI's `bootstrap` command only creates those directories and validates tracked configuration. `doctor` reports OS and architecture facts, WSL detection, versions from required CLIs under a reduced environment, presence-only results for optional executables, and repository validity. `--full` also reports visible interfaces, Linux raw-network capabilities, Yama `ptrace_scope`, USB-bus presence, and default Docker-socket presence. It does not execute optional tools, probe Docker-engine reachability, or prove a specific capture, debugger attachment, USB device, or route works. `up` starts the foreground loopback observer; stop it with `Ctrl+C`. Managed background startup, `status --watch`, and `down` remain future integration work.
+`scripts/bootstrap.sh` installs the repository lock with lifecycle scripts disabled, creates private runtime directories, validates the repository, and runs the smoke suite. The CLI's `bootstrap` command only creates those directories and validates tracked configuration. `doctor` reports OS and architecture facts, WSL detection, versions from required CLIs under a reduced environment, presence-only results for optional executables, and repository validity. `--full` also reports visible interfaces, Linux raw-network capabilities, Yama `ptrace_scope`, USB-bus presence, and default Docker-socket presence. It does not execute optional tools, probe Docker-engine reachability, or prove a specific capture, debugger attachment, USB device, or route works. `up` starts the foreground aggregate loopback observer and refuses every runtime selector. Its startup banner uses `operator.displayName` from the merged configuration. Stop it with `Ctrl+C`. Managed background startup, `status --watch`, and `down` remain future integration work.
 
 On Windows, the intended v0.1 setup runs in WSL2 because Firstmate supports macOS and Linux. The doctor reports the platform and WSL state; it does not yet provide a dedicated native-Windows remediation flow.
 
@@ -43,6 +44,41 @@ While `.registry.lock` or `.registry.pending` exists, `project show` fails and v
 Never blindly delete either control file or treat removal of only the lock as recovery.
 
 The project record is configuration, not authority. Registration does not clone a repository, acquire a workspace, authorize target contact, verify a No Mistakes run, or enable merge, deployment, or publication. The offline-analysis lane uses its canonical digest to bind a supplied artifact to one project, but that provenance binding still grants no authority over a publisher, vendor, account, service, or embedded endpoint. Current workspace and publication commands also require explicit repository inputs; they do not yet resolve or enforce every registered project field.
+
+## Concurrent bug-program cases
+
+Create one immutable case after its Program Profile is complete and ready. A managed project is optional, but it must already be registered and current when supplied:
+
+```bash
+./bin/gate.mjs bounty profile verify example-program --json
+./bin/gate.mjs project verify my-project --json
+
+./bin/gate.mjs case create example-web \
+  --program example-program \
+  --project my-project \
+  --name "Example web program" --json
+
+./bin/gate.mjs case list --json
+./bin/gate.mjs case show example-web --json
+```
+
+Omit `--project` when the work does not need managed-project provenance. Creation copies neither source record: it seals their IDs and exact current digests in `GATE_HOME/cases/example-web/scope.json`, then creates `state/` below it. The case scope cannot be updated or deleted through the CLI. A changed Program Profile or project digest makes it stale; create a new case for the new scope.
+
+Use one terminal per active program and select its case with either form. These one-shot examples avoid leaving a selector set for later shared commands:
+
+```bash
+./bin/gate.mjs --case example-web status --summary --json
+./bin/gate.mjs --case example-web workflow new example-web-map --json
+./bin/gate.mjs --case example-web workflow status example-web-map --json
+```
+
+If `--case` and `GATE_CASE` are both present, they must match. Every engagement and workflow command, Program Profile compilation, and `analysis manifest`, `run`, `purge`, or `status` requires an explicit runtime selection. Leading `--unassigned` selects the writable base-state compatibility namespace and can create new unscoped records; it opts out of case attribution and state separation. GATE never selects it implicitly, so prefer a case for program work. Case selection redirects events, engagements, workflows, execution records, offline-analysis records, evidence, token records, and private learning to `GATE_HOME/cases/CASE_ID/state`. Program Profiles, projects, managed tools, upstreams, and public learning remain shared. Profile compilation must use the bound Program Profile, and offline analysis must use the bound project.
+
+Setup and shared-registry commands reject all three selector forms. This includes bootstrap, validation, doctor, the aggregate cockpit, cases, projects, workspaces, upstreams, publication, tools, Program Profile intake and inspection, and `analysis capability`. Aggregate `status`, `event`, and private learning may run without a selector; event and private-learning writes then use base state. `learn promote` is the deliberate reviewed bridge that can move a sanitized case-private candidate into shared public learning.
+
+This is physical separation of private state directories. It is not a sandbox: case processes share the operator's user account, host, kernel, credentials available to that user, and network. Network containment is adapter-dependent. A case neither authorizes target contact nor changes any engagement, workflow, or execution gate.
+
+Run `gate up` in its own terminal with `GATE_CASE` unset and without `--unassigned`. The observer projects at most 32 cases selected from at most 1,024 discovered entries; its scan metadata exposes lower-bound omissions and incomplete coverage. A known omitted case remains directly retrievable with `gate case show ID --json` and `gate --case ID status --summary --json`. Each browser case terminal shows only structured, bounded lifecycle events and states; it is not a PTY and never exposes raw stdout or stderr, argv, commands, targets, evidence, or private paths. Its greeting uses `operator.displayName`. Active work is animated as indeterminate until a producer supplies a trustworthy completed and total count; elapsed time or phase position never becomes a guessed percentage.
 
 ## Verified Treehouse leases
 
@@ -102,16 +138,17 @@ Treehouse provides change isolation only. Every worktree for a clone shares the 
 
 ## Daily software work
 
-1. Register and verify the private project contract.
-2. State the outcome and acceptance criteria to the Firstmate session. GATE does not yet invoke or persist that Firstmate flow.
-3. Acquire a verified Treehouse lease for a named task and branch, then give Codex only the returned workspace path. GATE does not launch Codex or GNHF.
-4. Watch GATE-emitted activity, project summaries, derived agent/task state, learning, freshness, and available token totals in the observer. Firstmate, Treehouse, GNHF, and No Mistakes do not yet emit their complete lifecycle into it.
-5. Answer only decisions that are ambiguous, scope-expanding, destructive, or blocked by unavailable evidence.
-6. Run the real No Mistakes workflow with `axi run --no-publish-intent` for review, tests, documentation, push, PR, and CI, and retain its genuine run evidence. The caller-side omission withholds private intent from PR drafting; GATE does not yet orchestrate that handoff or verify a run ID against an external attestation.
-7. Run `gate publication check` and `gate publication dry-run` for the expected repository, pull request, exact head, genuine No Mistakes run reference, and intended merge mode. The v0.1 adapter checks PR state, head, mergeability, and every check observed on that exact head; it requires a nonempty all-green set without requiring branch protection. It does not verify the external run or automatically enforce the registered project contract.
-8. Report publication as blocked. A future trusted adapter may merge, deploy, or publish only after it verifies a No Mistakes attestation bound to that head and enforces the registered base branch, merge posture, and destination.
-9. After the exact workspace head has landed, stop its processes and run nonmutating `workspace verify`. Record the local reachability result and retain the lease for manual reconciliation.
-10. Review the outcome, limitations, costs, and learning entries.
+1. Complete and verify the Program Profile. Register and verify the private project contract when one is needed.
+2. Create an immutable case, then select it in that program's terminal with `GATE_CASE` or `--case`.
+3. State the outcome and acceptance criteria to the Firstmate session. GATE does not yet invoke or persist that Firstmate flow.
+4. Acquire a verified Treehouse lease for a named task and branch, then give Codex only the returned workspace path. GATE does not launch Codex or GNHF.
+5. Watch each case's structured lifecycle state and the aggregate fleet in the observer. Firstmate, Treehouse, GNHF, and No Mistakes do not yet emit their complete lifecycle into it.
+6. Answer only decisions that are ambiguous, scope-expanding, destructive, or blocked by unavailable evidence.
+7. Run the real No Mistakes workflow with `axi run --no-publish-intent` for review, tests, documentation, push, PR, and CI, and retain its genuine run evidence. The caller-side omission withholds private intent from PR drafting; GATE does not yet orchestrate that handoff or verify a run ID against an external attestation.
+8. Run `gate publication check` and `gate publication dry-run` for the expected repository, pull request, exact head, genuine No Mistakes run reference, and intended merge mode. The v0.1 adapter checks PR state, head, mergeability, and every check observed on that exact head; it requires a nonempty all-green set without requiring branch protection. It does not verify the external run or automatically enforce the registered project contract.
+9. Report publication as blocked. A future trusted adapter may merge, deploy, or publish only after it verifies a No Mistakes attestation bound to that head and enforces the registered base branch, merge posture, and destination.
+10. After the exact workspace head has landed, stop its processes and run nonmutating `workspace verify`. Record the local reachability result and retain the lease for manual reconciliation.
+11. Review the outcome, limitations, costs, and learning entries.
 
 The target operating model routes edit, test, commit, push, PR, CI, merge, deploy, and publication through the named owners. v0.1 wires local GATE primitives and read-only exact-head GitHub PR preflight. Mutation adapters and other owner bridges remain explicit integration work. No component may bypass a missing owner or adapter because another tool offers a similar command.
 
@@ -130,10 +167,10 @@ Use this lane for a lawfully supplied local Windows PE when the fixed REA PE-res
 ./bin/gate.mjs analysis capability --json
 ```
 
-Capability performs cheap presence checks for Linux, Node, the fixed adapter, the expected managed REA entrypoint, and Bubblewrap, then launches `/usr/bin/true` through the actual minimal Bubblewrap namespace shape. It does not reconstruct or hash the full managed REA npm tree. Register and verify the private project first. Then create one manifest from an exact absolute regular-file path:
+Capability performs cheap presence checks for Linux, Node, the fixed adapter, the expected managed REA entrypoint, and Bubblewrap, then launches `/usr/bin/true` through the actual minimal Bubblewrap namespace shape. It does not reconstruct or hash the full managed REA npm tree. Register and verify the private project first, create a case bound to it, and replace `example-web` below with that case. Then create one manifest from an exact absolute regular-file path:
 
 ```bash
-./bin/gate.mjs analysis manifest \
+./bin/gate.mjs --case example-web analysis manifest \
   --project my-project \
   --path "$HOME/private/client-installer.exe" \
   --minutes 15 --json
@@ -152,18 +189,18 @@ Creation first performs full reviewed-lock integrity reconstruction for the mana
 Review the complete manifest and use only the exact returned confirmation:
 
 ```bash
-./bin/gate.mjs analysis run \
+./bin/gate.mjs --case example-web analysis run \
   --project my-project \
   --manifest MANIFEST_ID \
   --confirm "ANALYZE MANIFEST_ID MANIFEST_SHA256 OFFLINE" --json
 
-./bin/gate.mjs analysis status --json
+./bin/gate.mjs --case example-web analysis status --json
 ```
 
 The retained-snapshot pool is owner-only and capped at 64 artifacts and 2 GiB of logical bytes. Linux/WSL2 system `flock` on the existing analysis directory serializes retention-lock acquisition, stale recovery, publication, mutation, and release for manifest snapshots, execution claims, and purges; malformed lock metadata or input entries fail closed. A durable creation intent covers snapshot creation through manifest publication. Recovery after a definitively dead creator removes a verified incomplete snapshot or retains one protected by a durably published manifest. Status accounts for retained capacity and pending, expired, active, terminal, purge-pending, purged, orphaned, missing, and invalid state. To retire one exact snapshot, use the digest-bound value returned with its manifest:
 
 ```bash
-./bin/gate.mjs analysis purge \
+./bin/gate.mjs --case example-web analysis purge \
   --project my-project \
   --manifest MANIFEST_ID \
   --confirm "PURGE MANIFEST_ID MANIFEST_SHA256 OFFLINE ARTIFACT" --json
@@ -182,6 +219,8 @@ Continue from the local result through the [end-to-end penetration-testing workf
 ## Active security work
 
 Create an engagement from [engagement.json](../templates/engagement.json). Drafting, local research, and an offline-analysis result do not authorize target contact. Use the [end-to-end workflow](pentest-workflow.md) to map prerequisites, evidence, stop conditions, and allowed handoffs before selecting a command.
+
+Run every engagement and workflow operation below with leading `--case ID` or from a dedicated terminal whose `GATE_CASE` selects the same case. Leading `--unassigned` is a deliberate writable base-state opt-out from case attribution and separation; prefer a case for program work.
 
 The active flow is:
 
@@ -262,7 +301,7 @@ Never turn inability to inspect into a negative claim. State that a surface is u
 
 ## Token usage
 
-The observer displays aggregate usage and per-session or recorded-run values when its sources provide them. See [observation and token accounting](architecture.md#observation-and-token-accounting) for source selection, aggregation, and exact, estimated, or unavailable values. Complete live Codex fleet and account-quota telemetry, plus grouping by day, require a future harness adapter.
+The observer displays aggregate usage and per-session or recorded-run values when its sources provide them. Host Codex session logs have no trustworthy case identity, so their usage stays aggregate. A case terminal reports token attribution as unavailable unless canonical case-bound records exist in that case's state directory. See [observation and token accounting](architecture.md#observation-and-token-accounting) for source selection, aggregation, and exact, estimated, or unavailable values. Complete live Codex fleet and account-quota telemetry, plus grouping by day, require a future harness adapter.
 
 Token budgets are required declared bounds for GNHF loops and engagements. GATE does not yet orchestrate the GNHF loop. A reviewed active-tool adapter may meter tokens when it can establish that counter, while the generic lane records token measurement as unavailable and requires `UNMETERED` confirmation. A budget must never trigger a silent provider, model, account, or billing-mode change.
 
@@ -290,6 +329,7 @@ These commands must be idempotent and documented before a profile is considered 
 - A changed security plan invalidates active authority until a new receipt exists.
 - An offline manifest is never recovered for a second attempt. Its claim survives success, failure, interruption, and ambiguity. Inspect the private run and evidence records, rerun `analysis capability`, and create a new snapshot and manifest after verifying the current project and artifact.
 - A generic manifest is never recovered for a second attempt. Inspect its private claim and run record; treat a missing or ambiguous terminal record as consumed. Use a newly generated manifest after rechecking current authority. `engagement stop` and revocation are durable requests, but only the live original supervisor polls and acts on them. Wall duration and process-group termination are best effort; supervisor crash containment, takeover, and escaped-daemon containment are unavailable.
+- Safety-critical execution and offline-analysis status and reconciliation scan retained control state so an old live, orphaned, or ambiguous operation cannot be hidden by a recent-item cap. These paths remain `O(history)`; a hard history-independent time and I/O bound requires a crash-safe active/recovery index.
 - Offline-analysis provenance, local engagement approvals, and active-execution provenance share the operator-writable `GATE_HOME` with the state they describe. A process allowed to rewrite the whole root can alter snapshots, receipts, manifests, claims, runs, stops, and evidence, so these records are not tamper-proof against that same-user writer. Managed-upstream integrity uses the reviewed repository locks as its anchor; writable installation receipts are evidence only.
 
 Recovery never uses an unverified reset, force push, cleanup, scope expansion, credential substitution, or silent approval.

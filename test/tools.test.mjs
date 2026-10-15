@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { runtimePaths } from "../src/lib/paths.mjs";
 import { validateDocument } from "../src/lib/schema.mjs";
 import { toolInventory, toolPlan } from "../src/lib/tools.mjs";
 import { upstreamStatus } from "../src/lib/upstreams.mjs";
@@ -577,12 +578,7 @@ test("REA receipt projection rejects symlinked state and upstream roots outside 
 test("receipt-only upstream status is cheap while the default verifies installed content", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-upstream-status-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const paths = {
-    repo,
-    home: root,
-    upstreams: path.join(root, "upstreams"),
-    upstreamTools: path.join(root, "upstream-tools")
-  };
+  const paths = runtimePaths({ home: root, repo });
   const lock = JSON.parse(fs.readFileSync(path.join(repo, "locks", "upstreams.lock.json"), "utf8"));
   const entry = lock.upstreams.find((candidate) => candidate.id === "gnhf");
   const directory = path.join(paths.upstreamTools, entry.id);

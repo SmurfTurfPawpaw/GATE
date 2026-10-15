@@ -6,6 +6,7 @@
  */
 
 const RECORD_LIMIT = 100;
+const CASE_LIMIT = 64;
 const TOOL_RUNTIME_LIMIT = 256;
 const STRING_LIMIT = 160;
 const MAX_COUNT = Number.MAX_SAFE_INTEGER;
@@ -18,7 +19,8 @@ const STATUSES = new Set([
   "succeeded",
   "failed",
   "cancelled",
-  "unknown"
+  "unknown",
+  "idle"
 ]);
 
 const STATUS_ALIASES = new Map([
@@ -46,6 +48,7 @@ const EFFECTS = new Set([
 ]);
 
 const AVAILABILITY = new Set(["exact", "estimated", "unavailable"]);
+const USAGE_SOURCES = new Set(["codex-session-jsonl", "gate-token-log"]);
 const FRESHNESS = new Set(["live", "fresh", "stale", "offline", "unknown"]);
 const LEARNING_STATUS = new Set(["proposed", "active", "superseded", "reverted"]);
 const LEARNING_SCOPE = new Set(["session", "project", "repository"]);
@@ -199,8 +202,21 @@ const WORKFLOW_LANES = new Set([
 ]);
 const WORKFLOW_EFFECTS = new Set(["P0", "P1", "A1", "A2", "A3"]);
 const WORKFLOW_CONTROLS = new Set(["enforced", "measured-only", "unavailable"]);
+const CASE_STATUSES = new Set(["ready", "stale", "invalid"]);
+const CASE_STATES = new Set([
+  "queued", "running", "waiting", "blocked", "succeeded", "failed", "cancelled", "unknown", "idle"
+]);
+const CASE_STATE_NAMESPACES = new Set(["isolated-directory"]);
+const CASE_PROCESS_BOUNDARIES = new Set(["shared-user"]);
+const CASE_NETWORK_BOUNDARIES = new Set(["adapter-dependent"]);
+const CASE_RUNTIME_HEALTH_STATUSES = new Set(["available", "unavailable"]);
+const CASE_RUNTIME_HEALTH_REASONS = new Set(["invalid-case", "runtime-observation-failed"]);
+const ENGAGEMENT_SCAN_AVAILABILITY = new Set(["loaded", "not-loaded", "unavailable"]);
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/;
 const EVENT_KIND = /^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+$/;
+const CASE_ID = /^case_[a-f0-9]{16}$/;
+const PROGRAM_ID = /^program_[a-f0-9]{16}$/;
+const PROJECT_ID = /^project_[a-f0-9]{16}$/;
 
 function record(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
@@ -251,6 +267,21 @@ function oneLine(value, maximum = 220) {
   return normalized.slice(0, maximum);
 }
 
+function displayName(value, maximum = 80) {
+  if (typeof value !== "string") return null;
+  const normalized = value.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!normalized || normalized.length > maximum) return null;
+  if (/[:][/][/]|[\\/]|\b(?:authorization|cookie|set-cookie|api[-_ ]?key|access[-_ ]?token)\b/i.test(normalized)) {
+    return null;
+  }
+  return /^[\p{L}\p{N}][\p{L}\p{N} ._()'&+:-]*$/u.test(normalized) ? normalized : null;
+}
+
+function caseDisplayName(value) {
+  if (typeof value !== "string" || !value || value.length > 60) return null;
+  return /^[A-Za-z][A-Za-z0-9 .'-]*$/u.test(value) ? value.trim() : null;
+}
+
 /**
  * Learning cause/change are the only reviewed prose accepted by this client.
  * The server must sanitize them first; this second pass withholds common path,
@@ -291,8 +322,11 @@ function usageShape(input, fallbackUpdatedAt = null) {
 
   return {
     availability,
-    source: identifier(value.source, null, 80),
-    model: identifier(firstDefined(value.model, newestSession?.model), null, 80),
+    source: enumValue(value.source, USAGE_SOURCES, null),
+    model: typeof firstDefined(value.model, newestSession?.model) === "string" &&
+      /^[A-Za-z0-9][A-Za-z0-9._:+-]{0,79}$/.test(firstDefined(value.model, newestSession?.model))
+      ? firstDefined(value.model, newestSession?.model)
+      : null,
     updatedAt: timestamp(firstDefined(value.updatedAt, value.at, newestSession?.modified_at, fallbackUpdatedAt)),
     inputTokens: unavailable ? null : count(firstDefined(sourceValues.inputTokens, sourceValues.input, sourceValues.input_tokens)),
     cachedInputTokens: unavailable
@@ -403,8 +437,9 @@ function executionShape(input) {
     laneAvailable,
     mode,
     reason: laneAvailable ? null : enumValue(value.reason, EXECUTION_REASONS, null),
+    queuedCount: count(firstDefined(value.queuedCount, counts.queued)),
     runningCount: count(firstDefined(value.runningCount, counts.running)),
-    stoppingCount: count(counts.stopping),
+    stoppingCount: count(firstDefined(value.stoppingCount, counts.stopping)),
     enforced,
     bestEffort,
     unavailable,
@@ -474,6 +509,159 @@ function workflowsShape(input) {
       complete: typeof rawScan.complete === "boolean" ? rawScan.complete : false,
       truncated: typeof rawScan.truncated === "boolean" ? rawScan.truncated : true
     }
+  };
+}
+
+function caseBindingShape(input, pattern) {
+  const value = record(input);
+  const id = typeof value.id === "string" && pattern.test(value.id) ? value.id : null;
+  if (!id || typeof value.current !== "boolean") return null;
+  return { id, current: value.current };
+}
+
+function caseCountsShape(input) {
+  const value = record(input);
+  return Object.fromEntries([
+    "total", "queued", "running", "waiting", "blocked", "succeeded", "failed", "cancelled", "unknown", "idle"
+  ].map((key) => [key, count(value[key])]));
+}
+
+function caseTelemetryShape(input) {
+  const value = record(input);
+  const telemetryState = enumValue(value.freshness, FRESHNESS, "unknown");
+  return {
+    state: telemetryState === "fresh" ? "live" : telemetryState,
+    lastActivityAt: timestamp(firstDefined(value.lastActivityAt, value.last_activity_at)),
+    ageSeconds: count(firstDefined(value.ageSeconds, value.age_seconds))
+  };
+}
+
+function caseRuntimeHealthShape(input, caseStatus) {
+  const value = record(input);
+  const status = enumValue(value.status, CASE_RUNTIME_HEALTH_STATUSES, "unavailable");
+  const reason = value.reason === null ? null : enumValue(value.reason, CASE_RUNTIME_HEALTH_REASONS, null);
+  if (caseStatus === "invalid") return { status: "unavailable", reason: "invalid-case" };
+  if (status === "available" && reason === null) return { status, reason };
+  return { status: "unavailable", reason: "runtime-observation-failed" };
+}
+
+function engagementScanShape(input) {
+  const value = record(input);
+  const requestedAvailability = enumValue(value.availability, ENGAGEMENT_SCAN_AVAILABILITY, "unavailable");
+  const loaded = requestedAvailability === "loaded" && (
+    typeof value.complete === "boolean" || count(value.scanned) !== null ||
+    count(value.discoveredAtLeast) !== null || count(value.invalid) !== null
+  );
+  const availability = requestedAvailability === "not-loaded"
+    ? "not-loaded"
+    : loaded
+      ? "loaded"
+      : "unavailable";
+  return {
+    availability,
+    reason: availability === "not-loaded" && value.reason === "aggregate-case-detail-elided" ? value.reason : null,
+    limit: count(value.limit),
+    discoveryLimit: count(value.discoveryLimit),
+    entriesInspected: count(value.entriesInspected),
+    discoveredAtLeast: count(value.discoveredAtLeast),
+    scanned: count(value.scanned),
+    omittedAtLeast: count(value.omittedAtLeast),
+    invalid: count(value.invalid),
+    recordsRead: count(value.recordsRead),
+    complete: typeof value.complete === "boolean" ? value.complete : false,
+    truncated: typeof value.truncated === "boolean" ? value.truncated : true,
+    discoveryTruncated: typeof value.discoveryTruncated === "boolean" ? value.discoveryTruncated : false
+  };
+}
+
+function caseShape(input) {
+  const value = record(input);
+  const id = typeof value.id === "string" && CASE_ID.test(value.id) ? value.id : null;
+  const label = caseDisplayName(value.displayName);
+  const caseStatus = enumValue(value.status, CASE_STATUSES, null);
+  if (!id || !label || !caseStatus) return null;
+  if (caseStatus === "invalid") {
+    if (label !== "Invalid case" || value.binding !== null || value.isolation !== null || value.state !== "blocked") {
+      return null;
+    }
+    return {
+      id,
+      displayName: label,
+      status: caseStatus,
+      binding: null,
+      isolation: null,
+      runtimeHealth: caseRuntimeHealthShape(value.runtimeHealth, caseStatus),
+      state: "blocked",
+      counts: caseCountsShape({}),
+      telemetry: caseTelemetryShape({}),
+      usage: usageShape({}),
+      execution: executionShape({}),
+      workflows: workflowsShape({}),
+      engagementScan: engagementScanShape({}),
+      offlineAnalysis: offlineAnalysisShape({}),
+      activity: []
+    };
+  }
+  const binding = record(value.binding);
+  const program = caseBindingShape(binding.program, PROGRAM_ID);
+  const project = binding.project === null ? null : caseBindingShape(binding.project, PROJECT_ID);
+  const isolation = record(value.isolation);
+  const stateNamespace = enumValue(isolation.stateNamespace, CASE_STATE_NAMESPACES, null);
+  const processBoundary = enumValue(isolation.processBoundary, CASE_PROCESS_BOUNDARIES, null);
+  const networkBoundary = enumValue(isolation.networkBoundary, CASE_NETWORK_BOUNDARIES, null);
+  if (
+    !program ||
+    (binding.project !== null && !project) ||
+    !stateNamespace || !processBoundary || !networkBoundary
+  ) return null;
+
+  const bindingsCurrent = program.current === true && (project === null || project.current === true);
+  const normalizedStatus = caseStatus === "ready" && !bindingsCurrent
+    ? "stale"
+    : caseStatus === "stale" && bindingsCurrent
+      ? "ready"
+      : caseStatus;
+  const runtimeHealth = caseRuntimeHealthShape(value.runtimeHealth, normalizedStatus);
+  const runtimeAvailable = runtimeHealth.status === "available";
+
+  const activity = Array.isArray(value.activity)
+    ? value.activity
+      .slice(0, RECORD_LIMIT)
+      .map(eventShape)
+      .filter(Boolean)
+      .sort((left, right) => Date.parse(right.at) - Date.parse(left.at))
+      .slice(0, 30)
+    : [];
+  return {
+    id,
+    displayName: label,
+    status: normalizedStatus,
+    binding: { program, project },
+    isolation: { stateNamespace, processBoundary, networkBoundary },
+    runtimeHealth,
+    state: runtimeAvailable ? enumValue(value.state, CASE_STATES, "unknown") : "blocked",
+    counts: caseCountsShape(runtimeAvailable ? value.counts : {}),
+    telemetry: caseTelemetryShape(runtimeAvailable ? value.telemetry : {}),
+    usage: usageShape(runtimeAvailable ? value.usage : {}),
+    execution: executionShape(runtimeAvailable ? value.execution : {}),
+    workflows: workflowsShape(runtimeAvailable ? value.workflows : {}),
+    engagementScan: engagementScanShape(runtimeAvailable ? value.engagementScan : {}),
+    offlineAnalysis: offlineAnalysisShape(runtimeAvailable ? value.offlineAnalysis : {}),
+    activity: runtimeAvailable ? activity : []
+  };
+}
+
+function caseScanShape(input) {
+  const value = record(input);
+  return {
+    discovered: count(value.discovered),
+    scanned: count(value.scanned),
+    omitted: count(value.omitted),
+    invalid: count(value.invalid),
+    discoveredAtLeast: typeof value.discoveredAtLeast === "boolean" ? value.discoveredAtLeast : false,
+    omittedAtLeast: typeof value.omittedAtLeast === "boolean" ? value.omittedAtLeast : false,
+    complete: typeof value.complete === "boolean" ? value.complete : false,
+    truncated: typeof value.truncated === "boolean" ? value.truncated : true
   };
 }
 
@@ -646,6 +834,7 @@ function agentShape(input) {
 export function sanitizeStatusPayload(input) {
   const value = record(record(input).status && typeof record(input).status === "object" ? record(input).status : input);
   const observedAt = timestamp(firstDefined(value.at, value.observedAt, value.updatedAt));
+  const operator = record(value.operator);
   const rawAgents = Array.isArray(value.agents) && value.agents.length
     ? value.agents
     : Array.isArray(value.tasks)
@@ -660,9 +849,15 @@ export function sanitizeStatusPayload(input) {
 
   return {
     observedAt,
+    operator: { displayName: displayName(operator.displayName, 80) },
     state: status(firstDefined(value.state, value.status)),
     counts: safeCounts(value.counts),
     agents,
+    cases: Array.isArray(value.cases)
+      ? value.cases.slice(0, CASE_LIMIT).map(caseShape).filter(Boolean)
+      : [],
+    caseScan: caseScanShape(value.caseScan),
+    engagementScan: engagementScanShape(value.engagementScan),
     execution: executionShape(value.execution),
     workflows: workflowsShape(value.workflows),
     offlineAnalysis: offlineAnalysisShape(value.offlineAnalysis),

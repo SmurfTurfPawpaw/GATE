@@ -56,7 +56,7 @@ After the non-attestation answers are complete:
 2. Have the operator render `bounty profile show PROGRAM_ID --format review` in a local terminal or local-only interface. Do not run it through a model-visible tool, ingest its output, or reproduce its private literals. The operator may return a simple continue-to-attestation or revise decision and choice-safe categorical exceptions.
 3. After local acceptance, have the local controller capture the operator-confirmed authorization answer and all attestation fields, including operator identity and timestamp, then apply them without exposing the values or command result to the model.
 4. Have the local controller verify again outside model context and return only ready or revise. Resolve a revise result through sanitized choice batches and local exact-value capture. Do not replace missing evidence with a confident answer.
-5. When compilation is requested or required by the surrounding task, have the operator or reviewed local controller run it outside model context. Raw compile results remain local. Compilation makes no target contact.
+5. When compilation is requested or required by the surrounding task, have the operator or reviewed local controller run it outside model context with an explicit runtime selection under the [case selection contract](../../docs/operating-model.md#concurrent-bug-program-cases). Profile intake and inspection use shared state and reject runtime selectors. Raw compile results remain local. Compilation makes no target contact.
 
 ## Fallbacks
 

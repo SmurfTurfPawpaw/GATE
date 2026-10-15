@@ -40,6 +40,41 @@ test("observer status requests receipt evidence without executable hashing", asy
   assert.equal(status.toolRuntimes.executableHashReads, 0);
 });
 
+test("status bounds engagement discovery, projection, and individual record reads", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-bounded-engagement-status-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const paths = runtimePaths({ repo, home: path.join(root, "home") });
+  fs.mkdirSync(paths.engagements, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(paths.engagements, "000-oversized.json"), "x".repeat(2 * 1024 * 1024 + 1), {
+    mode: 0o600
+  });
+  for (let index = 0; index < 70; index += 1) {
+    const name = `eng-${String(index).padStart(3, "0")}.json`;
+    fs.writeFileSync(path.join(paths.engagements, name), `${JSON.stringify({ marker: name })}\n`, { mode: 0o600 });
+  }
+
+  const status = await buildStatus({
+    paths,
+    tokens: { roots: [path.join(root, "no-sessions")] }
+  });
+
+  assert.equal(status.engagements.length, 64);
+  assert.deepEqual(status.engagements[0], { id: "000-oversized.json", status: "invalid" });
+  assert.equal(status.engagements[1].marker, "eng-000.json");
+  assert.deepEqual(status.engagementScan, {
+    limit: 64,
+    discoveryLimit: 4096,
+    entriesInspected: 71,
+    discoveredAtLeast: 71,
+    scanned: 64,
+    omittedAtLeast: 7,
+    invalid: 1,
+    complete: false,
+    truncated: true,
+    discoveryTruncated: false
+  });
+});
+
 test("agent status summary stays below 8 KiB under adversarial bounded fields", () => {
   const manyCounts = Object.fromEntries(Array.from({ length: 30 }, (_, index) => [
     `count-${index}-${"x".repeat(100)}`,
@@ -128,6 +163,116 @@ test("agent status summary stays below 8 KiB under adversarial bounded fields", 
   assert.equal(summary.omitted.runtimeBodies, 126);
   assert.match(summary.source.sha256, /^[a-f0-9]{64}$/u);
   assert.ok(summary.source.bytes > bytes(summary));
+});
+
+test("status summary retains runtime selection and bounded actionable case lanes", () => {
+  const executionCounts = (running = 0) => ({
+    queued: 0, running, stopping: 0, succeeded: 0, failed: 0, cancelled: 0, blocked: 0, unknown: 0
+  });
+  const offlineCounts = (queued = 0) => ({
+    queued, running: 0, succeeded: 0, failed: 0, cancelled: 0, blocked: 0, unknown: 0
+  });
+  const workflowCounts = (active = 0) => ({
+    total: active, active, open: active, stopped: 0, "recovery-hold": 0,
+    reported: 0, closed: 0, degraded: 0, unknown: 0
+  });
+  const cases = Array.from({ length: 32 }, (_, index) => ({
+    id: `case-${String(index).padStart(2, "0")}`,
+    displayName: `Case ${index} ${"x".repeat(200)}`,
+    status: index === 0 ? "stale" : "ready",
+    binding: {
+      program: { id: `program-${index}`, current: index !== 0 },
+      project: null
+    },
+    rawTarget: `PRIVATE_TARGET_${index}`,
+    runtime: {
+      engagements: [{
+        metadata: { status: "active" },
+        evidence: `PRIVATE_EVIDENCE_${index}`,
+        argv: [`PRIVATE_ARGV_${index}`]
+      }],
+      engagementScan: { complete: true, omittedAtLeast: 0, invalid: 0 },
+      execution: { counts: executionCounts(index === 31 ? 2 : 0) },
+      workflows: { counts: workflowCounts(index === 30 ? 1 : 0) },
+      offlineAnalysis: { counts: offlineCounts(index === 29 ? 3 : 0) },
+      tokens: []
+    }
+  }));
+  const aggregate = statusSummary({
+    at: "2026-10-15T12:00:00.000Z",
+    selection: { mode: "aggregate", caseId: null },
+    cases,
+    caseScan: {
+      attempted: true,
+      limit: 32,
+      discoveryLimit: 1024,
+      discovered: 40,
+      scanned: 32,
+      omitted: 8,
+      invalid: 0,
+      discoveredAtLeast: false,
+      omittedAtLeast: false,
+      complete: false,
+      truncated: true
+    },
+    events: [], learnings: [], engagements: [], projects: [], upstreams: [],
+    toolRuntimes: { tools: [] }
+  });
+  assert.ok(outputBytes(aggregate) < AGENT_SUMMARY_MAX_BYTES);
+  assert.deepEqual(aggregate.selection, { mode: "aggregate", caseId: null, bindingHealth: null });
+  assert.equal(aggregate.caseFleet.scan.discovered, 40);
+  assert.equal(aggregate.caseFleet.scan.omitted, 8);
+  assert.equal(aggregate.caseFleet.observedCases, 32);
+  assert.ok(aggregate.caseFleet.items.length > 0 && aggregate.caseFleet.items.length <= 8);
+  assert.equal(
+    aggregate.caseFleet.omittedObservedCases,
+    aggregate.caseFleet.observedCases - aggregate.caseFleet.items.length
+  );
+  const projectedCaseIds = new Set(aggregate.caseFleet.items.map((item) => item.id));
+  for (const id of ["case-29", "case-30", "case-31"]) {
+    assert.equal(projectedCaseIds.has(id), true, `${id} should be retained in the actionable projection`);
+  }
+  assert.equal(aggregate.caseFleet.statuses.stale, 1);
+  assert.equal(aggregate.caseFleet.observedLaneCounts.execution.nonzero.running, 2);
+  assert.equal(aggregate.caseFleet.observedLaneCounts.workflows.nonzero.active, 1);
+  assert.equal(aggregate.caseFleet.observedLaneCounts.offlineAnalysis.nonzero.queued, 3);
+  assert.equal(aggregate.caseFleet.observedLaneCounts.coverageComplete, false);
+  assert.equal(aggregate.caseFleet.retrieval.caseStatus, "gate --case ID status --summary --json");
+  const serialized = JSON.stringify(aggregate);
+  for (const forbidden of ["PRIVATE_TARGET", "PRIVATE_EVIDENCE", "PRIVATE_ARGV", "rawTarget", "evidence", "argv"]) {
+    assert.equal(serialized.includes(forbidden), false, `status summary leaked ${forbidden}`);
+  }
+
+  const selected = statusSummary({
+    selection: {
+      mode: "case",
+      caseId: "selected-case",
+      bindingHealth: { status: "stale", programCurrent: false, projectCurrent: true }
+    },
+    selectedCaseId: "selected-case",
+    cases: [],
+    caseScan: { attempted: false, discovered: 0, scanned: 0, omitted: 0, invalid: 0, complete: false, truncated: false },
+    events: [], learnings: [], engagements: [], projects: [], upstreams: [], toolRuntimes: { tools: [] }
+  });
+  assert.deepEqual(selected.selection, {
+    mode: "case",
+    caseId: "selected-case",
+    bindingHealth: { status: "stale", programCurrent: false, projectCurrent: true }
+  });
+  assert.equal(selected.caseFleet.scan.attempted, false);
+  assert.equal(selected.retrieval.fullStatus, "gate --case ID status --json");
+  assert.equal(selected.retrieval.workflowDetail, "gate --case ID workflow status ID --json");
+
+  const unassigned = statusSummary({
+    selection: { mode: "unassigned", caseId: null },
+    cases: [],
+    caseScan: { attempted: false, discovered: 0, scanned: 0, omitted: 0, invalid: 0, complete: false, truncated: false },
+    events: [], learnings: [], engagements: [], projects: [], upstreams: [], toolRuntimes: { tools: [] }
+  });
+  assert.deepEqual(unassigned.selection, { mode: "unassigned", caseId: null, bindingHealth: null });
+  assert.equal(unassigned.caseFleet.observedCases, 0);
+  assert.equal(unassigned.retrieval.fullStatus, "gate --unassigned status --json");
+  assert.equal(unassigned.retrieval.workflowDetail, "gate --unassigned workflow status ID --json");
 });
 
 test("agent status summary selects the latest cumulative usage per logical session", () => {
@@ -290,8 +435,16 @@ test("summary CLI projections stay bounded and paginate without inventing token 
   assert.equal(status.status, 0, status.stderr);
   assert.ok(Buffer.byteLength(status.stdout) < AGENT_SUMMARY_MAX_BYTES);
   const statusValue = JSON.parse(status.stdout);
+  assert.deepEqual(statusValue.selection, { mode: "aggregate", caseId: null, bindingHealth: null });
   assert.equal(statusValue.tokens.availability, "unavailable");
   assert.equal(statusValue.tokens.totals.totalTokens, null);
+
+  const unassignedStatus = invoke(["--unassigned", "status", "--summary", "--json"]);
+  assert.equal(unassignedStatus.status, 0, unassignedStatus.stderr);
+  assert.ok(Buffer.byteLength(unassignedStatus.stdout) < AGENT_SUMMARY_MAX_BYTES);
+  const unassignedStatusValue = JSON.parse(unassignedStatus.stdout);
+  assert.deepEqual(unassignedStatusValue.selection, { mode: "unassigned", caseId: null, bindingHealth: null });
+  assert.equal(unassignedStatusValue.caseFleet.scan.attempted, false);
 
   const list = invoke(["tool", "list", "--summary", "--limit", "10", "--cursor", "0", "--json"]);
   assert.equal(list.status, 0, list.stderr);

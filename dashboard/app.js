@@ -12,6 +12,9 @@ const POLL_INTERVAL_MS = 2_000;
 const REQUEST_TIMEOUT_MS = 3_500;
 const MAX_RESPONSE_BYTES = 2_000_000;
 const OBSERVER_API_VERSION = "gate.observer/v1";
+const OBSERVER_STATUS_STATES = new Set([
+  "queued", "running", "waiting", "blocked", "succeeded", "failed", "cancelled", "unknown", "idle"
+]);
 const browserAvailable = typeof document !== "undefined" && typeof window !== "undefined";
 
 function select(selector) {
@@ -31,6 +34,10 @@ const view = {
   eventList: select("#event-list"),
   learningList: select("#learning-list"),
   learningCount: select("#learning-count"),
+  casePanel: select("#case-panel"),
+  caseGrid: select("#case-grid"),
+  caseCount: select("#case-count"),
+  caseScan: select("#case-scan"),
   executionLane: select("#execution-lane"),
   executionMode: select("#execution-mode"),
   executionRunning: select("#execution-running"),
@@ -120,11 +127,13 @@ const state = {
   learnings: [],
   agentFilter: "all",
   search: "",
+  selectedCaseId: null,
   paused: false,
   refreshing: false,
   timer: null,
   failedEndpoints: new Set(),
-  lastNetworkSuccess: null
+  lastNetworkSuccess: null,
+  connectionState: "unknown"
 };
 
 function element(tag, className, text) {
@@ -230,6 +239,246 @@ export function executionRunPresentation(run = {}) {
     observedAt,
     result
   };
+}
+
+function greetingName(operator = {}) {
+  const value = typeof operator.displayName === "string" ? operator.displayName.trim() : "";
+  if (!value || value.length > 80 || /[\u0000-\u001f\u007f\\/]/.test(value)) return "Operator";
+  return value;
+}
+
+function caseCountSummary(counts = {}) {
+  const parts = [];
+  for (const key of ["running", "queued", "waiting", "blocked", "failed", "succeeded"]) {
+    if (Number.isFinite(counts[key])) parts.push(`${counts[key]} ${key}`);
+  }
+  return parts.length ? parts.join(" · ") : "counts unavailable";
+}
+
+function terminalLine(label, value, tone = "neutral") {
+  return { label, value, tone, observedAt: null };
+}
+
+function observedTerminalLine(label, value, tone, observedAt, unavailableLabel = "time unavailable") {
+  const parsed = typeof observedAt === "string" ? Date.parse(observedAt) : NaN;
+  const valid = Number.isFinite(parsed);
+  return {
+    label,
+    value: valid ? value : `${value} · ${unavailableLabel}`,
+    tone,
+    observedAt: valid ? new Date(parsed).toISOString() : null
+  };
+}
+
+function caseTokenLabel(usage = {}) {
+  const availability = usage.availability || "unavailable";
+  if (availability === "unavailable") return "unavailable";
+  if (!Number.isFinite(usage.totalTokens)) return `${availability} · total unavailable`;
+  return `${availability} · ${fullNumber(usage.totalTokens)} tokens observed`;
+}
+
+export function usageScopeLabel(usage = {}) {
+  if (usage.source === "codex-session-jsonl") return "Host-wide, unattributed sessions";
+  if (usage.source === "gate-token-log") return "Base/unassigned token log";
+  return "Host/base scope unavailable";
+}
+
+export function engagementScanPresentation(scan = {}) {
+  if (scan.availability === "not-loaded") {
+    return { label: "details not loaded", attention: false };
+  }
+  if (scan.availability !== "loaded") {
+    return { label: "unavailable", attention: true };
+  }
+  const parts = [];
+  if (Number.isFinite(scan.scanned)) parts.push(`${scan.scanned} scanned`);
+  if (Number.isFinite(scan.discoveredAtLeast)) parts.push(`${scan.discoveredAtLeast}+ discovered`);
+  if (Number.isFinite(scan.omittedAtLeast) && scan.omittedAtLeast > 0) parts.push(`${scan.omittedAtLeast}+ omitted`);
+  if (Number.isFinite(scan.invalid) && scan.invalid > 0) parts.push(`${scan.invalid} invalid`);
+  if (scan.truncated === true) parts.push("truncated");
+  if (scan.complete !== true && scan.truncated !== true) parts.push("partial");
+  return {
+    label: parts.length ? parts.join(" · ") : "no records observed",
+    attention: scan.complete !== true || scan.truncated === true || Number(scan.invalid || 0) > 0
+  };
+}
+
+export function casePresentation(caseView = {}, operator = {}) {
+  const runtimeHealth = caseView.runtimeHealth || { status: "unavailable", reason: "runtime-observation-failed" };
+  const runtimeAvailable = runtimeHealth.status === "available";
+  const execution = caseView.execution || {};
+  const offlineAnalysis = caseView.offlineAnalysis || {};
+  const offlineCounts = offlineAnalysis.counts || {};
+  const workflows = caseView.workflows || {};
+  const workflowInstances = Array.isArray(workflows.instances) ? workflows.instances : [];
+  const executionRuns = Array.isArray(execution.recent) ? execution.recent : [];
+  const activity = Array.isArray(caseView.activity) ? caseView.activity : [];
+  const activeWorkflows = workflowInstances.filter((workflow) => workflow.activePhase);
+  const liveRun = executionRuns.some((run) => ["queued", "running", "stopping"].includes(run.status));
+  const active = runtimeAvailable && (["queued", "running"].includes(caseView.state) || liveRun || activeWorkflows.length > 0 ||
+    Number(execution.queuedCount || 0) > 0 || Number(execution.runningCount || 0) > 0 ||
+    Number(execution.stoppingCount || 0) > 0 || Number(offlineCounts.queued || 0) > 0 ||
+    Number(offlineCounts.running || 0) > 0);
+  const telemetryLive = caseView.telemetry?.state === "live";
+  const indeterminate = active && caseView.status === "ready" && telemetryLive;
+  const bindingAvailable = caseView.binding !== null && typeof caseView.binding === "object";
+  const isolationAvailable = caseView.isolation !== null && typeof caseView.isolation === "object";
+  const engagementScan = engagementScanPresentation(caseView.engagementScan);
+  const telemetryState = caseView.telemetry?.state || "unknown";
+  const telemetryTone = telemetryState === "offline"
+    ? "blocked"
+    : telemetryState === "stale"
+      ? "waiting"
+      : telemetryState === "live"
+        ? "active"
+        : "neutral";
+  const lines = [
+    terminalLine("case", `${caseView.displayName || "Unnamed case"} · ${caseView.id || "unknown"}`, "identity"),
+    terminalLine("program", bindingAvailable ? caseView.binding?.program?.id || "unavailable" : "unavailable"),
+    terminalLine(
+      "project",
+      bindingAvailable ? caseView.binding?.project?.id || (caseView.binding?.project === null ? "not bound" : "unavailable") : "unavailable"
+    ),
+    terminalLine(
+      "isolation",
+      isolationAvailable
+        ? `state ${readableCapability(caseView.isolation?.stateNamespace || "unknown").toLowerCase()} · ` +
+          `process ${readableCapability(caseView.isolation?.processBoundary || "unknown").toLowerCase()} · ` +
+          `network ${readableCapability(caseView.isolation?.networkBoundary || "unknown").toLowerCase()}`
+        : "unavailable"
+    ),
+    terminalLine(
+      "runtime",
+      runtimeAvailable ? "available" : `unavailable · ${readableCapability(runtimeHealth.reason || "runtime-observation-failed").toLowerCase()}`,
+      runtimeAvailable ? "neutral" : "blocked"
+    ),
+    terminalLine("state", `${caseView.state || "unknown"} · case ${caseView.status || "unknown"}`, caseView.state || "unknown"),
+    observedTerminalLine("telemetry", telemetryState, telemetryTone, caseView.telemetry?.lastActivityAt, "age unavailable"),
+    terminalLine("counts", caseCountSummary(caseView.counts)),
+    terminalLine(
+      "execution",
+      Number.isFinite(execution.queuedCount) && Number.isFinite(execution.runningCount) && Number.isFinite(execution.stoppingCount)
+        ? `${execution.queuedCount} queued · ${execution.runningCount} running · ${execution.stoppingCount} stopping`
+        : "counts unavailable"
+    ),
+    terminalLine(
+      "analysis",
+      Number.isFinite(offlineCounts.queued) && Number.isFinite(offlineCounts.running)
+        ? `${offlineCounts.queued} queued · ${offlineCounts.running} running`
+        : "counts unavailable"
+    ),
+    terminalLine("engagements", engagementScan.label, engagementScan.attention ? "blocked" : "neutral"),
+    terminalLine("tokens", caseTokenLabel(caseView.usage))
+  ];
+
+  for (const workflow of activeWorkflows.slice(0, 4)) {
+    lines.push(terminalLine(
+      "phase",
+      `${workflow.instanceId} · ${workflow.activePhase.id} · tool ${workflow.activePhase.toolId || "none"}`,
+      "active"
+    ));
+  }
+  for (const run of executionRuns.slice(0, 4)) {
+    const display = executionRunPresentation(run);
+    lines.push(observedTerminalLine(
+      "run",
+      `${display.runId || "unknown"} · ${display.status}${display.result ? ` · ${readableCapability(display.result)}` : ""}`,
+      display.status,
+      display.observedAt
+    ));
+  }
+  for (const event of activity.slice(0, 4)) {
+    const details = [readableKind(event.kind || "activity.unknown"), event.status || "unknown"];
+    if (event.action?.toolName) details.push(`tool ${event.action.toolName}`);
+    lines.push(observedTerminalLine("activity", details.join(" · "), event.status || "unknown", event.at));
+  }
+
+  return {
+    id: caseView.id || null,
+    displayName: caseView.displayName || "Unnamed case",
+    state: caseView.state || "unknown",
+    status: caseView.status || "invalid",
+    greeting: `GATE // Welcome, ${greetingName(operator)}.`,
+    active,
+    indeterminate,
+    lines
+  };
+}
+
+export function cycleCaseSelection(cases, currentId, direction = 0) {
+  const ids = [...new Set((Array.isArray(cases) ? cases : [])
+    .map((item) => typeof item === "string" ? item : item?.id)
+    .filter((id) => typeof id === "string" && id))];
+  if (!ids.length) return null;
+  const currentIndex = ids.indexOf(currentId);
+  if (direction === 0) return currentIndex >= 0 ? currentId : ids[0];
+  if (currentIndex < 0) return direction < 0 ? ids.at(-1) : ids[0];
+  const step = direction < 0 ? -1 : 1;
+  return ids[(currentIndex + step + ids.length) % ids.length];
+}
+
+export function captureCaseRenderContinuity(caseGrid, activeElement) {
+  const scrollPositions = new Map();
+  let focusedCaseId = null;
+  if (!caseGrid?.querySelectorAll) return { focusedCaseId, scrollPositions };
+  for (const card of caseGrid.querySelectorAll("[data-case-id]")) {
+    const caseId = card?.dataset?.caseId;
+    if (!caseId) continue;
+    const terminal = card.querySelector?.(".case-terminal");
+    if (terminal) {
+      const maximumTop = Number.isFinite(terminal.scrollHeight) && Number.isFinite(terminal.clientHeight)
+        ? Math.max(0, terminal.scrollHeight - terminal.clientHeight)
+        : null;
+      scrollPositions.set(caseId, {
+        top: Number.isFinite(terminal.scrollTop) ? Math.max(0, terminal.scrollTop) : 0,
+        left: Number.isFinite(terminal.scrollLeft) ? Math.max(0, terminal.scrollLeft) : 0,
+        atBottom: maximumTop !== null && maximumTop > 0 && terminal.scrollTop >= maximumTop - 1
+      });
+    }
+    if (card === activeElement || card.contains?.(activeElement)) focusedCaseId = caseId;
+  }
+  return { focusedCaseId, scrollPositions };
+}
+
+export function restoreCaseRenderContinuity(caseGrid, snapshot = {}) {
+  if (!caseGrid?.querySelectorAll) return;
+  let focusedCard = null;
+  let fallbackCard = null;
+  const terminals = [];
+  for (const card of caseGrid.querySelectorAll("[data-case-id]")) {
+    const caseId = card?.dataset?.caseId;
+    if (!caseId) continue;
+    const terminal = card.querySelector?.(".case-terminal");
+    const position = snapshot.scrollPositions instanceof Map ? snapshot.scrollPositions.get(caseId) : null;
+    if (terminal && position) terminals.push({ terminal, position });
+    if (caseId === snapshot.focusedCaseId) focusedCard = card;
+    if (caseId === snapshot.fallbackFocusCaseId) fallbackCard = card;
+  }
+  if (!focusedCard && snapshot.focusedCaseId) focusedCard = fallbackCard;
+  if (focusedCard?.focus) {
+    try {
+      focusedCard.focus({ preventScroll: true });
+    } catch {
+      focusedCard.focus();
+    }
+  }
+  for (const { terminal, position } of terminals) {
+    terminal.scrollTop = position.atBottom && Number.isFinite(terminal.scrollHeight) && Number.isFinite(terminal.clientHeight)
+      ? Math.max(0, terminal.scrollHeight - terminal.clientHeight)
+      : position.top;
+    terminal.scrollLeft = position.left;
+  }
+}
+
+export function caseScanPresentation(scan = {}, visibleCount = 0) {
+  const visible = Number.isFinite(visibleCount) && visibleCount >= 0 ? visibleCount : 0;
+  const scanned = Number.isFinite(scan.scanned) ? scan.scanned : visible;
+  const discovered = Number.isFinite(scan.discovered) ? scan.discovered : visible;
+  const omitted = Number.isFinite(scan.omitted) ? scan.omitted : Math.max(0, discovered - scanned);
+  const invalid = Number.isFinite(scan.invalid) ? scan.invalid : 0;
+  const discoveredLabel = `${discovered}${scan.discoveredAtLeast === true ? "+" : ""}`;
+  const omittedLabel = `${omitted}${scan.omittedAtLeast === true ? "+" : ""}`;
+  return `${scanned} scanned / ${discoveredLabel} discovered${omitted ? ` · ${omittedLabel} omitted` : ""}${invalid ? ` · ${invalid} invalid` : ""}${scan.complete === true ? "" : " · partial"}`;
 }
 
 export function offlineAnalysisPresentation(analysis = {}) {
@@ -615,6 +864,114 @@ function renderLearnings() {
   view.learningList.replaceChildren(fragment);
 }
 
+function applyCaseSelection({ focus = false } = {}) {
+  if (!view.caseGrid) return;
+  let selected = null;
+  for (const card of view.caseGrid.querySelectorAll("[data-case-id]")) {
+    const active = card.dataset.caseId === state.selectedCaseId;
+    card.tabIndex = active ? 0 : -1;
+    if (active) {
+      card.setAttribute("aria-current", "true");
+      selected = card;
+    } else {
+      card.removeAttribute("aria-current");
+    }
+  }
+  if (focus) selected?.focus();
+}
+
+function renderCases() {
+  const continuity = captureCaseRenderContinuity(view.caseGrid, document.activeElement);
+  const cases = Array.isArray(state.status.cases) ? state.status.cases : [];
+  state.selectedCaseId = cycleCaseSelection(cases, state.selectedCaseId, 0);
+  continuity.fallbackFocusCaseId = state.selectedCaseId;
+  setText(view.caseCount, String(cases.length));
+  const scan = state.status.caseScan || {};
+  setText(view.caseScan, caseScanPresentation(scan, cases.length));
+
+  if (!cases.length) {
+    view.caseGrid.replaceChildren(
+      emptyState("▱", "No cases observed", "Create or bind a case to open its separate activity terminal.")
+    );
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  for (const caseView of cases) {
+    const display = casePresentation(caseView, state.status.operator);
+    const card = element("article", `case-card state-${display.state} case-${display.status}`);
+    card.dataset.caseId = display.id;
+    card.tabIndex = display.id === state.selectedCaseId ? 0 : -1;
+    const headingId = `case-title-${display.id}`;
+    card.setAttribute("aria-labelledby", headingId);
+    if (display.id === state.selectedCaseId) card.setAttribute("aria-current", "true");
+    card.addEventListener("focus", () => {
+      state.selectedCaseId = display.id;
+      applyCaseSelection();
+    });
+    card.addEventListener("click", () => {
+      state.selectedCaseId = display.id;
+      applyCaseSelection();
+    });
+
+    const header = element("header", "case-card-header");
+    const identity = element("div", "case-card-identity");
+    identity.append(
+      element("p", "eyebrow", "Case terminal"),
+      element("h3", "", display.displayName),
+      element("code", "", shortId(display.id))
+    );
+    identity.querySelector("h3").id = headingId;
+    const stateGroup = element("div", "case-card-state");
+    if (display.indeterminate) {
+      const spinner = element("span", "terminal-spinner");
+      spinner.setAttribute("aria-hidden", "true");
+      stateGroup.append(spinner);
+    }
+    stateGroup.append(element("span", `state-pill ${display.state}`, display.state));
+    header.append(identity, stateGroup);
+
+    const terminal = element("section", "case-terminal");
+    terminal.setAttribute("role", "log");
+    terminal.setAttribute("aria-live", "off");
+    terminal.setAttribute("aria-busy", String(display.active));
+    terminal.setAttribute("aria-label", `${display.displayName} structured lifecycle activity`);
+    terminal.append(element("p", "terminal-greeting", display.greeting));
+    const lines = element("ol", "terminal-lines");
+    for (const line of display.lines) {
+      const item = element("li", `terminal-line tone-${line.tone}`);
+      const value = element("span", "terminal-value", line.value);
+      if (line.observedAt) {
+        const observed = element("time", "terminal-observed", relativeTime(line.observedAt));
+        observed.dateTime = line.observedAt;
+        observed.title = dateTime(line.observedAt);
+        value.append(" · ", observed);
+      }
+      item.append(
+        element("span", "terminal-label", line.label),
+        value
+      );
+      lines.append(item);
+    }
+    terminal.append(lines);
+
+    const progress = element(
+      "div",
+      `terminal-progress${display.indeterminate ? " indeterminate" : ""}${display.active ? " active" : ""}`
+    );
+    if (display.indeterminate) {
+      progress.setAttribute("role", "progressbar");
+      progress.setAttribute("aria-label", `${display.displayName} activity`);
+      progress.setAttribute("aria-valuetext", "In progress; completion percentage unavailable");
+      progress.append(element("span", ""));
+    }
+    card.append(header, terminal, progress);
+    fragment.append(card);
+  }
+  view.caseGrid.replaceChildren(fragment);
+  restoreCaseRenderContinuity(view.caseGrid, continuity);
+}
+
 function renderCapabilityList(node, values, emptyLabel) {
   const entries = values.length ? values : [emptyLabel];
   const fragment = document.createDocumentFragment();
@@ -676,7 +1033,8 @@ function renderExecution() {
   setText(
     view.executionNote,
     `${presentation.reasonLabel ? `${presentation.reasonLabel}. ` : ""}` +
-      "Every launch requires an approved, digest-bound one-shot manifest. Running counts reflect durable records, not independent process proof."
+      "Every launch requires an approved, digest-bound one-shot manifest. Running counts reflect durable records, not independent process proof. " +
+      `Engagement registry: ${engagementScanPresentation(state.status.engagementScan).label}.`
   );
 }
 
@@ -814,6 +1172,7 @@ function setMeter(meter, fill, percent, label) {
 function renderUsage() {
   const usage = state.status.usage;
   const available = usage.availability !== "unavailable";
+  const scopeLabel = usageScopeLabel(usage);
   const contextPercent = boundedPercent(usage.context.usedTokens, usage.context.windowTokens);
   const budgetPercent = boundedPercent(usage.budget.usedTokens, usage.budget.limitTokens);
   const contextWindowKnown = Number.isFinite(usage.context.windowTokens);
@@ -851,14 +1210,16 @@ function renderUsage() {
     node.title = available ? `${fullNumber(number)} tokens` : "Token data unavailable";
   }
 
-  setText(view.usageSource, usage.source ? `Source ${usage.source}` : "Source unavailable");
+  setText(view.usageSource, usage.source ? `${scopeLabel} · source ${usage.source}` : scopeLabel);
   setText(view.usageUpdated, usage.updatedAt ? `Updated ${relativeTime(usage.updatedAt)}` : "Never observed");
 
   setText(view.metricTokens, available && Number.isFinite(usage.totalTokens) ? formatTokens(usage.totalTokens) : "Unavailable");
   view.metricTokens.title = available ? `${fullNumber(usage.totalTokens)} total tokens` : "Token data unavailable";
   setText(
     view.metricTokensDetail,
-    available ? `${usage.availability}${usage.model ? ` · ${usage.model}` : ""}` : "No provider data"
+    available
+      ? `${scopeLabel} · ${usage.availability}${usage.model ? ` · ${usage.model}` : ""}`
+      : `${scopeLabel} · no provider data`
   );
   setText(
     view.metricContext,
@@ -879,6 +1240,12 @@ function latestObservedAt() {
   const candidates = [state.status.usage.updatedAt, state.events[0]?.at, state.learnings[0]?.at].filter(Boolean);
   if (!candidates.length) return null;
   return candidates.sort((left, right) => Date.parse(right) - Date.parse(left))[0];
+}
+
+function syncMotionState() {
+  if (!browserAvailable) return;
+  const suspended = state.paused || document.hidden || ["stale", "offline", "unknown"].includes(state.connectionState);
+  document.documentElement.dataset.motion = suspended ? "paused" : "running";
 }
 
 function renderConnection() {
@@ -908,6 +1275,8 @@ function renderConnection() {
     label = "Disconnected";
   }
 
+  state.connectionState = connectionState;
+  syncMotionState();
   view.connectionIndicator.className = `pulse ${connectionState}`;
   setText(view.connectionLabel, label.charAt(0).toUpperCase() + label.slice(1));
   setText(view.metricFreshness, telemetry.state === "unknown" ? "Unknown" : telemetry.state.charAt(0).toUpperCase() + telemetry.state.slice(1));
@@ -930,7 +1299,7 @@ function renderMetrics() {
   setText(view.metricRunning, countText(counts.running));
   setText(
     view.metricRunningDetail,
-    Number.isFinite(counts.queued) ? `${counts.queued} queued · ${agents.length} observed` : "Waiting for status"
+    Number.isFinite(counts.queued) ? `${counts.queued} fleet queued · ${agents.length} base members observed` : "Waiting for status"
   );
   setText(view.metricWaiting, countText(counts.waiting));
   setText(view.metricAttention, countText(attention));
@@ -940,6 +1309,7 @@ function renderMetrics() {
 
 function render() {
   renderMetrics();
+  renderCases();
   renderExecution();
   renderOfflineAnalysis();
   renderToolRuntimes();
@@ -975,6 +1345,16 @@ function validCollectionPayload(value, key) {
     value.apiVersion === OBSERVER_API_VERSION && Array.isArray(value[key]);
 }
 
+function validStatusPayload(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value) &&
+    value.apiVersion === OBSERVER_API_VERSION &&
+    typeof value.at === "string" && Number.isFinite(Date.parse(value.at)) &&
+    OBSERVER_STATUS_STATES.has(value.state) &&
+    value.counts !== null && typeof value.counts === "object" && !Array.isArray(value.counts) &&
+    value.telemetry !== null && typeof value.telemetry === "object" && !Array.isArray(value.telemetry) &&
+    Array.isArray(value.cases);
+}
+
 /**
  * Reconcile independently fetched projections without discarding a last-known
  * valid collection when one endpoint is unavailable or malformed.
@@ -986,7 +1366,7 @@ export function reconcileRefreshResults(current, results, now = Date.now()) {
   let learnings = current.learnings;
   let networkSucceeded = false;
 
-  if (results.status.status === "fulfilled") {
+  if (results.status.status === "fulfilled" && validStatusPayload(results.status.value)) {
     status = sanitizeStatusPayload(results.status.value);
     networkSucceeded = true;
   } else {
@@ -1060,15 +1440,36 @@ function togglePause() {
 }
 
 function showShortcuts() {
-  if (typeof view.shortcutsDialog.showModal === "function") view.shortcutsDialog.showModal();
+  if (!view.shortcutsDialog.open && typeof view.shortcutsDialog.showModal === "function") view.shortcutsDialog.showModal();
+}
+
+export function observerShortcutAllowed(event = {}, dialogOpen = false) {
+  return event.defaultPrevented !== true && event.isComposing !== true &&
+    event.altKey !== true && event.ctrlKey !== true && event.metaKey !== true && !dialogOpen;
+}
+
+function cycleCaseFocus(direction) {
+  const cases = Array.isArray(state.status.cases) ? state.status.cases : [];
+  const selected = cycleCaseSelection(cases, state.selectedCaseId, direction);
+  if (!selected) {
+    view.casePanel?.focus();
+    setText(view.screenReaderStatus, "No case terminals are available.");
+    return;
+  }
+  state.selectedCaseId = selected;
+  applyCaseSelection({ focus: true });
+  const current = cases.find((item) => item.id === selected);
+  setText(view.screenReaderStatus, `Focused case ${current?.displayName || selected}.`);
 }
 
 function handleKeyboard(event) {
+  if (!observerShortcutAllowed(event, view.shortcutsDialog?.open === true)) return;
   const target = event.target;
   const editing = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target?.isContentEditable;
   if (editing && event.key !== "Escape") return;
 
   const focusTargets = {
+    "0": "#case-panel",
     "1": "#fleet-panel",
     "2": "#timeline-panel",
     "3": "#execution-panel",
@@ -1085,6 +1486,12 @@ function handleKeyboard(event) {
   if (event.key === "/") {
     event.preventDefault();
     view.eventSearch.focus();
+  } else if (event.key === "[") {
+    event.preventDefault();
+    cycleCaseFocus(-1);
+  } else if (event.key === "]") {
+    event.preventDefault();
+    cycleCaseFocus(1);
   } else if (event.key.toLowerCase() === "r") {
     event.preventDefault();
     refresh({ announce: true });
@@ -1120,6 +1527,7 @@ if (browserAvailable) {
   view.refreshButton.addEventListener("click", () => refresh({ announce: true }));
   view.shortcutsButton.addEventListener("click", showShortcuts);
   document.addEventListener("keydown", handleKeyboard);
+  document.addEventListener("visibilitychange", syncMotionState);
 
   window.setInterval(() => {
     const now = new Date();

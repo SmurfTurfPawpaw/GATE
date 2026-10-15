@@ -307,6 +307,19 @@ function statusFixture(overrides = {}) {
         limits: { maxTokens: 25000 }
       }
     ],
+    engagementScan: {
+      limit: 64,
+      discoveryLimit: 4096,
+      entriesInspected: 3,
+      discoveredAtLeast: 2,
+      scanned: 1,
+      omittedAtLeast: 1,
+      invalid: 1,
+      complete: false,
+      truncated: true,
+      discoveryTruncated: false,
+      filenames: ["PRIVATE_ENGAGEMENT_SCAN_FILENAME_CANARY"]
+    },
     execution: executionFixture(),
     workflows: {
       counts: {
@@ -430,9 +443,74 @@ function statusFixture(overrides = {}) {
           totalTokens: 17,
           source: "codex-session-jsonl"
         }
+      ],
+      sessions: [
+        {
+          id: "safe-session",
+          modifiedAt: at,
+          provider: "openai",
+          model: "gpt-6",
+          source: "codex-session-jsonl",
+          availability: "exact",
+          contextWindow: 200_000,
+          usage: { inputTokens: 11, cachedInputTokens: 3, outputTokens: 6, reasoningTokens: 2, totalTokens: 17 }
+        },
+        {
+          id: "private-session-canary",
+          modifiedAt: "2026-10-13T11:59:58.000Z",
+          provider: "/private/USAGE_PROVIDER_PATH_CANARY",
+          model: "/private/USAGE_MODEL_PATH_CANARY",
+          source: "/private/USAGE_SOURCE_PATH_CANARY",
+          availability: "exact",
+          contextWindow: 200_000,
+          usage: { inputTokens: 1, cachedInputTokens: 0, outputTokens: 1, reasoningTokens: 0, totalTokens: 2 }
+        }
       ]
     },
     ...overrides
+  };
+}
+
+function caseFixture({
+  id = "private-alpha-case",
+  displayName = "Alpha assessment",
+  status = "ready",
+  programId = "private-alpha-program",
+  projectId = "private-alpha-project",
+  programCurrent = true,
+  projectCurrent = true,
+  runtime = null,
+  runtimeHealth = runtime ? { status: "available", reason: null } : undefined
+} = {}) {
+  return {
+    id,
+    displayName,
+    status,
+    binding: {
+      program: {
+        id: programId,
+        profileSha256: "a".repeat(64),
+        current: programCurrent
+      },
+      project: projectId === null ? null : {
+        id: projectId,
+        contractSha256: "b".repeat(64),
+        current: projectCurrent
+      }
+    },
+    isolation: {
+      stateNamespace: "isolated-directory",
+      processBoundary: "shared-user",
+      networkBoundary: "adapter-dependent",
+      root: "/private/CASE_STATE_PATH_CANARY"
+    },
+    scopeSha256: "c".repeat(64),
+    runtimeHealth,
+    runtime,
+    argv: ["CASE_ARGV_CANARY"],
+    stdout: "CASE_STDOUT_CANARY",
+    target: "https://CASE_TARGET_CANARY.invalid",
+    privateData: "CASE_PRIVATE_DATA_CANARY"
   };
 }
 
@@ -532,6 +610,21 @@ test("observer endpoints coalesce status reads and expose metadata-only projecti
   assert.equal(status.engagements[0].executionLaneAvailable, true);
   assert.equal(status.engagements[0].executionMode, "supervised-generic");
   assert.equal(status.engagements[0].executionEligibility, "manifest-required");
+  assert.deepEqual(status.engagementScan, {
+    availability: "loaded",
+    reason: null,
+    limit: 64,
+    discoveryLimit: 4096,
+    entriesInspected: 3,
+    discoveredAtLeast: 2,
+    scanned: 1,
+    omittedAtLeast: 1,
+    invalid: 1,
+    recordsRead: null,
+    complete: false,
+    truncated: true,
+    discoveryTruncated: false
+  });
   assert.equal("preflightOnly" in status.engagements[0], false);
   assert.equal("executionAvailable" in status.engagements[0], false);
   assert.equal(status.engagements[0].attestation.operatorProvenance, "local-unverified");
@@ -656,6 +749,10 @@ test("observer endpoints coalesce status reads and expose metadata-only projecti
     "REPOSITORY_CANARY",
     "GATE_HOME_CANARY",
     "PRIVATE_CAPABILITY_CANARY",
+    "PRIVATE_ENGAGEMENT_SCAN_FILENAME_CANARY",
+    "USAGE_PROVIDER_PATH_CANARY",
+    "USAGE_MODEL_PATH_CANARY",
+    "USAGE_SOURCE_PATH_CANARY",
     "PRIVATE_OFFLINE_REASON_CANARY",
     "PRIVATE_OFFLINE_CAPABILITY_CANARY",
     "OFFLINE_ARTIFACT_PATH_CANARY",
@@ -685,6 +782,449 @@ test("observer endpoints coalesce status reads and expose metadata-only projecti
     assert.equal(response.headers.get("access-control-allow-origin"), null);
     assert.equal(response.headers.get("x-content-type-options"), "nosniff");
   }
+});
+
+test("observer publishes multiple isolated cases with opaque bindings and metadata-only activity", async (t) => {
+  const firstRunId = `xrun_${"5".repeat(32)}`;
+  const firstManifestId = `xmf_${"6".repeat(32)}`;
+  const firstPhaseAttemptId = `wpa_${"7".repeat(32)}`;
+  const firstReservationId = `wxr_${"8".repeat(32)}`;
+  const firstRuntime = statusFixture({
+    at: "2026-10-15T08:00:05.000Z",
+    repository: "/private/CASE_REPOSITORY_PATH_CANARY",
+    gate_home: "/private/CASE_GATE_HOME_PATH_CANARY",
+    events: [canonicalEvent({
+      id: "evt_casealpha01",
+      at: "2026-10-15T08:00:04.000Z",
+      runId: "raw-alpha-event-run",
+      taskId: "raw-alpha-event-task",
+      agent: "raw-alpha-event-agent",
+      summary: "CASE_EVENT_PRIVATE_SUMMARY_CANARY",
+      effect: {
+        class: "network-probe",
+        targetRef: "https://CASE_EVENT_TARGET_CANARY.invalid/private",
+        engagementId: "raw-alpha-engagement",
+        planDigest: "d".repeat(64)
+      },
+      evidenceRefs: ["private://CASE_EVENT_EVIDENCE_CANARY"],
+      usageRef: "usage://case-alpha"
+    })],
+    execution: executionFixture({
+      recent: [{
+        runId: firstRunId,
+        manifestId: firstManifestId,
+        engagementId: "raw-alpha-engagement",
+        status: "running",
+        createdAt: "2026-10-15T08:00:01.000Z",
+        startedAt: "2026-10-15T08:00:02.000Z",
+        finishedAt: null,
+        terminationReason: null,
+        exitCode: null,
+        signal: null,
+        workflow: {
+          instanceId: "raw-alpha-workflow",
+          phaseId: "active-testing",
+          phaseAttemptId: firstPhaseAttemptId,
+          reservationId: firstReservationId
+        },
+        targetArgument: "CASE_EXECUTION_TARGET_CANARY",
+        argv: ["--header", "CASE_EXECUTION_ARGV_CANARY"],
+        executablePath: "/private/CASE_EXECUTABLE_PATH_CANARY",
+        stdout: "CASE_EXECUTION_STDOUT_CANARY",
+        stderr: "CASE_EXECUTION_STDERR_CANARY",
+        evidence: "CASE_EXECUTION_EVIDENCE_CANARY"
+      }]
+    }),
+    cases: [],
+    caseScan: { discovered: 0, scanned: 0, omitted: 0, complete: true, truncated: false }
+  });
+  const secondRuntime = statusFixture({
+    at: "2026-10-15T08:00:03.000Z",
+    events: [canonicalEvent({
+      id: "evt_casebeta001",
+      at: "2026-10-15T08:00:02.000Z",
+      runId: "raw-beta-event-run",
+      taskId: "raw-beta-event-task",
+      agent: "raw-beta-event-agent",
+      summary: "CASE_BETA_PRIVATE_SUMMARY_CANARY"
+    })],
+    cases: [],
+    caseScan: { discovered: 0, scanned: 0, omitted: 0, complete: true, truncated: false }
+  });
+  const raw = statusFixture({
+    operator: { displayName: "Giovanni", secret: "CASE_OPERATOR_PRIVATE_CANARY" },
+    cases: [
+      caseFixture({
+        id: "raw-alpha-case",
+        displayName: "Alpha assessment",
+        programId: "raw-alpha-program",
+        projectId: "raw-alpha-project",
+        runtime: firstRuntime,
+        runtimeHealth: { status: "available", reason: null, detail: "CASE_RUNTIME_HEALTH_DETAIL_CANARY" }
+      }),
+      caseFixture({
+        id: "raw-beta-case",
+        displayName: "Beta assessment",
+        programId: "raw-beta-program",
+        projectId: "raw-beta-project",
+        runtime: secondRuntime
+      })
+    ],
+    caseScan: { discovered: 2, scanned: 2, omitted: 0, complete: true, truncated: false, root: "/private/CASE_SCAN_PATH_CANARY" }
+  });
+  const { origin } = await listen(t, async () => raw);
+  const response = await fetch(`${origin}/api/status`);
+  assert.equal(response.status, 200);
+  const status = await response.json();
+
+  assert.deepEqual(status.operator, { displayName: "Giovanni" });
+  assert.deepEqual(status.caseScan, {
+    discovered: 2,
+    scanned: 2,
+    omitted: 0,
+    invalid: 0,
+    discoveredAtLeast: false,
+    omittedAtLeast: false,
+    complete: true,
+    truncated: false
+  });
+  assert.equal(status.cases.length, 2);
+  assert.deepEqual(status.cases.map((item) => item.displayName), ["Alpha assessment", "Beta assessment"]);
+  for (const item of status.cases) {
+    assert.match(item.id, /^case_[a-f0-9]{16}$/u);
+    assert.match(item.binding.program.id, /^program_[a-f0-9]{16}$/u);
+    assert.match(item.binding.project.id, /^project_[a-f0-9]{16}$/u);
+    assert.deepEqual(item.isolation, {
+      stateNamespace: "isolated-directory",
+      processBoundary: "shared-user",
+      networkBoundary: "adapter-dependent"
+    });
+    assert.deepEqual(item.runtimeHealth, { status: "available", reason: null });
+  }
+  assert.notEqual(status.cases[0].id, status.cases[1].id);
+  assert.notEqual(status.cases[0].binding.program.id, status.cases[1].binding.program.id);
+  assert.notEqual(status.cases[0].binding.project.id, status.cases[1].binding.project.id);
+  assert.equal(status.cases[0].state, "running");
+  assert.equal(status.cases[0].execution.recent.length, 1);
+  assert.match(status.cases[0].execution.recent[0].runId, /^run_[a-f0-9]{16}$/u);
+  assert.match(status.cases[0].execution.recent[0].manifestId, /^manifest_[a-f0-9]{16}$/u);
+  assert.equal(status.cases[0].activity.length, 1);
+  assert.equal(status.cases[0].activity[0].action.toolName, "gate-observer");
+  assert.equal(status.cases[0].engagementScan.invalid, 1);
+  assert.equal(status.cases[0].engagementScan.truncated, true);
+
+  const dashboard = sanitizeStatusPayload(status);
+  assert.equal(dashboard.cases.length, 2, "the browser allowlist must preserve the public case contract");
+  assert.deepEqual(dashboard.cases.map((item) => item.id), status.cases.map((item) => item.id));
+  assert.deepEqual(dashboard.cases.map((item) => item.binding), status.cases.map((item) => item.binding));
+
+  const serialized = JSON.stringify({ status, dashboard });
+  for (const forbidden of [
+    "raw-alpha-case", "raw-beta-case", "raw-alpha-program", "raw-beta-program",
+    "raw-alpha-project", "raw-beta-project", "raw-alpha-event-run", "raw-alpha-event-task",
+    "raw-alpha-event-agent", "raw-beta-event-run", "raw-beta-event-task", "raw-beta-event-agent",
+    "raw-alpha-engagement", "raw-alpha-workflow", firstRunId, firstManifestId, firstPhaseAttemptId,
+    firstReservationId, "CASE_REPOSITORY_PATH_CANARY", "CASE_GATE_HOME_PATH_CANARY",
+    "CASE_STATE_PATH_CANARY", "CASE_SCAN_PATH_CANARY", "CASE_OPERATOR_PRIVATE_CANARY",
+    "CASE_RUNTIME_HEALTH_DETAIL_CANARY",
+    "CASE_EVENT_PRIVATE_SUMMARY_CANARY", "CASE_EVENT_TARGET_CANARY", "CASE_EVENT_EVIDENCE_CANARY",
+    "CASE_BETA_PRIVATE_SUMMARY_CANARY", "CASE_EXECUTION_TARGET_CANARY", "CASE_EXECUTION_ARGV_CANARY",
+    "CASE_EXECUTABLE_PATH_CANARY", "CASE_EXECUTION_STDOUT_CANARY", "CASE_EXECUTION_STDERR_CANARY",
+    "CASE_EXECUTION_EVIDENCE_CANARY", "CASE_ARGV_CANARY", "CASE_STDOUT_CANARY",
+    "CASE_TARGET_CANARY", "CASE_PRIVATE_DATA_CANARY"
+  ]) assert.equal(serialized.includes(forbidden), false, `case observer projection leaked ${forbidden}`);
+});
+
+test("stale cases retain sanitized monitoring while invalid rows become blocked tombstones", () => {
+  const privateRuntime = statusFixture({
+    events: [canonicalEvent({
+      id: "evt_stalecase01",
+      runId: "STALE_RUNTIME_RUN_CANARY",
+      taskId: "STALE_RUNTIME_TASK_CANARY",
+      summary: "STALE_RUNTIME_SUMMARY_CANARY"
+    })],
+    execution: executionFixture({
+      recent: [{
+        ...executionFixture().recent[0],
+        argv: ["STALE_RUNTIME_ARGV_CANARY"],
+        stdout: "STALE_RUNTIME_STDOUT_CANARY",
+        targetArgument: "STALE_RUNTIME_TARGET_CANARY"
+      }]
+    }),
+    cases: []
+  });
+  const raw = statusFixture({
+    cases: [
+      caseFixture({
+        id: "raw-stale-case",
+        displayName: "Stale assessment",
+        status: "stale",
+        programId: "raw-stale-program",
+        projectId: "raw-stale-project",
+        programCurrent: false,
+        projectCurrent: false,
+        runtime: privateRuntime
+      }),
+      {
+        id: "raw-invalid-case",
+        displayName: null,
+        status: "invalid",
+        binding: null,
+        isolation: null,
+        scopeSha256: null,
+        runtime: privateRuntime,
+        argv: ["INVALID_RUNTIME_ARGV_CANARY"],
+        path: "/private/INVALID_CASE_PATH_CANARY"
+      },
+      {
+        id: null,
+        displayName: null,
+        status: "invalid",
+        binding: null,
+        isolation: null,
+        privateId: "UNUSABLE_CASE_ID_CANARY",
+        path: "/private/UNUSABLE_CASE_PATH_CANARY"
+      }
+    ],
+    caseScan: { discovered: 3, scanned: 3, omitted: 0, invalid: 2, complete: false, truncated: false }
+  });
+  const status = projectSnapshot(raw, paths).status;
+
+  assert.equal(status.cases.length, 2);
+  const stale = status.cases.find((item) => item.displayName === "Stale assessment");
+  const invalid = status.cases.find((item) => item.displayName === "Invalid case");
+  assert.equal(stale.state, "running");
+  assert.equal(stale.activity.length, 1);
+  assert.equal(stale.execution.recent.length, 1);
+  assert.equal(stale.execution.laneAvailable, true);
+  assert.equal(stale.usage.availability, "exact");
+  assert.equal(stale.workflows.instances.length, 1);
+  assert.ok(stale.learningCount > 0);
+  assert.equal(stale.binding.program.current, false);
+  assert.equal(stale.binding.project.current, false);
+  assert.equal(invalid.state, "blocked");
+  assert.equal(invalid.binding, null);
+  assert.equal(invalid.isolation, null);
+  assert.deepEqual(invalid.activity, []);
+  assert.deepEqual(invalid.execution.recent, []);
+  assert.equal(invalid.execution.laneAvailable, false);
+  assert.equal(invalid.usage.availability, "unavailable");
+  assert.deepEqual(invalid.workflows.instances, []);
+  assert.equal(invalid.learningCount, 0);
+  assert.deepEqual(status.caseScan, {
+    discovered: 3,
+    scanned: 3,
+    omitted: 0,
+    invalid: 2,
+    discoveredAtLeast: false,
+    omittedAtLeast: false,
+    complete: false,
+    truncated: false
+  });
+
+  const dashboard = sanitizeStatusPayload(status);
+  const dashboardInvalid = dashboard.cases.find((item) => item.status === "invalid");
+  assert.equal(dashboard.cases.length, 2);
+  assert.equal(dashboardInvalid.displayName, "Invalid case");
+  assert.equal(dashboardInvalid.state, "blocked");
+  assert.equal(dashboardInvalid.binding, null);
+  assert.equal(dashboardInvalid.isolation, null);
+
+  const serialized = JSON.stringify({ status, dashboard });
+  for (const forbidden of [
+    "raw-stale-case", "raw-stale-program", "raw-stale-project", "raw-invalid-case",
+    "UNUSABLE_CASE_ID_CANARY", "UNUSABLE_CASE_PATH_CANARY", "INVALID_RUNTIME_ARGV_CANARY",
+    "INVALID_CASE_PATH_CANARY", "STALE_RUNTIME_RUN_CANARY", "STALE_RUNTIME_TASK_CANARY",
+    "STALE_RUNTIME_SUMMARY_CANARY", "STALE_RUNTIME_ARGV_CANARY", "STALE_RUNTIME_STDOUT_CANARY",
+    "STALE_RUNTIME_TARGET_CANARY", "CASE_STATE_PATH_CANARY", "CASE_ARGV_CANARY",
+    "CASE_STDOUT_CANARY", "CASE_TARGET_CANARY", "CASE_PRIVATE_DATA_CANARY"
+  ]) assert.equal(serialized.includes(forbidden), false, `stale or invalid case projection leaked ${forbidden}`);
+});
+
+test("case projection is bounded and preserves the existing top-level observer lanes", () => {
+  const baseline = projectSnapshot(statusFixture(), paths);
+  const rawCases = Array.from({ length: 33 }, (_, index) => caseFixture({
+    id: `raw-bounded-case-${String(index).padStart(2, "0")}`,
+    displayName: `Bounded assessment ${String(index).padStart(2, "0")}`,
+    status: "stale",
+    programId: `raw-bounded-program-${String(index).padStart(2, "0")}`,
+    projectId: null,
+    programCurrent: false
+  }));
+  const projected = projectSnapshot(statusFixture({
+    cases: rawCases,
+    caseScan: { discovered: 33, scanned: 32, omitted: 1, invalid: 0, complete: false, truncated: true }
+  }), paths);
+
+  assert.equal(projected.status.cases.length, 32);
+  assert.equal(new Set(projected.status.cases.map((item) => item.id)).size, 32);
+  assert.ok(projected.status.cases.every((item) => /^case_[a-f0-9]{16}$/u.test(item.id)));
+  assert.deepEqual(projected.status.caseScan, {
+    discovered: 33,
+    scanned: 32,
+    omitted: 1,
+    invalid: 0,
+    discoveredAtLeast: false,
+    omittedAtLeast: false,
+    complete: false,
+    truncated: true
+  });
+  const lowerBound = projectSnapshot(statusFixture({
+    cases: rawCases,
+    caseScan: {
+      discovered: 1024,
+      scanned: 32,
+      omitted: 992,
+      invalid: 0,
+      discoveredAtLeast: true,
+      omittedAtLeast: true,
+      complete: false,
+      truncated: true
+    }
+  }), paths).status.caseScan;
+  assert.deepEqual(lowerBound, {
+    discovered: 1024,
+    scanned: 32,
+    omitted: 992,
+    invalid: 0,
+    discoveredAtLeast: true,
+    omittedAtLeast: true,
+    complete: false,
+    truncated: true
+  });
+  assert.equal(JSON.stringify(projected).includes("raw-bounded-case-32"), false);
+  for (const key of [
+    "execution", "workflows", "offlineAnalysis", "toolRuntimes", "usage", "budget",
+    "engagements", "projects", "upstreams"
+  ]) assert.deepEqual(projected.status[key], baseline.status[key], `case fleet changed top-level ${key}`);
+  assert.deepEqual(projected.events, baseline.events);
+  assert.deepEqual(projected.learnings, baseline.learnings);
+});
+
+test("case state uses exact active execution and offline counts beyond bounded recent records", () => {
+  const terminalExecution = executionFixture({
+    counts: {
+      queued: 0,
+      running: 1,
+      stopping: 0,
+      succeeded: 100,
+      failed: 0,
+      cancelled: 0,
+      blocked: 0,
+      unknown: 0
+    },
+    recent: []
+  });
+  const offline = offlineAnalysisFixture({
+    counts: {
+      queued: 0,
+      running: 1,
+      succeeded: 100,
+      failed: 0,
+      cancelled: 0,
+      blocked: 0,
+      unknown: 0
+    },
+    recent: []
+  });
+  const quietRuntime = (overrides) => statusFixture({
+    events: [],
+    learnings: [],
+    engagements: [],
+    engagementScan: {
+      availability: "not-loaded",
+      reason: "aggregate-case-detail-elided",
+      recordsRead: 0,
+      complete: false
+    },
+    workflows: undefined,
+    tokens: [],
+    execution: undefined,
+    offlineAnalysis: undefined,
+    cases: [],
+    ...overrides
+  });
+  const projected = projectSnapshot(statusFixture({
+    cases: [
+      caseFixture({
+        id: "execution-count-case",
+        displayName: "Execution count case",
+        projectId: null,
+        runtime: quietRuntime({ execution: terminalExecution })
+      }),
+      caseFixture({
+        id: "offline-count-case",
+        displayName: "Offline count case",
+        projectId: null,
+        runtime: quietRuntime({ offlineAnalysis: offline })
+      })
+    ],
+    caseScan: { discovered: 2, scanned: 2, omitted: 0, invalid: 0, complete: true, truncated: false }
+  }), paths).status;
+
+  const executionCase = projected.cases.find((item) => item.displayName === "Execution count case");
+  const offlineCase = projected.cases.find((item) => item.displayName === "Offline count case");
+  assert.equal(executionCase.state, "running");
+  assert.equal(executionCase.execution.runningCount, 1);
+  assert.equal(executionCase.execution.recent.length, 0);
+  assert.equal(executionCase.engagementScan.availability, "not-loaded");
+  assert.equal(offlineCase.state, "running");
+  assert.equal(offlineCase.offlineAnalysis.counts.running, 1);
+  assert.equal(offlineCase.offlineAnalysis.recent.length, 0);
+
+  const dashboard = sanitizeStatusPayload(projected);
+  assert.equal(dashboard.cases.find((item) => item.displayName === "Execution count case").execution.runningCount, 1);
+  assert.equal(dashboard.cases.find((item) => item.displayName === "Offline count case").offlineAnalysis.counts.running, 1);
+});
+
+test("case token projections remain compact across a full 32-case fleet", () => {
+  const sessions = Array.from({ length: 100 }, (_, index) => ({
+    id: `private-session-${index}`,
+    modifiedAt: new Date(Date.parse(at) - index * 1_000).toISOString(),
+    provider: "openai",
+    model: "gpt-6-codex-session-budget-test",
+    source: "codex-session-jsonl",
+    availability: "exact",
+    contextWindow: 200_000,
+    usage: {
+      inputTokens: index + 1,
+      cachedInputTokens: index,
+      outputTokens: index + 2,
+      reasoningTokens: index,
+      totalTokens: index + 3
+    }
+  }));
+  const cases = Array.from({ length: 32 }, (_, index) => caseFixture({
+    id: `token-case-${index}`,
+    displayName: `Token assessment ${String(index).padStart(2, "0")}`,
+    programId: `token-program-${index}`,
+    projectId: null,
+    runtime: {
+      at,
+      events: [],
+      learnings: [],
+      engagements: [],
+      engagementScan: { availability: "not-loaded", reason: "aggregate-case-detail-elided", recordsRead: 0, complete: false },
+      workflows: null,
+      tokens: {
+        availability: "exact",
+        source: "codex-session-jsonl",
+        totals: { inputTokens: 10_000, cachedInputTokens: 5_000, outputTokens: 2_000, reasoningTokens: 1_000, totalTokens: 12_000 },
+        sessions
+      },
+      cases: []
+    }
+  }));
+  const status = projectSnapshot(statusFixture({
+    cases,
+    caseScan: { discovered: 32, scanned: 32, omitted: 0, invalid: 0, complete: true, truncated: false }
+  }), paths).status;
+  assert.equal(status.cases.length, 32);
+  assert.ok(status.cases.every((item) => JSON.stringify(Object.keys(item.usage).sort()) === JSON.stringify(["availability", "totalTokens"])));
+  assert.ok(status.cases.every((item) => !("sessions" in item.usage)));
+  assert.ok(Buffer.byteLength(`${JSON.stringify(status)}\n`) < 2_000_000, "status must stay below the dashboard response limit");
+  const dashboard = sanitizeStatusPayload(status);
+  assert.ok(Buffer.byteLength(`${JSON.stringify(dashboard)}\n`) < 2_000_000);
 });
 
 test("tool runtime observer summary allowlists metadata and withholds raw verification errors", () => {
@@ -1213,6 +1753,40 @@ test("status failures return a generic service error without exception details",
   const body = await response.text();
   assert.match(body, /observer status unavailable/);
   assert.doesNotMatch(body, /SENSITIVE_BUILDER_FAILURE/);
+});
+
+test("cached fallback marks every case telemetry stale while keeping the local endpoint available", async (t) => {
+  const now = new Date().toISOString();
+  const runtime = statusFixture({
+    at: now,
+    events: [canonicalEvent({ id: "evt_cachedcase1", at: now })],
+    cases: []
+  });
+  const raw = statusFixture({
+    at: now,
+    events: [canonicalEvent({ id: "evt_cachedroot1", at: now })],
+    cases: [caseFixture({ id: "cached-case", displayName: "Cached case", projectId: null, runtime })],
+    caseScan: { discovered: 1, scanned: 1, omitted: 0, invalid: 0, complete: true, truncated: false }
+  });
+  let calls = 0;
+  const { origin } = await listen(t, () => {
+    calls += 1;
+    if (calls > 1) throw new Error("PRIVATE_CACHED_BUILDER_FAILURE");
+    return raw;
+  }, { refreshMs: 250 });
+
+  const firstResponse = await fetch(`${origin}/api/status`);
+  const first = await firstResponse.json();
+  assert.equal(first.cases[0].telemetry.freshness, "fresh");
+  await new Promise((resolve) => setTimeout(resolve, 275));
+  const fallbackResponse = await fetch(`${origin}/api/status`);
+  const fallback = await fallbackResponse.json();
+  assert.equal(fallbackResponse.status, 200, "the observer connection remains available from cache");
+  assert.equal(fallback.telemetry.freshness, "stale");
+  assert.ok(fallback.cases.every((item) => item.telemetry.freshness === "stale"));
+  const dashboard = sanitizeStatusPayload(fallback);
+  assert.ok(dashboard.cases.every((item) => item.telemetry.state === "stale"));
+  assert.equal(JSON.stringify(fallback).includes("PRIVATE_CACHED_BUILDER_FAILURE"), false);
 });
 
 

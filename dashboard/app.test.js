@@ -2,13 +2,21 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  captureCaseRenderContinuity,
+  casePresentation,
+  caseScanPresentation,
+  cycleCaseSelection,
+  engagementScanPresentation,
   executionPresentation,
   executionRunPresentation,
+  observerShortcutAllowed,
   offlineAnalysisPresentation,
   offlineAnalysisRunPresentation,
   reconcileRefreshResults,
+  restoreCaseRenderContinuity,
   toolRuntimeItemPresentation,
-  toolRuntimePresentation
+  toolRuntimePresentation,
+  usageScopeLabel
 } from "./app.js";
 
 const at = "2026-10-13T12:00:00.000Z";
@@ -31,10 +39,22 @@ function currentState() {
   };
 }
 
+function statusEnvelope(overrides = {}) {
+  return {
+    apiVersion: "gate.observer/v1",
+    at,
+    state: "running",
+    counts: {},
+    telemetry: {},
+    cases: [],
+    ...overrides
+  };
+}
+
 test("partial endpoint failures preserve the last valid event and learning projections", () => {
   const current = currentState();
   const next = reconcileRefreshResults(current, {
-    status: fulfilled({ apiVersion: "gate.observer/v1", at, state: "running" }),
+    status: fulfilled(statusEnvelope()),
     events: rejected(),
     learnings: rejected()
   }, 200);
@@ -43,6 +63,26 @@ test("partial endpoint failures preserve the last valid event and learning proje
   assert.strictEqual(next.learnings, current.learnings);
   assert.deepEqual([...next.failedEndpoints], ["/api/events", "/api/learnings"]);
   assert.equal(next.lastNetworkSuccess, 200);
+});
+
+test("malformed successful status envelopes preserve the last valid status and report endpoint failure", () => {
+  const current = currentState();
+  for (const malformed of [
+    { at, state: "running", counts: {}, telemetry: {}, cases: [] },
+    statusEnvelope({ apiVersion: "wrong/v1" }),
+    statusEnvelope({ at: "not-a-time" }),
+    statusEnvelope({ counts: null }),
+    statusEnvelope({ cases: null })
+  ]) {
+    const next = reconcileRefreshResults(current, {
+      status: fulfilled(malformed),
+      events: rejected(),
+      learnings: rejected()
+    }, 250);
+    assert.strictEqual(next.status, current.status);
+    assert.equal(next.failedEndpoints.has("/api/status"), true);
+    assert.equal(next.lastNetworkSuccess, current.lastNetworkSuccess);
+  }
 });
 
 test("valid empty collections replace old data while malformed responses preserve it", () => {
@@ -370,4 +410,285 @@ test("managed runtime presentation distinguishes aggregate health and per-tool r
   assert.match(receipt.evidenceLabel, /12s ago/);
   assert.match(receipt.evidenceLabel, /current bytes not checked/);
   assert.equal(toolRuntimeItemPresentation({ state: "invalid-receipt" }).tone, "invalid");
+});
+
+test("case terminal presentation greets once and exposes lifecycle metadata without raw operation data", () => {
+  const display = casePresentation({
+    id: `case_${"1".repeat(16)}`,
+    displayName: "Primary assessment",
+    status: "ready",
+    binding: {
+      program: { id: `program_${"2".repeat(16)}`, current: true },
+      project: { id: `project_${"3".repeat(16)}`, current: true }
+    },
+    isolation: {
+      stateNamespace: "isolated-directory",
+      processBoundary: "shared-user",
+      networkBoundary: "adapter-dependent"
+    },
+    runtimeHealth: { status: "available", reason: null },
+    state: "running",
+    counts: { running: 1, queued: 0, waiting: 0, blocked: 0, failed: 0, succeeded: 0 },
+    telemetry: { state: "live", lastActivityAt: at },
+    usage: { availability: "exact", totalTokens: 2048 },
+    execution: {
+      queuedCount: 0,
+      runningCount: 1,
+      stoppingCount: 0,
+      recent: [{
+        runId: `run_${"4".repeat(16)}`,
+        manifestId: `manifest_${"5".repeat(16)}`,
+        engagementId: `engagement_${"6".repeat(16)}`,
+        status: "running",
+        createdAt: at,
+        startedAt: at,
+        finishedAt: null,
+        terminationReason: null,
+        command: "RUN_COMMAND_CANARY",
+        argv: ["RUN_ARGV_CANARY"],
+        output: "RUN_OUTPUT_CANARY",
+        target: "RUN_TARGET_CANARY"
+      }]
+    },
+    offlineAnalysis: { counts: { queued: 0, running: 0 } },
+    engagementScan: {
+      availability: "loaded",
+      scanned: 3,
+      discoveredAtLeast: 3,
+      omittedAtLeast: 0,
+      invalid: 1,
+      complete: false,
+      truncated: false
+    },
+    workflows: {
+      instances: [{
+        instanceId: `workflow_${"7".repeat(16)}`,
+        activePhase: { id: "active-testing", toolId: "httpx", target: "PHASE_TARGET_CANARY" }
+      }]
+    },
+    activity: [{
+      at,
+      kind: "tool.started",
+      status: "running",
+      action: { toolName: "httpx", command: "EVENT_COMMAND_CANARY" },
+      summary: "EVENT_SUMMARY_CANARY"
+    }],
+    command: "CASE_COMMAND_CANARY",
+    output: "CASE_OUTPUT_CANARY",
+    target: "CASE_TARGET_CANARY"
+  }, { displayName: "Giovanni" });
+
+  assert.equal(display.greeting, "GATE // Welcome, Giovanni.");
+  assert.equal(display.indeterminate, true);
+  assert.equal(display.active, true);
+  assert.equal(display.lines.some((line) => line.label === "phase" && /active-testing · tool httpx/.test(line.value)), true);
+  assert.equal(display.lines.some((line) => line.label === "run" && /running/.test(line.value)), true);
+  assert.equal(display.lines.some((line) => line.label === "execution" && /1 running/.test(line.value)), true);
+  assert.equal(display.lines.some((line) => line.label === "analysis" && /0 running/.test(line.value)), true);
+  assert.equal(display.lines.some((line) => line.label === "engagements" && /1 invalid/.test(line.value)), true);
+  assert.equal(display.lines.some((line) => line.label === "isolation" && /shared user/.test(line.value)), true);
+  assert.equal(display.lines.some((line) => line.label === "tokens" && /exact · 2.048 tokens observed/.test(line.value)), true);
+  assert.deepEqual(
+    display.lines.find((line) => line.label === "telemetry"),
+    { label: "telemetry", value: "live", tone: "active", observedAt: at }
+  );
+  assert.equal(display.lines.find((line) => line.label === "run").observedAt, at);
+  assert.equal(display.lines.find((line) => line.label === "activity").observedAt, at);
+  const rendered = JSON.stringify(display);
+  assert.equal(rendered.split("GATE // Welcome, Giovanni.").length - 1, 1);
+  for (const canary of [
+    "RUN_COMMAND_CANARY", "RUN_ARGV_CANARY", "RUN_OUTPUT_CANARY", "RUN_TARGET_CANARY", "PHASE_TARGET_CANARY",
+    "EVENT_COMMAND_CANARY", "EVENT_SUMMARY_CANARY", "CASE_COMMAND_CANARY", "CASE_OUTPUT_CANARY", "CASE_TARGET_CANARY"
+  ]) assert.equal(rendered.includes(canary), false, `terminal presentation leaked ${canary}`);
+});
+
+test("case terminal animation is indeterminate only for fresh active lifecycle state", () => {
+  const base = {
+    id: `case_${"a".repeat(16)}`,
+    displayName: "Case A",
+    status: "ready",
+    binding: { program: { id: `program_${"b".repeat(16)}`, current: true }, project: null },
+    isolation: {
+      stateNamespace: "isolated-directory",
+      processBoundary: "shared-user",
+      networkBoundary: "adapter-dependent"
+    },
+    runtimeHealth: { status: "available", reason: null },
+    counts: {},
+    usage: { availability: "unavailable" },
+    execution: { queuedCount: 0, runningCount: 0, stoppingCount: 0, recent: [] },
+    offlineAnalysis: { counts: { queued: 0, running: 0 } },
+    workflows: { instances: [] },
+    activity: []
+  };
+  assert.equal(casePresentation({ ...base, state: "queued", telemetry: { state: "live" } }).indeterminate, true);
+  assert.equal(casePresentation({ ...base, state: "succeeded", telemetry: { state: "live" } }).indeterminate, false);
+  const staleActive = casePresentation({ ...base, state: "running", status: "stale", telemetry: { state: "live" } });
+  assert.equal(staleActive.active, true);
+  assert.equal(staleActive.indeterminate, false);
+  assert.equal(casePresentation({
+    ...base,
+    state: "idle",
+    telemetry: { state: "live" },
+    workflows: { instances: [{ activePhase: { id: "mapping", toolId: null } }] }
+  }).indeterminate, true);
+  assert.equal(casePresentation({
+    ...base,
+    state: "idle",
+    telemetry: { state: "live" },
+    execution: { queuedCount: 0, runningCount: 1, stoppingCount: 0, recent: [] }
+  }).indeterminate, true, "exact execution counts keep older active runs visible");
+  assert.equal(casePresentation({
+    ...base,
+    state: "idle",
+    telemetry: { state: "live" },
+    offlineAnalysis: { counts: { queued: 0, running: 1 } }
+  }).indeterminate, true, "offline analysis counts keep active local work visible");
+  const staleTelemetry = casePresentation({
+    ...base,
+    state: "idle",
+    telemetry: { state: "stale" },
+    execution: { queuedCount: 0, runningCount: 1, stoppingCount: 0, recent: [] }
+  });
+  assert.equal(staleTelemetry.active, true);
+  assert.equal(staleTelemetry.indeterminate, false, "stale telemetry must stop progress animation");
+});
+
+test("invalid case tombstones render unavailable binding and isolation metadata", () => {
+  const display = casePresentation({
+    id: `case_${"d".repeat(16)}`,
+    displayName: "Invalid case",
+    status: "invalid",
+    binding: null,
+    isolation: null,
+    runtimeHealth: { status: "unavailable", reason: "invalid-case" },
+    state: "blocked",
+    counts: {},
+    telemetry: { state: "unknown" },
+    usage: { availability: "unavailable" },
+    execution: { stoppingCount: 0, recent: [] },
+    workflows: { instances: [] },
+    activity: []
+  }, { displayName: "Giovanni" });
+
+  assert.equal(display.active, false);
+  assert.equal(display.indeterminate, false);
+  assert.equal(display.lines.find((line) => line.label === "program").value, "unavailable");
+  assert.equal(display.lines.find((line) => line.label === "project").value, "unavailable");
+  assert.equal(display.lines.find((line) => line.label === "isolation").value, "unavailable");
+});
+
+test("engagement scan presentation keeps partial, invalid, and elided status visible", () => {
+  assert.deepEqual(engagementScanPresentation({
+    availability: "loaded",
+    scanned: 64,
+    discoveredAtLeast: 65,
+    omittedAtLeast: 1,
+    invalid: 2,
+    complete: false,
+    truncated: true
+  }), {
+    label: "64 scanned · 65+ discovered · 1+ omitted · 2 invalid · truncated",
+    attention: true
+  });
+  assert.deepEqual(engagementScanPresentation({ availability: "not-loaded" }), {
+    label: "details not loaded",
+    attention: false
+  });
+});
+
+test("case keyboard selection remains stable and wraps in both directions", () => {
+  const cases = [
+    { id: `case_${"1".repeat(16)}` },
+    { id: `case_${"2".repeat(16)}` },
+    { id: `case_${"3".repeat(16)}` }
+  ];
+  assert.equal(cycleCaseSelection(cases, cases[1].id, 0), cases[1].id);
+  assert.equal(cycleCaseSelection(cases, cases[2].id, 1), cases[0].id);
+  assert.equal(cycleCaseSelection(cases, cases[0].id, -1), cases[2].id);
+  assert.equal(cycleCaseSelection(cases, "missing", 1), cases[0].id);
+  assert.equal(cycleCaseSelection([], null, 1), null);
+});
+
+test("case render continuity restores focused cards and independent terminal scroll positions", () => {
+  const focusedChild = {};
+  const oldCards = [
+    {
+      dataset: { caseId: `case_${"1".repeat(16)}` },
+      querySelector: () => ({ scrollTop: 91, scrollLeft: 4, scrollHeight: 291, clientHeight: 200 }),
+      contains: (candidate) => candidate === focusedChild
+    },
+    {
+      dataset: { caseId: `case_${"2".repeat(16)}` },
+      querySelector: () => ({ scrollTop: 23, scrollLeft: 0, scrollHeight: 300, clientHeight: 200 }),
+      contains: () => false
+    }
+  ];
+  const snapshot = captureCaseRenderContinuity({ querySelectorAll: () => oldCards }, focusedChild);
+  assert.equal(snapshot.focusedCaseId, oldCards[0].dataset.caseId);
+  assert.deepEqual(snapshot.scrollPositions.get(oldCards[1].dataset.caseId), { top: 23, left: 0, atBottom: false });
+
+  const restoredTerminals = [
+    { scrollTop: 0, scrollLeft: 0, scrollHeight: 350, clientHeight: 200 },
+    { scrollTop: 0, scrollLeft: 0, scrollHeight: 300, clientHeight: 200 }
+  ];
+  const focusCalls = [];
+  const newCards = oldCards.map((card, index) => ({
+    dataset: { ...card.dataset },
+    querySelector: () => restoredTerminals[index],
+    focus: (options) => focusCalls.push({ id: card.dataset.caseId, options })
+  }));
+  restoreCaseRenderContinuity({ querySelectorAll: () => newCards }, snapshot);
+  assert.deepEqual(restoredTerminals, [
+    { scrollTop: 150, scrollLeft: 4, scrollHeight: 350, clientHeight: 200 },
+    { scrollTop: 23, scrollLeft: 0, scrollHeight: 300, clientHeight: 200 }
+  ]);
+  assert.deepEqual(focusCalls, [{ id: oldCards[0].dataset.caseId, options: { preventScroll: true } }]);
+
+  const fallbackCalls = [];
+  restoreCaseRenderContinuity({
+    querySelectorAll: () => [{
+      dataset: { caseId: oldCards[1].dataset.caseId },
+      querySelector: () => null,
+      focus: (options) => fallbackCalls.push(options)
+    }]
+  }, {
+    focusedCaseId: `case_${"f".repeat(16)}`,
+    fallbackFocusCaseId: oldCards[1].dataset.caseId,
+    scrollPositions: new Map()
+  });
+  assert.deepEqual(fallbackCalls, [{ preventScroll: true }], "a removed focused case transfers focus to the selected fallback");
+});
+
+test("observer shortcuts ignore browser modifiers and an open shortcuts dialog", () => {
+  assert.equal(observerShortcutAllowed({ key: "r" }), true);
+  assert.equal(observerShortcutAllowed({ key: "r", ctrlKey: true }), false);
+  assert.equal(observerShortcutAllowed({ key: "p", metaKey: true }), false);
+  assert.equal(observerShortcutAllowed({ key: "[", altKey: true }), false);
+  assert.equal(observerShortcutAllowed({ key: "r", defaultPrevented: true }), false);
+  assert.equal(observerShortcutAllowed({ key: "r", isComposing: true }), false);
+  assert.equal(observerShortcutAllowed({ key: "?", shiftKey: true }), true);
+  assert.equal(observerShortcutAllowed({ key: "r" }, true), false);
+});
+
+test("token scope labels distinguish host sessions from base records", () => {
+  assert.equal(usageScopeLabel({ source: "codex-session-jsonl" }), "Host-wide, unattributed sessions");
+  assert.equal(usageScopeLabel({ source: "gate-token-log" }), "Base/unassigned token log");
+  assert.equal(usageScopeLabel({}), "Host/base scope unavailable");
+});
+
+test("case scan presentation exposes invalid and partial scan state", () => {
+  assert.equal(
+    caseScanPresentation({
+      discovered: 1024,
+      scanned: 32,
+      omitted: 992,
+      invalid: 2,
+      discoveredAtLeast: true,
+      omittedAtLeast: true,
+      complete: false
+    }, 32),
+    "32 scanned / 1024+ discovered · 992+ omitted · 2 invalid · partial"
+  );
+  assert.equal(caseScanPresentation({}, 2), "2 scanned / 2 discovered · partial");
 });

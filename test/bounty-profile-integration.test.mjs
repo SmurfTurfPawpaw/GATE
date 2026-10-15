@@ -809,6 +809,36 @@ test("invisible-only required core text is rejected before persistence", (t) => 
   assert.equal(fs.existsSync(path.join(paths.programs, id)), false);
 });
 
+test("case-bound compilation rejects a profile revision selected before the compile lock", (t) => {
+  const { home, paths } = fixture(t);
+  const id = "case-bound-compilation";
+  createProgramProfile(id, completeProfile(id), { paths, now: fixedAt });
+  const selected = resumeProgramProfile(id, { paths });
+
+  applyProgramProfileAnswers(id, {
+    identity: {
+      objective: "Assess the listed application after a concurrent profile revision."
+    }
+  }, {
+    paths,
+    now: "2026-10-14T12:01:00.000Z",
+    expectedRevision: selected.summary.revision,
+    expectedProfileSha256: selected.summary.profileSha256
+  });
+  const revised = resumeProgramProfile(id, { paths });
+  assert.notEqual(revised.summary.profileSha256, selected.summary.profileSha256);
+
+  assert.throws(
+    () => compileProgramProfile(id, {}, {
+      paths,
+      now: "2026-10-14T12:02:00.000Z",
+      expectedProfileSha256: selected.summary.profileSha256
+    }),
+    new RegExp(`program profile digest changed: expected ${selected.summary.profileSha256}, observed ${revised.summary.profileSha256}`, "u")
+  );
+  assert.equal(fs.existsSync(path.join(home, "programs", id, "compiled")), false);
+});
+
 test("compilation is deterministic, lossless across every policy matrix, and keeps provider prediction separate", (t) => {
   const { home, paths } = fixture(t);
   const id = "matrix-canary";

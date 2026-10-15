@@ -50,27 +50,27 @@
 
     <section class="metrics" aria-label="Live summary">
       <article class="metric-card accent-cyan">
-        <span class="metric-label">Running</span>
+        <span class="metric-label">Fleet running</span>
         <strong class="metric-value" id="metric-running">—</strong>
         <span class="metric-detail" id="metric-running-detail">Waiting for status</span>
       </article>
       <article class="metric-card accent-amber">
-        <span class="metric-label">Waiting</span>
+        <span class="metric-label">Fleet waiting</span>
         <strong class="metric-value" id="metric-waiting">—</strong>
         <span class="metric-detail">Approval or operator input</span>
       </article>
       <article class="metric-card accent-red">
-        <span class="metric-label">Needs attention</span>
+        <span class="metric-label">Fleet attention</span>
         <strong class="metric-value" id="metric-attention">—</strong>
         <span class="metric-detail">Blocked or failed</span>
       </article>
       <article class="metric-card accent-violet">
-        <span class="metric-label">Tokens observed</span>
+        <span class="metric-label">Host/base tokens</span>
         <strong class="metric-value" id="metric-tokens">Unavailable</strong>
         <span class="metric-detail" id="metric-tokens-detail">No provider data</span>
       </article>
       <article class="metric-card accent-blue">
-        <span class="metric-label">Context</span>
+        <span class="metric-label">Host/base context</span>
         <strong class="metric-value" id="metric-context">Unavailable</strong>
         <span class="metric-detail" id="metric-context-detail">No active window</span>
       </article>
@@ -81,11 +81,34 @@
       </article>
     </section>
 
+    <section class="panel case-cockpit" id="case-panel" tabindex="-1" aria-labelledby="case-panel-title">
+      <header class="panel-header">
+        <div>
+          <p class="eyebrow">Concurrent program state separation</p>
+          <h1 id="case-panel-title">Case cockpit</h1>
+        </div>
+        <div class="case-panel-meta" aria-label="Case scan status">
+          <span id="case-scan">0 / 0 scanned · partial</span>
+          <span class="count-badge" id="case-count">0</span>
+        </div>
+      </header>
+      <div class="case-grid" id="case-grid">
+        <div class="empty-state">
+          <span class="empty-glyph" aria-hidden="true">▱</span>
+          <strong>Waiting for cases</strong>
+          <span>Each case will appear in its own structured activity terminal.</span>
+        </div>
+      </div>
+      <p class="execution-note">
+        Terminals show allowlisted lifecycle metadata. Completion percentages, ETAs, commands, targets, and raw output are not inferred.
+      </p>
+    </section>
+
     <section class="panel execution-overview" id="execution-panel" tabindex="-1" aria-labelledby="execution-title">
       <header class="panel-header compact">
         <div>
           <p class="eyebrow">Supervised security operations</p>
-          <h2 id="execution-title">Active execution</h2>
+          <h2 id="execution-title">Base / unassigned execution</h2>
         </div>
         <span class="source-badge" id="execution-lane">Unknown</span>
       </header>
@@ -125,7 +148,7 @@
       <header class="panel-header compact">
         <div>
           <p class="eyebrow">Zero-network artifact inspection</p>
-          <h2 id="offline-analysis-title">Offline analysis</h2>
+          <h2 id="offline-analysis-title">Base / unassigned offline analysis</h2>
         </div>
         <span class="source-badge" id="offline-analysis-lane">Unknown</span>
       </header>
@@ -235,8 +258,8 @@
       <section class="panel fleet-panel" id="fleet-panel" tabindex="-1" aria-labelledby="fleet-title">
         <header class="panel-header">
           <div>
-            <p class="eyebrow">Live fleet</p>
-            <h1 id="fleet-title">Agents &amp; tasks</h1>
+            <p class="eyebrow">Live base runtime</p>
+            <h2 id="fleet-title">Base / unassigned agents &amp; tasks</h2>
           </div>
           <div class="segmented" role="group" aria-label="Filter agents by state">
             <button type="button" class="segment selected" data-agent-filter="all" aria-pressed="true">All</button>
@@ -257,7 +280,7 @@
         <header class="panel-header">
           <div>
             <p class="eyebrow">Metadata only</p>
-            <h2 id="timeline-title">Activity timeline</h2>
+            <h2 id="timeline-title">Base / unassigned activity</h2>
           </div>
           <label class="search-field">
             <span class="visually-hidden">Filter activity</span>
@@ -284,7 +307,7 @@
           <header class="panel-header compact">
             <div>
               <p class="eyebrow">Usage &amp; limits</p>
-              <h2 id="telemetry-title">Resource posture</h2>
+              <h2 id="telemetry-title">Host / base resource posture</h2>
             </div>
             <span class="source-badge" id="usage-availability">Unavailable</span>
           </header>
@@ -326,7 +349,7 @@
           <header class="panel-header compact">
             <div>
               <p class="eyebrow">Cause → change</p>
-              <h2 id="learning-title">Learning log</h2>
+              <h2 id="learning-title">Shared + base / unassigned learning</h2>
             </div>
             <span class="count-badge" id="learning-count">—</span>
           </header>
@@ -357,6 +380,7 @@
           <button class="close-button" value="close" aria-label="Close keyboard shortcuts">×</button>
         </header>
         <dl class="shortcut-list">
+          <div><dt><kbd>0</kbd></dt><dd>Focus the case cockpit</dd></div>
           <div><dt><kbd>1</kbd></dt><dd>Focus agents and tasks</dd></div>
           <div><dt><kbd>2</kbd></dt><dd>Focus activity timeline</dd></div>
           <div><dt><kbd>3</kbd></dt><dd>Focus active execution</dd></div>
@@ -364,6 +388,7 @@
           <div><dt><kbd>5</kbd></dt><dd>Focus learning log</dd></div>
           <div><dt><kbd>6</kbd></dt><dd>Focus offline analysis</dd></div>
           <div><dt><kbd>7</kbd></dt><dd>Focus managed tool runtimes</dd></div>
+          <div><dt><kbd>[</kbd> <kbd>]</kbd></dt><dd>Previous or next case terminal</dd></div>
           <div><dt><kbd>/</kbd></dt><dd>Filter safe activity metadata</dd></div>
           <div><dt><kbd>R</kbd></dt><dd>Refresh all endpoints</dd></div>
           <div><dt><kbd>P</kbd></dt><dd>Pause or resume live updates</dd></div>

@@ -27,6 +27,7 @@ const MAX_CLAIM_BYTES = 64 * 1024;
 const MAX_PURGE_BYTES = 128 * 1024;
 const MAX_RETAINED_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024;
 const MAX_RETAINED_ARTIFACTS = 64;
+const MAX_RECENT_OFFLINE_ANALYSES = 25;
 const MANIFEST_TTL_MS = 15 * 60_000;
 const TERMINATION_GRACE_MS = 1_000;
 const RETENTION_LOCK_TIMEOUT_MS = 5_000;
@@ -1085,8 +1086,8 @@ function assertInputKeys(value, allowed, label) {
   if (unexpected.length) throw new Error(`${label} contains unsupported fields: ${unexpected.join(", ")}`);
 }
 
-function publicPaths(options, label) {
-  assertInputKeys(options, new Set(["paths"]), `${label} options`);
+function publicPaths(options, label, extraOptionKeys = []) {
+  assertInputKeys(options, new Set(["paths", ...extraOptionKeys]), `${label} options`);
   const paths = analysisPaths(options.paths || runtimePaths());
   const trustedRepo = fs.realpathSync.native(runtimePaths().repo);
   let selectedRepo;
@@ -1149,11 +1150,24 @@ export function offlineAnalysisCapability(options = {}) {
 
 export function createOfflineAnalysisManifest(projectId, input, options = {}) {
   assertInputKeys(input, new Set(["path", "maxMinutes"]), "offline analysis manifest input");
-  const paths = publicPaths(options, "offline analysis manifest");
+  const paths = publicPaths(options, "offline analysis manifest", ["expectedProjectContractSha256"]);
+  const expectedProjectContractSha256 = options.expectedProjectContractSha256;
+  if (
+    expectedProjectContractSha256 !== undefined &&
+    !/^[a-f0-9]{64}$/u.test(expectedProjectContractSha256)
+  ) throw new Error("expected managed-project contract digest must be a lowercase SHA-256 digest");
   ensureRuntime(paths);
   const capability = offlineAnalysisCapability({ paths });
   if (!capability.laneAvailable) throw new Error(`offline analysis is unavailable: ${capability.reason}`);
   const project = projectContractBinding(projectId, { paths });
+  if (
+    expectedProjectContractSha256 !== undefined &&
+    project.contractSha256 !== expectedProjectContractSha256
+  ) {
+    throw new Error(
+      `managed-project contract digest changed: expected ${expectedProjectContractSha256}, observed ${project.contractSha256}`
+    );
+  }
   const manifestId = randomId("amf");
   const runId = randomId("arun");
   const sandbox = path.join(paths.offlineAnalysisSandboxes, runId);
@@ -1175,6 +1189,14 @@ export function createOfflineAnalysisManifest(projectId, input, options = {}) {
       const currentProject = projectContractBinding(projectId, { paths });
       if (canonicalDigest(project) !== canonicalDigest(currentProject)) {
         throw new Error("registered project changed while the artifact snapshot was created");
+      }
+      if (
+        expectedProjectContractSha256 !== undefined &&
+        currentProject.contractSha256 !== expectedProjectContractSha256
+      ) {
+        throw new Error(
+          `managed-project contract digest changed: expected ${expectedProjectContractSha256}, observed ${currentProject.contractSha256}`
+        );
       }
       const now = new Date();
       const expiresAt = new Date(now.getTime() + MANIFEST_TTL_MS);
@@ -1225,6 +1247,18 @@ export function createOfflineAnalysisManifest(projectId, input, options = {}) {
       assertValidDocument(manifest, "offline-analysis-manifest.schema.json", { paths });
       assertManifestInvariants(manifest);
       const manifestContent = `${JSON.stringify(manifest, null, 2)}\n`;
+      const publicationProject = projectContractBinding(projectId, { paths });
+      if (canonicalDigest(project) !== canonicalDigest(publicationProject)) {
+        throw new Error("registered project changed before offline manifest publication");
+      }
+      if (
+        expectedProjectContractSha256 !== undefined &&
+        publicationProject.contractSha256 !== expectedProjectContractSha256
+      ) {
+        throw new Error(
+          `managed-project contract digest changed: expected ${expectedProjectContractSha256}, observed ${publicationProject.contractSha256}`
+        );
+      }
       const publication = newCreationPublication(intent, manifest, manifestContent);
       atomicExclusiveRecord(paths, creationPublicationFile(paths, manifestId), `${JSON.stringify(publication)}\n`, {
         encoding: "utf8",
@@ -2347,9 +2381,11 @@ function retentionControlStatus(paths) {
 
 function offlineArtifactRetentionStatus(
   paths,
+  manifests,
   executionClaims,
   purgeClaims,
   runsByRun,
+  activeRunIds,
   invalidClaimIds,
   invalidClaimRecords,
   invalidRunIds,
@@ -2376,7 +2412,8 @@ function offlineArtifactRetentionStatus(
   let blockedManifests = 0;
   let invalidPurgeRecords = 0;
   const purgeRecordIds = new Set();
-  for (const name of fs.readdirSync(paths.offlineAnalysisPurges)) {
+  for (const entry of directoryEntries(paths.offlineAnalysisPurges)) {
+    const name = entry.name;
     if (/^amf_[a-f0-9]{32}\.json$/u.test(name)) purgeRecordIds.add(name.slice(0, -5));
     else {
       invalidEntries += 1;
@@ -2384,12 +2421,8 @@ function offlineArtifactRetentionStatus(
     }
   }
 
-  for (const name of fs.readdirSync(paths.offlineAnalysisManifests).filter((entry) => entry.endsWith(".json"))) {
-    const id = name.slice(0, -5);
-    let manifest;
-    try {
-      manifest = readManifest(paths, id);
-    } catch {
+  for (const { id, manifest } of manifests.records) {
+    if (!manifest) {
       invalidEntries += 1;
       if (/^amf_[a-f0-9]{32}$/u.test(id)) {
         blockedManifests += 1;
@@ -2486,7 +2519,7 @@ function offlineArtifactRetentionStatus(
       unknownManifests += 1;
     } else if (new Set(["succeeded", "failed", "cancelled", "blocked"]).has(run.status)) {
       terminalManifests += 1;
-    } else if (new Set(["queued", "running"]).has(run.status) && supervisorIsAlive(claim)) {
+    } else if (activeRunIds.has(runId)) {
       activeManifests += 1;
     } else {
       unknownManifests += 1;
@@ -2534,6 +2567,72 @@ function offlineArtifactRetentionStatus(
   };
 }
 
+function compactStatusManifest(manifest) {
+  return {
+    metadata: {
+      id: manifest.metadata.id,
+      runId: manifest.metadata.runId,
+      expiresAt: manifest.metadata.expiresAt
+    },
+    manifestSha256: manifest.manifestSha256,
+    project: { id: manifest.project.id },
+    operation: {
+      artifact: {
+        snapshotRef: manifest.operation.artifact.snapshotRef,
+        sha256: manifest.operation.artifact.sha256,
+        bytes: manifest.operation.artifact.bytes
+      }
+    }
+  };
+}
+
+function* directoryEntries(directory) {
+  const handle = fs.opendirSync(directory);
+  try {
+    let entry;
+    while ((entry = handle.readSync()) !== null) yield entry;
+  } finally {
+    handle.closeSync();
+  }
+}
+
+function collectStatusManifests(paths) {
+  const records = [];
+  const byId = new Map();
+  for (const entry of directoryEntries(paths.offlineAnalysisManifests)) {
+    if (!entry.name.endsWith(".json")) continue;
+    const id = entry.name.slice(0, -5);
+    try {
+      const manifest = compactStatusManifest(readManifest(paths, id));
+      records.push({ id, manifest });
+      byId.set(id, manifest);
+    } catch {
+      records.push({ id, manifest: null });
+    }
+  }
+  return { records, byId };
+}
+
+function compareRecentOfflineAnalyses(left, right) {
+  const created = String(right.createdAt).localeCompare(String(left.createdAt));
+  if (created !== 0) return created;
+  const run = left.runId.localeCompare(right.runId);
+  if (run !== 0) return run;
+  return left.manifestId.localeCompare(right.manifestId);
+}
+
+function retainRecentOfflineAnalysis(recent, metadata) {
+  let lower = 0;
+  let upper = recent.length;
+  while (lower < upper) {
+    const middle = Math.floor((lower + upper) / 2);
+    if (compareRecentOfflineAnalyses(metadata, recent[middle]) < 0) upper = middle;
+    else lower = middle + 1;
+  }
+  recent.splice(lower, 0, metadata);
+  if (recent.length > MAX_RECENT_OFFLINE_ANALYSES) recent.pop();
+}
+
 function offlineStatusGeneration(paths) {
   const identities = {};
   for (const [key, directory] of [
@@ -2578,16 +2677,31 @@ function offlineStatusGeneration(paths) {
 
 function collectOfflineAnalysisStatus(paths) {
   const recent = [];
-  const seenRuns = new Set();
+  const counts = {
+    queued: 0,
+    running: 0,
+    succeeded: 0,
+    failed: 0,
+    cancelled: 0,
+    blocked: 0,
+    unknown: 0
+  };
+  const recordProjection = (metadata) => {
+    counts[metadata.status] += 1;
+    retainRecentOfflineAnalysis(recent, metadata);
+  };
   const claimsByManifest = new Map();
   const purgeClaimsByManifest = new Map();
   const runsByRun = new Map();
+  const activeRunIds = new Set();
   const invalidClaimIds = new Set();
   const invalidRunIds = new Set();
   let invalidClaimRecords = 0;
   let invalidRunRecordCount = 0;
   let invalid = 0;
-  for (const name of fs.readdirSync(paths.offlineAnalysisClaims)) {
+  const manifests = collectStatusManifests(paths);
+  for (const entry of directoryEntries(paths.offlineAnalysisClaims)) {
+    const name = entry.name;
     const id = name.endsWith(".json") ? name.slice(0, -5) : name;
     try {
       const metadata = readClaimMetadata(paths, id);
@@ -2599,23 +2713,18 @@ function collectOfflineAnalysisStatus(paths) {
       if (/^amf_[a-f0-9]{32}$/u.test(id)) invalidClaimIds.add(id);
     }
   }
-  for (const name of fs.readdirSync(paths.offlineAnalysisRuns)) {
+  for (const entry of directoryEntries(paths.offlineAnalysisRuns)) {
+    const name = entry.name;
     const validName = /^arun_[a-f0-9]{32}\.json$/u.test(name);
     const id = name.endsWith(".json") ? name.slice(0, -5) : name;
     try {
       if (!validName) throw new Error("offline analysis run filename is invalid");
       const run = readRun(paths, id);
-      seenRuns.add(run.runId);
       runsByRun.set(run.runId, run);
       const claim = claimsByManifest.get(run.manifestId);
-      let manifestBindingInvalid = false;
-      try {
-        const manifest = readManifest(paths, run.manifestId);
-        manifestBindingInvalid = manifest.metadata.runId !== run.runId ||
-          manifest.manifestSha256 !== run.manifestSha256 || manifest.project.id !== run.projectId;
-      } catch {
-        manifestBindingInvalid = true;
-      }
+      const manifest = manifests.byId.get(run.manifestId);
+      const manifestBindingInvalid = !manifest || manifest.metadata.runId !== run.runId ||
+        manifest.manifestSha256 !== run.manifestSha256 || manifest.project.id !== run.projectId;
       const claimRecordInvalid = invalidClaimIds.has(run.manifestId);
       const claimMissing = !claim && !claimRecordInvalid;
       const claimBindingInvalid = Boolean(claim) && (
@@ -2628,10 +2737,11 @@ function collectOfflineAnalysisStatus(paths) {
         invalidRunIds.add(run.runId);
         invalidRunRecordCount += 1;
       }
-      const staleActive = new Set(["queued", "running"]).has(run.status) && (
-        projectionBindingInvalid || !supervisorIsAlive(claim)
-      );
-      recent.push({
+      const activeStatus = run.status === "queued" || run.status === "running";
+      const activeSupervisor = activeStatus && !projectionBindingInvalid && supervisorIsAlive(claim);
+      const staleActive = activeStatus && !activeSupervisor;
+      if (activeSupervisor) activeRunIds.add(run.runId);
+      recordProjection({
         runId: run.runId,
         manifestId: run.manifestId,
         projectId: run.projectId,
@@ -2653,7 +2763,7 @@ function collectOfflineAnalysisStatus(paths) {
     }
   }
   for (const metadata of claimsByManifest.values()) {
-    if (!seenRuns.has(metadata.runId)) {
+    if (!runsByRun.has(metadata.runId)) {
       const {
         supervisorPid: _supervisorPid,
         supervisorIdentity: _supervisorIdentity,
@@ -2661,20 +2771,19 @@ function collectOfflineAnalysisStatus(paths) {
         claimKind: _claimKind,
         ...projection
       } = metadata;
-      recent.push(projection);
+      recordProjection(projection);
     }
   }
-  recent.sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)));
-  const counts = Object.fromEntries(["queued", "running", "succeeded", "failed", "cancelled", "blocked", "unknown"]
-    .map((status) => [status, recent.filter((run) => run.status === status).length]));
   counts.unknown += invalid;
   const controls = retentionControlStatus(paths);
   return {
     retention: offlineArtifactRetentionStatus(
       paths,
+      manifests,
       claimsByManifest,
       purgeClaimsByManifest,
       runsByRun,
+      activeRunIds,
       invalidClaimIds,
       invalidClaimRecords,
       invalidRunIds,
@@ -2682,7 +2791,7 @@ function collectOfflineAnalysisStatus(paths) {
       controls
     ),
     counts,
-    recent: recent.slice(0, 25)
+    recent
   };
 }
 

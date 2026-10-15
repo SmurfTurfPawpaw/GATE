@@ -4,10 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { runtimePaths } from "../src/lib/paths.mjs";
 import { buildStatus } from "../src/lib/status.mjs";
 import { projectUsage } from "../src/observer/server.mjs";
 import { validateDocument } from "../src/lib/schema.mjs";
 import { extractTokenRecord, normalizeUsage, scanCodexUsage } from "../src/lib/tokens.mjs";
+
+const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 test("normalizes Codex cumulative token events", () => {
   const record = {
@@ -360,7 +363,6 @@ test("session scans return canonical validated usage records", async (t) => {
   assert.equal(result.records[0].at, "2026-10-13T12:34:56.000Z");
   assert.equal(result.sessions[0].context_window, 200000);
   assert.equal(result.source, "codex-session-jsonl:host-session-roots");
-  const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   assert.equal(validateDocument(result.records[0], "token-usage.schema.json", { paths: { repo } }).ok, true);
   const projected = projectUsage(result);
   assert.equal(projected.totalTokens, 15);
@@ -462,26 +464,11 @@ test("session discovery reports directory, depth, file, and time cutoffs", async
 test("build status prefers deduplicated canonical usage over its session-scan fallback", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-token-status-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const home = path.join(root, "home");
   const sessionRoot = path.join(root, "sessions");
-  fs.mkdirSync(path.join(home, "memory", "private"), { recursive: true });
+  fs.mkdirSync(home, { recursive: true });
   fs.mkdirSync(sessionRoot, { recursive: true });
-  const paths = {
-    repo,
-    home,
-    events: path.join(home, "events.jsonl"),
-    tokens: path.join(home, "tokens.jsonl"),
-    engagements: path.join(home, "engagements"),
-    authorizations: path.join(home, "authorizations"),
-    plans: path.join(home, "plans"),
-    evidence: path.join(home, "evidence"),
-    upstreams: path.join(home, "upstreams"),
-    upstreamTools: path.join(home, "upstream-tools"),
-    publicLearningRecords: path.join(root, "public-learnings.jsonl"),
-    publicLearnings: path.join(root, "LEARNINGS.md"),
-    privateLearnings: path.join(home, "memory", "private", "learnings.jsonl")
-  };
+  const paths = runtimePaths({ home, repo });
   const canonical = {
     apiVersion: "gate.usage/v1",
     id: "use_statuscanonical",
@@ -522,26 +509,11 @@ test("build status prefers deduplicated canonical usage over its session-scan fa
 test("build status falls back to scoped session telemetry when the token log has no valid record", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-token-fallback-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const home = path.join(root, "home");
   const sessionRoot = path.join(root, "sessions");
-  fs.mkdirSync(path.join(home, "memory", "private"), { recursive: true });
+  fs.mkdirSync(home, { recursive: true });
   fs.mkdirSync(sessionRoot, { recursive: true });
-  const paths = {
-    repo,
-    home,
-    events: path.join(home, "events.jsonl"),
-    tokens: path.join(home, "tokens.jsonl"),
-    engagements: path.join(home, "engagements"),
-    authorizations: path.join(home, "authorizations"),
-    plans: path.join(home, "plans"),
-    evidence: path.join(home, "evidence"),
-    upstreams: path.join(home, "upstreams"),
-    upstreamTools: path.join(home, "upstream-tools"),
-    publicLearningRecords: path.join(root, "public-learnings.jsonl"),
-    publicLearnings: path.join(root, "LEARNINGS.md"),
-    privateLearnings: path.join(home, "memory", "private", "learnings.jsonl")
-  };
+  const paths = runtimePaths({ home, repo });
   fs.writeFileSync(paths.tokens, `${JSON.stringify({ apiVersion: "wrong" })}\n`, "utf8");
   fs.writeFileSync(path.join(sessionRoot, "session.jsonl"), `${JSON.stringify({
     payload: {

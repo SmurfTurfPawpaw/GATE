@@ -6,7 +6,7 @@
 
 GATE is host-first. It is designed to run on a Windows 11 laptop through WSL2 with Codex CLI as the primary harness. Native tools remain appropriate when a GUI, the Windows certificate store, packet capture, USB, a GPU, or radio hardware needs direct host access. Containers can organize conflicting dependencies, but GATE does not treat a container, WSL2, or a Git worktree as a security boundary.
 
-> **Status: v0.1 foundation.** The checked-in policy, schemas, CLI, private project registry, source-backed bug bounty Program Profile intake, project-bound zero-network PE-resource analysis, verified Treehouse lease bridge, engagement receipts, one-shot supervised generic execution, two narrow managed active adapters, observer, token reader, upstream pins, 126-tool security catalog, seven-tool managed core runtime, and journaled end-to-end penetration-testing workflow work today. Complete Firstmate, GNHF, and No Mistakes orchestration, broader reviewed adapters and runtime locks, deployment, and lab lifecycle remain integration work. See [Current limits](#current-limits).
+> **Status: v0.1 foundation.** The checked-in policy, schemas, CLI, private project registry, source-backed bug bounty Program Profile intake, immutable per-program cases, aggregate case cockpit, project-bound zero-network PE-resource analysis, verified Treehouse lease bridge, engagement receipts, one-shot supervised generic execution, two narrow managed active adapters, observer, token reader, upstream pins, 126-tool security catalog, seven-tool managed core runtime, and journaled end-to-end penetration-testing workflow work today. Complete Firstmate, GNHF, and No Mistakes orchestration, broader reviewed adapters and runtime locks, deployment, and lab lifecycle remain integration work. See [Current limits](#current-limits).
 
 ## Start on Windows 11 with WSL2
 
@@ -22,6 +22,7 @@ Inside Ubuntu, install Node.js **22.20 or newer** (Node 24 is also tested) from 
 git clone https://github.com/SmurfTurfPawpaw/GATE.git ~/src/GATE
 cd ~/src/GATE
 export GH_TOKEN="$(gh auth token)"
+unset GATE_CASE
 ./scripts/bootstrap.sh --check-only
 ./scripts/bootstrap.sh
 npm run dashboard
@@ -43,7 +44,7 @@ Private state defaults to `~/.local/share/gate` inside WSL2. Set `GATE_HOME` bef
 export GATE_HOME="$HOME/.local/share/gate"
 ```
 
-Do not place `GATE_HOME` inside this repository or a cloud-synced public folder. GATE rejects lexical or physical overlap between the private root and repository in either direction, repairs owner-only POSIX permissions, and rejects linked control-state paths. In v0.1 it is one local trust domain: a process that can write the whole directory can also change project records, offline snapshots and manifests, engagement records, receipts, active-execution manifests, claims, runs, stops, evidence, managed tool caches and runtimes, and installation receipts. Give write access only to the operator and trusted GATE processes, and keep credential values in a separate OS secret store or narrowly permissioned file referenced by `env://`, `keychain://`, or `file://`.
+Do not place `GATE_HOME` inside this repository or a cloud-synced public folder. GATE rejects lexical or physical overlap between the private root and repository in either direction, repairs owner-only POSIX permissions, and rejects linked control-state paths. Each case gets a separate owner-only state directory, while all case directories remain inside one local trust domain: a process that can write the whole `GATE_HOME` can also change case scopes, project records, offline snapshots and manifests, engagement records, receipts, active-execution manifests, claims, runs, stops, evidence, managed tool caches and runtimes, and installation receipts. Give write access only to the operator and trusted GATE processes, and keep credential values in a separate OS secret store or narrowly permissioned file referenced by `env://`, `keychain://`, or `file://`.
 
 ## What owns each transition
 
@@ -51,6 +52,7 @@ GATE composes upstream projects at exact commits rather than merging their sourc
 
 | Component | Role |
 | --- | --- |
+| **GATE case registry** | Immutable Program Profile and optional managed-project bindings with separate per-case runtime state |
 | **Firstmate** | Intake, supervision, dispatch, and the operator decision inbox |
 | **Treehouse** | Exclusive development workspace allocation and durable leases |
 | **Codex CLI** | Primary implementation and investigation harness |
@@ -63,7 +65,7 @@ GATE composes upstream projects at exact commits rather than merging their sourc
 | **Lavish** | Local interactive planning and decision artifacts |
 | **AXI** | Agent-facing command and output conventions |
 | **Skills CLI** | Distribution of reviewed project-scoped skills |
-| **Observer** | Read-only activity, gate, learning, upstream, and token views |
+| **Observer** | Read-only aggregate case terminals, activity, gate, learning, upstream, and token views |
 
 The full ownership and recovery model is in [docs/architecture.md](docs/architecture.md) and [docs/operating-model.md](docs/operating-model.md). Exact upstream commits, versions, and artifact integrity values live in [locks/upstreams.lock.json](locks/upstreams.lock.json); committed npm dependency trees live under [locks/npm](locks/npm).
 
@@ -84,6 +86,35 @@ cp templates/project.json "$HOME/.config/gate/projects/my-project.json"
 ```
 
 Registering the same canonical contract again is idempotent. A different contract with the same ID, or a second project that resolves to the same repository identity, is rejected. Local `file://` repositories are stored at their physical realpath and fail later verification if a moved or replaced alias resolves elsewhere. A contract-write failure rolls back the exact new file when that can be proved safe. An audit append, flush, or close error is ambiguous because the event may already be durable, so GATE preserves the contract and its nonce-and-digest-bound `.registry.pending` marker for reconciliation. An abrupt interruption can leave the same fail-closed state. While a lock or pending marker exists, full reads fail or report invalid/degraded registry state. Never delete either control blindly; follow the evidence-based recovery procedure in [docs/operating-model.md](docs/operating-model.md#private-project-contracts). `list`, healthy `status`, and the observer expose bounded summaries without repository URLs or deployment destinations; the observer also replaces the private project ID with a process-local pseudonym. `show` deliberately returns the complete private contract, so treat its terminal output accordingly. v0.1 has no project update or delete command, and registration does not clone a repository or make the contract an authorization grant.
+
+### Isolate concurrent bug-program cases
+
+A case is an immutable private scope for one ready bug bounty Program Profile and, when local project provenance is needed, one optional registered project. Creation captures the exact current profile and project digests. If either bound record later changes, the case becomes stale instead of silently following the replacement.
+
+```bash
+# Prepare and verify the Program Profile first.
+./bin/gate.mjs bounty profile verify example-program --json
+
+./bin/gate.mjs case create example-web \
+  --program example-program \
+  --name "Example web program" \
+  --project my-project --json
+
+./bin/gate.mjs case list --json
+./bin/gate.mjs case show example-web --json
+
+# Prefix each command, or export GATE_CASE in that case's terminal.
+./bin/gate.mjs --case example-web workflow new example-web-map --json
+GATE_CASE=example-web ./bin/gate.mjs workflow status example-web-map --json
+```
+
+Omit `--project` when the case does not need a managed-project binding. Scoped commands place events, engagements, workflows, execution state, offline-analysis state, evidence, tokens, and private learning under `GATE_HOME/cases/CASE_ID/state`; Program Profiles, registered projects, managed tools, upstreams, and reviewed public learning remain shared. Every engagement and workflow command, Program Profile compilation, and `analysis manifest`, `run`, `purge`, or `status` requires a leading `--case ID` or `GATE_CASE`. Profile compilation must use the bound Program Profile, and offline analysis must use the bound project. `--case ID` and `GATE_CASE` must agree when both are present.
+
+Every case-owned command requires an explicit runtime selection: leading `--case ID`, matching `GATE_CASE`, or leading `--unassigned`. `--unassigned` selects the writable base-state compatibility namespace and can create new unscoped records; using it opts out of case attribution and state separation. GATE never selects it implicitly, so prefer a case for program work. Setup and shared-registry commands—including project, case, workspace, upstream, tool, publication, Program Profile intake, and `analysis capability`—reject all runtime selectors. Plain `gate status` is the bounded aggregate fleet view; `gate --unassigned status` reads only base state, while `gate --case ID status` reads one case. Events and private learning without a selector also write to base state.
+
+This is filesystem separation for organizing concurrent work. Case processes still run as the same operating-system user on the same host, with the same host-access implications. Network containment comes only from the selected execution adapter or environment. A case does not grant target authority or strengthen an adapter's isolation.
+
+Run `gate up` without a runtime selector. It presents the bounded fleet cockpit and refuses `--case`, `GATE_CASE`, and `--unassigned` because a scoped observer would hide the other visible cases. One snapshot projects at most 32 cases selected from at most 1,024 discovered entries. Scan metadata marks lower-bound counts and `complete: false`; retrieve a known omitted case directly with `gate case show ID --json` or `gate --case ID status --summary --json`.
 
 ### Lease and verify a Treehouse workspace
 
@@ -154,20 +185,20 @@ GATE has one narrow implemented offline adapter for a supplied Windows PE file. 
 ./bin/gate.mjs analysis capability --json
 ```
 
-Capability checks prerequisite presence and launches a minimal Bubblewrap namespace; it does not verify the full managed REA tree. Register a private project, then create and review a manifest for one exact absolute regular-file path:
+Capability checks prerequisite presence and launches a minimal Bubblewrap namespace; it does not verify the full managed REA tree. Register a private project and create a case bound to it, then create and review a manifest for one exact absolute regular-file path in that case:
 
 ```bash
-./bin/gate.mjs analysis manifest \
+./bin/gate.mjs --case example-web analysis manifest \
   --project my-project \
   --path "$HOME/private/client-installer.exe" \
   --minutes 15 --json
 
-./bin/gate.mjs analysis run \
+./bin/gate.mjs --case example-web analysis run \
   --project my-project \
   --manifest MANIFEST_ID \
   --confirm "ANALYZE MANIFEST_ID MANIFEST_SHA256 OFFLINE" --json
 
-./bin/gate.mjs analysis status --json
+./bin/gate.mjs --case example-web analysis status --json
 ```
 
 Use the exact returned confirmation after reviewing the complete manifest. The [offline-analysis operating procedure](docs/operating-model.md#offline-static-artifact-analysis) owns the integrity checks, bindings, isolation guarantees and unavailable controls, evidence limits, snapshot quotas, crash recovery, and digest-bound purge procedure. This adapter supplies PE-resource inspection, rather than a general reverse-engineering or dynamic-analysis environment.
@@ -184,12 +215,12 @@ For bug bounty work, the [`gate-program-profile` skill](skills/gate-program-prof
 
 Nmap remains a planning example: `./bin/gate.mjs tool plan nmap --json` reports its admission requirements. It is blocked from generic execution pending reviewed runtime admission, even when installed and permitted by an engagement.
 
-The boundary walkthrough below uses ExifTool and an operator-supplied copied image to exercise the engagement broker through exact preflight. It deliberately stops before manifest creation. ExifTool is mapped only to the non-contact `local-artifact-analysis` phase, while every generic execution manifest now requires an active target-contact phase with a reviewed admission and matching tool mapping. No valid workflow or phase-attempt ID can make this ExifTool example executable. `tool plan exiftool` may report PATH eligibility, but that does not create the missing workflow admission. Use the local-artifact procedure and retain ExifTool output as external evidence with its real provenance, or add a separately reviewed adapter and workflow mapping before exposing it through GATE.
+The boundary walkthrough below uses ExifTool and an operator-supplied copied image to exercise the engagement broker through exact preflight inside `example-web`. It deliberately stops before manifest creation. ExifTool is mapped only to the non-contact `local-artifact-analysis` phase, while every generic execution manifest now requires an active target-contact phase with a reviewed admission and matching tool mapping. No valid workflow or phase-attempt ID can make this ExifTool example executable. `tool plan exiftool` may report PATH eligibility, but that does not create the missing workflow admission. Use the local-artifact procedure and retain ExifTool output as external evidence with its real provenance, or add a separately reviewed adapter and workflow mapping before exposing it through GATE.
 
 1. Create the envelope. Use exact targets and exclusions; catalog profiles do not grant authority. URL paths match only on segment boundaries. A query written into an approved URL selector must match exactly, while fragments are rejected because they are not sent to a server.
 
    ```bash
-   ./bin/gate.mjs engagement new acme-web \
+   ./bin/gate.mjs --case example-web engagement new acme-web \
      --title "Authorized Acme artifact inspection" \
      --targets "$GATE_HOME/artifacts/sample.jpg" \
      --actions observe \
@@ -203,21 +234,21 @@ The boundary walkthrough below uses ExifTool and an operator-supplied copied ima
 2. Attach the written authorization from a private source path. GATE copies it into `GATE_HOME` as a regular private file. Contract and client-written authorization engagements cannot be approved without it.
 
    ```bash
-   ./bin/gate.mjs engagement authorization acme-web \
+   ./bin/gate.mjs --case example-web engagement authorization acme-web \
      --file "$HOME/private/acme-web-written-authorization.pdf"
    ```
 
 3. Write the concrete engagement report from [templates/plan-review.md](templates/plan-review.md). It must name targets, actions, tools, expected effects, coverage, limits, data handling, stop conditions, risks, and completion tests. Attach it; GATE copies it to private state and returns `plan.sha256`.
 
    ```bash
-   ./bin/gate.mjs engagement plan acme-web \
+   ./bin/gate.mjs --case example-web engagement plan acme-web \
      --file "$HOME/private/acme-web-plan.md"
    ```
 
 4. Run a real No Mistakes review against an immutable commit. Record its run ID, full 40-character head SHA, and result. Recording a value is not a substitute for running the review.
 
    ```bash
-   ./bin/gate.mjs engagement review acme-web \
+   ./bin/gate.mjs --case example-web engagement review acme-web \
      --run NO_MISTAKES_RUN_ID \
      --head 0123456789abcdef0123456789abcdef01234567 \
      --result passed
@@ -226,7 +257,7 @@ The boundary walkthrough below uses ExifTool and an operator-supplied copied ima
 5. Show the operator the complete report and digest. The operator supplies an exact receipt for that digest. Agents must never invent or infer the confirmation string. The receipt binds the plan, engagement envelope, and SHA-256 of the written authorization; changing any of them invalidates active preflight.
 
    ```bash
-   ./bin/gate.mjs engagement approve acme-web \
+   ./bin/gate.mjs --case example-web engagement approve acme-web \
      --sha PLAN_SHA256 \
      --confirm "APPROVE acme-web"
    ```
@@ -234,7 +265,7 @@ The boundary walkthrough below uses ExifTool and an operator-supplied copied ima
 6. Check the target and declared action label immediately before the proposed active command. An allowed result includes an `executionBinding` for the exact engagement, plan, envelope, receipt, authorization expiry, target, action label, environment, permitted tool list, and allowed destinations. The generic lane requires receipt-approved `gate-home` because its raw evidence always lands under `GATE_HOME`. The recorded operator and No Mistakes provenance remains `local-unverified` rather than a cryptographic external attestation.
 
    ```bash
-   ./bin/gate.mjs engagement check acme-web \
+   ./bin/gate.mjs --case example-web engagement check acme-web \
      --target "$GATE_HOME/artifacts/sample.jpg" \
      --action observe
    ```
@@ -244,14 +275,14 @@ The boundary walkthrough below uses ExifTool and an operator-supplied copied ima
 8. Revoke the complete engagement when its authority should end.
 
    ```bash
-   ./bin/gate.mjs engagement revoke acme-web \
+   ./bin/gate.mjs --case example-web engagement revoke acme-web \
      --confirm "REVOKE acme-web" --json
    ```
 
 9. Close the engagement when work ends.
 
    ```bash
-   ./bin/gate.mjs engagement close acme-web
+   ./bin/gate.mjs --case example-web engagement close acme-web
    ```
 
    `close` is an administrative state change. It does not inspect the coverage map, validate findings, run completion tests, or certify that the assessment is complete.
@@ -291,12 +322,17 @@ OWASP ZAP and mitmproxy are the open-source web interception defaults. Burp Suit
 
 ## Observer and token visibility
 
-`gate up` serves a dependency-free, read-only cockpit on loopback. The browser shows activity, agent/task state, active execution, a privacy-filtered offline-analysis panel, managed runtime counts and constraints, learnings, telemetry freshness, and token use. Its bounded status API also carries engagement and upstream summaries; v0.1 does not yet render dedicated panels for those two summaries. Runtime `unresolved` is full-catalog readiness rather than a failed-install count. The normal receipt-only view still withholds every managed executable because it performs no current-byte or live-smoke verification; full planning can report the two reviewed DNSx and HTTPx operations adapter-ready after exact verification. Keyboard shortcuts are:
+`gate up` serves a dependency-free, read-only aggregate cockpit on loopback. Up to 32 valid or attention-worthy cases from the bounded scan appear as separate browser terminals with their Program Profile and optional project binding, isolation posture, lifecycle state, active workflow phases, bounded run metadata, activity, and case-attributed token status. The welcome line uses `operator.displayName` from the merged GATE configuration; the tracked default is `Giovanni`.
 
-Agents should use `gate status --summary --json` and `gate tool list --summary --json`; use `gate tool show ID --json` for one bounded item. See [observation and token accounting](docs/architecture.md#observation-and-token-accounting) for output bounds, pagination, source digests, and telemetry limitations.
+These are structured lifecycle views, not PTYs. They never expose raw stdout or stderr, argv, commands, target selectors, evidence contents, or private paths. An active case uses a spinner and indeterminate bar while fresh lifecycle events show work in progress. GATE does not invent a completion percentage: determinate progress requires a source that supplies an actual completed and total count. Motion is disabled when the browser requests reduced motion.
+
+The case terminals are the per-program view. The activity, agent/task, active-execution, and offline-analysis panels below them describe only the writable base/unassigned runtime; their headings say so to prevent cross-case attribution. Managed runtime counts, learnings, telemetry freshness, and aggregate host token use are shared views. The bounded status API also carries base engagement and upstream summaries; v0.1 does not yet render dedicated panels for those two summaries. Runtime `unresolved` is full-catalog readiness rather than a failed-install count. The normal receipt-only view still withholds every managed executable because it performs no current-byte or live-smoke verification; full planning can report the two reviewed DNSx and HTTPx operations adapter-ready after exact verification. Keyboard shortcuts are:
+
+Agents should use `gate status --summary --json` and `gate tool list --summary --json`; use `gate tool show ID --json` for one bounded item. The status summary identifies its aggregate, unassigned, or selected-case lane and retains bounded per-case lane counts, case-scan omissions, and case-detail retrieval pointers. See [observation and token accounting](docs/architecture.md#observation-and-token-accounting) for output bounds, pagination, source digests, and telemetry limitations.
 
 | Key | Action |
 | --- | --- |
+| `0` | Focus the case cockpit |
 | `1` | Focus agents and tasks |
 | `2` | Focus activity |
 | `3` | Focus active execution |
@@ -304,18 +340,19 @@ Agents should use `gate status --summary --json` and `gate tool list --summary -
 | `5` | Focus learning |
 | `6` | Focus offline analysis |
 | `7` | Focus managed tool runtimes |
+| `[` / `]` | Focus the previous or next case terminal |
 | `/` | Focus the safe metadata filter |
 | `R` | Refresh now |
 | `P` | Pause or resume polling |
 | `?` | Open shortcut help |
 
-GATE streams local Codex session JSONL files under `CODEX_HOME/sessions` or `~/.codex/sessions` and parses only token-count/usage records. Provider counters are labeled `exact`; a missing value is `unavailable`, never zero. The scanner necessarily reads session-file bytes, but it never returns prompt bodies. The observer's browser API omits prompts, responses, commands, tool output, target selectors, absolute paths, and evidence contents.
+GATE streams local Codex session JSONL files under `CODEX_HOME/sessions` or `~/.codex/sessions` and parses only token-count/usage records. Provider counters are labeled `exact`; a missing value is `unavailable`, never zero. Host session files do not carry a trustworthy case binding, so their totals may appear only in the aggregate view. A case terminal reports token attribution as unavailable until a reviewed producer writes canonical token records inside that case's state directory. The scanner necessarily reads session-file bytes, but it never returns prompt bodies. The observer's browser API omits prompts, responses, commands, tool output, target selectors, absolute paths, and evidence contents.
 
 ## Learn and adapt
 
 GATE uses two linked feedback layers. During an assessment, `workflow test plan` and `workflow test review` keep the hypothesis, method, expected and contrary signals, observation, metrics, useful mistake, and next strategy in the private hash-chained workflow journal. Only one test cycle may remain open. Each later plan cites the preceding review and states the adaptation, so a retry cannot silently repeat the same method. These records explain how the assessment changed; they do not launch a tool, reserve execution, alter an admission, or grant authority.
 
-Reusable changes enter the durable learning layer. `learn cycle` records a private structured candidate and returns its digest. When new guidance replaces an effective lesson, the candidate names that reviewed predecessor in `promotion.replaces`; the replacement choice is therefore part of the candidate digest. `learn promote` requires a No Mistakes attestation bound to that exact digest and a full Git head recorded as local provenance, then creates a validated active record without rewriting the candidate or its replacement lineage. Replacement targets must still be effective and have the same sensitivity, domain, and exact applicability when promotion occurs. A public promotion therefore requires the original candidate to be reviewer- and operator-sanitized. Automated checks catch known secret and identifier patterns but cannot recognize every arbitrary single-token proper name or client alias; passing them does not prove that a candidate has no target or client identifier. Keep uncertain material private. `learn consult` selects only effective guidance in a bounded public projection for an exact applicability set; replaced ancestors remain immutable history and render as superseded. A plan freezes that applicability set, its ordered learning IDs, the learning-ledger head, and the projection digest. Journal replay verifies that frozen projection against an exact retained public-ledger prefix and rejects changed IDs, order, conflicts, omissions, or digests. Historical replay cannot independently prove that the named prefix was the newest one when the entry was written because v0.1 has no external cross-ledger time anchor; live plan creation enforces current-head freshness while holding the shared ledger lock. A workflow test plan's applicability equals exactly one workflow reference with the current ID, version, and contract digest, exactly one active-phase reference, and the exact admitted tool reference when present; v0.1 accepts no extra references. GATE recomputes the default consultation during planning and rejects stale provenance, unresolved declared conflicts, or omitted applicable lessons, including when the selected ID list is empty. A later regression appends a reviewed replacement or reversion without erasing earlier guidance. GATE does not hot-reload a learning into a running attempt or use learning to expand target scope, execution authority, or policy boundaries.
+Reusable changes enter the durable learning layer. `learn cycle` records a private structured candidate and returns its digest. When new guidance replaces an effective lesson, the candidate names that reviewed predecessor in `promotion.replaces`; the replacement choice is therefore part of the candidate digest. `learn promote` is the deliberate reviewed bridge from a case-private candidate to shared public learning: it requires a No Mistakes attestation bound to that exact digest and a full Git head recorded as local provenance, then creates a validated active record without rewriting the candidate or its replacement lineage. Replacement targets must still be effective and have the same sensitivity, domain, and exact applicability when promotion occurs. A public promotion therefore requires the original candidate to be reviewer- and operator-sanitized. Automated checks catch known secret and identifier patterns but cannot recognize every arbitrary single-token proper name or client alias; passing them does not prove that a candidate has no target or client identifier. Keep uncertain material private. `learn consult` selects only effective guidance in a bounded public projection for an exact applicability set; replaced ancestors remain immutable history and render as superseded. A plan freezes that applicability set, its ordered learning IDs, the learning-ledger head, and the projection digest. Journal replay verifies that frozen projection against an exact retained public-ledger prefix and rejects changed IDs, order, conflicts, omissions, or digests. Historical replay cannot independently prove that the named prefix was the newest one when the entry was written because v0.1 has no external cross-ledger time anchor; live plan creation enforces current-head freshness while holding the shared ledger lock. A workflow test plan's applicability equals exactly one workflow reference with the current ID, version, and contract digest, exactly one active-phase reference, and the exact admitted tool reference when present; v0.1 accepts no extra references. GATE recomputes the default consultation during planning and rejects stale provenance, unresolved declared conflicts, or omitted applicable lessons, including when the selected ID list is empty. A later regression appends a reviewed replacement or reversion without erasing earlier guidance. GATE does not hot-reload a learning into a running attempt or use learning to expand target scope, execution authority, or policy boundaries.
 
 The legacy cause-and-change command remains available for a simple observation:
 
@@ -388,6 +425,8 @@ The v0.1 boundary is intentionally explicit:
 - Operator approval receipts are digest-checked local files, not signed identities or remotely attested approvals. Their provenance relies on the single-operator process and filesystem permissions around `GATE_HOME`. This limitation applies to engagement authority; managed-upstream byte integrity is independently anchored to reviewed repository locks.
 - GitHub exact-head PR and observed-check preflight is implemented read-only without depending on branch protection. Merge, deploy, and publish remain blocked until a trusted adapter can verify an external No Mistakes attestation for the exact head and enforce project policy. `status --watch`, `down`, and the documented `gate lab` lifecycle are not implemented yet.
 - The private project registry validates, deduplicates, stores, lists, shows, and verifies contracts. It does not update or delete them, select a project implicitly, clone repositories, bind workspace commands to a registered contract, or enforce registered delivery and deployment fields in publication adapters.
+- Cases bind one exact ready Program Profile and at most one exact managed project into separate private state directories. Their bindings are immutable and become stale when the source profile or project digest changes. This is state separation, not process, credential, filesystem, kernel, or host isolation: every case runs under the same user, and network containment remains adapter-dependent. `gate up` aggregates at most the bounded case scan, and case token attribution remains unavailable without canonical case-bound records.
+- Safety-critical execution and offline-analysis status and reconciliation scan retained control state so old live, orphaned, or ambiguous work is not hidden by the recent-item display caps. Those paths remain `O(history)`; a hard history-independent time and I/O bound requires a crash-safe active/recovery index that is not implemented in v0.1.
 - Bug bounty Program Profiles store a private questionnaire and compile deterministic review, scope, technique, coverage, model-context, compatibility, and engagement-proposal artifacts without target contact. The `gate-program-profile` skill is an interaction layer: it can reason from provider-approved current-conversation material, structural questionnaire metadata, and manually sanitized categorical outcomes, then prepare the non-sensitive structure of answer envelopes. It cannot safely ingest arbitrary source bodies or `GATE_HOME` records, attest for the operator, or turn a choice into execution authority. Exact private values require local capture, and raw status, verification, review, and model-context output remain local rather than model input. v0.1 has no built-in model-safe Program Profile projector; an operator or reviewed local controller must supply categorical outcomes manually. Profiles do not retrieve or rehash operator-held source bodies, establish the truth or legal effect of operator-supplied terms, create active engagement authority, obtain a No Mistakes review or operator receipt, admit a workflow phase, or guarantee provider acceptance. Provider predictions depend on a complete, truthful, current operator-supplied capability profile; unsupported or unverified entries must remain `unknown`.
 - The Treehouse bridge requires the exact integrity-verified 3.1.3 release, fixed system Git, local refs, and clone-bound one-shot task roots. It invokes only `get` for acquisition; status and verification read bound state directly, and GATE never invokes Treehouse `status`, `return`, or `destroy`. It has no credential/proxy/SSH/network broker, rejects unsafe local Git state including Git LFS filters and submodules, and accepts only the main worktree's checked-out branch as local proof of landing. Verification retains every lease; automatic return, reset, destruction, reuse, and mount-safe cleanup are unavailable. The lifetime limit is 511 retained task roots per physical clone, after which work continues from a new physical clone or waits for future safe upstream lifecycle support. Worktrees do not isolate same-user access to the shared common `.git`, processes, credentials, the kernel, or the host filesystem.
 - The 126-tool catalog remains mostly declarative. Seven `core` entries have exact managed release locks and private prefetch/install/verify/remove operations; the other 119 entries remain discovery and admission-planning metadata and require their documented native, GUI, hardware, OCI, language, or external lane.
@@ -402,7 +441,7 @@ The v0.1 boundary is intentionally explicit:
 - Structured learning promotion binds validation and change references, the exact candidate digest, and a No Mistakes attestation to a full Git head. It does not invoke No Mistakes or cryptographically verify the external attestation's authenticity in v0.1. Consultation reads only bounded public, sanitized active records; private candidates remain outside the projection.
 - Repository configuration and policy files are schema-validated contracts. The project registry, Treehouse bridge, broker, publication adapter, observer, learning path, and upstream manager enforce only the fields they explicitly load; v0.1 has no general policy engine that applies every declared provider, limit, data, or lifecycle rule at runtime.
 - `gate up` is a foreground loopback server; service installation and boot-time startup are pending.
-- Token totals depend on fields present in local Codex session logs. The v0.1 scanner must read those file bytes even though it parses only usage records and never returns prompt bodies; a direct harness telemetry adapter is future work. Account quota and billing data are outside this reader.
+- Aggregate token totals depend on fields present in local Codex session logs. The v0.1 scanner must read those file bytes even though it parses only usage records and never returns prompt bodies; those host records cannot be attributed to a case without a separate case-bound producer. A direct harness telemetry adapter is future work. Account quota and billing data are outside this reader.
 - WSL2 cannot provide every native capture, monitor-mode, packet-injection, USB-radio, GPU, or GUI path. `gate doctor` reports host facts; native Linux or Windows tooling may still be required.
 
 Commands that are unavailable must be reported as unavailable. GATE never treats an unverified action, empty scanner result, or missing telemetry as success.

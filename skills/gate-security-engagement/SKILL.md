@@ -15,6 +15,8 @@ Curiosity may create hypotheses and a deeper test plan. It does not create autho
 
 ## Prepare the report
 
+Before using the engagement commands below, explicitly select the runtime according to the [case selection contract](../../docs/operating-model.md#concurrent-bug-program-cases). Keep that same selection in monitoring and stop terminals.
+
 1. Verify the authorization basis and validity window.
 2. Define exact included and excluded target selectors.
 3. Select only required actions from `observe`, `scan`, `intercept`, `authenticate`, `fuzz`, `exploit-safe`, `exploit-stateful`, `persist`, `denial-of-service`, `destructive-test`, `data-access`, `data-removal`, and `exfiltration-simulation`.

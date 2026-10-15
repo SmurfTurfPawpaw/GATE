@@ -1,6 +1,6 @@
 # Getting started
 
-GATE is a private, single-operator control plane for agentic engineering and authorized security work. This guide installs the managed core tools, opens the local cockpit, and starts a map-first assessment.
+GATE is a private, single-operator control plane for agentic engineering and authorized security work. This guide installs the managed core tools, opens the aggregate local cockpit, and starts a map-first assessment in its own bug-program case.
 
 Run the control plane on Linux or on Windows 11 through WSL2. Keep Windows-native tools such as Wireshark, Burp Suite, debuggers, and hardware utilities on Windows. See [Laptop and cloud setup](docs/setup.md) for the complete host setup.
 
@@ -19,6 +19,7 @@ cd ~/src/GATE
 
 export GATE_HOME="$HOME/.local/share/gate"
 export GH_TOKEN="$(gh auth token)"
+unset GATE_CASE
 
 ./scripts/bootstrap.sh --check-only
 ./scripts/bootstrap.sh --install-upstreams --install-core-tools
@@ -50,10 +51,14 @@ Installation proves exact runtime identity. Target authority and workflow admiss
 ## 2. Open the cockpit
 
 ```bash
+# Keep GATE_CASE unset in this terminal: the observer builds the bounded fleet view.
+unset GATE_CASE
 npm run dashboard
 ```
 
-Open <http://127.0.0.1:4173> and keep the terminal running. The cockpit shows activity, workflow state, active execution, offline analysis, managed tools, learning, and available Codex token telemetry. Press `?` for keyboard shortcuts, `R` to refresh, and `P` to pause or resume polling. Stop it with `Ctrl+C`.
+Open <http://127.0.0.1:4173> and keep the terminal running. The startup terminal and each browser case terminal greet the operator using `operator.displayName` from the merged configuration. The tracked default is `Giovanni`.
+
+The cockpit shows at most 32 terminal-style case cards from a discovery window of 1,024 entries. Scan metadata reports lower-bound omissions and incomplete coverage. Retrieve a known omitted case with `gate case show ID --json` or `gate --case ID status --summary --json`; removing `--summary` does not bypass fleet or recent-history bounds. The activity, workflow, active-execution, and offline-analysis panels outside the cards describe only base/unassigned state. Case terminals render only structured lifecycle metadata. They are not interactive PTYs and never show raw stdout or stderr, argv, commands, targets, evidence, or private paths. Active fresh work uses an indeterminate animation because GATE has no defensible percentage unless a producer supplies actual completed and total counts. Press `0` to focus cases, `[` or `]` to move between them, `?` for all shortcuts, `R` to refresh, and `P` to pause or resume polling. Stop the observer with `Ctrl+C`.
 
 Use the bounded agent-readable views in terminals and Codex sessions:
 
@@ -62,13 +67,37 @@ Use the bounded agent-readable views in terminals and Codex sessions:
 ./bin/gate.mjs tool list --summary --limit 10 --cursor 0 --json
 ```
 
-Token data is labelled `exact`, `estimated`, or `unavailable`. Missing telemetry is never reported as zero.
+Token data is labelled `exact`, `estimated`, or `unavailable`. Missing telemetry is never reported as zero. Host-wide Codex session telemetry has no trustworthy case identity, so a case reports token attribution as unavailable until a reviewed producer writes canonical token records into that case.
 
-## 3. Start a map-first assessment
+## 3. Create a case and start a map-first assessment
 
-For passive research, source review, or offline work that will not contact a target:
+Create and complete one private Program Profile first. The interactive command resumes safely if the interview is not finished in one sitting:
 
 ```bash
+./bin/gate.mjs bounty profile create example-program
+# If you stop before the interview is complete:
+./bin/gate.mjs bounty profile resume example-program
+./bin/gate.mjs bounty profile verify example-program --json
+```
+
+Follow the [Program Profile intake](docs/bug-bounty-program-profile.md) for the preferred choice-first skill, terminal wizard, or headless answers file. The profile must be current and ready before case creation.
+
+Create an immutable case for that exact profile. Add `--project my-project` only when a registered managed project is already available and this case needs its provenance for offline analysis:
+
+```bash
+./bin/gate.mjs case create example-web \
+  --program example-program \
+  --name "Example web program" --json
+
+./bin/gate.mjs case list --json
+./bin/gate.mjs case show example-web --json
+```
+
+Open a separate terminal for each concurrent program and select its case once. An explicit leading `--case ID` is equivalent. If both are present, they must match. Every engagement and workflow command, Program Profile compilation, and `analysis manifest`, `run`, `purge`, or `status` requires an explicit runtime selector. Leading `--unassigned` selects the writable base-state compatibility namespace and can create new unscoped records; it opts out of case attribution and state separation. GATE never chooses it implicitly, so prefer a case for program work.
+
+```bash
+export GATE_CASE=example-web
+
 ASSESSMENT_ID="assessment-$(date -u +%Y%m%d-%H%M%S)"
 
 ./bin/gate.mjs workflow new "$ASSESSMENT_ID" --json
@@ -77,17 +106,27 @@ ASSESSMENT_ID="assessment-$(date -u +%Y%m%d-%H%M%S)"
 ./bin/gate.mjs workflow status "$ASSESSMENT_ID" --json
 ```
 
+The selected case places events, engagements, workflows, execution state, offline-analysis state, evidence, token records, and private learning under `GATE_HOME/cases/example-web/state`. Its immutable scope binds one Program Profile and an optional managed project by digest. If a bound source record changes, the case becomes stale; create a new case rather than rewriting its scope.
+
+Setup and shared-registry commands reject `--case`, `GATE_CASE`, and `--unassigned`. This includes `bootstrap`, `doctor`, `validate`, `up`, project, case, workspace, upstream, tool, publication, Program Profile intake, and `analysis capability`. Run those from a separate terminal with `GATE_CASE` unset, as the cockpit example does. Plain `gate status` aggregates the bounded case fleet, `gate --unassigned status` reads only base state, and `gate --case ID status` reads one case. Events and private learning without a selector also use base state.
+
+This directory boundary prevents accidental state mixing between programs. Processes still share the same user, host, credentials available to that user, kernel, and network. Network containment depends on the admitted adapter or execution environment. Case selection grants no target authority.
+
 The workflow records authorization and rules of engagement first, then builds the target and trust map before selecting technical workstreams. These commands do not contact a target.
 
 Follow the [end-to-end penetration-testing workflow](docs/pentest-workflow.md) to attach evidence, disposition each workstream, reserve closeout capacity, record target-side changes, clean up in LIFO order, retest, and close the assessment.
 
-For a bug bounty program, use the [Program Profile intake](docs/bug-bounty-program-profile.md) first: the `gate-program-profile` skill provides the preferred choice-first interview, with terminal wizard and headless fallbacks. It records the program sources, exact asset and technique rules, limits, evidence handling, and reporting expectations in private state, then compiles no-contact model context and a compatibility preflight. A compiled profile supports planning; it does not replace the exact engagement, reviewed plan, operator receipt, workflow admission, or execution confirmation required for active target contact.
+A compiled Program Profile supports planning, and the case preserves its exact identity. Neither replaces the exact engagement, reviewed plan, operator receipt, workflow admission, or execution confirmation required for active target contact.
 
 ## 4. Analyze a saved Windows artifact offline
 
 The implemented offline lane inspects PE resources without executing the supplied file or giving the adapter network access.
 
 ```bash
+# The first example case has no project binding. Leave it before registering
+# the shared project, then create a new project-bound case for this lane.
+unset GATE_CASE
+
 mkdir -p "$HOME/.config/gate/projects"
 cp templates/project.json "$HOME/.config/gate/projects/my-project.json"
 
@@ -95,6 +134,11 @@ cp templates/project.json "$HOME/.config/gate/projects/my-project.json"
 ./bin/gate.mjs project register \
   --file "$HOME/.config/gate/projects/my-project.json" --json
 ./bin/gate.mjs project verify my-project --json
+
+./bin/gate.mjs case create example-artifact \
+  --program example-program \
+  --project my-project \
+  --name "Example artifact analysis" --json
 
 ./bin/gate.mjs analysis capability --json
 ```
@@ -108,6 +152,8 @@ If capability reports that REA is absent, install its integrity-pinned upstream 
 Then create the one-shot offline manifest:
 
 ```bash
+export GATE_CASE=example-artifact
+
 ./bin/gate.mjs analysis manifest \
   --project my-project \
   --path "$HOME/private/client-installer.exe" \
@@ -133,6 +179,7 @@ Dynamic Windows execution still needs a resettable Windows Sandbox or VM.
 Active work starts with an exact engagement, written authorization where applicable, a bounded plan, a real No Mistakes review, and the operator receipt for that plan digest. Bind the engagement when creating the workflow:
 
 ```bash
+export GATE_CASE=example-web
 ./bin/gate.mjs workflow new ACTIVE_WORKFLOW_ID \
   --engagement ENGAGEMENT_ID --json
 ```
@@ -421,7 +468,7 @@ chmod 600 "$GATE_HOME/input/learning-cycle.json"
   --file "$GATE_HOME/input/learning-cycle.json" --json
 ```
 
-The command returns both the candidate ID and `candidateSha256`. Routine passes and expected negative results remain workflow evidence. Leave `replaces` empty for compatible guidance. When this candidate corrects or reverts an effective validated lesson, put that learning ID in `replaces` before review. GATE accepts only currently effective validated records with the same domain and exact applicability, prevents replacement forks, and includes the ordered replacement set in the candidate digest. A candidate intended for public promotion must already contain only reviewer- and operator-sanitized narratives, applicability, evidence references, and canonical configuration references to existing regular non-symlink files inside the repository; promotion cannot rewrite that content. Automatic checks catch known secret and identifier patterns, but they cannot recognize every arbitrary single-token proper name or client alias. Passing them does not prove that a candidate has no target or client identifier, so keep uncertain material private. After independent validation and the durable behavior, policy, configuration, test, or documentation change, have No Mistakes review the exact candidate digest and implementation Git head. Then promote the candidate with the returned digest and genuine review evidence:
+The command returns both the candidate ID and `candidateSha256`. Routine passes and expected negative results remain workflow evidence. Leave `replaces` empty for compatible guidance. When this candidate corrects or reverts an effective validated lesson, put that learning ID in `replaces` before review. GATE accepts only currently effective validated records with the same domain and exact applicability, prevents replacement forks, and includes the ordered replacement set in the candidate digest. A candidate intended for public promotion must already contain only reviewer- and operator-sanitized narratives, applicability, evidence references, and canonical configuration references to existing regular non-symlink files inside the repository; promotion cannot rewrite that content. Automatic checks catch known secret and identifier patterns, but they cannot recognize every arbitrary single-token proper name or client alias. Passing them does not prove that a candidate has no target or client identifier, so keep uncertain material private. After independent validation and the durable behavior, policy, configuration, test, or documentation change, have No Mistakes review the exact candidate digest and implementation Git head. Then use `learn promote` as the deliberate reviewed bridge from this case-private candidate into the shared public ledger:
 
 ```bash
 cat >"$GATE_HOME/input/learning-promotion.json" <<'JSON'
@@ -451,11 +498,13 @@ The legacy `learn --cause ... --change ...` command remains available for a simp
 
 ## Current release boundaries
 
+- Cases provide immutable Program Profile and optional project bindings with separate state directories. They share the same user and host, and network containment remains adapter-dependent.
+- Safety-critical execution and offline-analysis status and reconciliation still inspect retained control history so an old live, orphaned, or ambiguous operation cannot disappear behind a display cap. Those paths remain `O(history)`; a crash-safe active/recovery index is required for a hard history-independent time and I/O bound.
 - The catalog describes 126 tools; seven core command-line runtimes have managed installation and verification.
 - DNSx and HTTPx have narrow reviewed active adapters. Broader operations and the other tools need matching adapters or the separately reviewed generic lane where eligible.
 - Windows dynamic analysis, resettable lab lifecycle, and native GUI-tool control remain separate host workflows.
 - Publication commands perform read-only exact-head preflight. Merge, deploy, and publish mutation require a trusted adapter.
 - Workflow test feedback is journal-bound and does not launch or authorize execution. Learning promotion binds an attestation to the exact candidate digest and Git head but does not invoke No Mistakes or cryptographically verify external authenticity; execution adapters remain separate.
-- Dashboard token totals depend on local Codex usage records and do not include account quota or billing data.
+- Aggregate dashboard token totals depend on local Codex usage records and do not include account quota or billing data. Per-case attribution is unavailable without case-bound records.
 
 See [Current limits](README.md#current-limits) for the complete boundary list.

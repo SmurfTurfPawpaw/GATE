@@ -8,7 +8,8 @@
   },
   "operator": {
     "mode": "single",
-    "id": "local-operator"
+    "id": "local-operator",
+    "displayName": "Giovanni"
   },
   "paths": {
     "homeEnvironmentVariable": "GATE_HOME",

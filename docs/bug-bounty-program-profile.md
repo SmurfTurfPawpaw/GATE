@@ -61,6 +61,7 @@ Use an answers file with `--answers` for a headless or repeatable workflow, or w
 Start or resume the interactive wizard:
 
 ```bash
+unset GATE_CASE
 ./bin/gate.mjs bounty profile create acme-program
 ./bin/gate.mjs bounty profile resume acme-program
 ```
@@ -116,19 +117,26 @@ The review step surfaces missing provenance, conflicting selectors, expired term
 
 Compilation is a local, no-contact operation. It binds the canonical profile and the source digests recorded in that profile, preserves exclusions and per-asset differences, and creates private operator-review, ambiguity, scope, technique, coverage, model-context, and compatibility records under `GATE_HOME`. It does not reopen or rehash the operator-held source bodies. Different rules for different assets remain separate instead of being flattened into one broad authorization.
 
-Verify, then compile. Optional engagement and workflow IDs label proposed downstream material without activating either one. A provider profile is optional for creating the private review bundle, but a current, model-bound context-window declaration is required for the compile gate to pass:
+Verify, then create or select an immutable case bound to that exact ready profile and compile inside it. Optional engagement and workflow IDs label proposed downstream material without activating either one. A provider profile is optional for creating the private review bundle, but a current, model-bound context-window declaration is required for the compile gate to pass:
 
 ```bash
+unset GATE_CASE
 ./bin/gate.mjs bounty profile verify acme-program --json
 
 ./bin/gate.mjs bounty profile show acme-program --format model-context
 
-./bin/gate.mjs bounty profile compile acme-program \
+./bin/gate.mjs case create acme-2026 \
+  --program acme-program \
+  --name "Acme 2026 program" --json
+
+./bin/gate.mjs --case acme-2026 bounty profile compile acme-program \
   --engagement acme-web-2026 \
   --workflow acme-web-2026 \
   --provider-profile "$HOME/private/provider-profile.json" \
   --json
 ```
+
+Program Profile creation, resume, status, show, and verification use the shared registry and reject `--case`, `GATE_CASE`, and `--unassigned`; run them with `GATE_CASE` unset. Compilation is case-owned and requires an explicit runtime selection. Use leading `--case ID` or `GATE_CASE` so the immutable case binds the profile being compiled. Leading `--unassigned` selects the writable base-state compatibility namespace, can create a new unscoped compilation, and opts out of case attribution and separation.
 
 Run verification and compilation in the operator's local terminal. Raw verification output can include source references, asset IDs, and free-form ambiguity details. A model-assisted interview may receive only a manually sanitized categorical outcome, such as ready, blocked, or revise, plus choice-safe blocker categories.
 

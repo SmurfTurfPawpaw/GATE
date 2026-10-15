@@ -16,23 +16,13 @@ import {
   revokeEngagement,
   targetMatches
 } from "../src/lib/engagements.mjs";
+import { runtimePaths } from "../src/lib/paths.mjs";
+
+const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-engagement-"));
-  const paths = {
-    repo: path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."),
-    home: path.join(root, "home"),
-    engagements: path.join(root, "home", "engagements"),
-    authorizations: path.join(root, "home", "authorizations"),
-    plans: path.join(root, "home", "plans"),
-    evidence: path.join(root, "home", "evidence"),
-    upstreams: path.join(root, "home", "upstreams"),
-    events: path.join(root, "home", "events.jsonl"),
-    tokens: path.join(root, "home", "tokens.jsonl"),
-    publicLearningRecords: path.join(root, "memory", "learnings.jsonl"),
-    publicLearnings: path.join(root, "memory", "LEARNINGS.md"),
-    privateLearnings: path.join(root, "home", "memory", "private", "learnings.jsonl")
-  };
+  const paths = runtimePaths({ home: path.join(root, "home"), repo });
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return { root, paths };
 }
