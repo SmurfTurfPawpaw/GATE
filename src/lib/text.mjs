@@ -80,19 +80,16 @@ function credentialParameters(parsed) {
   return groups;
 }
 
-function decodedUrlVariants(value, name) {
+function decodedUrlVariants(value) {
   const variants = [value];
   let current = value;
   for (let round = 0; round < 2; round += 1) {
     if (!current.includes("%")) break;
-    if (/%(?![0-9A-Fa-f]{2})/u.test(current)) {
-      throw new Error(`${name} contains malformed URL percent encoding`);
-    }
     let decoded;
     try {
       decoded = decodeURIComponent(current);
     } catch {
-      throw new Error(`${name} contains malformed URL percent encoding`);
+      break;
     }
     if (decoded === current) break;
     variants.push(decoded);
@@ -102,7 +99,7 @@ function decodedUrlVariants(value, name) {
 }
 
 function urlComponentContainsOpaqueCredential(value, name, options = {}) {
-  return decodedUrlVariants(value, name).some((variant) => containsOpaqueCredential(variant, name, options));
+  return decodedUrlVariants(value).some((variant) => containsOpaqueCredential(variant, name, options));
 }
 
 function urlPathContainsOpaqueCredential(pathname, name) {
@@ -110,7 +107,7 @@ function urlPathContainsOpaqueCredential(pathname, name) {
   // can be part of one opaque credential and must not become a trusted path
   // boundary after percent decoding.
   return pathname.split("/").filter(Boolean).some((segment) =>
-    decodedUrlVariants(segment, name).some((variant) =>
+    decodedUrlVariants(segment).some((variant) =>
       containsOpaqueCredential(variant, name, { encodedPathComponent: true })
     )
   );
@@ -130,8 +127,8 @@ function assertUrlContainsNoCredential(value, name) {
     }
     for (const parameters of credentialParameters(parsed)) {
       for (const [key, parameter] of parameters) {
-        const keys = decodedUrlVariants(key, `${name}.parameter-name`);
-        const values = decodedUrlVariants(parameter, `${name}.${key}`);
+        const keys = decodedUrlVariants(key);
+        const values = decodedUrlVariants(parameter);
         if (keys.some((candidate) => likelyOpaqueSecret(candidate, `${name}.parameter-name`)) ||
             (parameter && (keys.some((candidate) => sensitiveQueryName.test(candidate)) ||
               values.some((candidate) => likelyOpaqueSecret(candidate, `${name}.${key}`))))) {

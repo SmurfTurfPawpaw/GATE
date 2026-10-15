@@ -117,6 +117,37 @@ test("credential scanning permits ordinary URLs, prose, and labeled digests", ()
   }
 });
 
+test("URL credential scanning permits encoded percent literals without skipping credentials", () => {
+  for (const component of ["100%25", "100%2525", "%25E0%25A4"]) {
+    for (const suffix of [
+      `/docs/${component}`,
+      `/search?q=${component}`,
+      `/search?${component}=public`,
+      `/docs#${component}`,
+      `/docs#q=${component}`,
+      `/docs#${component}=public`
+    ]) {
+      assert.doesNotThrow(() => assertNoLikelySecret(`https://example.invalid${suffix}`), suffix);
+      assert.throws(
+        () => assertNoLikelySecret(`https://example.invalid${suffix} https://example.invalid/?token=private`),
+        /credential/u
+      );
+    }
+  }
+  const token = "aB9_Zx7Qp2Lm8Nv4Rk6Ts1Wd3Hy5";
+  for (const suffix of [
+    `/docs/${token}%25`,
+    `/search?q=${token}%25`,
+    `/search?${token}%25=public`,
+    `/docs#${token}%25`,
+    `/docs#q=${token}%25`,
+    `/docs#${token}%25=public`,
+    "/search?%2574oken=private&percent=100%25"
+  ]) {
+    assert.throws(() => assertNoLikelySecret(`https://example.invalid${suffix}`), /credential/u, suffix);
+  }
+});
+
 test("text boundaries reject terminal controls and invisible direction formatting", () => {
   for (const value of [
     "copy\u001b]52;c;payload\u0007",
