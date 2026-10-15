@@ -304,8 +304,7 @@ function sameOrDescendant(parent, candidate) {
     (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
 }
 
-function assertPublicConfigurationRefsSafe(learning, paths) {
-  const realRepository = fs.realpathSync(path.resolve(paths.repo));
+function assertPublicConfigurationRefsSafe(learning) {
   for (const ref of learning.configurationRefs || []) {
     assertNoLikelySecret(ref, "public learning configurationRef");
     const reason = publicConfigurationReason(ref);
@@ -317,6 +316,13 @@ function assertPublicConfigurationRefsSafe(learning, paths) {
     if (!segments.length || segments.some((segment) => !segment || segment === "." || segment === ".." || segment === ".git")) {
       throw new Error("public learning configurationRef must use a canonical repository path");
     }
+  }
+}
+
+function assertPublicConfigurationFilesExist(learning, paths) {
+  const realRepository = fs.realpathSync(path.resolve(paths.repo));
+  for (const ref of learning.configurationRefs || []) {
+    const segments = ref.split("/");
     let candidate = realRepository;
     for (const segment of segments) {
       candidate = path.join(candidate, segment);
@@ -370,7 +376,7 @@ function assertPublicNarrativesSafe(learning) {
   }
 }
 
-function assertPublicLearningSafe(learning, paths) {
+function assertPublicLearningSafe(learning) {
   assertPublicNarrativesSafe(learning);
   if (!PUBLIC_LEARNING_ID_PATTERN.test(learning.id) ||
     learning.supersedes !== null && !PUBLIC_LEARNING_ID_PATTERN.test(learning.supersedes)) {
@@ -403,12 +409,12 @@ function assertPublicLearningSafe(learning, paths) {
       if (versionReason) throw new Error(`public learning applicability version contains ${versionReason}`);
     }
   }
-  assertPublicConfigurationRefsSafe(learning, paths);
+  assertPublicConfigurationRefsSafe(learning);
 }
 
-function publicLearningIsSafe(learning, paths) {
+function publicLearningIsSafe(learning) {
   try {
-    assertPublicLearningSafe(learning, paths);
+    assertPublicLearningSafe(learning);
     return true;
   } catch {
     return false;
@@ -977,7 +983,10 @@ export function addLearning(input, options = {}) {
   };
   // Validate the complete record before emitting its observed audit event.
   assertValidDocument(learning, "learning.schema.json", { paths });
-  if (sensitivity === "public") assertPublicLearningSafe(learning, paths);
+  if (sensitivity === "public") {
+    assertPublicLearningSafe(learning);
+    assertPublicConfigurationFilesExist(learning, paths);
+  }
   return persistValidatedLearning(learning, { ...options, paths }, evidenceEventId);
 }
 
@@ -1090,7 +1099,10 @@ export function promoteLearning(candidateId, input = {}, options = {}) {
     if (sensitivity === "public" && scope !== "repository") {
       throw new Error("public promoted learning must use repository scope");
     }
-    if (sensitivity === "public") assertPublicLearningSafe(candidate, paths);
+    if (sensitivity === "public") {
+      assertPublicLearningSafe(candidate);
+      assertPublicConfigurationFilesExist(candidate, paths);
+    }
 
     const replacementTargets = new Set(replaces);
     if (conflictsWith.some((id) => replacementTargets.has(id))) {
@@ -1157,7 +1169,10 @@ export function promoteLearning(candidateId, input = {}, options = {}) {
     };
     assertV2Lifecycle(learning);
     assertValidDocument(learning, "learning.schema.json", { paths });
-    if (sensitivity === "public") assertPublicLearningSafe(learning, paths);
+    if (sensitivity === "public") {
+      assertPublicLearningSafe(learning);
+      assertPublicConfigurationFilesExist(learning, paths);
+    }
     return persistValidatedLearning(
       learning,
       { ...options, paths, ledgersLocked: true },
@@ -1211,21 +1226,23 @@ function consultLearningsWithRecords(input = {}, options = {}, suppliedRecords =
     ? readPublicRecords(paths.publicLearningRecords, paths)
     : suppliedRecords;
   uniqueRecordIndex(records);
-  const matchingV2 = records.filter((record) =>
+  const validatedV2 = records.filter((record) =>
     record.apiVersion === "gate.learning/v2" &&
     record.sensitivity === "public" &&
     record.scope === "repository" &&
-    record.status === "active" &&
     record.promotion?.state === "validated" &&
     record.supersedes === record.promotion.candidateId &&
-    record.promotion.review?.candidateSha256 === record.promotion.candidateSha256 &&
+    record.promotion.review?.candidateSha256 === record.promotion.candidateSha256
+  );
+  const matchingV2 = validatedV2.filter((record) =>
+    record.status === "active" &&
     canonicalJson(record.applicability) === canonicalJson(applicability) &&
-    publicLearningIsSafe(record, paths)
+    publicLearningIsSafe(record)
   );
 
   // Replacement edges are immutable. Following all reviewed edges keeps the
   // full history while excluding every ancestor in a replacement chain.
-  const replacedIds = new Set(matchingV2.flatMap((record) => record.promotion.replaces || []));
+  const replacedIds = new Set(validatedV2.flatMap((record) => record.promotion.replaces || []));
   const effectiveV2 = matchingV2.filter((record) => !replacedIds.has(record.id));
   const matchingById = new Map(effectiveV2.map((record) => [record.id, record]));
   const conflictEdges = new Map(effectiveV2.map((record) => [record.id, new Set()]));

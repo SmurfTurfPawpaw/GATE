@@ -570,6 +570,38 @@ test("reviewed replacement chains keep history while consultation selects only n
   assert.match(historicalSection, new RegExp(second.change.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
 });
 
+test("removed configuration files preserve replacement selection and frozen consultation", (t) => {
+  const paths = fixture(t);
+  paths.repo = path.join(paths.home, "repository");
+  fs.mkdirSync(paths.repo, { recursive: true });
+  fs.cpSync(path.join(repo, "schemas"), path.join(paths.repo, "schemas"), { recursive: true });
+  const reference = path.join(paths.repo, "reviewed.json");
+  fs.writeFileSync(reference, "{}\n");
+  const first = promotePublic(paths, addCandidate(paths));
+  const candidate = addCandidate(paths, {
+    replaces: [first.id],
+    configurationRefs: ["reviewed.json"]
+  });
+  const second = promotePublic(paths, candidate);
+  const consultation = consultLearnings({ applicability }, { paths });
+  assert.deepEqual(consultation.selected.map((item) => item.id), [second.id]);
+  const snapshot = {
+    applicability,
+    learningIds: [second.id],
+    ledgerHeadSha256: consultation.ledgerHeadSha256,
+    projectionSha256: consultation.projectionSha256
+  };
+  fs.renameSync(reference, path.join(paths.repo, "renamed.json"));
+  assert.deepEqual(consultLearnings({ applicability }, { paths }), consultation);
+  assert.deepEqual(verifyLearningConsultationSnapshot(snapshot, { paths }), consultation);
+  const missingReference = addCandidate(paths, { configurationRefs: ["reviewed.json"] });
+  assert.throws(() => promotePublic(paths, missingReference), /existing repository file/u);
+  const records = fs.readFileSync(paths.publicLearningRecords, "utf8").trim().split("\n").map(JSON.parse);
+  records.find((record) => record.id === second.id).cycle.lesson = "Inspect https://example.invalid next.";
+  fs.writeFileSync(paths.publicLearningRecords, records.map((record) => JSON.stringify(record)).join("\n") + "\n");
+  assert.deepEqual(consultLearnings({ applicability }, { paths }).selected, []);
+});
+
 test("replacement intent is candidate-digest-bound and cannot be chosen during promotion", (t) => {
   const paths = fixture(t);
   const active = promotePublic(paths, addCandidate(paths));
