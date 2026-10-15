@@ -34,7 +34,13 @@ import {
   requestExecutionStop
 } from "./lib/executions.mjs";
 import { recordEvent } from "./lib/events.mjs";
-import { addLearning } from "./lib/learnings.mjs";
+import {
+  addLearning,
+  addLearningCycle,
+  consultLearnings,
+  learningCandidateSha256,
+  promoteLearning
+} from "./lib/learnings.mjs";
 import {
   createOfflineAnalysisManifest,
   executeOfflineAnalysisManifest,
@@ -72,9 +78,11 @@ import {
   holdWorkflowLedger,
   joinWorkflowCoverage,
   openWorkflowLedger,
+  planWorkflowTest,
   preflightWorkflowPhase,
   preflightWorkflowPivot,
   recordWorkflowLedgerCleanup,
+  reviewWorkflowTest,
   setWorkflowCoverage,
   startWorkflowPhase,
   stopWorkflow,
@@ -98,6 +106,10 @@ Operations
   event <kind> --summary TEXT       Append a sanitized activity event
   learn --cause TEXT --change TEXT [--private] [--scope session|project|repository]
                                     Record one cause → change learning candidate
+  learn cycle --file FILE           Record one private structured learning candidate
+  learn promote ID --file FILE      Promote with a candidate-bound review attestation
+  learn consult --file FILE [--limit N] [--max-bytes N]
+                                    Select a bounded sanitized active-learning projection
 
 Projects
   project register --file PATH      Register a private validated project contract
@@ -159,6 +171,9 @@ Pentest workflows
   workflow phase preflight ID --phase PHASE --from PHASE --admission FILE [--handoff-id ID] [--handoff FILE]
   workflow phase start ID --phase PHASE [--from PHASE] [--admission FILE]
   workflow phase finish ID --phase PHASE --disposition DISPOSITION
+  workflow test plan ID --file FILE Plan one immutable private test attempt
+  workflow test review ID --file FILE
+                                    Review an attempt without launching its successor
   workflow evidence add ID --phase PHASE --evidence ID --file PATH
   workflow coverage set ID --domain DOMAIN --disposition DISPOSITION
   workflow ledger preflight|open|cleanup|verify|hold ID [options]
@@ -207,6 +222,66 @@ function assertPositionals(positional, count, usage) {
   if (positional.length !== count) throw new Error(`expected ${usage}`);
 }
 
+const MAX_STRUCTURED_COMMAND_BYTES = 1024 * 1024;
+
+function sameInputFileIdentity(left, right) {
+  return left.dev === right.dev && left.ino === right.ino && left.size === right.size &&
+    left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
+}
+
+function readStructuredCommandFile(file, label, maximumBytes = MAX_STRUCTURED_COMMAND_BYTES) {
+  const resolved = path.resolve(String(file || ""));
+  let before;
+  try {
+    before = fs.lstatSync(resolved, { bigint: true });
+  } catch (error) {
+    throw new Error(`${label} is unavailable: ${error.message}`, { cause: error });
+  }
+  if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1n) {
+    throw new Error(`${label} must be a single-link regular non-symlink file`);
+  }
+  if (before.size > BigInt(maximumBytes)) {
+    throw new Error(`${label} exceeds the ${maximumBytes}-byte limit`);
+  }
+  if (process.platform !== "win32" && !fs.constants.O_NOFOLLOW) {
+    throw new Error(`${label} cannot be opened without following links on this platform`);
+  }
+  const descriptor = fs.openSync(
+    resolved,
+    fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0) |
+      (process.platform === "win32" ? 0 : fs.constants.O_NOFOLLOW)
+  );
+  try {
+    const opened = fs.fstatSync(descriptor, { bigint: true });
+    if (!opened.isFile() || opened.nlink !== 1n || !sameInputFileIdentity(before, opened)) {
+      throw new Error(`${label} changed while it was opened`);
+    }
+    const chunks = [];
+    let total = 0;
+    while (total <= maximumBytes) {
+      const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, maximumBytes + 1 - total));
+      const count = fs.readSync(descriptor, buffer, 0, buffer.length, null);
+      if (count === 0) break;
+      chunks.push(buffer.subarray(0, count));
+      total += count;
+    }
+    if (total > maximumBytes) throw new Error(`${label} exceeds the ${maximumBytes}-byte limit`);
+    const after = fs.fstatSync(descriptor, { bigint: true });
+    if (!sameInputFileIdentity(opened, after) || after.size !== BigInt(total)) {
+      throw new Error(`${label} changed while it was read`);
+    }
+    const final = fs.lstatSync(resolved, { bigint: true });
+    if (!sameInputFileIdentity(after, final)) throw new Error(`${label} changed while it was verified`);
+    try {
+      return JSON.parse(Buffer.concat(chunks, total).toString("utf8"));
+    } catch (error) {
+      throw new Error(`${label} is malformed JSON`, { cause: error });
+    }
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
 function assertUnambiguousAnalysisArgs(argv) {
   const seen = new Set();
   for (const value of argv) {
@@ -235,6 +310,19 @@ function assertUnambiguousToolArgs(argv) {
     const name = value.slice(2, equals === -1 ? undefined : equals);
     if (!name) throw new Error("tool options must have a name");
     if (seen.has(name)) throw new Error(`tool option must not be repeated: --${name}`);
+    seen.add(name);
+  }
+}
+
+function assertUnambiguousLearningArgs(argv) {
+  const seen = new Set();
+  for (const value of argv) {
+    if (value === "--") throw new Error("learning commands do not accept passthrough arguments");
+    if (!value.startsWith("--")) continue;
+    const equals = value.indexOf("=");
+    const name = value.slice(2, equals === -1 ? undefined : equals);
+    if (!name) throw new Error("learning options must have a name");
+    if (seen.has(name)) throw new Error(`learning option must not be repeated: --${name}`);
     seen.add(name);
   }
 }
@@ -294,14 +382,41 @@ function questionApplies(question, profile) {
   return false;
 }
 
+function selectableQuestionChoices(question) {
+  if (question.type === "boolean") return ["yes", "no"];
+  if (["enum", "multi-enum"].includes(question.type)) return question.choices || [];
+  return [];
+}
+
+function resolveChoiceToken(raw, choices) {
+  const token = String(raw).trim();
+  if (/^[1-9]\d*$/u.test(token)) {
+    const selected = choices[Number(token) - 1];
+    if (selected === undefined) throw new Error(`choice number must be between 1 and ${choices.length}`);
+    return selected;
+  }
+  return token;
+}
+
+function questionChoicePrompt(question) {
+  const choices = selectableQuestionChoices(question);
+  if (!choices.length) return "";
+  const instruction = question.type === "multi-enum"
+    ? "Choose one or more by number or value; separate selections with commas."
+    : "Choose one by number or value.";
+  return `\n${choices.map((choice, index) => `  ${index + 1}. ${choice}`).join("\n")}\n${instruction}`;
+}
+
 function parseQuestionAnswer(question, raw) {
   const value = raw.trim();
   if (!value) return undefined;
   if (question.allowNull === true && value === "null") return null;
   if (question.type === "boolean") {
-    if (/^(?:y|yes|true|1)$/iu.test(value)) return true;
-    if (/^(?:n|no|false|0)$/iu.test(value)) return false;
-    throw new Error("enter yes or no");
+    if (value === "0") return false;
+    const selected = resolveChoiceToken(value, selectableQuestionChoices(question));
+    if (/^(?:y|yes|true)$/iu.test(selected)) return true;
+    if (/^(?:n|no|false)$/iu.test(selected)) return false;
+    throw new Error("choose 1 for yes or 2 for no, or enter yes or no");
   }
   if (question.type === "integer") {
     if (!/^-?\d+$/u.test(value) || !Number.isSafeInteger(Number(value))) throw new Error("enter a whole number");
@@ -314,20 +429,23 @@ function parseQuestionAnswer(question, raw) {
   }
   if (question.type === "enum") {
     const choices = (question.choices || []);
-    if (choices.length && !choices.includes(value)) throw new Error(`choose one of: ${choices.join(", ")}`);
-    return value;
+    const selected = resolveChoiceToken(value, choices);
+    if (choices.length && !choices.includes(selected)) throw new Error(`choose one of: ${choices.join(", ")}`);
+    return selected;
   }
   if (question.type === "multi-enum") {
     const values = value.startsWith("[")
       ? JSON.parse(value)
       : value.split(",").map((item) => item.trim()).filter(Boolean);
-    if (!Array.isArray(values) || values.some((item) => typeof item !== "string")) {
-      throw new Error("enter a comma-separated list or JSON string array");
+    if (!Array.isArray(values) || values.some((item) => !["string", "number"].includes(typeof item))) {
+      throw new Error("choose comma-separated numbers or values, or enter a JSON string array");
     }
     const choices = (question.choices || []);
-    const unsupported = choices.length ? values.filter((item) => !choices.includes(item)) : [];
+    const selected = values.map((item) => resolveChoiceToken(item, choices));
+    const unsupported = choices.length ? selected.filter((item) => !choices.includes(item)) : [];
     if (unsupported.length) throw new Error(`unsupported choice: ${unsupported.join(", ")}`);
-    return values;
+    const unique = new Set(selected);
+    return choices.length ? choices.filter((choice) => unique.has(choice)) : [...unique];
   }
   if (question.type === "secret-ref-list") {
     const values = value.startsWith("[")
@@ -423,7 +541,11 @@ function exampleDecision(disposition = "unknown") {
 function exampleStructuredList(question) {
   const stringLists = {
     "identity-deliverables": ["Technical vulnerability report"],
-    "identity-success-criteria": ["Every selected coverage domain has a sourced disposition."],
+    "identity-success-criteria": [
+      "Every selected coverage domain has a sourced disposition.",
+      "Every promising signal has a recorded hypothesis and evidence-backed conclusion.",
+      "Every applicable high-friction scenario is tested, not applicable, blocked, or explicitly untested."
+    ],
     "authority-source-refs": ["program-rules"],
     "limits-source-refs": ["program-rules"],
     "architecture-unknowns": [],
@@ -455,11 +577,15 @@ function exampleStructuredList(question) {
 
   const examples = {
     "actions-techniques": [{
-      id: "header-observation",
-      name: "Observe response headers",
-      action: "observe",
-      ...exampleDecision("allowed"),
-      parameters: { method: "GET" }
+      id: "webhook-open-connection-mutation",
+      name: "Mutate a synthetic webhook event while the reviewed connection remains open",
+      action: "exploit-stateful",
+      disposition: "conditional",
+      claimState: "observed",
+      sourceRefs: ["program-rules"],
+      rationale: "The program permits bounded webhook testing in its dedicated test tenant.",
+      conditions: ["Use only the named callback endpoint, synthetic events, and recorded cleanup procedure."],
+      parameters: { stateModel: "connect-mutate-observe-cleanup" }
     }],
     "execution-phase-policies": [{
       id: "active-web-validation",
@@ -547,12 +673,16 @@ function questionFormatGuidance(question) {
       example = examples[question.id] || "Recorded value";
       break;
     }
-    case "multiline":
+    case "multiline": {
+      const examples = {
+        "web-api-automation-rules": "Automate reviewed callback, webhook, role and tenant, state-transition, timing, and differential scenarios when manual orchestration would be costly or error-prone."
+      };
       accepted = "plain text; finish multiline input with . on its own line";
-      example = "Describe the exact source-backed rule.";
+      example = examples[question.id] || "Describe the exact source-backed rule.";
       break;
+    }
     case "boolean":
-      accepted = "yes or no (also accepts true/false or 1/0)";
+      accepted = "choice 1 or 2 (also accepts yes/no, true/false, or legacy 1/0)";
       example = "yes";
       break;
     case "integer": {
@@ -583,11 +713,11 @@ function questionFormatGuidance(question) {
       break;
     }
     case "enum":
-      accepted = `one exact value: ${(question.choices || []).join(", ")}`;
+      accepted = `one numbered choice or exact value: ${(question.choices || []).join(", ")}`;
       example = question.id === "data-classification" ? "confidential" : question.choices?.[0] || "value";
       break;
     case "multi-enum":
-      accepted = `a comma-separated list or JSON string array using: ${(question.choices || []).join(", ")}`;
+      accepted = `comma-separated choice numbers or exact values using: ${(question.choices || []).join(", ")}`;
       example = question.choices?.length ? [question.choices[0]] : [];
       break;
     case "secret-ref-list":
@@ -717,12 +847,14 @@ function questionnaireResult(status, outcome) {
 function newProgramProfileAnswers(id) {
   return {
     $schema: "https://gate.local/schemas/bug-bounty-program-profile-answers.schema.json",
-    apiVersion: "gate.dev/program-profile-answers/v1",
+    apiVersion: "gate.dev/program-profile-answers/v2",
     kind: "BugBountyProgramProfileAnswers",
     metadata: {
       programId: id,
       title: id,
-      updatedAt: new Date().toISOString()
+      updatedAt: new Date().toISOString(),
+      baseRevision: null,
+      baseProfileSha256: null
     },
     answers: {}
   };
@@ -759,7 +891,7 @@ async function runProgramProfileQuestionnaire(id, mode, options = {}) {
     terminalOutput.write(`Resuming at unanswered required question: ${questions[index].id}.\n`);
   }
   const terminal = createInterface({ input, output: terminalOutput, terminal: options.terminal ?? true });
-  terminalOutput.write("Commands: back, edit QUESTION_ID, why, format, save, quit. Structured answers use JSON.\n");
+  terminalOutput.write("Commands: back, edit QUESTION_ID, why, format, save, quit. Choice questions accept numbers; format shows advanced typed shapes.\n");
 
   try {
     while (index < questions.length) {
@@ -769,7 +901,6 @@ async function runProgramProfileQuestionnaire(id, mode, options = {}) {
         continue;
       }
       const section = questionSection(question);
-      const choices = (question.choices || []);
       const current = profileValueAt(profile, question.path);
       const recorded = questionHasAnswer(question, profile, answers);
       const currentHint = current === undefined || question.sensitive
@@ -777,12 +908,12 @@ async function runProgramProfileQuestionnaire(id, mode, options = {}) {
         : recorded
           ? ` [current: ${boundedTerminalValue(current)}]`
           : ` [unconfirmed draft: ${boundedTerminalValue(current)}; enter explicitly to confirm]`;
-      const choiceHint = choices.length ? ` (${choices.join(" | ")})` : "";
+      const choiceHint = questionChoicePrompt(question);
       const requiredHint = question.required ? " [required]" : "";
       const multilineHint = question.type === "multiline" ? " [multiline; finish with . on its own line]" : "";
       const progress = applicableQuestionProgress(questions, profile, index);
       const raw = await terminal.question(
-        `\n${section.title} · ${progress.position}/${progress.total} applicable · ${question.id}\n${question.prompt}${choiceHint}${requiredHint}${multilineHint}${currentHint}\n> `
+        `\n${section.title} · ${progress.position}/${progress.total} applicable · ${question.id}\n${question.prompt}${requiredHint}${multilineHint}${currentHint}${choiceHint}\n> `
       );
       const command = raw.trim();
       if (command === "why") {
@@ -861,6 +992,8 @@ async function runProgramProfileQuestionnaire(id, mode, options = {}) {
 export const cliInternals = Object.freeze({
   applicableQuestionProgress,
   boundedTerminalValue,
+  parseQuestionAnswer,
+  questionChoicePrompt,
   questionFormatGuidance,
   questionnaireResult,
   questionHasAnswer,
@@ -884,12 +1017,44 @@ function workflowMutationOptions(flags, paths) {
   };
 }
 
+function learningCommit(learning) {
+  return {
+    ok: true,
+    id: learning.id,
+    apiVersion: learning.apiVersion,
+    at: learning.at,
+    status: learning.status,
+    scope: learning.scope,
+    sensitivity: learning.sensitivity,
+    supersedes: learning.supersedes,
+    promotionState: learning.promotion.state,
+    candidateSha256: learning.promotion.state === "candidate"
+      ? learningCandidateSha256(learning)
+      : learning.promotion.candidateSha256,
+    applicabilityCount: learning.applicability.length,
+    evidenceCount: learning.evidence.length
+  };
+}
+
 function workflowCommit(result) {
   const payload = result.entry.payload;
   const details = (() => {
     switch (result.entry.type) {
       case "phase.started": return { phaseId: payload.phaseId, attemptId: payload.attemptId };
       case "phase.finished": return { phaseId: payload.phaseId, disposition: payload.disposition };
+      case "test.planned": return {
+        phaseId: payload.phaseId,
+        attemptId: payload.attemptId,
+        testId: payload.testId,
+        learningCount: payload.learningIds.length
+      };
+      case "test.reviewed": return {
+        phaseId: payload.phaseId,
+        attemptId: payload.attemptId,
+        testId: payload.testId,
+        disposition: payload.disposition,
+        nextDecision: payload.nextStrategy.decision
+      };
       case "evidence.added": return { evidenceId: payload.evidenceId, sha256: payload.sha256 };
       case "coverage.set": return { domain: payload.domain, disposition: payload.disposition };
       case "ledger.opened": return { entryId: payload.entryId };
@@ -1258,20 +1423,50 @@ export async function main(argv) {
   }
 
   if (command === "learn") {
-    assertFlags(parsed.flags, ["cause", "change", "private", "scope", "json"]);
-    assertPositionals(parsed.positional, 0, "gate learn --cause TEXT --change TEXT");
-    return output(
-      addLearning(
-        {
-          cause: requiredFlag(parsed.flags, "cause"),
-          change: requiredFlag(parsed.flags, "change"),
-          scope: typeof parsed.flags.scope === "string" ? parsed.flags.scope : undefined,
-          sensitivity: parsed.flags.private === true ? "private" : "public"
-        },
-        { paths }
-      ),
-      json
-    );
+    assertUnambiguousLearningArgs(rest);
+    const [action, id] = parsed.positional;
+    if (!action) {
+      assertFlags(parsed.flags, ["cause", "change", "private", "scope", "json"]);
+      assertPositionals(parsed.positional, 0, "gate learn --cause TEXT --change TEXT");
+      return output(
+        addLearning(
+          {
+            cause: requiredFlag(parsed.flags, "cause"),
+            change: requiredFlag(parsed.flags, "change"),
+            scope: typeof parsed.flags.scope === "string" ? parsed.flags.scope : undefined,
+            sensitivity: parsed.flags.private === true ? "private" : "public"
+          },
+          { paths }
+        ),
+        json
+      );
+    }
+    if (action === "cycle") {
+      assertPositionals(parsed.positional, 1, "gate learn cycle --file FILE");
+      assertFlags(parsed.flags, ["file", "json"]);
+      const input = readStructuredCommandFile(requiredFlag(parsed.flags, "file"), "learning cycle file");
+      return output(learningCommit(addLearningCycle(input, { paths })), json);
+    }
+    if (action === "promote") {
+      assertPositionals(parsed.positional, 2, "gate learn promote ID --file FILE");
+      assertFlags(parsed.flags, ["file", "json"]);
+      const input = readStructuredCommandFile(requiredFlag(parsed.flags, "file"), "learning promotion file");
+      return output(learningCommit(promoteLearning(id, input, { paths })), json);
+    }
+    if (action === "consult") {
+      assertPositionals(parsed.positional, 1, "gate learn consult --file FILE [--limit N] [--max-bytes N]");
+      assertFlags(parsed.flags, ["file", "limit", "max-bytes", "json"]);
+      const input = readStructuredCommandFile(requiredFlag(parsed.flags, "file"), "learning consultation file");
+      const limit = optionalValueFlag(parsed.flags, "limit");
+      const maxBytes = optionalValueFlag(parsed.flags, "max-bytes");
+      const request = {
+        ...input,
+        ...(limit === undefined ? {} : { limit }),
+        ...(maxBytes === undefined ? {} : { maxBytes })
+      };
+      return output(consultLearnings(request, { paths }), json);
+    }
+    throw new Error(`unknown learn action: ${action}`);
   }
 
   if (command === "run") {
@@ -1560,6 +1755,18 @@ export async function main(argv) {
         rationale: optionalValueFlag(parsed.flags, "rationale"),
         evidenceSha256: listFlag(parsed.flags, "evidence-sha")
       }, workflowMutationOptions(parsed.flags, paths));
+      return output(workflowCommit(result), json);
+    }
+    if (area === "test" && new Set(["plan", "review"]).has(actionOrId)) {
+      assertPositionals(parsed.positional, 3, `gate workflow test ${actionOrId} ID --file FILE`);
+      assertFlags(parsed.flags, ["file", ...mutationFlags]);
+      const input = readStructuredCommandFile(
+        requiredFlag(parsed.flags, "file"),
+        `workflow test ${actionOrId} file`
+      );
+      const result = actionOrId === "plan"
+        ? planWorkflowTest(maybeId, input, workflowMutationOptions(parsed.flags, paths))
+        : reviewWorkflowTest(maybeId, input, workflowMutationOptions(parsed.flags, paths));
       return output(workflowCommit(result), json);
     }
     if (area === "evidence" && actionOrId === "add") {

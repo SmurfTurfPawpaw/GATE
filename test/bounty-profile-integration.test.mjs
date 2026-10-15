@@ -339,6 +339,16 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
+function currentMutationOptions(paths, id, now) {
+  const current = resumeProgramProfile(id, { paths });
+  return {
+    paths,
+    now,
+    expectedRevision: current.summary.revision,
+    expectedProfileSha256: current.summary.profileSha256
+  };
+}
+
 function assertPrivateTree(root) {
   for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
     const file = path.join(root, entry.name);
@@ -414,8 +424,14 @@ test("a headless answer file is preserved and deterministically maps every quest
   assert.equal(crypto.createHash("sha256").update(secondStoredAnswersBytes).digest("hex"), secondOutput.answersSha256);
   const firstStoredAnswers = JSON.parse(firstStoredAnswersBytes);
   const secondStoredAnswers = JSON.parse(secondStoredAnswersBytes);
+  assert.equal(firstStoredAnswers.apiVersion, "gate.dev/program-profile-answers/v2");
+  assert.equal(firstStoredAnswers.metadata.baseRevision, 1);
+  assert.equal(firstStoredAnswers.metadata.baseProfileSha256, firstOutput.profileSha256);
+  assert.equal(secondStoredAnswers.metadata.baseProfileSha256, secondOutput.profileSha256);
   delete firstStoredAnswers.metadata.updatedAt;
   delete secondStoredAnswers.metadata.updatedAt;
+  delete firstStoredAnswers.metadata.baseProfileSha256;
+  delete secondStoredAnswers.metadata.baseProfileSha256;
   assert.deepEqual(firstStoredAnswers, secondStoredAnswers);
   const stored = readJson(path.join(first.home, "programs", id, "program-profile.json"));
   for (const question of PROGRAM_PROFILE_QUESTIONS) {
@@ -474,6 +490,48 @@ test("parent and child answer paths merge deterministically and every raw value 
   }
 });
 
+test("legacy stored v1 answers resume through an in-memory v2 binding and migrate on mutation", (t) => {
+  const { home, paths } = fixture(t);
+  const id = "legacy-answer-state";
+  createProgramProfile(id, {}, { paths, now: fixedAt });
+  const directory = path.join(home, "programs", id);
+  const answerFile = path.join(directory, "answers.json");
+  const bindingFile = path.join(directory, "state-binding.json");
+  const legacy = readJson(answerFile);
+  legacy.apiVersion = "gate.dev/program-profile-answers/v1";
+  delete legacy.metadata.baseRevision;
+  delete legacy.metadata.baseProfileSha256;
+  writeJson(answerFile, legacy);
+  const binding = readJson(bindingFile);
+  binding.answersSha256 = crypto.createHash("sha256").update(fs.readFileSync(answerFile)).digest("hex");
+  writeJson(bindingFile, binding);
+
+  const resumed = resumeProgramProfile(id, { paths });
+  assert.equal(resumed.answers.apiVersion, "gate.dev/program-profile-answers/v2");
+  assert.equal(resumed.answers.metadata.baseRevision, 1);
+  assert.equal(resumed.answers.metadata.baseProfileSha256, binding.profileSha256);
+  const updated = applyProgramProfileAnswers(id, resumed.answers, { paths, now: "2026-10-14T12:01:00.000Z" });
+  assert.equal(updated.revision, 2);
+  const migrated = readJson(answerFile);
+  assert.equal(migrated.apiVersion, "gate.dev/program-profile-answers/v2");
+  assert.equal(migrated.metadata.baseRevision, 2);
+  assert.equal(migrated.metadata.baseProfileSha256, updated.profileSha256);
+});
+
+test("create rejects a v2 envelope that claims an existing base", (t) => {
+  const { paths } = fixture(t);
+  const id = "bound-create-rejected";
+  const envelope = answerEnvelope(id, completeProfile(id));
+  envelope.apiVersion = "gate.dev/program-profile-answers/v2";
+  envelope.metadata.baseRevision = 4;
+  envelope.metadata.baseProfileSha256 = "a".repeat(64);
+  assert.throws(
+    () => createProgramProfile(id, envelope, { paths, now: fixedAt }),
+    /create requires an unbound v2 answer envelope/u
+  );
+  assert.equal(fs.existsSync(path.join(paths.programs, id)), false);
+});
+
 test("substantive edits invalidate attestation until the current revision is explicitly re-attested", (t) => {
   const { home, paths } = fixture(t);
   const id = "attestation-binding";
@@ -486,7 +544,7 @@ test("substantive edits invalidate attestation until the current revision is exp
     // bind it to a new revision. Re-attestation requires a fresh explicit
     // answer set with a changed timestamp.
     attestation: structuredClone(completeProfile(id).attestation)
-  }, { paths, now: "2026-10-14T12:01:00.000Z" });
+  }, currentMutationOptions(paths, id, "2026-10-14T12:01:00.000Z"));
   assert.equal(changed.ready, false);
   const stale = readJson(path.join(home, "programs", id, "program-profile.json"));
   assert.equal(stale.attestation.answersComplete, false);
@@ -513,11 +571,136 @@ test("substantive edits invalidate attestation until the current revision is exp
       attestedAt: "2026-10-14T12:02:00.000Z",
       attestedRevision: null
     }
-  }, { paths, now: "2026-10-14T12:02:00.000Z" });
+  }, currentMutationOptions(paths, id, "2026-10-14T12:02:00.000Z"));
   assert.equal(reattested.ready, true);
   const current = readJson(path.join(home, "programs", id, "program-profile.json"));
   assert.equal(current.attestation.attestedRevision, current.metadata.revision);
   assert.equal(current.metadata.revision, 3);
+});
+
+test("answer updates bind the exact base and require chronologically fresh re-attestation", (t) => {
+  const { home, paths } = fixture(t);
+  const id = "answer-replay-binding";
+  createProgramProfile(id, completeProfile(id), { paths, now: fixedAt });
+  const revisionOne = resumeProgramProfile(id, { paths });
+  assert.equal(revisionOne.answers.apiVersion, "gate.dev/program-profile-answers/v2");
+  assert.equal(revisionOne.answers.metadata.baseRevision, 1);
+  assert.equal(revisionOne.answers.metadata.baseProfileSha256, revisionOne.summary.profileSha256);
+
+  const firstWriter = structuredClone(revisionOne.answers);
+  firstWriter.answers["identity-objective"] = "Exercise the first writer's exact reviewed objective.";
+  firstWriter.answers["attestation-at"] = "2026-10-14T12:01:00.000Z";
+  const firstResult = applyProgramProfileAnswers(id, firstWriter, {
+    paths,
+    now: "2026-10-14T12:01:00.000Z"
+  });
+  assert.equal(firstResult.revision, 2);
+  assert.equal(firstResult.ready, true);
+
+  const current = resumeProgramProfile(id, { paths });
+  assert.equal(current.answers.metadata.baseRevision, 2);
+  assert.equal(current.answers.metadata.baseProfileSha256, current.summary.profileSha256);
+  const directory = path.join(home, "programs", id);
+  const stateFiles = ["program-profile.json", "answers.json", "state-binding.json"];
+  const beforeRejectedUpdates = Object.fromEntries(stateFiles.map((name) => [name, fs.readFileSync(path.join(directory, name))]));
+  const partialStale = structuredClone(revisionOne.answers);
+  partialStale.answers = { "identity-objective": "A stale partial overwrite." };
+  const wrongRevision = structuredClone(current.answers);
+  wrongRevision.metadata.baseRevision -= 1;
+  const wrongDigest = structuredClone(current.answers);
+  wrongDigest.metadata.baseProfileSha256 = "0".repeat(64);
+  const legacy = answerEnvelope(id, completeProfile(id));
+
+  for (const [candidate, message] of [
+    [revisionOne.answers, /revision changed/u],
+    [partialStale, /revision changed/u],
+    [wrongRevision, /revision changed/u],
+    [wrongDigest, /digest changed/u],
+    [legacy, /not bound to a base profile/u]
+  ]) {
+    assert.throws(() => applyProgramProfileAnswers(id, candidate, { paths }), message);
+    for (const name of stateFiles) {
+      assert.deepEqual(fs.readFileSync(path.join(directory, name)), beforeRejectedUpdates[name]);
+    }
+  }
+  assert.throws(
+    () => applyProgramProfileAnswers(id, { identity: { objective: "Unbound raw overwrite." } }, { paths }),
+    /raw program profile updates require expectedRevision and expectedProfileSha256/u
+  );
+  for (const name of stateFiles) {
+    assert.deepEqual(fs.readFileSync(path.join(directory, name)), beforeRejectedUpdates[name]);
+  }
+
+  const equalTimestamp = structuredClone(current.answers);
+  equalTimestamp.answers["identity-objective"] = "An edit that must invalidate the equal prior attestation.";
+  equalTimestamp.answers["attestation-at"] = "2026-10-14T12:01:00.000Z";
+  const invalidated = applyProgramProfileAnswers(id, equalTimestamp, {
+    paths,
+    now: "2026-10-14T12:02:00.000Z"
+  });
+  assert.equal(invalidated.ready, false);
+  const unattested = resumeProgramProfile(id, { paths });
+  assert.equal(unattested.profile.attestation.attestedAt, null);
+  assert.equal(unattested.profile.attestation.attestedRevision, null);
+
+  const reattestation = structuredClone(unattested.answers);
+  Object.assign(reattestation.answers, {
+    "attestation-operator": "local-operator",
+    "attestation-answers-complete": true,
+    "attestation-sources-reviewed": true,
+    "attestation-scope-reviewed": true,
+    "attestation-at": "2026-10-14T12:03:00.000Z"
+  });
+  const reattested = applyProgramProfileAnswers(id, reattestation, {
+    paths,
+    now: "2026-10-14T12:03:00.000Z"
+  });
+  assert.equal(reattested.ready, true);
+
+  const olderTimestamp = resumeProgramProfile(id, { paths }).answers;
+  olderTimestamp.answers["identity-objective"] = "An edit that must invalidate an older attestation.";
+  olderTimestamp.answers["attestation-at"] = "2026-10-14T12:02:00.000Z";
+  const olderResult = applyProgramProfileAnswers(id, olderTimestamp, {
+    paths,
+    now: "2026-10-14T12:04:00.000Z"
+  });
+  assert.equal(olderResult.ready, false);
+  assert.equal(resumeProgramProfile(id, { paths }).profile.attestation.attestedRevision, null);
+});
+
+test("new answer confirmation invalidates attestation even when a parent answer already supplied the same value", (t) => {
+  const { paths } = fixture(t);
+  const id = "duplicate-path-confirmation";
+  const profile = completeProfile(id);
+  profile.questionnaire.applicableModules = ["web-api"];
+  profile.modules["web-api"] = {
+    ...sourceDecision("allowed"),
+    answers: {
+      entryPoints: [targetCanary],
+      authenticationFlows: ["researcher account login"],
+      automationRules: "Use the recorded global rate limit."
+    }
+  };
+  const initial = answerEnvelope(id, profile);
+  delete initial.answers["web-api-entry-points"];
+  const created = createProgramProfile(id, initial, { paths, now: fixedAt });
+  assert.equal(created.ready, false);
+  const revisionOne = resumeProgramProfile(id, { paths });
+  assert.equal(revisionOne.profile.attestation.attestedRevision, 1);
+  assert.equal(Object.hasOwn(revisionOne.answers.answers, "web-api-entry-points"), false);
+
+  const confirmed = structuredClone(revisionOne.answers);
+  confirmed.answers["web-api-entry-points"] = [targetCanary];
+  const applied = applyProgramProfileAnswers(id, confirmed, {
+    paths,
+    now: "2026-10-14T12:01:00.000Z"
+  });
+  assert.equal(applied.ready, false);
+  const revisionTwo = resumeProgramProfile(id, { paths });
+  assert.deepEqual(revisionTwo.profile.modules["web-api"].answers.entryPoints, [targetCanary]);
+  assert.equal(revisionTwo.profile.attestation.attestedAt, null);
+  assert.equal(revisionTwo.profile.attestation.attestedRevision, null);
+  assert.equal(Object.hasOwn(revisionTwo.answers.answers, "web-api-entry-points"), true);
 });
 
 test("interactive resume opens the exact false attestation answer", { timeout: 5000 }, async (t) => {
@@ -650,7 +833,7 @@ test("compilation is deterministic, lossless across every policy matrix, and kee
   assert.equal(first.created, true);
   assert.equal(second.created, false);
   assert.equal(first.compilationId, second.compilationId);
-  assert.equal(first.artifactContractVersion, "gate.dev/program-profile-compilation/v2");
+  assert.equal(first.artifactContractVersion, "gate.dev/program-profile-compilation/v3");
   assert.deepEqual(first.artifacts, second.artifacts);
   assert.equal(first.targetContact, false);
   assert.equal(first.executionAuthority, false);
@@ -664,9 +847,10 @@ test("compilation is deterministic, lossless across every policy matrix, and kee
   const preflight = readJson(path.join(compiled, "model-preflight.json"));
   const proposal = readJson(path.join(compiled, "engagement-proposal.json"));
   const executionPolicy = readJson(path.join(compiled, "execution-policy.json"));
+  const review = fs.readFileSync(path.join(compiled, "operator-review.md"), "utf8");
 
-  assert.equal(context.apiVersion, "gate.dev/model-context/v2");
-  assert.equal(context.metadata.compilationContract, "gate.dev/program-profile-compilation/v2");
+  assert.equal(context.apiVersion, "gate.dev/model-context/v3");
+  assert.equal(context.metadata.compilationContract, "gate.dev/program-profile-compilation/v3");
   assert.equal(preflight.apiVersion, "gate.dev/model-preflight/v2");
 
   assert.deepEqual(new Set(Object.keys(techniques.actions)), new Set(PROGRAM_PROFILE_ACTIONS));
@@ -697,6 +881,14 @@ test("compilation is deterministic, lossless across every policy matrix, and kee
   assert.deepEqual(context.access, profile.access);
   assert.deepEqual(context.architecture, profile.architecture);
   assert.deepEqual(context.reporting, profile.reporting);
+  assert.match(context.modelInstructions.depthDirective, /Systematically enumerate/u);
+  assert.match(context.modelInstructions.surfaceRole, /not assessment completion/u);
+  assert.match(context.modelInstructions.onPromisingSignal, /form a testable hypothesis/u);
+  assert.match(context.modelInstructions.automationPriority, /callbacks or webhooks/u);
+  assert.match(context.modelInstructions.completionRule, /every promising signal/u);
+  assert.match(review, /## Assessment strategy/u);
+  assert.match(review, /Every applicable coverage domain has a sourced disposition/u);
+  assert.match(review, /`header-observation` — Observe response headers/u);
   assert.equal(context.metadata.issuedAt, assessedAt);
   assert.equal(preflight.assessedAt, assessedAt);
   assert.deepEqual(context.executionPolicy.requestedAssistanceModes, profile.executionPolicy.requestedAssistanceModes);
@@ -1363,7 +1555,12 @@ for (const entrypoint of ["answers", "resume", "compile"]) {
       nonce: "c".repeat(32),
       createdAt: fixedAt
     });
-    const recoveryOptions = { paths, now: "2026-10-14T12:01:00.000Z" };
+    const recoveryOptions = {
+      paths,
+      now: "2026-10-14T12:01:00.000Z",
+      expectedRevision: 1,
+      expectedProfileSha256: next.profileSha256
+    };
     if (entrypoint === "resume") {
       const resumed = resumeProgramProfile(id, recoveryOptions);
       assert.equal(resumed.profile.metadata.revision, 1);
@@ -1583,20 +1780,25 @@ test("questionnaire order preserves final attestation after applicable module an
     }
   };
   const envelope = answerEnvelope(id, profile);
-  const cumulative = structuredClone(envelope);
-  cumulative.answers = {};
+  envelope.answers["attestation-at"] = "2026-10-14T12:02:00.000Z";
   for (const question of PROGRAM_PROFILE_QUESTIONS) {
     if (question.module && question.module !== "web-api") continue;
+    const cumulative = resumeProgramProfile(id, { paths }).answers;
+    const appliedAt = question.id === "attestation-at"
+      ? "2026-10-14T12:02:00.000Z"
+      : "2026-10-14T12:01:00.000Z";
+    cumulative.metadata.updatedAt = appliedAt;
     cumulative.answers[question.id] = envelope.answers[question.id];
-    applyProgramProfileAnswers(id, cumulative, { paths, now: fixedAt });
+    applyProgramProfileAnswers(id, cumulative, { paths, now: appliedAt });
   }
   const stored = readJson(path.join(paths.programs, id, "program-profile.json"));
   assert.equal(stored.identity.objective, profile.identity.objective);
   assert.deepEqual(stored.modules["web-api"], profile.modules["web-api"]);
   assert.equal(stored.attestation.answersComplete, true);
   assert.equal(stored.attestation.attestedRevision, stored.metadata.revision);
-  assert.equal(verifyProgramProfile(id, { paths, now: fixedAt }).ready, true);
-  const invalid = structuredClone(envelope);
+  const verification = verifyProgramProfile(id, { paths, now: "2026-10-14T12:02:00.000Z" });
+  assert.equal(verification.ready, true, JSON.stringify(verification.blockers));
+  const invalid = resumeProgramProfile(id, { paths }).answers;
   invalid.answers = { "execution-phase-policies": [{}, {}] };
   assert.throws(() => applyProgramProfileAnswers(id, invalid, { paths, now: fixedAt }), /required property 'id'/u);
   assert.deepEqual(readJson(path.join(paths.programs, id, "program-profile.json")), stored);

@@ -81,7 +81,7 @@ The workflow records authorization and rules of engagement first, then builds th
 
 Follow the [end-to-end penetration-testing workflow](docs/pentest-workflow.md) to attach evidence, disposition each workstream, reserve closeout capacity, record target-side changes, clean up in LIFO order, retest, and close the assessment.
 
-For a bug bounty program, complete the [Program Profile wizard](docs/bug-bounty-program-profile.md) first. It records the program sources, exact asset and technique rules, limits, evidence handling, and reporting expectations in private state, then compiles no-contact model context and a compatibility preflight. A compiled profile supports planning; it does not replace the exact engagement, reviewed plan, operator receipt, workflow admission, or execution confirmation required for active target contact.
+For a bug bounty program, use the [Program Profile intake](docs/bug-bounty-program-profile.md) first: the `gate-program-profile` skill provides the preferred choice-first interview, with terminal wizard and headless fallbacks. It records the program sources, exact asset and technique rules, limits, evidence handling, and reporting expectations in private state, then compiles no-contact model context and a compatibility preflight. A compiled profile supports planning; it does not replace the exact engagement, reviewed plan, operator receipt, workflow admission, or execution confirmation required for active target contact.
 
 ## 4. Analyze a saved Windows artifact offline
 
@@ -144,7 +144,67 @@ This release has two narrow reviewed active adapters:
 - DNSx 1.3.1: one exact-domain `A` observation through one explicit resolver.
 - HTTPx 1.12.0: one exact-URL `GET`, dialled through one operator-approved literal IP while preserving the approved Host header and HTTPS SNI.
 
-After the matching `active-surface-validation` phase is admitted, create a typed manifest with no raw argument surface:
+After the matching `active-surface-validation` phase is admitted, retain its `activePhase.attemptId`, `activePhase.toolId`, and the workflow `contract.sha256` from `workflow status`. Before creating a manifest, consult the exact learning projection for that workflow contract, phase, and admitted tool. This DNSx example uses the default consultation limits that `workflow test plan` will recompute:
+
+```bash
+mkdir -p "$GATE_HOME/input"
+cat >"$GATE_HOME/input/active-surface-learning.json" <<'JSON'
+{
+  "applicability": [
+    {
+      "kind": "workflow",
+      "id": "pentest-e2e",
+      "version": "2",
+      "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    { "kind": "phase", "id": "active-surface-validation" },
+    { "kind": "tool", "id": "dnsx" }
+  ]
+}
+JSON
+chmod 600 "$GATE_HOME/input/active-surface-learning.json"
+
+./bin/gate.mjs learn consult \
+  --file "$GATE_HOME/input/active-surface-learning.json" \
+  --limit 8 --max-bytes 4096 --json
+```
+
+Replace the example workflow digest with `contract.sha256`. If the admission uses HTTPx, replace the tool reference with `httpx` and rewrite the hypothesis, method, and signals for that exact HTTP request. The plan's applicability must equal this runtime-derived workflow, phase, and optional tool set; v0.1 rejects every extra reference. Copy the complete applicability array, returned `selected[].id` values in order, `ledgerHeadSha256`, and `projectionSha256` into the first private test plan:
+
+```bash
+cat >"$GATE_HOME/input/active-surface-test-plan.json" <<'JSON'
+{
+  "phaseId": "active-surface-validation",
+  "attemptId": "wpa_0123456789abcdef0123456789abcdef",
+  "hypothesis": "The exact approved name resolves through the admitted resolver.",
+  "method": "Send one admitted DNS A observation and preserve its execution result.",
+  "expectedSignal": "The bounded result contains one validated A response.",
+  "contrarySignal": "The bounded result is empty, invalid, or contradicts the mapped name.",
+  "learningApplicability": [
+    {
+      "kind": "workflow",
+      "id": "pentest-e2e",
+      "version": "2",
+      "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    { "kind": "phase", "id": "active-surface-validation" },
+    { "kind": "tool", "id": "dnsx" }
+  ],
+  "learningIds": [],
+  "learningLedgerHeadSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "learningProjectionSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "basisEvidenceSha256": [],
+  "priorReviewEntrySha256": null,
+  "adaptation": null
+}
+JSON
+chmod 600 "$GATE_HOME/input/active-surface-test-plan.json"
+
+./bin/gate.mjs workflow test plan WORKFLOW_ID \
+  --file "$GATE_HOME/input/active-surface-test-plan.json" --json
+```
+
+Replace the attempt ID, applicability values, selected learning IDs, and consultation digests with the immediately preceding results. Retain the plan's `event.details.testId` and `event.headSha256`. With exactly one test plan open, create one typed manifest; its reservation automatically binds that test and plan entry. The following commands are alternatives for matching admissions, not a sequence to run together:
 
 ```bash
 ./bin/gate.mjs engagement adapter-manifest ENGAGEMENT_ID \
@@ -167,17 +227,227 @@ After the matching `active-surface-validation` phase is admitted, create a typed
 
 Review the immutable manifest and execute it only with its exact returned confirmation through `gate engagement exec`. DNSx and HTTPx retain broader catalog capabilities, but these adapters admit only the operations above. The other five managed core runtimes remain available for verified planning while their active adapters are added.
 
-## 6. Record learning
-
-When a failure, correction, better tool, or environment constraint changes future behavior, record the cause and the concrete change:
-
 ```bash
-./bin/gate.mjs learn --private --scope session \
-  --cause "Describe what changed the assessment." \
-  --change "Describe the specific behavior that will change."
+./bin/gate.mjs engagement exec ENGAGEMENT_ID \
+  --manifest MANIFEST_ID \
+  --confirm "EXECUTE MANIFEST_ID MANIFEST_SHA256 UNMETERED" \
+  --json
 ```
 
-Use private learning for target, client, credential, evidence, unpublished finding, or private-path details.
+After the run is terminal, add its exact result file as the required inventory and add the reconciliation created from that result. The inventory digest must therefore equal the linked execution result digest:
+
+```bash
+./bin/gate.mjs workflow evidence add WORKFLOW_ID \
+  --phase active-surface-validation \
+  --evidence active-surface-inventory \
+  --claim observed \
+  --file "$GATE_HOME/evidence/execution-RUN_ID-result.json" \
+  --json
+
+./bin/gate.mjs workflow evidence add WORKFLOW_ID \
+  --phase active-surface-validation \
+  --evidence hypothesis-reconciliation \
+  --claim inferred \
+  --file "$HOME/private/hypothesis-reconciliation.json" \
+  --json
+```
+
+Retain both returned `event.details.sha256` values. A supported or contradicted target-contact review must follow the completed reservation, include the linked execution result digest, and cite only evidence added after the plan:
+
+```bash
+cat >"$GATE_HOME/input/active-surface-test-review.json" <<'JSON'
+{
+  "testId": "wtest_0123456789abcdef0123456789abcdef",
+  "phaseId": "active-surface-validation",
+  "attemptId": "wpa_0123456789abcdef0123456789abcdef",
+  "planEntrySha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "disposition": "supported",
+  "observation": "The admitted DNS observation returned the expected in-scope A response.",
+  "evidenceSha256": [
+    "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  ],
+  "metrics": { "requests": 1, "tokens": "unavailable" },
+  "usefulMistake": null,
+  "nextStrategy": {
+    "decision": "stop",
+    "rationale": "The bounded observation resolved this hypothesis."
+  }
+}
+JSON
+chmod 600 "$GATE_HOME/input/active-surface-test-review.json"
+
+./bin/gate.mjs workflow test review WORKFLOW_ID \
+  --file "$GATE_HOME/input/active-surface-test-review.json" --json
+
+./bin/gate.mjs workflow phase finish WORKFLOW_ID \
+  --phase active-surface-validation \
+  --disposition tested --json
+```
+
+Replace every example ID and digest with the plan and evidence results. A failed, blocked, or ambiguous run needs the matching review disposition and rationale; do not reuse the successful example. A target-contact phase reaches `tested` only after its required evidence exists and a reviewed cycle is bound to the successfully completed execution's result evidence added after completion; no reservation may remain pending.
+
+## 6. Record and apply adaptive learning
+
+Use the private workflow journal for immediate test feedback and the learning ledger for reusable behavior changes. Store input files under `GATE_HOME`, keep them owner-only, and substitute IDs and digests returned by your own workflow.
+
+Before planning, request the small learning projection that exactly matches the work:
+
+```bash
+mkdir -p "$GATE_HOME/input"
+cat >"$GATE_HOME/input/learning-consult.json" <<'JSON'
+{
+  "applicability": [
+    {
+      "kind": "workflow",
+      "id": "pentest-e2e",
+      "version": "2",
+      "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    { "kind": "phase", "id": "authorization-and-roe" }
+  ]
+}
+JSON
+chmod 600 "$GATE_HOME/input/learning-consult.json"
+
+./bin/gate.mjs learn consult \
+  --file "$GATE_HOME/input/learning-consult.json" \
+  --limit 8 --max-bytes 4096 --json
+```
+
+Consultation returns only public, sanitized, active lessons with that exact applicability set. Replace the example workflow digest with `contract.sha256` from `workflow status`. Every test plan's applicability must equal exactly one workflow reference with its current version and digest, exactly one reference to the active phase, and the exact admitted tool reference when the active phase has one; v0.1 accepts no additional references. Retain the applicability array, `selected[].id`, `ledgerHeadSha256`, and `projectionSha256` together. Copy the selected IDs in their returned order and both returned digests into the plan even when `selected` is empty. `workflow test plan` recomputes this default 8-record, 4096-byte consultation and rejects stale values, unresolved conflicts, or any omitted applicable lesson.
+
+Create the first private test plan for the active phase attempt:
+
+```bash
+cat >"$GATE_HOME/input/test-plan.json" <<'JSON'
+{
+  "phaseId": "authorization-and-roe",
+  "attemptId": "wpa_0123456789abcdef0123456789abcdef",
+  "hypothesis": "One bounded observation may distinguish the two current explanations.",
+  "method": "Exercise one admitted path and preserve its exact evidence.",
+  "expectedSignal": "The response contains the discriminating marker.",
+  "contrarySignal": "The response omits the marker or contradicts the hypothesis.",
+  "learningApplicability": [
+    {
+      "kind": "workflow",
+      "id": "pentest-e2e",
+      "version": "2",
+      "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    { "kind": "phase", "id": "authorization-and-roe" }
+  ],
+  "learningIds": [],
+  "learningLedgerHeadSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "learningProjectionSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "basisEvidenceSha256": [],
+  "priorReviewEntrySha256": null,
+  "adaptation": null
+}
+JSON
+chmod 600 "$GATE_HOME/input/test-plan.json"
+
+./bin/gate.mjs workflow test plan "$ASSESSMENT_ID" \
+  --file "$GATE_HOME/input/test-plan.json" --json
+```
+
+Replace the example attempt ID with the active `attemptId`, and replace both learning digests with the values returned by the immediately preceding consultation. Retain the plan's returned `event.details.testId` and `event.headSha256`, then bind both into the review:
+
+```bash
+cat >"$GATE_HOME/input/test-review.json" <<'JSON'
+{
+  "testId": "wtest_0123456789abcdef0123456789abcdef",
+  "phaseId": "authorization-and-roe",
+  "attemptId": "wpa_0123456789abcdef0123456789abcdef",
+  "planEntrySha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "disposition": "inconclusive",
+  "observation": "The response was stable but did not distinguish the explanations.",
+  "evidenceSha256": [],
+  "metrics": { "duration-ms": 1200, "tokens": "unavailable" },
+  "usefulMistake": {
+    "cause": "The first method varied two conditions at once.",
+    "change": "Vary one condition at a time in the next test."
+  },
+  "nextStrategy": {
+    "decision": "iterate-within-current-envelope",
+    "rationale": "A single-variable comparison can resolve the ambiguity."
+  }
+}
+JSON
+chmod 600 "$GATE_HOME/input/test-review.json"
+
+./bin/gate.mjs workflow test review "$ASSESSMENT_ID" \
+  --file "$GATE_HOME/input/test-review.json" --json
+```
+
+Use only evidence digests already known to this workflow. The next plan must set `priorReviewEntrySha256` to this review's returned `event.headSha256` and give a one-line `adaptation`. One workflow can have only one open test cycle. Planning and reviewing record feedback; they do not execute a test or change its authority. Launches still use the separately admitted engagement adapters.
+
+When a result warrants a reusable change, record a structured private candidate:
+
+```bash
+cat >"$GATE_HOME/input/learning-cycle.json" <<'JSON'
+{
+  "trigger": "strategy-improvement",
+  "domain": "active-testing",
+  "cycle": {
+    "hypothesis": "A single-variable comparison will produce a clearer oracle.",
+    "method": "Repeat the bounded test while changing one condition only.",
+    "outcome": {
+      "disposition": "confirmed",
+      "summary": "The isolated condition produced a stable discriminating signal."
+    },
+    "lesson": "Change one condition at a time when the first oracle is ambiguous.",
+    "nextAdjustment": "Use a single-variable comparison before adding more probes."
+  },
+  "applicability": [
+    {
+      "kind": "workflow",
+      "id": "pentest-e2e",
+      "version": "2",
+      "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    { "kind": "phase", "id": "authorization-and-roe" }
+  ],
+  "evidence": ["evidence://sanitized-workflow-review"],
+  "configurationRefs": ["config/workflows/pentest-e2e.json"],
+  "replaces": [],
+  "sensitivity": "private",
+  "scope": "session"
+}
+JSON
+chmod 600 "$GATE_HOME/input/learning-cycle.json"
+
+./bin/gate.mjs learn cycle \
+  --file "$GATE_HOME/input/learning-cycle.json" --json
+```
+
+The command returns both the candidate ID and `candidateSha256`. Routine passes and expected negative results remain workflow evidence. Leave `replaces` empty for compatible guidance. When this candidate corrects or reverts an effective validated lesson, put that learning ID in `replaces` before review. GATE accepts only currently effective validated records with the same domain and exact applicability, prevents replacement forks, and includes the ordered replacement set in the candidate digest. A candidate intended for public promotion must already contain only reviewer- and operator-sanitized narratives, applicability, evidence references, and canonical configuration references to existing regular non-symlink files inside the repository; promotion cannot rewrite that content. Automatic checks catch known secret and identifier patterns, but they cannot recognize every arbitrary single-token proper name or client alias. Passing them does not prove that a candidate has no target or client identifier, so keep uncertain material private. After independent validation and the durable behavior, policy, configuration, test, or documentation change, have No Mistakes review the exact candidate digest and implementation Git head. Then promote the candidate with the returned digest and genuine review evidence:
+
+```bash
+cat >"$GATE_HOME/input/learning-promotion.json" <<'JSON'
+{
+  "sensitivity": "public",
+  "scope": "repository",
+  "validationRefs": ["evidence://reviewed-validation"],
+  "changeRefs": ["commit://0123456789abcdef0123456789abcdef01234567"],
+  "review": {
+    "owner": "no-mistakes",
+    "attestationRef": "evidence://no-mistakes/reviewed-run",
+    "attestationSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "candidateSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "headSha": "0123456789abcdef0123456789abcdef01234567"
+  }
+}
+JSON
+chmod 600 "$GATE_HOME/input/learning-promotion.json"
+
+./bin/gate.mjs learn promote CANDIDATE_ID \
+  --file "$GATE_HOME/input/learning-promotion.json" --json
+```
+
+Replace every example ID, digest, evidence reference, commit, and review attestation with its real value. `review.candidateSha256` must equal the `learn cycle` receipt, and `review.headSha` must be the full 40-character lowercase Git head reported by the review. Promotion creates a new active record that supersedes the candidate and preserves its cycle, applicability, cause, change, configuration references, and replacement lineage exactly. Each replacement target must match the promoted record's sensitivity as well as its domain and exact applicability. Promotion rejects an attempt to choose or alter `replaces`, and a record cannot both replace and conflict with the same lesson. GATE validates the candidate binding and field shapes, but `headSha` and the external attestation remain locally asserted provenance: v0.1 does not invoke No Mistakes, verify the commit against a repository, or cryptographically verify the review's authenticity. If the new record contradicts another existing effective lesson without replacing it, add that learning ID to the optional `conflictsWith` array; otherwise the records coexist. A later consult excludes and reports explicitly conflicting records, excludes replaced ancestors, and prefers the newest effective compatible guidance. The default projection is capped at eight records and 4096 bytes, and consultation itself makes no model call. Tokens are used only when a caller places that bounded projection in model context.
+
+The legacy `learn --cause ... --change ...` command remains available for a simple cause-and-change observation. Use private learning for target, client, credential, evidence, unpublished finding, or private-path details.
 
 ## Current release boundaries
 
@@ -185,6 +455,7 @@ Use private learning for target, client, credential, evidence, unpublished findi
 - DNSx and HTTPx have narrow reviewed active adapters. Broader operations and the other tools need matching adapters or the separately reviewed generic lane where eligible.
 - Windows dynamic analysis, resettable lab lifecycle, and native GUI-tool control remain separate host workflows.
 - Publication commands perform read-only exact-head preflight. Merge, deploy, and publish mutation require a trusted adapter.
+- Workflow test feedback is journal-bound and does not launch or authorize execution. Learning promotion binds an attestation to the exact candidate digest and Git head but does not invoke No Mistakes or cryptographically verify external authenticity; execution adapters remain separate.
 - Dashboard token totals depend on local Codex usage records and do not include account quota or billing data.
 
 See [Current limits](README.md#current-limits) for the complete boundary list.

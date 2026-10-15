@@ -14,7 +14,9 @@
     "policy-violation",
     "benchmark-regression",
     "evidence-contradiction",
-    "unexpected-environment-constraint"
+    "unexpected-environment-constraint",
+    "test-strategy-revision",
+    "orchestration-method-revision"
   ],
   "record": {
     "requiredFields": ["at", "scope", "cause", "change", "evidence", "status", "sensitivity"],
@@ -45,12 +47,33 @@
   ],
   "promotion": {
     "owner": "no-mistakes",
-    "requires": ["supporting-evidence", "deduplication", "redaction", "behavior-change", "validation"],
+    "requires": ["supporting-evidence", "deduplication", "redaction", "behavior-change", "validation", "review-attestation"],
     "allowedStatuses": ["proposed", "active", "superseded", "reverted"]
+  },
+  "consultation": {
+    "activeOnly": true,
+    "exactApplicability": true,
+    "deterministic": true,
+    "maxRecords": 8,
+    "maxBytes": 4096,
+    "conflictBehavior": "block",
+    "hotReloadDuringAttempt": false
+  },
+  "testFeedback": {
+    "destination": "private-workflow-journal",
+    "hashChained": true,
+    "reviewIsAdvisory": true,
+    "routineResultsBecomeLearning": false,
+    "nextAttemptRequiresExplicitPlan": true
   },
   "protectedBoundaries": [
     "target-scope",
     "authorization",
+    "tool-selection",
+    "execution-environment",
+    "effect-class",
+    "resource-limits",
+    "stop-conditions",
     "secret-release",
     "data-destination",
     "publication-permission",
@@ -58,7 +81,9 @@
   ],
   "untrustedInput": {
     "mayPropose": true,
+    "mayActivate": false,
     "mayDirectlyWritePersistentMemory": false,
-    "mayChangePolicy": false
+    "mayChangePolicy": false,
+    "mayLaunchTest": false
   }
 }

@@ -4,6 +4,11 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 import { checkEngagement } from "./engagements.mjs";
+import {
+  consultLearnings,
+  verifyLearningConsultationSnapshot,
+  withLearningLedgerSnapshot
+} from "./learnings.mjs";
 import { ensureRuntime, runtimePaths } from "./paths.mjs";
 import { PENTEST_COVERAGE_DOMAINS, pentestWorkflowSemanticErrors } from "./pentest-workflow.mjs";
 import {
@@ -21,9 +26,14 @@ const PHASE_ID_PATTERN = /^[a-z][a-z0-9-]{1,79}$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const REQUEST_PATTERN = /^wreq_[a-f0-9]{32}$/u;
 const ATTEMPT_PATTERN = /^wpa_[a-f0-9]{32}$/u;
+const TEST_PATTERN = /^wtest_[a-f0-9]{32}$/u;
+const LEARNING_PATTERN = /^lrn_[A-Za-z0-9][A-Za-z0-9_-]{5,127}$/u;
 const RESERVATION_PATTERN = /^wxr_[a-f0-9]{32}$/u;
 const LEDGER_PATTERN = /^wle_[a-f0-9]{32}$/u;
 const TERMINAL_DISPOSITIONS = new Set(["tested", "not-applicable", "blocked", "untested"]);
+const TEST_DISPOSITIONS = new Set(["supported", "contradicted", "inconclusive", "blocked", "invalid-test"]);
+const TEST_NEXT_DECISIONS = new Set(["stop", "iterate-within-current-envelope", "defer", "requires-new-authority"]);
+const LEARNING_APPLICABILITY_KINDS = new Set(["component", "workflow", "phase", "tool", "adapter", "test", "environment"]);
 const CLEAN_LEDGER_STATES = new Set(["empty", "verified-clean"]);
 const TEARDOWN_PHASES = new Set([
   "offline-lab-reset-verification",
@@ -42,6 +52,9 @@ const MAX_FLEET_DISCOVERY = 4096;
 const MAX_FLEET_SCAN = 64;
 const MAX_FLEET_PROJECTION_BYTES = 128 * 1024;
 const MAX_FLEET_JOURNAL_BYTES = 256 * 1024;
+const MAX_TEST_LEARNING_IDS = 64;
+const MAX_TEST_EVIDENCE_DIGESTS = 256;
+const MAX_TEST_METRICS = 32;
 
 function stableObject(value) {
   if (Array.isArray(value)) return value.map(stableObject);
@@ -90,6 +103,215 @@ function oneLine(value, label, maximum) {
     throw new Error(`${label} must be a nonempty single-line value of at most ${maximum} characters`);
   }
   return result;
+}
+
+function boundedUniqueStrings(value, label, maximum, normalize) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
+  if (value.length > maximum) throw new Error(`${label} exceeds the ${maximum}-item limit`);
+  const normalized = value.map((item) => normalize(String(item)));
+  if (new Set(normalized).size !== normalized.length) throw new Error(`${label} must not contain duplicates`);
+  return normalized.sort();
+}
+
+function normalizeTestLearningIds(value) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw new Error("workflow test learning ids must be an array");
+  if (value.length > MAX_TEST_LEARNING_IDS) {
+    throw new Error(`workflow test learning ids exceed the ${MAX_TEST_LEARNING_IDS}-item limit`);
+  }
+  const normalized = value.map((item) => {
+    const learningId = String(item);
+    if (!LEARNING_PATTERN.test(learningId)) throw new Error("workflow test learning id is invalid");
+    return learningId;
+  });
+  if (new Set(normalized).size !== normalized.length) {
+    throw new Error("workflow test learning ids must not contain duplicates");
+  }
+  return normalized;
+}
+
+function normalizeTestLearningApplicability(value) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 16) {
+    throw new Error("workflow test learning applicability must contain between 1 and 16 references");
+  }
+  const normalized = value.map((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new Error(`workflow test learning applicability[${index}] must be an object`);
+    }
+    if (Object.keys(item).some((key) => !["kind", "id", "version", "digest"].includes(key))) {
+      throw new Error(`workflow test learning applicability[${index}] contains an unknown field`);
+    }
+    const kind = String(item.kind || "");
+    const applicabilityId = String(item.id || "");
+    if (!LEARNING_APPLICABILITY_KINDS.has(kind)) {
+      throw new Error(`workflow test learning applicability[${index}].kind is invalid`);
+    }
+    if (!/^[a-z][a-z0-9._-]{1,127}$/u.test(applicabilityId)) {
+      throw new Error(`workflow test learning applicability[${index}].id is invalid`);
+    }
+    const result = { kind, id: applicabilityId };
+    if (item.version !== undefined) {
+      const version = String(item.version);
+      if (!/^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/u.test(version)) {
+        throw new Error(`workflow test learning applicability[${index}].version is invalid`);
+      }
+      result.version = version;
+    }
+    if (item.digest !== undefined) {
+      const digest = String(item.digest);
+      if (!SHA256_PATTERN.test(digest)) {
+        throw new Error(`workflow test learning applicability[${index}].digest is invalid`);
+      }
+      result.digest = digest;
+    }
+    return result;
+  }).sort((left, right) => JSON.stringify(stableObject(left)).localeCompare(JSON.stringify(stableObject(right))));
+  if (new Set(normalized.map((item) => JSON.stringify(stableObject(item)))).size !== normalized.length) {
+    throw new Error("workflow test learning applicability references must be unique");
+  }
+  return normalized;
+}
+
+function normalizeTestEvidence(value, label) {
+  return boundedUniqueStrings(value, label, MAX_TEST_EVIDENCE_DIGESTS, (item) => {
+    if (!SHA256_PATTERN.test(item)) throw new Error(`${label} contains an invalid SHA-256 value`);
+    return item;
+  });
+}
+
+function nullableOneLine(value, label, maximum) {
+  return value === undefined || value === null ? null : oneLine(value, label, maximum);
+}
+
+function normalizeTestMetrics(value) {
+  if (value === undefined || value === null) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("workflow test metrics must be an object or null");
+  }
+  const entries = Object.entries(value);
+  if (entries.length > MAX_TEST_METRICS) throw new Error(`workflow test metrics exceed the ${MAX_TEST_METRICS}-field limit`);
+  const normalized = {};
+  for (const [key, metric] of entries.sort(([left], [right]) => left.localeCompare(right))) {
+    if (!/^[a-z][a-z0-9-]{0,63}$/u.test(key)) throw new Error(`workflow test metric name is invalid: ${key}`);
+    if (metric !== "unavailable" &&
+      (typeof metric !== "number" || !Number.isFinite(metric) || metric < 0 || metric > Number.MAX_SAFE_INTEGER)) {
+      throw new Error(`workflow test metric ${key} must be a nonnegative finite number or unavailable`);
+    }
+    normalized[key] = metric;
+  }
+  return normalized;
+}
+
+function normalizeUsefulMistake(value) {
+  if (value === undefined || value === null) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value) ||
+    JSON.stringify(Object.keys(value).sort()) !== JSON.stringify(["cause", "change"])) {
+    throw new Error("workflow test useful mistake must contain only cause and change");
+  }
+  return {
+    cause: oneLine(value.cause, "workflow test useful mistake cause", 500),
+    change: oneLine(value.change, "workflow test useful mistake change", 500)
+  };
+}
+
+function normalizeNextStrategy(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value) ||
+    JSON.stringify(Object.keys(value).sort()) !== JSON.stringify(["decision", "rationale"])) {
+    throw new Error("workflow test next strategy must contain only decision and rationale");
+  }
+  const decision = String(value.decision || "");
+  if (!TEST_NEXT_DECISIONS.has(decision)) throw new Error("workflow test next strategy decision is invalid");
+  return { decision, rationale: oneLine(value.rationale, "workflow test next strategy rationale", 1000) };
+}
+
+function phaseTestRecords(projection) {
+  return Object.values(projection.phases).flatMap((phase) => Object.values(phase.tests || {}));
+}
+
+function requiredTestLearningApplicability(projection, active) {
+  return [
+    {
+      kind: "workflow",
+      id: projection.definition.id,
+      version: String(projection.definition.version),
+      digest: projection.definition.sha256
+    },
+    { kind: "phase", id: active.phaseId },
+    ...(active.toolId ? [{ kind: "tool", id: active.toolId }] : [])
+  ];
+}
+
+function assertTestLearningApplicability(projection, active, applicability) {
+  const required = normalizeTestLearningApplicability(requiredTestLearningApplicability(projection, active));
+  for (const expected of required) {
+    const matches = applicability.filter((item) => item.kind === expected.kind && item.id === expected.id);
+    if (matches.length !== 1 || canonicalDigest(matches[0]) !== canonicalDigest(expected)) {
+      throw new Error(`workflow test learning applicability must include the exact active ${expected.kind} reference`);
+    }
+  }
+  if (canonicalDigest(applicability) !== canonicalDigest(required)) {
+    throw new Error("workflow test learning applicability must exactly match the runtime-derived active context");
+  }
+}
+
+function assertWorkflowTestReview(projection, phase, planned, review) {
+  const positive = ["supported", "contradicted"].includes(review.disposition);
+  if (positive && !review.evidenceSha256.length) {
+    throw new Error(`${review.disposition} workflow test review requires evidence`);
+  }
+  const evidenceAfter = (digest, sequence) => projection.evidence.some((record) =>
+    record.sha256 === digest && record.phaseId === review.phaseId &&
+    record.attemptId === review.attemptId && Number(record.journalSequence) > sequence
+  );
+  if (review.evidenceSha256.some((digest) => !evidenceAfter(digest, planned.planSequence))) {
+    throw new Error("workflow test review evidence must belong to the same phase attempt and follow the plan");
+  }
+  const reservations = Object.values(projection.executionReservations).filter((reservation) =>
+    reservation.testId === review.testId
+  );
+  if (reservations.length > 1) throw new Error("workflow planned test has multiple execution reservations");
+  const reservation = reservations[0] || null;
+  if (reservation) {
+    if (reservation.phaseId !== review.phaseId || reservation.phaseAttemptId !== review.attemptId ||
+      reservation.testPlanEntrySha256 !== review.planEntrySha256) {
+      throw new Error("workflow test execution reservation binding changed");
+    }
+    if (!["completed", "failed", "cancelled", "blocked", "unknown"].includes(reservation.status)) {
+      throw new Error("workflow test execution reservation must be terminal before review");
+    }
+  } else if (phase.targetContact && !["blocked", "invalid-test"].includes(review.disposition)) {
+    throw new Error("target-contact workflow test without an execution reservation may only be blocked or invalid-test");
+  }
+  if (phase.targetContact && positive) {
+    if (!reservation || reservation.status !== "completed" || !reservation.completedEntrySha256 ||
+      !Number.isSafeInteger(reservation.completedSequence) || !reservation.resultSha256) {
+      throw new Error(`${review.disposition} target-contact review requires a successfully completed linked execution with result evidence`);
+    }
+    if (!review.evidenceSha256.includes(reservation.resultSha256) ||
+      review.evidenceSha256.some((digest) => !evidenceAfter(digest, reservation.completedSequence))) {
+      throw new Error("target-contact review evidence must be recorded after and include the linked execution result");
+    }
+  }
+  return reservation;
+}
+
+function hasSubstantiveTargetReview(projection, phase) {
+  return Object.values(phase.tests || {}).some((test) => {
+    if (test.status !== "reviewed" ||
+      !["supported", "contradicted", "inconclusive"].includes(test.review?.disposition)) return false;
+    const reservation = Object.values(projection.executionReservations).find((candidate) =>
+      candidate.testId === test.testId && candidate.phaseAttemptId === phase.attemptId
+    );
+    if (!reservation || reservation.status !== "completed" || !reservation.completedEntrySha256 ||
+      !Number.isSafeInteger(reservation.completedSequence) || !reservation.resultSha256 ||
+      !test.review.evidenceSha256.includes(reservation.resultSha256)) return false;
+    return projection.evidence.some((record) =>
+      record.sha256 === reservation.resultSha256 && record.phaseId === phase.phaseId &&
+      record.attemptId === phase.attemptId && Number(record.journalSequence) > reservation.completedSequence &&
+      Number(record.journalSequence) < Number(test.review.reviewSequence)
+    );
+  });
 }
 
 function normalizePaths(input = {}) {
@@ -435,6 +657,349 @@ function pendingReservations(projection) {
   );
 }
 
+function sameCanonicalValue(left, right) {
+  return canonicalDigest(left, "gate.workflow.replay-value.v1") ===
+    canonicalDigest(right, "gate.workflow.replay-value.v1");
+}
+
+function assertPhaseStartReplayBinding(projection, payload, paths) {
+  const allowedFields = new Set([
+    "phaseId", "attemptId", "sourcePhase", "transitionSha256", "handoffId", "lane", "effectClass",
+    "targetContact", "target", "targetSha256", "action", "toolId", "toolMappingSha256", "admissionSha256",
+    "handoffSha256", "authority", "envelope", "preauthorizedTeardown", "budget", "effectiveStops",
+    "executionEpochSha256"
+  ]);
+  if (!payload || typeof payload !== "object" || Array.isArray(payload) ||
+    Object.keys(payload).some((field) => !allowedFields.has(field)) ||
+    [...allowedFields].some((field) => !Object.hasOwn(payload, field))) {
+    throw new Error("workflow phase start journal payload fields are invalid");
+  }
+  if (["closed", "reported"].includes(projection.status)) {
+    throw new Error(`workflow status ${projection.status} cannot start a phase`);
+  }
+  if (projection.activePhase || projection.phases[payload.phaseId]) {
+    throw new Error("workflow phase start journal entry overlaps an existing phase attempt");
+  }
+  if (!ATTEMPT_PATTERN.test(String(payload.attemptId || ""))) {
+    throw new Error("workflow phase start journal attempt id is invalid");
+  }
+  const definition = loadDefinition(paths);
+  const phase = phaseById(definition, payload.phaseId);
+  if (projection.joined && !new Set(["retest-and-regression", "retest-cleanup-verification"]).has(phase.id)) {
+    throw new Error("joined coverage permits only the defined retest branch before reporting");
+  }
+  const sourcePhase = payload.sourcePhase || null;
+  const handoffId = payload.handoffId || null;
+  let transition = transitionFor(projection, definition, sourcePhase, phase, handoffId);
+  if (transition) transition = { ...transition, __fromPhase: sourcePhase };
+  const teardown = transition?.guard.authorization === "preauthorized-teardown" && TEARDOWN_PHASES.has(phase.id);
+  if (["stopped", "recovery-hold"].includes(projection.status) && !teardown) {
+    throw new Error("workflow phase start journal entry advances after a fired stop");
+  }
+  if (!teardown) assertDependencies(projection, phase, definition);
+  const expectedHandoffId = transition?.handoffId || null;
+  const expectedTransitionSha256 = transition
+    ? canonicalDigest({
+      sourcePhase,
+      transition: Object.fromEntries(Object.entries(transition).filter(([key]) => key !== "__fromPhase")),
+      handoffId: expectedHandoffId
+    }, "gate.workflow.transition.v1")
+    : canonicalDigest({ root: phase.id }, "gate.workflow.transition.v1");
+  for (const [field, expected] of [
+    ["sourcePhase", sourcePhase],
+    ["handoffId", expectedHandoffId],
+    ["lane", phase.lane],
+    ["effectClass", phase.effectClass],
+    ["targetContact", phase.targetContact],
+    ["transitionSha256", expectedTransitionSha256],
+    ["preauthorizedTeardown", teardown]
+  ]) {
+    if (payload[field] !== expected) {
+      throw new Error(`workflow phase start journal entry differs from the installed phase: ${field}`);
+    }
+  }
+  if (!sameCanonicalValue(payload.effectiveStops, effectiveStops(definition, phase))) {
+    throw new Error("workflow phase start journal stop set differs from the installed phase");
+  }
+
+  let admission = null;
+  if (phase.targetContact) {
+    if (!SHA256_PATTERN.test(String(payload.admissionSha256 || ""))) {
+      throw new Error("target-contact phase start journal entry lacks a valid admission digest");
+    }
+    const admissionFile = path.join(paths.workflowAdmissions, `${payload.admissionSha256}.json`);
+    const admissionBytes = readPrivateFileBounded(admissionFile, 2 * 1024 * 1024, null, {
+      label: "workflow admission"
+    });
+    if (sha256(admissionBytes) !== payload.admissionSha256) {
+      throw new Error("workflow phase start admission digest changed");
+    }
+    admission = parseExternalJson(admissionBytes, "workflow-admission.schema.json", paths, "workflow admission");
+    const mapping = phase.toolMappings.find((candidate) => candidate.toolId === admission.toolId);
+    const mappingSha256 = mapping && canonicalDigest(mapping, "gate.workflow.tool-mapping.v1");
+    const expectedAuthority = {
+      engagementId: admission.authority.engagementId,
+      planSha256: admission.authority.planSha256,
+      envelopeSha256: admission.authority.envelopeSha256,
+      receiptSha256: admission.authority.receiptSha256,
+      authorizationValidUntil: admission.authority.authorizationValidUntil,
+      checkedAt: admission.authority.checkedAt
+    };
+    if (admission.instanceId !== projection.instanceId ||
+      admission.workflowDefinitionSha256 !== projection.definition.sha256 || admission.phaseId !== phase.id ||
+      !mapping || admission.toolMappingSha256 !== mappingSha256 ||
+      admission.adapterConstraint !== mapping.adapterConstraint ||
+      (projection.engagementId && projection.engagementId !== admission.authority.engagementId)) {
+      throw new Error("workflow phase start admission does not bind the installed phase and instance");
+    }
+    validateEnvelope(admission.envelope);
+    for (const [field, expected] of [
+      ["target", admission.target],
+      ["targetSha256", sha256(Buffer.from(admission.target))],
+      ["action", admissionAction(admission)],
+      ["toolId", admission.toolId],
+      ["toolMappingSha256", mappingSha256],
+      ["admissionSha256", sha256(admissionBytes)]
+    ]) {
+      if (payload[field] !== expected) {
+        throw new Error(`workflow phase start journal entry differs from its stored admission: ${field}`);
+      }
+    }
+    if (!sameCanonicalValue(payload.authority, expectedAuthority) ||
+      !sameCanonicalValue(payload.envelope, admission.envelope)) {
+      throw new Error("workflow phase start authority or envelope differs from its stored admission");
+    }
+    const engagementFile = path.join(paths.engagements, `${admission.authority.engagementId}.json`);
+    const engagementBytes = readPrivateFileBounded(engagementFile, 2 * 1024 * 1024, null, {
+      label: "workflow engagement"
+    });
+    const engagement = parseExternalJson(engagementBytes, "engagement.schema.json", paths, "workflow engagement");
+    const approvalEnvelope = {
+      engagementId: engagement.metadata.id,
+      owner: engagement.metadata.owner,
+      authorization: engagement.authorization,
+      scope: engagement.scope,
+      plan: {
+        reportRef: engagement.plan.reportRef,
+        sha256: engagement.plan.sha256,
+        depth: engagement.plan.depth,
+        hypotheses: engagement.plan.hypotheses,
+        coverage: engagement.plan.coverage,
+        completion: engagement.plan.completion
+      },
+      noMistakes: engagement.review.noMistakes,
+      limits: engagement.limits,
+      dataHandling: engagement.dataHandling,
+      stopOn: engagement.stopOn
+    };
+    if (engagement.metadata.id !== admission.authority.engagementId ||
+      engagement.plan.sha256 !== admission.authority.planSha256 ||
+      engagement.authorization.validUntil !== admission.authority.authorizationValidUntil ||
+      sha256(Buffer.from(JSON.stringify(approvalEnvelope))) !== admission.authority.envelopeSha256) {
+      throw new Error("workflow phase start admission differs from the approved engagement envelope");
+    }
+    const receiptBytes = readPrivateFileBounded(
+      path.join(paths.authorizations, `${admission.authority.engagementId}.receipt.json`),
+      64 * 1024,
+      null,
+      { label: "operator authorization receipt" }
+    );
+    let receipt;
+    try { receipt = JSON.parse(receiptBytes.toString("utf8")); }
+    catch { throw new Error("operator authorization receipt is malformed JSON"); }
+    if (sha256(receiptBytes) !== admission.authority.receiptSha256 ||
+      receipt.engagementId !== admission.authority.engagementId ||
+      receipt.planSha256 !== admission.authority.planSha256 ||
+      receipt.envelopeSha256 !== admission.authority.envelopeSha256) {
+      throw new Error("workflow phase start admission authority receipt binding changed");
+    }
+    const sourceAuthority = projection.phases[sourcePhase]?.authority || null;
+    if (transition?.guard.authorization === "new-engagement" &&
+      sourceAuthority?.receiptSha256 === expectedAuthority.receiptSha256) {
+      throw new Error("workflow phase start transition requires a fresh engagement receipt");
+    }
+    if (transition?.guard.authorization === "current-engagement" &&
+      (!sourceAuthority || sourceAuthority.receiptSha256 !== expectedAuthority.receiptSha256)) {
+      throw new Error("workflow phase start transition requires the current engagement receipt");
+    }
+    if (transition?.guard.authorization === "preauthorized-teardown" &&
+      (!sourceAuthority || sourceAuthority.receiptSha256 !== expectedAuthority.receiptSha256 ||
+        sourceAuthority.engagementId !== expectedAuthority.engagementId)) {
+      throw new Error("workflow phase start preauthorized teardown changed its authority receipt");
+    }
+    const expectedBudget = structuredClone(projection.budget || {
+      total: {
+        maxMinutes: engagement.limits.maxMinutes,
+        maxRequests: engagement.limits.maxRequests,
+        maxTotalTokens: engagement.limits.maxTokens
+      },
+      used: { maxMinutes: 0, maxRequests: 0, maxTotalTokens: 0 },
+      cleanup: {
+        maxMinutes: Math.ceil(engagement.limits.maxMinutes / 10),
+        maxRequests: Math.ceil(engagement.limits.maxRequests / 10),
+        maxTotalTokens: Math.ceil(engagement.limits.maxTokens / 10)
+      },
+      reporting: {
+        maxMinutes: Math.ceil(engagement.limits.maxMinutes / 10),
+        maxRequests: Math.ceil(engagement.limits.maxRequests / 10),
+        maxTotalTokens: Math.ceil(engagement.limits.maxTokens / 10)
+      }
+    });
+    for (const field of Object.keys(expectedBudget.total)) {
+      expectedBudget.used[field] += admission.envelope[field];
+    }
+    if (!sameCanonicalValue(payload.budget, expectedBudget)) {
+      throw new Error("workflow phase start budget differs from the approved engagement allocation");
+    }
+    if (phase.effectClass === "A3") {
+      if (!SHA256_PATTERN.test(String(payload.handoffSha256 || ""))) {
+        throw new Error("A3 phase start journal entry lacks a valid handoff digest");
+      }
+      const handoffFile = path.join(paths.workflowHandoffs, `${payload.handoffSha256}.json`);
+      const handoffBytes = readPrivateFileBounded(handoffFile, 2 * 1024 * 1024, null, {
+        label: "workflow handoff"
+      });
+      if (sha256(handoffBytes) !== payload.handoffSha256) {
+        throw new Error("workflow phase start handoff digest changed");
+      }
+      const handoff = parseExternalJson(handoffBytes, "workflow-handoff.schema.json", paths, "workflow handoff");
+      const handoffDefinition = definition.value.handoffs.find((candidate) => candidate.id === expectedHandoffId);
+      for (const [field, expected] of [
+        ["instanceId", projection.instanceId],
+        ["workflowDefinitionSha256", projection.definition.sha256],
+        ["handoffId", expectedHandoffId],
+        ["fromPhase", sourcePhase],
+        ["toPhase", phase.id],
+        ["sourceAttemptId", projection.phases[sourcePhase]?.attemptId],
+        ["admissionSha256", payload.admissionSha256],
+        ["toolId", admission.toolId],
+        ["toolMappingSha256", mappingSha256],
+        ["target", admission.target],
+        ["action", admissionAction(admission)],
+        ["adapterConstraint", admission.adapterConstraint],
+        ["policyId", handoffDefinition?.policyId],
+        ["type", handoffDefinition?.type]
+      ]) {
+        if (handoff[field] !== expected) {
+          throw new Error(`workflow phase start handoff binding differs: ${field}`);
+        }
+      }
+      if (!sameCanonicalValue(handoff.authority, expectedAuthority) ||
+        !sameCanonicalValue(handoff.envelope, admission.envelope)) {
+        throw new Error("workflow phase start handoff differs from its stored admission");
+      }
+    } else if (payload.handoffSha256 !== null) {
+      throw new Error("non-A3 phase start journal entry has an unexpected handoff digest");
+    }
+  } else {
+    for (const field of ["target", "targetSha256", "action", "toolId", "toolMappingSha256",
+      "admissionSha256", "handoffSha256", "authority", "envelope", "budget"]) {
+      if (payload[field] !== null) {
+        throw new Error(`non-contact phase start journal entry has an unexpected ${field} binding`);
+      }
+    }
+  }
+
+  const expectedEpochSha256 = canonicalDigest({
+    instanceId: projection.instanceId,
+    definitionSha256: projection.definition.sha256,
+    phaseId: phase.id,
+    attemptId: payload.attemptId,
+    transitionSha256: expectedTransitionSha256,
+    admissionSha256: admission ? payload.admissionSha256 : null,
+    handoffSha256: payload.handoffSha256,
+    previousJournalHeadSha256: projection.journalHeadSha256
+  }, "gate.workflow.execution-epoch.v1");
+  if (payload.executionEpochSha256 !== expectedEpochSha256) {
+    throw new Error("workflow phase start execution epoch differs from the authoritative journal prefix");
+  }
+}
+
+function assertPhaseFinishReplayBinding(projection, payload, paths) {
+  const allowedFields = new Set(["phaseId", "attemptId", "direct", "disposition", "rationale", "evidenceSha256"]);
+  if (!payload || typeof payload !== "object" || Array.isArray(payload) ||
+    Object.keys(payload).some((field) => !allowedFields.has(field)) ||
+    [...allowedFields].some((field) => !Object.hasOwn(payload, field)) ||
+    !ATTEMPT_PATTERN.test(String(payload.attemptId || "")) || typeof payload.direct !== "boolean" ||
+    !TERMINAL_DISPOSITIONS.has(payload.disposition)) {
+    throw new Error("workflow phase finish journal payload is invalid");
+  }
+  if (!Array.isArray(payload.evidenceSha256) || payload.evidenceSha256.length > MAX_TEST_EVIDENCE_DIGESTS ||
+    payload.evidenceSha256.some((digest) => !SHA256_PATTERN.test(String(digest)))) {
+    throw new Error("phase disposition evidence digest is invalid");
+  }
+  const evidenceSha256 = payload.evidenceSha256.map(String).sort();
+  if (!sameCanonicalValue(payload.evidenceSha256, evidenceSha256)) {
+    throw new Error("workflow phase finish evidence digests are not canonical");
+  }
+  if (payload.rationale !== null &&
+    oneLine(payload.rationale, "phase rationale", 1000) !== payload.rationale) {
+    throw new Error("workflow phase finish rationale is not canonical");
+  }
+  const definition = loadDefinition(paths);
+  const phase = phaseById(definition, payload.phaseId);
+  const active = projection.activePhase;
+  const running = active?.phaseId === payload.phaseId && active?.attemptId === payload.attemptId;
+  if (projection.joined && !running) throw new Error("joined coverage rejects direct phase dispositions");
+  if (projection.status !== "open" && !(running && TEARDOWN_PHASES.has(payload.phaseId))) {
+    throw new Error(`workflow status ${projection.status} cannot finish this phase`);
+  }
+  const prior = projection.phases[payload.phaseId] || null;
+  if (prior && !running) throw new Error(`phase ${payload.phaseId} is already terminal`);
+  if (payload.direct !== !running) {
+    throw new Error("workflow phase finish direct binding differs from the active attempt");
+  }
+  if (payload.disposition === "tested" && !running) {
+    throw new Error("tested disposition requires an active phase attempt");
+  }
+  if (!running) {
+    if (phase.applicability.mode !== "conditional") {
+      throw new Error("an always phase must be started and tested");
+    }
+    if (active) throw new Error("another phase is active");
+    if (payload.rationale === null) throw new Error("direct conditional disposition requires a rationale");
+  }
+  const record = prior || { attemptId: payload.attemptId, authority: null };
+  if (record.attemptId !== payload.attemptId) {
+    throw new Error("workflow phase finish journal entry does not bind the phase attempt");
+  }
+  if (running && Object.values(record.tests || {}).some((candidate) => candidate.status === "planned")) {
+    throw new Error("workflow phase journal entry leaves a workflow test cycle open");
+  }
+  const phaseEvidence = projection.evidence.filter((evidence) =>
+    evidence.phaseId === payload.phaseId && evidence.attemptId === record.attemptId
+  );
+  if (payload.disposition === "tested") {
+    if (phase.targetContact && !hasSubstantiveTargetReview(projection, record)) {
+      throw new Error("tested target-contact phase journal entry lacks a completed result-bound review");
+    }
+    const missing = phase.evidence.filter((expected) => expected.required &&
+      !phaseEvidence.some((actual) => actual.evidenceId === expected.id &&
+        actual.claimState === expected.claimState));
+    if (missing.length) throw new Error("tested workflow phase journal entry lacks required evidence");
+    if (pendingReservations(projection).some((reservation) =>
+      reservation.phaseAttemptId === record.attemptId)) {
+      throw new Error("tested workflow phase journal entry leaves an execution reservation pending");
+    }
+    const derivedEvidence = phaseEvidence.map((item) => item.sha256).sort();
+    if (!sameCanonicalValue(payload.evidenceSha256, derivedEvidence)) {
+      throw new Error("tested workflow phase journal evidence differs from the active phase evidence");
+    }
+  } else {
+    if (payload.rationale === null) throw new Error(`${payload.disposition} disposition requires a rationale`);
+    const known = new Set(projection.evidence.map((item) => item.sha256));
+    if (payload.evidenceSha256.some((digest) => !known.has(digest))) {
+      throw new Error("phase disposition references unknown evidence");
+    }
+    if (payload.disposition === "not-applicable" && !payload.evidenceSha256.length) {
+      throw new Error("not-applicable disposition requires explicit supporting evidence");
+    }
+    if (payload.disposition !== "not-applicable" && payload.evidenceSha256.length) {
+      throw new Error(`${payload.disposition} direct disposition does not accept evidence digests`);
+    }
+  }
+}
+
 function applyEntry(previous, entry, paths) {
   let projection;
   if (entry.type === "workflow.created") {
@@ -469,6 +1034,9 @@ function applyEntry(previous, entry, paths) {
   const payload = entry.payload;
   switch (entry.type) {
     case "phase.started": {
+      if (Number(projection.definition.version) >= 2) {
+        assertPhaseStartReplayBinding(projection, payload, paths);
+      }
       const record = { ...structuredClone(payload), status: "running", startedAt: entry.at, finishedAt: null };
       if (payload.budget) projection.budget = structuredClone(payload.budget);
       projection.activePhase = structuredClone(record);
@@ -476,7 +1044,34 @@ function applyEntry(previous, entry, paths) {
       break;
     }
     case "phase.finished": {
+      if (Number(projection.definition.version) >= 2) {
+        assertPhaseFinishReplayBinding(projection, payload, paths);
+      }
       const prior = projection.phases[payload.phaseId] || {};
+      const running = projection.activePhase?.phaseId === payload.phaseId &&
+        projection.activePhase?.attemptId === payload.attemptId;
+      if (Object.values(prior.tests || {}).some((test) => test.status === "planned")) {
+        throw new Error("workflow phase journal entry leaves a workflow test cycle open");
+      }
+      if (payload.disposition === "tested") {
+        if (!running) throw new Error("tested workflow phase journal entry does not bind the active phase attempt");
+        if (prior.targetContact && Number(projection.definition.version) >= 2 &&
+          !hasSubstantiveTargetReview(projection, prior)) {
+          throw new Error("tested target-contact phase journal entry lacks a completed result-bound review");
+        }
+        const phase = phaseById(loadDefinition(paths), payload.phaseId);
+        const phaseEvidence = projection.evidence.filter((record) =>
+          record.phaseId === payload.phaseId && record.attemptId === payload.attemptId
+        );
+        const missing = phase.evidence.filter((expected) => expected.required &&
+          !phaseEvidence.some((actual) => actual.evidenceId === expected.id &&
+            actual.claimState === expected.claimState));
+        if (missing.length) throw new Error("tested workflow phase journal entry lacks required evidence");
+        if (pendingReservations(projection).some((reservation) =>
+          reservation.phaseAttemptId === payload.attemptId)) {
+          throw new Error("tested workflow phase journal entry leaves an execution reservation pending");
+        }
+      }
       projection.phases[payload.phaseId] = {
         ...prior,
         phaseId: payload.phaseId,
@@ -490,9 +1085,119 @@ function applyEntry(previous, entry, paths) {
       if (projection.activePhase?.attemptId === payload.attemptId) projection.activePhase = null;
       break;
     }
-    case "evidence.added":
-      projection.evidence.push({ ...structuredClone(payload), recordedAt: entry.at, journalEntrySha256: entry.entrySha256 });
+    case "test.planned": {
+      const phase = projection.phases[payload.phaseId];
+      const active = projection.activePhase;
+      if (!phase || phase.attemptId !== payload.attemptId || !active ||
+        active.phaseId !== payload.phaseId || active.attemptId !== payload.attemptId) {
+        throw new Error("workflow test plan does not bind a known phase attempt");
+      }
+      if (!Array.isArray(payload.learningApplicability) || !payload.learningApplicability.length ||
+        !SHA256_PATTERN.test(payload.learningLedgerHeadSha256) ||
+        !SHA256_PATTERN.test(payload.learningProjectionSha256)) {
+        throw new Error("workflow test plan has inconsistent frozen learning provenance");
+      }
+      assertTestLearningApplicability(projection, active,
+        normalizeTestLearningApplicability(payload.learningApplicability));
+      verifyLearningConsultationSnapshot({
+        applicability: payload.learningApplicability,
+        learningIds: payload.learningIds,
+        ledgerHeadSha256: payload.learningLedgerHeadSha256,
+        projectionSha256: payload.learningProjectionSha256
+      }, { paths });
+      const tests = { ...(phase.tests || {}) };
+      if (tests[payload.testId]) throw new Error("workflow test id is already present in the phase attempt");
+      if (phaseTestRecords(projection).some((test) => test.status === "planned")) {
+        throw new Error("workflow already has an open test cycle");
+      }
+      const latestReview = phaseTestRecords(projection)
+        .filter((test) => test.status === "reviewed" && test.review?.reviewEntrySha256)
+        .sort((left, right) => right.review.reviewSequence - left.review.reviewSequence)[0] || null;
+      if (!latestReview) {
+        if (payload.priorReviewEntrySha256 !== null || payload.adaptation !== null) {
+          throw new Error("the first workflow test cycle cannot name a prior review or adaptation");
+        }
+      } else if (payload.priorReviewEntrySha256 !== latestReview.review.reviewEntrySha256 ||
+        payload.adaptation === null) {
+        throw new Error("workflow test plan does not bind and adapt from the exact latest review entry");
+      }
+      const knownEvidence = new Set(projection.evidence.map((record) => record.sha256));
+      if (payload.basisEvidenceSha256.some((digest) => !knownEvidence.has(digest))) {
+        throw new Error("workflow test plan references unknown basis evidence");
+      }
+      tests[payload.testId] = {
+        ...structuredClone(payload),
+        status: "planned",
+        plannedAt: entry.at,
+        planSequence: entry.sequence,
+        planEntrySha256: entry.entrySha256,
+        review: null
+      };
+      projection.phases[payload.phaseId] = { ...phase, tests };
+      if (projection.activePhase?.attemptId === payload.attemptId) {
+        projection.activePhase = { ...projection.activePhase, tests: structuredClone(tests) };
+      }
       break;
+    }
+    case "test.reviewed": {
+      const phase = projection.phases[payload.phaseId];
+      const tests = { ...(phase?.tests || {}) };
+      const planned = tests[payload.testId];
+      if (!phase || phase.attemptId !== payload.attemptId || !planned || planned.status !== "planned" ||
+        planned.planEntrySha256 !== payload.planEntrySha256) {
+        throw new Error("workflow test review does not bind the open planned test");
+      }
+      assertWorkflowTestReview(projection, phase, planned, payload);
+      const { testId, phaseId, attemptId, planEntrySha256, ...review } = payload;
+      tests[testId] = {
+        ...planned,
+        status: "reviewed",
+        review: {
+          ...structuredClone(review),
+          reviewedAt: entry.at,
+          reviewSequence: entry.sequence,
+          reviewEntrySha256: entry.entrySha256
+        }
+      };
+      projection.phases[phaseId] = { ...phase, tests };
+      if (projection.activePhase?.attemptId === attemptId) {
+        projection.activePhase = { ...projection.activePhase, tests: structuredClone(tests) };
+      }
+      break;
+    }
+    case "evidence.added": {
+      const phase = projection.phases[payload.phaseId];
+      const strictEvidenceReplay = Number(projection.definition.version) >= 2;
+      if (strictEvidenceReplay) {
+        const active = projection.activePhase;
+        const definitionPhase = phaseById(loadDefinition(paths), payload.phaseId);
+        const expected = definitionPhase.evidence.find((record) => record.id === payload.evidenceId);
+        const exactRef = `private://workflows/${projection.instanceId}/evidence/${payload.sha256}.bin`;
+        if (!active || active.phaseId !== payload.phaseId || active.attemptId !== payload.attemptId ||
+          !expected || payload.claimState !== expected.claimState || payload.sensitivity !== expected.sensitivity ||
+          !SHA256_PATTERN.test(String(payload.sha256 || "")) ||
+          !Number.isSafeInteger(payload.bytes) || payload.bytes < 0 || payload.bytes > MAX_EXTERNAL_BYTES ||
+          payload.ref !== exactRef) {
+          throw new Error("workflow feedback evidence journal entry does not bind declared phase evidence");
+        }
+        const evidenceFile = path.join(paths.workflowEvidence, `${payload.sha256}.bin`);
+        const evidenceBytes = readPrivateFileBounded(evidenceFile, MAX_EXTERNAL_BYTES, null, {
+          label: `workflow evidence ${payload.sha256}`
+        });
+        if (evidenceBytes.length !== payload.bytes || sha256(evidenceBytes) !== payload.sha256) {
+          throw new Error("workflow feedback evidence file does not match its journal binding");
+        }
+      }
+      projection.evidence.push({
+        ...structuredClone(payload),
+        recordedAt: entry.at,
+        ...(strictEvidenceReplay ? {
+          journalSequence: entry.sequence,
+          journalEntrySha256: entry.entrySha256
+        } : {})
+      });
+      break;
+    }
     case "coverage.set":
       projection.coverage[payload.domain] = { ...structuredClone(payload), recordedAt: entry.at };
       break;
@@ -529,14 +1234,91 @@ function applyEntry(previous, entry, paths) {
         ? "stopped" : "recovery-hold";
       projection.activePhase = null;
       break;
-    case "execution.reserved":
+    case "execution.reserved": {
+      if (!RESERVATION_PATTERN.test(String(payload.reservationId || "")) ||
+        !/^xmf_[a-f0-9]{32}$/u.test(String(payload.manifestId || "")) ||
+        !/^xrun_[a-f0-9]{32}$/u.test(String(payload.runId || "")) ||
+        !ATTEMPT_PATTERN.test(String(payload.phaseAttemptId || ""))) {
+        throw new Error("workflow execution reservation journal binding is invalid");
+      }
+      if (projection.executionReservations[payload.reservationId]) {
+        throw new Error("workflow execution reservation journal id is already in use");
+      }
+      const active = projection.activePhase;
+      if (!active || active.phaseId !== payload.phaseId || active.attemptId !== payload.phaseAttemptId ||
+        active.executionEpochSha256 !== payload.executionEpochSha256) {
+        throw new Error("workflow execution reservation journal entry does not bind the active phase epoch");
+      }
+      if (active.effectClass === "A3") {
+        throw new Error("the supervised generic execution lane cannot execute an A3 phase");
+      }
+      if (pendingReservations(projection).some((reservation) =>
+        reservation.phaseAttemptId === payload.phaseAttemptId)) {
+        throw new Error("workflow execution reservation journal entry overlaps a pending reservation");
+      }
+      const hasTestBinding = payload.testId !== undefined || payload.testPlanEntrySha256 !== undefined;
+      if (active.targetContact && Number(projection.definition.version) >= 2 && !hasTestBinding) {
+        throw new Error("workflow execution reservation journal entry lacks the required test binding");
+      }
+      if (hasTestBinding) {
+        const phase = projection.phases[payload.phaseId];
+        const planned = phase?.tests?.[payload.testId];
+        if (!TEST_PATTERN.test(String(payload.testId || "")) ||
+          !SHA256_PATTERN.test(String(payload.testPlanEntrySha256 || "")) ||
+          !phase || phase.attemptId !== payload.phaseAttemptId || !planned || planned.status !== "planned" ||
+          planned.planEntrySha256 !== payload.testPlanEntrySha256) {
+          throw new Error("workflow execution reservation does not bind an open planned test");
+        }
+        if (Object.values(projection.executionReservations).some((reservation) => reservation.testId === payload.testId)) {
+          throw new Error("workflow planned test already has an execution reservation");
+        }
+      }
+      if (active.targetContact) {
+        if (payload.instanceId !== projection.instanceId ||
+          payload.engagementId !== active.authority?.engagementId ||
+          payload.targetSha256 !== active.targetSha256 || payload.action !== active.action ||
+          payload.toolId !== active.toolId || payload.toolMappingSha256 !== active.toolMappingSha256 ||
+          payload.admissionSha256 !== active.admissionSha256 ||
+          payload.authorityReceiptSha256 !== active.authority?.receiptSha256 ||
+          payload.journalHeadAtReservationSha256 !== projection.journalHeadSha256) {
+          throw new Error("workflow execution reservation journal entry differs from the active admission binding");
+        }
+        const envelope = executionEnvelope({ envelope: payload.envelope }, active);
+        if (canonicalDigest(envelope) !== canonicalDigest(payload.envelope)) {
+          throw new Error("workflow execution reservation journal envelope is not canonical");
+        }
+        for (const field of ["maxMinutes", "maxRequests", "maxRatePerSecond", "maxParallel", "maxInputTokens",
+          "maxOutputTokens", "maxTotalTokens", "maxEvidenceBytes", "maxSpend"]) {
+          if (envelope[field] > Number(active.envelope[field])) {
+            throw new Error(`workflow execution reservation journal ${field} exceeds the active admission`);
+          }
+        }
+        const used = Object.values(projection.executionReservations).filter((reservation) =>
+          reservation.phaseAttemptId === payload.phaseAttemptId && reservation.status !== "cancelled"
+        );
+        for (const field of ["maxMinutes", "maxRequests", "maxTotalTokens", "maxEvidenceBytes", "maxSpend"]) {
+          const reserved = used.reduce((sum, reservation) => sum + Number(reservation.envelope?.[field] || 0), 0);
+          if (reserved + envelope[field] > Number(active.envelope[field])) {
+            throw new Error(`workflow execution reservation journal ${field} exceeds the remaining phase allocation`);
+          }
+        }
+      }
       projection.executionReservations[payload.reservationId] = {
         ...structuredClone(payload), status: "reserved", reservedAt: entry.at
       };
       break;
-    case "execution.claimed":
+    }
+    case "execution.claimed": {
+      const reservation = projection.executionReservations[payload.reservationId];
+      if (!reservation || reservation.status !== "reserved" ||
+        payload.phaseAttemptId !== reservation.phaseAttemptId ||
+        payload.executionEpochSha256 !== reservation.executionEpochSha256 ||
+        payload.manifestId !== reservation.manifestId || payload.runId !== reservation.runId ||
+        !SHA256_PATTERN.test(String(payload.manifestSha256 || ""))) {
+        throw new Error("workflow execution claim journal entry does not bind a reserved execution");
+      }
       projection.executionReservations[payload.reservationId] = {
-        ...projection.executionReservations[payload.reservationId],
+        ...reservation,
         manifestId: payload.manifestId,
         manifestSha256: payload.manifestSha256,
         runId: payload.runId,
@@ -544,15 +1326,31 @@ function applyEntry(previous, entry, paths) {
         claimedAt: entry.at
       };
       break;
+    }
     case "execution.completed": {
+      const reservation = projection.executionReservations[payload.reservationId];
+      if (!reservation || reservation.status !== "claimed" ||
+        payload.manifestId !== reservation.manifestId ||
+        payload.manifestSha256 !== reservation.manifestSha256 || payload.runId !== reservation.runId ||
+        !["succeeded", "failed", "cancelled", "blocked", "unknown"].includes(payload.status) ||
+        !SHA256_PATTERN.test(String(payload.runSha256 || "")) ||
+        (payload.resultSha256 !== null && payload.resultSha256 !== undefined &&
+          !SHA256_PATTERN.test(String(payload.resultSha256)))) {
+        throw new Error("workflow execution completion journal entry does not bind a claimed execution");
+      }
       const status = payload.status === "succeeded" ? "completed" : payload.status;
+      const feedbackTracked = Boolean(reservation.testId);
       projection.executionReservations[payload.reservationId] = {
-        ...projection.executionReservations[payload.reservationId],
+        ...reservation,
         status,
         runSha256: payload.runSha256,
         resultSha256: payload.resultSha256 || null,
         terminationReason: payload.terminationReason || null,
-        completedAt: entry.at
+        completedAt: entry.at,
+        ...(feedbackTracked ? {
+          completedSequence: entry.sequence,
+          completedEntrySha256: entry.entrySha256
+        } : {})
       };
       if (status === "unknown") {
         projection.status = "recovery-hold";
@@ -560,12 +1358,17 @@ function applyEntry(previous, entry, paths) {
       }
       break;
     }
-    case "execution.cancelled":
+    case "execution.cancelled": {
+      const reservation = projection.executionReservations[payload.reservationId];
+      if (!reservation || reservation.status !== "reserved") {
+        throw new Error("workflow execution cancellation journal entry does not bind an unused reservation");
+      }
       projection.executionReservations[payload.reservationId] = {
-        ...projection.executionReservations[payload.reservationId], status: "cancelled",
+        ...reservation, status: "cancelled",
         cancellationReason: payload.reason, cancelledAt: entry.at
       };
       break;
+    }
     case "coverage.joined": {
       projection.joined = { ...structuredClone(payload), joinedAt: entry.at };
       const attemptId = `wpa_${entry.entrySha256.slice(0, 32)}`;
@@ -663,7 +1466,9 @@ function loadProjection(paths, {
   const played = replay(entries, paths);
   if (requireCurrentContract) {
     const definition = loadDefinition(paths);
-    if (played.projection.definition.sha256 !== definition.contractSha256 ||
+    if (played.projection.definition.id !== definition.value.metadata.id ||
+      String(played.projection.definition.version) !== String(definition.value.metadata.version) ||
+      played.projection.definition.sha256 !== definition.contractSha256 ||
       played.projection.definition.workflowSha256 !== definition.workflowSha256 ||
       played.projection.definition.catalogSha256 !== definition.catalogSha256 ||
       played.projection.definition.engagementPolicySha256 !== definition.engagementPolicySha256 ||
@@ -826,6 +1631,20 @@ function allocationStatus(projection, active) {
   };
 }
 
+function compactTestFeedback(projection) {
+  const tests = phaseTestRecords(projection);
+  const open = tests.filter((test) => test.status === "planned");
+  const reviewed = tests.filter((test) => test.status === "reviewed")
+    .sort((left, right) => Number(left.review?.reviewSequence || -1) - Number(right.review?.reviewSequence || -1));
+  return {
+    total: tests.length,
+    reviewed: reviewed.length,
+    open: open.length,
+    openTestId: open.at(-1)?.testId || null,
+    latestReviewSha256: reviewed.at(-1)?.review?.reviewEntrySha256 || null
+  };
+}
+
 function compactStatus(projection, definition, extra = {}) {
   const active = projection.activePhase;
   const { updatedAt = null, ...journalExtra } = extra;
@@ -875,6 +1694,7 @@ function compactStatus(projection, definition, extra = {}) {
     stops: visibleStops,
     unresolvedClaims: projection.evidence.filter((record) => record.claimState === "unverified").length,
     evidenceCount: projection.evidence.length,
+    testFeedback: compactTestFeedback(projection),
     joined: Boolean(projection.joined),
     reportSha256: projection.report?.sha256 || null
   };
@@ -1064,7 +1884,7 @@ function saveContentAddressed(directory, digest, bytes, label) {
 
 function validateEnvelope(envelope) {
   if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) throw new Error("workflow admission envelope is missing");
-  for (const field of ["maxMinutes", "maxRequests", "maxRatePerSecond", "maxParallel", "maxInputTokens", "maxOutputTokens", "maxTotalTokens", "maxEvidenceBytes"]) {
+  for (const field of ["maxMinutes", "maxRequests", "maxRatePerSecond", "maxParallel", "maxInputTokens", "maxOutputTokens", "maxTotalTokens", "maxEvidenceBytes", "maxSpend"]) {
     if (!Number.isFinite(Number(envelope[field])) || Number(envelope[field]) < 0) throw new Error(`workflow admission envelope ${field} is invalid`);
   }
   if (Number(envelope.maxMinutes) <= 0 || Number(envelope.maxRequests) <= 0 || Number(envelope.maxParallel) <= 0 ||
@@ -1638,6 +2458,147 @@ export function addWorkflowEvidence(id, input, options = {}) {
   });
 }
 
+function normalizeWorkflowTestPlanInput(input) {
+  const testId = input.testId === undefined || input.testId === null ? null : String(input.testId);
+  if (testId !== null && !TEST_PATTERN.test(testId)) throw new Error("workflow test id is invalid");
+  const attemptId = String(input.attemptId || "");
+  if (!ATTEMPT_PATTERN.test(attemptId)) throw new Error("workflow test phase attempt id is invalid");
+  const priorReviewEntrySha256 = input.priorReviewEntrySha256 === undefined || input.priorReviewEntrySha256 === null
+    ? null : String(input.priorReviewEntrySha256);
+  if (priorReviewEntrySha256 !== null && !SHA256_PATTERN.test(priorReviewEntrySha256)) {
+    throw new Error("workflow test prior review digest is invalid");
+  }
+  const learningIds = normalizeTestLearningIds(input.learningIds);
+  const learningApplicability = normalizeTestLearningApplicability(input.learningApplicability);
+  const learningLedgerHeadSha256 = String(input.learningLedgerHeadSha256 || "");
+  const learningProjectionSha256 = String(input.learningProjectionSha256 || "");
+  if (!SHA256_PATTERN.test(learningLedgerHeadSha256)) {
+    throw new Error("workflow test learning ledger head digest is invalid");
+  }
+  if (!SHA256_PATTERN.test(learningProjectionSha256)) {
+    throw new Error("workflow test learning projection digest is invalid");
+  }
+  return {
+    testId,
+    phaseId: requireEvidenceId(input.phaseId, "workflow test phase id"),
+    attemptId,
+    hypothesis: oneLine(input.hypothesis, "workflow test hypothesis", 1000),
+    method: oneLine(input.method, "workflow test method", 1000),
+    expectedSignal: oneLine(input.expectedSignal, "workflow test expected signal", 1000),
+    contrarySignal: oneLine(input.contrarySignal, "workflow test contrary signal", 1000),
+    learningApplicability,
+    learningIds,
+    learningLedgerHeadSha256,
+    learningProjectionSha256,
+    basisEvidenceSha256: normalizeTestEvidence(input.basisEvidenceSha256, "workflow test basis evidence"),
+    priorReviewEntrySha256,
+    adaptation: nullableOneLine(input.adaptation, "workflow test adaptation", 1000)
+  };
+}
+
+export function planWorkflowTest(id, input = {}, options = {}) {
+  const normalized = normalizeWorkflowTestPlanInput(input);
+  return withLearningLedgerSnapshot(options, () =>
+    mutate(id, intentOptions(options, "test.plan", normalized), (projection, entries, paths) => {
+      const active = projection.activePhase;
+      if (!active || active.phaseId !== normalized.phaseId || active.attemptId !== normalized.attemptId) {
+        throw new Error("workflow test plan must bind the active phase attempt");
+      }
+      if (projection.status !== "open" && !TEARDOWN_PHASES.has(active.phaseId)) {
+        throw new Error(`workflow status ${projection.status} cannot plan a test outside teardown`);
+      }
+      const phase = projection.phases[normalized.phaseId];
+      if (phaseTestRecords(projection).some((test) => test.status === "planned")) {
+        throw new Error("workflow already has an open test cycle");
+      }
+      assertTestLearningApplicability(projection, active, normalized.learningApplicability);
+      const consultation = consultLearnings({ applicability: normalized.learningApplicability }, { paths });
+      if (consultation.conflicts.length || consultation.truncation.omittedConflicts) {
+        throw new Error("workflow test learning consultation has unresolved conflicts");
+      }
+      if (consultation.truncation.omittedLearnings > 0) {
+        throw new Error("workflow test learning consultation is incomplete because applicable learnings were omitted");
+      }
+      const selectedIds = consultation.selected.map((learning) => learning.id);
+      if (JSON.stringify(normalized.learningIds) !== JSON.stringify(selectedIds)) {
+        throw new Error("workflow test learning ids do not match the fresh consultation selection and order");
+      }
+      if (normalized.learningLedgerHeadSha256 !== consultation.ledgerHeadSha256 ||
+        normalized.learningProjectionSha256 !== consultation.projectionSha256) {
+        throw new Error("workflow test frozen learning provenance differs from the fresh consultation");
+      }
+      const latestReview = [...entries].reverse().find((entry) => entry.type === "test.reviewed");
+      if (!latestReview) {
+        if (normalized.priorReviewEntrySha256 !== null || normalized.adaptation !== null) {
+          throw new Error("the first workflow test cycle cannot name a prior review or adaptation");
+        }
+      } else {
+        if (normalized.priorReviewEntrySha256 !== latestReview.entrySha256) {
+          throw new Error("workflow test plan must bind the exact latest review entry");
+        }
+        if (normalized.adaptation === null) {
+          throw new Error("a subsequent workflow test plan requires an adaptation from the prior review");
+        }
+      }
+      const knownEvidence = new Set(projection.evidence.map((record) => record.sha256));
+      if (normalized.basisEvidenceSha256.some((digest) => !knownEvidence.has(digest))) {
+        throw new Error("workflow test plan references unknown basis evidence");
+      }
+      const testId = normalized.testId || newId("wtest");
+      if (phaseTestRecords(projection).some((test) => test.testId === testId)) {
+        throw new Error("workflow test id is already in use");
+      }
+      return {
+        type: "test.planned",
+        payload: { ...normalized, testId }
+      };
+    })
+  );
+}
+
+function normalizeWorkflowTestReviewInput(input) {
+  const testId = String(input.testId || "");
+  if (!TEST_PATTERN.test(testId)) throw new Error("workflow test id is invalid");
+  const attemptId = String(input.attemptId || "");
+  if (!ATTEMPT_PATTERN.test(attemptId)) throw new Error("workflow test phase attempt id is invalid");
+  const planEntrySha256 = String(input.planEntrySha256 || "");
+  if (!SHA256_PATTERN.test(planEntrySha256)) throw new Error("workflow test plan entry digest is invalid");
+  const disposition = String(input.disposition || "");
+  if (!TEST_DISPOSITIONS.has(disposition)) throw new Error("workflow test review disposition is invalid");
+  return {
+    testId,
+    phaseId: requireEvidenceId(input.phaseId, "workflow test phase id"),
+    attemptId,
+    planEntrySha256,
+    disposition,
+    observation: oneLine(input.observation, "workflow test observation", 2000),
+    evidenceSha256: normalizeTestEvidence(input.evidenceSha256, "workflow test review evidence"),
+    metrics: normalizeTestMetrics(input.metrics),
+    usefulMistake: normalizeUsefulMistake(input.usefulMistake),
+    nextStrategy: normalizeNextStrategy(input.nextStrategy)
+  };
+}
+
+export function reviewWorkflowTest(id, input = {}, options = {}) {
+  const normalized = normalizeWorkflowTestReviewInput(input);
+  return mutate(id, intentOptions(options, "test.review", normalized), (projection) => {
+    if (["reported", "closed"].includes(projection.status)) {
+      throw new Error(`workflow status ${projection.status} cannot review a test`);
+    }
+    const phase = projection.phases[normalized.phaseId];
+    if (!phase || phase.attemptId !== normalized.attemptId) {
+      throw new Error("workflow test review must bind a known phase attempt");
+    }
+    const planned = phase.tests?.[normalized.testId];
+    if (!planned || planned.status !== "planned") throw new Error("workflow test is not open for review");
+    if (planned.planEntrySha256 !== normalized.planEntrySha256) {
+      throw new Error("workflow test review must bind the exact plan entry");
+    }
+    assertWorkflowTestReview(projection, phase, planned, normalized);
+    return { type: "test.reviewed", payload: normalized };
+  });
+}
+
 export function finishWorkflowPhase(id, input, options = {}) {
   const phaseId = requireEvidenceId(input.phaseId, "phase id");
   const disposition = String(input.disposition || "");
@@ -1662,8 +2623,14 @@ export function finishWorkflowPhase(id, input, options = {}) {
       attemptId = newId("wpa");
     }
     const record = projection.phases[phaseId] || { attemptId, authority: null };
+    if (running && Object.values(record.tests || {}).some((test) => test.status === "planned")) {
+      throw new Error("phase cannot finish while a workflow test cycle is open");
+    }
     const phaseEvidence = projection.evidence.filter((evidence) => evidence.phaseId === phaseId && evidence.attemptId === record.attemptId);
     if (disposition === "tested") {
+      if (phase.targetContact && !hasSubstantiveTargetReview(projection, record)) {
+        throw new Error("tested target-contact phase requires a reviewed cycle bound to post-completion result evidence");
+      }
       const missing = phase.evidence.filter((expected) => expected.required &&
         !phaseEvidence.some((actual) => actual.evidenceId === expected.id && actual.claimState === expected.claimState));
       if (missing.length) throw new Error(`phase required evidence is missing: ${missing.map((item) => item.id).join(", ")}`);
@@ -2079,7 +3046,9 @@ function assertReservationBinding(reservation, input) {
     ["executionEpochSha256", input.executionEpochSha256],
     ["manifestId", input.manifestId],
     ["manifestSha256", input.manifestSha256],
-    ["runId", input.runId]
+    ["runId", input.runId],
+    ["testId", input.testId],
+    ["testPlanEntrySha256", input.testPlanEntrySha256]
   ].filter(([, value]) => value !== undefined && value !== null);
   for (const [field, expected] of comparisons) {
     if (field === "manifestSha256" && reservation.manifestSha256 === null) continue;
@@ -2114,6 +3083,16 @@ export function reserveWorkflowExecution(id, input, options = {}) {
     if (pendingReservations(projection).some((reservation) => reservation.phaseAttemptId === phaseAttemptId)) {
       throw new Error("the active phase attempt already has a pending execution reservation");
     }
+    const openTests = Object.values(active.tests || {}).filter((test) => test.status === "planned");
+    if (openTests.length !== 1) {
+      throw new Error("target-contact execution requires exactly one open workflow test in the active phase");
+    }
+    const plannedTest = openTests[0];
+    if (Object.values(projection.executionReservations).some((reservation) =>
+      reservation.testId === plannedTest.testId
+    )) {
+      throw new Error("workflow planned test already has an execution reservation");
+    }
     recheckAdmission(paths, active);
     const envelope = executionEnvelope(input, active);
     for (const field of ["maxMinutes", "maxRequests", "maxRatePerSecond", "maxParallel", "maxInputTokens", "maxOutputTokens", "maxTotalTokens", "maxEvidenceBytes", "maxSpend"]) {
@@ -2136,6 +3115,8 @@ export function reserveWorkflowExecution(id, input, options = {}) {
         instanceId: projection.instanceId,
         phaseId: active.phaseId,
         phaseAttemptId,
+        testId: plannedTest.testId,
+        testPlanEntrySha256: plannedTest.planEntrySha256,
         engagementId: active.authority.engagementId,
         manifestId,
         manifestSha256: null,

@@ -29,6 +29,7 @@ export function validateRepository(options = {}) {
     "package.json",
     "config/gate.config.json",
     "AGENTS.md",
+    "OPINIONS.md",
     "README.md",
     "SECURITY.md",
     "locks/upstreams.lock.json",

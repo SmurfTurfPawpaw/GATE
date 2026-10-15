@@ -4,6 +4,103 @@
   "title": "GATE authoritative workflow journal entry",
   "type": "object",
   "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "test.planned"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "#/$defs/testPlanPayload"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "test.reviewed"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "#/$defs/testReviewPayload"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "execution.claimed"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "#/$defs/executionClaimPayload"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "execution.completed"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "#/$defs/executionCompletionPayload"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "execution.cancelled"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "#/$defs/executionCancellationPayload"
+          }
+        }
+      }
+    }
+  ],
   "required": [
     "apiVersion",
     "kind",
@@ -49,6 +146,8 @@
         "workflow.created",
         "phase.started",
         "phase.finished",
+        "test.planned",
+        "test.reviewed",
         "evidence.added",
         "coverage.set",
         "ledger.opened",
@@ -93,6 +192,418 @@
     "sha256": {
       "type": "string",
       "pattern": "^[a-f0-9]{64}$"
+    },
+    "phaseId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,79}$"
+    },
+    "attemptId": {
+      "type": "string",
+      "pattern": "^wpa_[a-f0-9]{32}$"
+    },
+    "testId": {
+      "type": "string",
+      "pattern": "^wtest_[a-f0-9]{32}$"
+    },
+    "reservationId": {
+      "type": "string",
+      "pattern": "^wxr_[a-f0-9]{32}$"
+    },
+    "manifestId": {
+      "type": "string",
+      "pattern": "^xmf_[a-f0-9]{32}$"
+    },
+    "runId": {
+      "type": "string",
+      "pattern": "^xrun_[a-f0-9]{32}$"
+    },
+    "oneLine1000": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000,
+      "pattern": "^[^\\u0000\\r\\n]+$"
+    },
+    "digestList": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/sha256"
+      }
+    },
+    "learningIds": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^lrn_[A-Za-z0-9][A-Za-z0-9_-]{5,127}$"
+      }
+    },
+    "nullableSha256": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/sha256"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "nullableOneLine1000": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/oneLine1000"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "testPlanPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "testId",
+        "phaseId",
+        "attemptId",
+        "hypothesis",
+        "method",
+        "expectedSignal",
+        "contrarySignal",
+        "learningApplicability",
+        "learningIds",
+        "learningLedgerHeadSha256",
+        "learningProjectionSha256",
+        "basisEvidenceSha256",
+        "priorReviewEntrySha256",
+        "adaptation"
+      ],
+      "properties": {
+        "testId": {
+          "$ref": "#/$defs/testId"
+        },
+        "phaseId": {
+          "$ref": "#/$defs/phaseId"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/attemptId"
+        },
+        "hypothesis": {
+          "$ref": "#/$defs/oneLine1000"
+        },
+        "method": {
+          "$ref": "#/$defs/oneLine1000"
+        },
+        "expectedSignal": {
+          "$ref": "#/$defs/oneLine1000"
+        },
+        "contrarySignal": {
+          "$ref": "#/$defs/oneLine1000"
+        },
+        "learningIds": {
+          "$ref": "#/$defs/learningIds"
+        },
+        "learningLedgerHeadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "learningProjectionSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "basisEvidenceSha256": {
+          "$ref": "#/$defs/digestList"
+        },
+        "priorReviewEntrySha256": {
+          "$ref": "#/$defs/nullableSha256"
+        },
+        "adaptation": {
+          "$ref": "#/$defs/nullableOneLine1000"
+        },
+        "learningApplicability": {
+          "$ref": "#/$defs/learningApplicability"
+        }
+      }
+    },
+    "metrics": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "maxProperties": 32,
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          },
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "const": "unavailable"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "usefulMistake": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cause",
+            "change"
+          ],
+          "properties": {
+            "cause": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "pattern": "^[^\\u0000\\r\\n]+$"
+            },
+            "change": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "pattern": "^[^\\u0000\\r\\n]+$"
+            }
+          }
+        }
+      ]
+    },
+    "nextStrategy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decision",
+        "rationale"
+      ],
+      "properties": {
+        "decision": {
+          "enum": [
+            "stop",
+            "iterate-within-current-envelope",
+            "defer",
+            "requires-new-authority"
+          ]
+        },
+        "rationale": {
+          "$ref": "#/$defs/oneLine1000"
+        }
+      }
+    },
+    "testReviewPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "testId",
+        "phaseId",
+        "attemptId",
+        "planEntrySha256",
+        "disposition",
+        "observation",
+        "evidenceSha256",
+        "metrics",
+        "usefulMistake",
+        "nextStrategy"
+      ],
+      "properties": {
+        "testId": {
+          "$ref": "#/$defs/testId"
+        },
+        "phaseId": {
+          "$ref": "#/$defs/phaseId"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/attemptId"
+        },
+        "planEntrySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "disposition": {
+          "enum": [
+            "supported",
+            "contradicted",
+            "inconclusive",
+            "blocked",
+            "invalid-test"
+          ]
+        },
+        "observation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
+          "pattern": "^[^\\u0000\\r\\n]+$"
+        },
+        "evidenceSha256": {
+          "$ref": "#/$defs/digestList"
+        },
+        "metrics": {
+          "$ref": "#/$defs/metrics"
+        },
+        "usefulMistake": {
+          "$ref": "#/$defs/usefulMistake"
+        },
+        "nextStrategy": {
+          "$ref": "#/$defs/nextStrategy"
+        }
+      }
+    },
+    "executionClaimPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reservationId",
+        "phaseAttemptId",
+        "executionEpochSha256",
+        "manifestId",
+        "manifestSha256",
+        "runId"
+      ],
+      "properties": {
+        "reservationId": {
+          "$ref": "#/$defs/reservationId"
+        },
+        "phaseAttemptId": {
+          "$ref": "#/$defs/attemptId"
+        },
+        "executionEpochSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "manifestId": {
+          "$ref": "#/$defs/manifestId"
+        },
+        "manifestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "runId": {
+          "$ref": "#/$defs/runId"
+        }
+      }
+    },
+    "executionCompletionPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reservationId",
+        "manifestId",
+        "manifestSha256",
+        "runId",
+        "status",
+        "runSha256",
+        "resultSha256",
+        "terminationReason"
+      ],
+      "properties": {
+        "reservationId": {
+          "$ref": "#/$defs/reservationId"
+        },
+        "manifestId": {
+          "$ref": "#/$defs/manifestId"
+        },
+        "manifestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "runId": {
+          "$ref": "#/$defs/runId"
+        },
+        "status": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "cancelled",
+            "blocked",
+            "unknown"
+          ]
+        },
+        "runSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "resultSha256": {
+          "$ref": "#/$defs/nullableSha256"
+        },
+        "terminationReason": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[^\\u0000\\r\\n]+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "executionCancellationPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reservationId",
+        "reason"
+      ],
+      "properties": {
+        "reservationId": {
+          "$ref": "#/$defs/reservationId"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "pattern": "^[^\\u0000\\r\\n]+$"
+        }
+      }
+    },
+    "learningApplicabilityRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "component",
+            "workflow",
+            "phase",
+            "tool",
+            "adapter",
+            "test",
+            "environment"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9._-]{1,127}$"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$"
+        },
+        "digest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "learningApplicability": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/learningApplicabilityRef"
+      }
     }
   }
 }

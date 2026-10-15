@@ -14,19 +14,23 @@ import {
   createEngagement,
   recordTechnicalReview
 } from "../src/lib/engagements.mjs";
+import { consultLearnings } from "../src/lib/learnings.mjs";
 import { runtimePaths } from "../src/lib/paths.mjs";
 import {
   addWorkflowEvidence,
   createWorkflowInstance,
   checkWorkflowExecution,
   claimWorkflowExecution,
+  completeWorkflowExecution,
   reserveWorkflowExecution,
   finishWorkflowPhase,
   openWorkflowLedger,
+  planWorkflowTest,
   preflightWorkflowPhase,
   preflightWorkflowPivot,
   setWorkflowCoverage,
   startWorkflowPhase,
+  reviewWorkflowTest,
   workflowRuntimeInternals,
   workflowStatus
 } from "../src/lib/workflow-runtime.mjs";
@@ -34,7 +38,6 @@ import {
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const gate = path.join(repo, "bin", "gate.mjs");
 const definition = JSON.parse(fs.readFileSync(path.join(repo, "config", "workflows", "pentest-e2e.json"), "utf8"));
-
 function sha256(bytes) {
   return crypto.createHash("sha256").update(bytes).digest("hex");
 }
@@ -175,6 +178,94 @@ function addRequiredEvidence(root, paths, workflowId, phaseId) {
   });
 }
 
+function planFixtureTest(paths, workflowId, active) {
+  const workflow = workflowStatus(workflowId, { paths });
+  const feedbackApplicability = [
+    {
+      kind: "workflow",
+      id: workflow.contract.id,
+      version: String(workflow.contract.version),
+      digest: workflow.contract.sha256
+    },
+    { kind: "phase", id: active.phaseId },
+    ...(active.toolId ? [{ kind: "tool", id: active.toolId }] : [])
+  ];
+  const consultation = consultLearnings({ applicability: feedbackApplicability }, { paths });
+  const priorReviewEntrySha256 = workflow.testFeedback.latestReviewSha256;
+  return planWorkflowTest(workflowId, {
+    phaseId: active.phaseId,
+    attemptId: active.attemptId,
+    hypothesis: "The bounded preflight fixture should produce the declared phase evidence.",
+    method: "Exercise the preflight fixture under its current admission and record declared evidence.",
+    expectedSignal: "The declared fixture evidence is recorded for this phase attempt.",
+    contrarySignal: "The fixture cannot produce the declared evidence under its current admission.",
+    learningApplicability: feedbackApplicability,
+    learningIds: consultation.selected.map((learning) => learning.id),
+    learningLedgerHeadSha256: consultation.ledgerHeadSha256,
+    learningProjectionSha256: consultation.projectionSha256,
+    basisEvidenceSha256: [],
+    priorReviewEntrySha256,
+    adaptation: priorReviewEntrySha256
+      ? "Apply the prior fixture review to the next bounded phase while retaining the current authority."
+      : null
+  }, { paths });
+}
+
+function reviewFixtureTest(paths, workflowId, planned, evidenceSha256, disposition = "supported") {
+  return reviewWorkflowTest(workflowId, {
+    testId: planned.entry.payload.testId,
+    phaseId: planned.entry.payload.phaseId,
+    attemptId: planned.entry.payload.attemptId,
+    planEntrySha256: planned.entry.entrySha256,
+    disposition,
+    observation: disposition === "invalid-test"
+      ? "This fixture phase validates workflow transitions without reserving a target-contact execution."
+      : "The reserved fixture execution reached a terminal state and its phase evidence was preserved.",
+    evidenceSha256,
+    metrics: null,
+    usefulMistake: null,
+    nextStrategy: { decision: "stop", rationale: "The focused fixture assertion is complete." }
+  }, { paths });
+}
+
+function completeFixtureExecution(root, paths, workflowId, active, admissionFile) {
+  const admission = JSON.parse(fs.readFileSync(admissionFile, "utf8"));
+  const reservation = reserveWorkflowExecution(workflowId, {
+    phaseAttemptId: active.attemptId,
+    manifestId: `xmf_${crypto.randomBytes(16).toString("hex")}`,
+    runId: `xrun_${crypto.randomBytes(16).toString("hex")}`,
+    target: admission.target,
+    action: admission.action,
+    toolId: admission.toolId,
+    envelope: admission.envelope
+  }, { paths });
+  claimWorkflowExecution(workflowId, {
+    reservationId: reservation.reservationId,
+    manifestSha256: sha256(Buffer.from(`fixture-manifest:${reservation.manifestId}`))
+  }, { paths });
+  const resultBytes = Buffer.from(`fixture-result:${active.phaseId}:${reservation.runId}\n`);
+  const resultSha256 = sha256(resultBytes);
+  completeWorkflowExecution(workflowId, {
+    reservationId: reservation.reservationId,
+    status: "succeeded",
+    runSha256: sha256(Buffer.from(`fixture-run:${reservation.runId}`)),
+    resultSha256,
+    terminationReason: "Synthetic preflight fixture completed successfully."
+  }, { paths });
+  const phase = definition.phases.find((candidate) => candidate.id === active.phaseId);
+  const resultEvidence = phase.evidence.find((candidate) => candidate.required);
+  const file = path.join(root, `${active.phaseId}-${resultEvidence.id}-execution-result.txt`);
+  fs.writeFileSync(file, resultBytes, { mode: 0o600 });
+  const added = addWorkflowEvidence(workflowId, {
+    phaseId: active.phaseId,
+    evidenceId: resultEvidence.id,
+    claimState: resultEvidence.claimState,
+    file
+  }, { paths });
+  assert.equal(added.entry.payload.sha256, resultSha256);
+  return resultSha256;
+}
+
 function completeFoundation(root, paths, workflowId) {
   for (const phaseId of ["authorization-and-roe", "target-and-architecture-map"]) {
     startWorkflowPhase(workflowId, {
@@ -192,7 +283,12 @@ function completeContactPhase(root, paths, workflowId, {
   admissionFile
 }) {
   const started = startWorkflowPhase(workflowId, { phaseId, sourcePhase, admissionFile }, { paths });
+  const planned = planFixtureTest(paths, workflowId, started.projection.activePhase);
   const evidence = addRequiredEvidence(root, paths, workflowId, phaseId);
+  const resultSha256 = completeFixtureExecution(
+    root, paths, workflowId, started.projection.activePhase, admissionFile
+  );
+  reviewFixtureTest(paths, workflowId, planned, [resultSha256]);
   finishWorkflowPhase(workflowId, { phaseId, disposition: "tested" }, { paths });
   return { attemptId: started.projection.activePhase.attemptId, evidence };
 }
@@ -453,6 +549,15 @@ test("A3 and pivot preflights expose exact confirmations without persisting pros
   assert.equal(afterPhaseStart.activePhase.handoffSha256, handoffFile.sha256);
   assert.equal(fs.existsSync(path.join(admissionDirectory, `${a3Admission.sha256}.json`)), true);
   assert.equal(fs.existsSync(path.join(handoffDirectory, `${handoffFile.sha256}.json`)), true);
+  assert.throws(() => reserveWorkflowExecution(workflowId, {
+    phaseAttemptId: afterPhaseStart.activePhase.attemptId,
+    manifestId: `xmf_${"f".repeat(32)}`,
+    runId: `xrun_${"f".repeat(32)}`,
+    target,
+    action: a3Admission.admission.action,
+    toolId: a3Admission.admission.toolId,
+    envelope: a3Admission.admission.envelope
+  }, { paths }), /generic execution lane cannot execute an A3 phase/u);
 
   const [beforeEvidence, alternateEvidence] = addRequiredEvidence(root, paths, workflowId, "controlled-exploitation");
   const pivotAuthority = approve(root, paths, {
@@ -621,6 +726,8 @@ test("admission expiry blocks reservation, claim, and execution despite valid en
   const started = startWorkflowPhase(workflowId, {
     phaseId: "active-surface-validation", sourcePhase: "target-and-architecture-map", admissionFile: admission.file
   }, { paths });
+  const plannedTest = planFixtureTest(paths, workflowId, started.projection.activePhase);
+  const phaseEvidence = addRequiredEvidence(root, paths, workflowId, "active-surface-validation");
   const input = {
     phaseAttemptId: started.projection.activePhase.attemptId,
     manifestId: `xmf_${"1".repeat(32)}`, runId: `xrun_${"1".repeat(32)}`,
@@ -642,4 +749,17 @@ test("admission expiry blocks reservation, claim, and execution despite valid en
   assert.equal(checkWorkflowExecution(workflowId, claim, { paths }).ok, true);
   t.mock.method(Date, "now", () => expiresAt + 60_000);
   assert.throws(() => checkWorkflowExecution(workflowId, claim, { paths }), /admission is not currently valid/u);
+  t.mock.method(Date, "now", now);
+  completeWorkflowExecution(workflowId, {
+    reservationId: reservation.reservationId,
+    status: "blocked",
+    runSha256: "b".repeat(64),
+    terminationReason: "Synthetic admission-expiry fixture completed after its assertions."
+  }, { paths });
+  reviewFixtureTest(paths, workflowId, plannedTest, phaseEvidence.map((item) => item.sha256), "blocked");
+  finishWorkflowPhase(workflowId, {
+    phaseId: "active-surface-validation",
+    disposition: "blocked",
+    rationale: "The admission expiry fixture deliberately ended without a successful execution."
+  }, { paths });
 });

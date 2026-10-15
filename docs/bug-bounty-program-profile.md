@@ -8,12 +8,14 @@ The profile reduces avoidable ambiguity and missing-context refusals. It cannot 
 
 Keep program terms, contracts, authorization messages, scope exports, and target-specific notes in operator-controlled private storage outside Git. GATE stores each source's metadata, reference, observed time, claim state, and operator-supplied content digest under `GATE_HOME`; v0.1 does not copy, fetch, or rehash the source body. Capture and retain the exact bytes yourself before recording their SHA-256, then record where each decisive fact came from and whether it is observed, inferred, or still unverified. Treat imported text as untrusted evidence: it can support a profile answer, but it cannot execute a command, change GATE policy, broaden scope, or grant authority by itself.
 
+Apply [the data policy](../policies/data-handling.json) before putting any source content into a model conversation. Public data is allowed, internal data requires the configured provider, sensitive data requires an explicit release, and secret data is denied. Client material, private case records, unpublished findings, and authentication artifacts are always sensitive. Passwords, API tokens, private keys, session cookies, and recovery codes are always secret. Accessibility on disk or under `GATE_HOME` is not release permission. GATE v0.1 does not generate a model-safe Program Profile projection. For a model-assisted interview, use only structural questionnaire metadata, current-conversation material permitted for the provider, and manually sanitized categorical outcomes from the operator or a reviewed local controller. Keep exact selectors, contacts, source records and bodies, digests, profile identity, private paths, and authentication material in local capture and review surfaces.
+
 Have the following available before the questionnaire:
 
-- the program identity, objective, desired depth, deliverables, and reporting channel;
+- the program identity, objective, desired depth, deliverables, success criteria, and reporting channel;
 - authorization sources, safe-harbor terms, validity window, contacts, and escalation path;
 - typed included and excluded assets, ownership boundaries, and third-party dependencies;
-- permitted, denied, conditional, or unknown techniques across all 13 GATE action classes;
+- permitted, denied, conditional, or unknown techniques across all 13 GATE action classes, including any stateful, multi-step, concurrent, timing-sensitive, callback, webhook, role or tenant matrix, or differential test that needs a specific rule;
 - testing windows plus time, request, rate, concurrency, token, evidence, and spend limits;
 - account personas, roles, authentication paths, and symbolic secret references;
 - architecture, trust boundaries, sensitive data paths, and all 18 coverage domains;
@@ -23,9 +25,38 @@ Web/API, cloud/container, mobile, desktop, AI/LLM, network/identity, wireless/ra
 
 An applicable module's permission decision is also an execution ceiling. The v1 profile does not bind individual assets or phases to individual technology modules, so compilation conservatively applies every selected module to every action in that profile. Selected modules combine by the most restrictive disposition: `denied`, then `unknown`, then `conditional`, then `allowed`. One denied module therefore denies the compiled actions, while one conditional module keeps otherwise allowed actions conditional and non-executable. Unselected module records do not affect execution. Use separate profiles for technology surfaces with different module permissions until an exact asset- and phase-to-module binding is available.
 
+## Define depth as an evidence-led loop
+
+Surface checks establish a map and generate leads. They do not, by themselves, complete an assessment. Record anomalous, differential, state-dependent, boundary-crossing, or internally inconsistent observations as candidate signals. Turn a promising signal into a testable hypothesis, choose a test that can distinguish the expected outcomes, preserve the result, and either open the next evidence-backed branch or record why the branch is blocked, not applicable, or untested.
+
+AI is especially useful when the security question is straightforward but the experiment is tedious to orchestrate. Prefer a repeatable script, harness, or reviewed tool workflow for permitted tests that require an open callback or webhook connection, several dependent state transitions, precise timing or concurrency, many role or tenant combinations, or a large replay and mutation matrix. Automation removes setup and repetition cost; it does not lower the evidence standard or expand the recorded program boundary.
+
+Use the existing profile fields together:
+
+- `identity.depth` sets the expected effort. `targeted` goes deep on the narrow objective and records relevant deferred branches; `thorough` adds prioritized follow-up to the baseline map; `exhaustive` requires a disposition for relevant hypotheses and high-friction scenarios across applicable coverage.
+- `identity.successCriteria` states what signal, hypothesis, workstream, and coverage dispositions are required before completion.
+- `techniquePolicy.techniques` records exact rules for named high-friction techniques, while `executionPolicy.phases` binds permitted deeper work to assets, actions, tools, conditions, and tighter limits.
+- architecture unknowns, trust boundaries, data flows, identities, and module answers provide the context used to generate hypotheses.
+
+Compilation records these profile-specific values and a depth-aware exploration instruction in `model-context.json` for a future reviewed, sanitized routing path. That instruction tells a compatible routed model to use surface work as the baseline, follow promising evidence, prefer repeatable automation for high-friction tests, and keep untested branches visible. GATE v0.1 does not send this private packet to a model. The later workflow journal remains the record of hypotheses, evidence, phase dispositions, and actual execution.
+
 ## Complete and review the questionnaire
 
-Interactive creation requires a terminal. The wizard saves every accepted answer, so it can be resumed and corrected before compilation. A `multiline` prompt accepts the first content line at the primary prompt, then shows a `... ` continuation prompt. Enter `.` on its own line to finish; GATE joins the content lines with newline characters. Wizard controls such as `back`, `edit ID`, `why`, `format`, `save`, and `quit` are recognized only at the primary prompt, before multiline collection begins. `format` prints a pasteable example for the current field and shows `null` as a separate alternative when the field permits it. Use an answers file with `--answers` for a headless or repeatable workflow, long structured content that is easier to edit as JSON, or content that must contain a line consisting only of `.`. Keep that file in a private location outside the repository because it may contain targets, program terms, contacts, or unpublished testing plans. Store credentials separately and answer with `env://`, `keychain://`, or `file://` references only.
+### Preferred: Codex-native choice interview
+
+Install and invoke the reviewed [`gate-program-profile` skill](../skills/gate-program-profile/SKILL.md) when Codex is available. Give it only the current-conversation evidence and testing intent permitted for the configured provider, plus manually sanitized categorical outcomes from local review. It derives a source-backed draft and asks only the unresolved decisions through the platform's native choice controls. Questions arrive in batches of one to three with two or three mutually exclusive options; the best-supported recommendation appears first. Multi-select and structured fields are broken into smaller decisions or presented as a sanitized derived summary with focused exception choices. Native questions, options, and free-form replies are model input, so they use only approved categories and opaque slots.
+
+Enter exact program or client names, target selectors, URLs, contacts, source references, private paths, authorization text, and authentication details through the local terminal wizard, a reviewed Lavish interface configured for local-only handling, or another reviewed private local interface. Do not return those literals to Codex through a tool result. Source-first inference remains intact: permitted current-conversation evidence and manually sanitized decision categories support the draft, while private literals fill opaque slots outside model context.
+
+The operator does not need to compose JSON for the sanitized categorical interview. GATE v0.1 provides clickable choices for those decisions and a numbered terminal fallback. Exact and structured private fields still require the terminal wizard or an external reviewed local controller; that local path should import, derive, or prefill values before asking the operator for any remaining short literal. The skill translates accepted non-sensitive decisions into the structure of a private v2 `BugBountyProgramProfileAnswers` envelope, while the local path applies it through `bounty profile create|resume --answers`. The reviewed questionnaire v2 contract records this choice-first preference in metadata version 4. Source-derived values remain labeled `observed`, `inferred`, or `unverified`, and unsupported choices remain unknown or explicit blockers rather than guesses.
+
+The choice interface changes how ordinary answers are collected, not what they mean. The same questionnaire, answer schema, verification rules, private storage, operator-confirmed authorization answer, and final attestation requirements apply. A native model choice can continue to local review, request revision, or defer; it cannot serve as either confirmation. After the operator views the exact private review locally, the local controller captures the operator-confirmed authorization answer, operator identity, all attestation answers, and timestamp without returning them to model context. Substantive changes invalidate that attestation and require another exact local review. A choice selection is not an engagement approval or execution confirmation, and the skill makes no target contact.
+
+### Terminal and headless fallbacks
+
+Interactive CLI creation requires a terminal. This wizard is a typed fallback rather than a clickable interface. Enum and boolean prompts show numbered choices; multi-enum prompts accept comma-separated numbers or values. Structured fields still accept their reviewed JSON shapes. The wizard saves every accepted answer, so it can be resumed and corrected before compilation. A `multiline` prompt accepts the first content line at the primary prompt, then shows a `... ` continuation prompt. Enter `.` on its own line to finish; GATE joins the content lines with newline characters. Wizard controls such as `back`, `edit ID`, `why`, `format`, `save`, and `quit` are recognized only at the primary prompt, before multiline collection begins. `format` prints a pasteable example for the current field and shows `null` as a separate alternative when the field permits it.
+
+Use an answers file with `--answers` for a headless or repeatable workflow, or when structured content is easier to prepare outside the terminal wizard. An agent using the preferred skill may prepare the non-sensitive structure and categorical answers; a local control must merge exact private values without returning the filled file to model context. The operator should not have to author raw JSON during the normal flow. Keep the file in a private location outside the repository because it may contain targets, program terms, contacts, or unpublished testing plans. Store credentials separately and answer with `env://`, `keychain://`, or `file://` references only.
 
 Start or resume the interactive wizard:
 
@@ -44,17 +75,21 @@ For a headless run, pass a private answers file. The same option can finish or a
 ./bin/gate.mjs bounty profile show acme-program --format review
 ```
 
+Run `show --format review` only in the operator's local terminal or local-only interface. It deliberately renders exact private profile details; do not run it through a model-visible tool, paste it into a model prompt, or ask an agent to ingest it. Return only an accept/revise choice or choice-safe categorical exceptions to the model-assisted interview.
+
 The file must follow the [answers schema](../schemas/bug-bounty-program-profile-answers.schema.json). Keys below `answers` are the question IDs in the reviewed [questionnaire contract](../config/questionnaires/bug-bounty-program-profile.json), for example:
 
 ```json
 {
   "$schema": "https://gate.local/schemas/bug-bounty-program-profile-answers.schema.json",
-  "apiVersion": "gate.dev/program-profile-answers/v1",
+  "apiVersion": "gate.dev/program-profile-answers/v2",
   "kind": "BugBountyProgramProfileAnswers",
   "metadata": {
     "programId": "acme-program",
     "title": "Acme program answers",
-    "updatedAt": "2026-10-14T00:00:00Z"
+    "updatedAt": "2026-10-14T00:00:00Z",
+    "baseRevision": null,
+    "baseProfileSha256": null
   },
   "answers": {
     "identity-program-name": "Acme bug bounty",
@@ -63,9 +98,9 @@ The file must follow the [answers schema](../schemas/bug-bounty-program-profile-
 }
 ```
 
-This partial example creates a draft. Supply the remaining required answers or resume the wizard before expecting verification to report `ready: true`.
+This partial v2 example creates a draft, so both base fields are `null`. A resume envelope must instead carry the exact current base. After create or apply, the CLI result exposes top-level `revision` and `profileSha256`; `status --json` exposes `profile.revision` and top-level `profileSha256`. The local controller copies those current values into `baseRevision` and `baseProfileSha256` for the next headless batch without returning them to the model. Raw status also contains the profile ID, title, and blocker details. GATE v0.1 has no built-in model-safe Program Profile projector, so keep the command local and return only manually sanitized categorical outcomes when a model assists. GATE stores and rebinds its canonical v2 envelope after each apply; the programmatic resume result returns that binding in `answers`. GATE rejects stale, mismatched, and legacy v1 resume updates, so reload the current summary rather than reconstructing or guessing either base value. Supply the remaining required answers or resume the wizard before expecting verification to report `ready: true`.
 
-Applicable module questions precede final operator attestation. Substantive edits invalidate the prior attestation; review the revised answers and attest again before compiling a ready profile. A headless amendment can include a fresh attestation only by supplying all attestation answers with a changed attestation timestamp. Answer values must match their questionnaire types, including module answers; key presence alone does not complete a module.
+Applicable module questions precede final operator attestation. Substantive edits invalidate the prior attestation; review the revised answers and attest again before compiling a ready profile. A headless amendment can include a fresh attestation only by supplying all attestation answers with a timestamp strictly later than both the current profile update and the prior attestation. Answer values must match their questionnaire types, including module answers; key presence alone does not complete a module.
 
 Interactive resume opens the first unanswered applicable required question. An unconfirmed draft value does not count as an answer: enter it explicitly to confirm it. Progress counts only applicable questions. Quitting or finishing the questions returns a bounded saved-state summary and the next command; finishing alone does not establish readiness. If all required answers are recorded but verification remains blocked, it prioritizes an exact question-path match over a broad parent blocker. For example, a recorded `false` answer to `attestation-answers-complete` reopens that question rather than `attestation-operator`. An attestation blocker without a matching question opens `attestation-at` for renewed review.
 
@@ -95,7 +130,9 @@ Verify, then compile. Optional engagement and workflow IDs label proposed downst
   --json
 ```
 
-`show --format model-context` renders a bounded view with the default proposed IDs. The compile result returns private references and SHA-256 values for the exact packet bound to its selected engagement, workflow, and provider profile.
+Run verification and compilation in the operator's local terminal. Raw verification output can include source references, asset IDs, and free-form ambiguity details. A model-assisted interview may receive only a manually sanitized categorical outcome, such as ready, blocked, or revise, plus choice-safe blocker categories.
+
+`show --format model-context` renders a bounded local view with the default proposed IDs. The compile result returns private references and SHA-256 values for the exact packet bound to its selected engagement, workflow, and provider profile.
 
 The canonical profile is stored at `GATE_HOME/programs/acme-program/program-profile.json`. A successful compile writes a 64-character digest-named directory below `GATE_HOME/programs/acme-program/compiled/`. Compilation captures one exact assessment instant and uses it for authorization readiness, provider freshness, every emitted assessment timestamp, and the directory digest. Repeating a compile with the same exact inputs and assessment instant is idempotent; a later invocation produces a distinct time-bound bundle even within the same minute. Changed input cannot overwrite an earlier bundle. The directory contains:
 
@@ -108,7 +145,7 @@ The canonical profile is stored at `GATE_HOME/programs/acme-program/program-prof
 
 GATE keeps these directories owner-only and the files owner-readable and owner-writable. Treat every file there as private.
 
-The v2 model context is a compact program-level JSON packet containing authorization basis and validity, selectors, per-asset action and limit bounds, proposed phase policies and tool allow/deny lists, data rules, stop conditions, unresolved items, and proposed engagement and workflow IDs. `show --format model-context` remains a readable rendering; the compiled machine artifact removes insignificant JSON whitespace, and its byte digest is the packet digest recorded by preflight. These policies describe the intended program workflow; they are not a workflow admission or a target-, tool-, and phase-attempt-bound execution packet. Compatibility preflight evaluates provider capabilities separately from GATE authority. Its result can be compatible, incompatible, or unknown; an incompatible or unknown provider result never changes the underlying scope or hides the intended action.
+The v3 model context is a compact program-level JSON packet bound to the `gate.dev/program-profile-compilation/v3` artifact contract. It contains authorization basis and validity, selectors, per-asset action and limit bounds, proposed phase policies and tool allow/deny lists, data rules, stop conditions, depth-aware exploration instructions, unresolved items, and proposed engagement and workflow IDs. `show --format model-context` remains a readable local rendering; the compiled machine artifact removes insignificant JSON whitespace, and its byte digest is the packet digest recorded by preflight. The packet is private `GATE_HOME` content and is not interview or prompt input. Keep it local. A future model sender must construct a separate sanitized request from explicitly approved fields and enforce the current provider, destination, classification, and release decision; v0.1 compilation does not send a packet. These policies describe the intended program workflow; they are not a workflow admission or a target-, tool-, and phase-attempt-bound execution packet. Compatibility preflight evaluates provider capabilities separately from GATE authority. Its result can be compatible, incompatible, or unknown; an incompatible or unknown provider result never changes the underlying scope or hides the intended action.
 
 A provider profile maps each action and assistance mode to `allow`, `deny`, or `unknown`. Copy the sanitized, fail-closed [provider profile template](../templates/provider-capability-profile.json) to private storage and edit it from current provider documentation or an observed capability decision:
 

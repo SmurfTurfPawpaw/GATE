@@ -7,7 +7,12 @@
   "required": ["$schema", "apiVersion", "kind", "metadata", "semantics", "sections", "conditionalModules"],
   "properties": {
     "$schema": { "type": "string", "minLength": 1 },
-    "apiVersion": { "const": "gate.dev/program-profile-questionnaire/v1" },
+    "apiVersion": {
+      "enum": [
+        "gate.dev/program-profile-questionnaire/v1",
+        "gate.dev/program-profile-questionnaire/v2"
+      ]
+    },
     "kind": { "const": "ProgramProfileQuestionnaire" },
     "metadata": {
       "type": "object",
@@ -18,6 +23,30 @@
         "title": { "$ref": "#/$defs/oneLine" },
         "version": { "type": "integer", "minimum": 1 },
         "description": { "$ref": "#/$defs/text" }
+      }
+    },
+    "interaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "style",
+        "preferredSurface",
+        "deriveBeforeAsk",
+        "maxQuestionsPerBatch",
+        "maxChoicesPerQuestion",
+        "recommendation",
+        "freeText",
+        "structuredAnswers"
+      ],
+      "properties": {
+        "style": { "const": "choice-first" },
+        "preferredSurface": { "const": "native-choice-controls" },
+        "deriveBeforeAsk": { "const": true },
+        "maxQuestionsPerBatch": { "const": 3 },
+        "maxChoicesPerQuestion": { "const": 3 },
+        "recommendation": { "const": "best-supported-first" },
+        "freeText": { "const": "short-exact-or-unrepresentable-only" },
+        "structuredAnswers": { "const": "draft-review-or-decomposed-choices" }
       }
     },
     "semantics": {

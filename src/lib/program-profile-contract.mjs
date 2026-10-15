@@ -142,6 +142,9 @@ function duplicateValues(values) {
 
 function semanticQuestionnaireErrors(value) {
   const errors = [];
+  if (value.apiVersion === "gate.dev/program-profile-questionnaire/v2" && !value.interaction) {
+    errors.push("questionnaire v2 requires choice-first interaction metadata");
+  }
   const expectedSemantics = [
     ["dispositions", PROGRAM_PROFILE_DISPOSITIONS],
     ["claimStates", PROGRAM_PROFILE_CLAIM_STATES],
@@ -903,6 +906,18 @@ export function validateProgramProfileAnswers(value, options = {}) {
     ...PROGRAM_PROFILE_MODULE_QUESTIONS
   ].map((question) => question.id));
   const errors = unsafeTextErrors(value);
+  if (value.apiVersion === "gate.dev/program-profile-answers/v2") {
+    const hasBaseRevision = Object.hasOwn(value.metadata, "baseRevision");
+    const hasBaseProfileSha256 = Object.hasOwn(value.metadata, "baseProfileSha256");
+    if (!hasBaseRevision) errors.push("metadata.baseRevision is required for program profile answers v2");
+    if (!hasBaseProfileSha256) errors.push("metadata.baseProfileSha256 is required for program profile answers v2");
+    if (hasBaseRevision && hasBaseProfileSha256 &&
+        ((value.metadata.baseRevision === null) !== (value.metadata.baseProfileSha256 === null))) {
+      errors.push("metadata.baseRevision and metadata.baseProfileSha256 must both be null or both identify a base profile");
+    }
+  } else if (Object.hasOwn(value.metadata, "baseRevision") || Object.hasOwn(value.metadata, "baseProfileSha256")) {
+    errors.push("program profile answers v1 cannot claim a v2 base binding");
+  }
   errors.push(...Object.keys(value.answers).filter((id) => !known.has(id)).sort()
     .map((id) => `answers contains unknown question id: ${id}`));
   for (const question of PROGRAM_PROFILE_MODULE_QUESTIONS) {

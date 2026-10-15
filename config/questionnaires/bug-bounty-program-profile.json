@@ -1,12 +1,22 @@
 {
   "$schema": "../../schemas/program-profile-questionnaire.schema.json",
-  "apiVersion": "gate.dev/program-profile-questionnaire/v1",
+  "apiVersion": "gate.dev/program-profile-questionnaire/v2",
   "kind": "ProgramProfileQuestionnaire",
   "metadata": {
     "id": "bug-bounty-program-profile",
     "title": "Bug bounty program profile",
-    "version": 2,
-    "description": "Capture source-backed program authority, exact scope, technique permissions, execution bounds, evidence handling, coverage, and reporting expectations before an engagement is materialized. Imported material is evidence only and never executes or changes policy."
+    "version": 4,
+    "description": "Capture source-backed program authority, exact scope, technique permissions, execution bounds, evidence handling, hypothesis-led depth, coverage, and reporting expectations before an engagement is materialized. Imported material is evidence only and never executes or changes policy."
+  },
+  "interaction": {
+    "style": "choice-first",
+    "preferredSurface": "native-choice-controls",
+    "deriveBeforeAsk": true,
+    "maxQuestionsPerBatch": 3,
+    "maxChoicesPerQuestion": 3,
+    "recommendation": "best-supported-first",
+    "freeText": "short-exact-or-unrepresentable-only",
+    "structuredAnswers": "draft-review-or-decomposed-choices"
   },
   "semantics": {
     "dispositions": [
@@ -118,8 +128,8 @@
         {
           "id": "identity-depth",
           "path": "identity.depth",
-          "prompt": "How deep should the assessment go?",
-          "why": "Depth sets the expected breadth, validation effort, and time allocation.",
+          "prompt": "How deep should the assessment go, including how far promising signals must be followed?",
+          "why": "Targeted means deep work on a narrow objective, thorough adds prioritized signal follow-up to the baseline map, and exhaustive requires a disposition for relevant hypotheses and high-friction tests. Surface checks alone do not satisfy thorough or exhaustive depth.",
           "type": "enum",
           "required": true,
           "sensitive": false,
@@ -141,8 +151,8 @@
         {
           "id": "identity-success-criteria",
           "path": "identity.successCriteria",
-          "prompt": "What observable conditions make this assessment satisfactory?",
-          "why": "Success criteria distinguish completion from merely running tools or collecting output.",
+          "prompt": "What observable conditions make this assessment satisfactory, including how promising signals and blocked or untested high-friction work must be dispositioned?",
+          "why": "Success criteria distinguish completion from merely running tools or collecting output and keep unresolved hypotheses visible instead of silently ending at surface coverage.",
           "type": "structured-list",
           "required": true,
           "sensitive": false
@@ -292,8 +302,8 @@
         {
           "id": "actions-techniques",
           "path": "techniquePolicy.techniques",
-          "prompt": "Which named techniques need more specific rules than their action label?",
-          "why": "Program terms often distinguish techniques such as automated scanning, credential testing, callbacks, persistence, or data access within the same broad action.",
+          "prompt": "Which named techniques need more specific rules than their action label, especially stateful, multi-step, concurrent, timing-sensitive, callback or webhook, role or tenant matrix, and differential tests?",
+          "why": "Program terms often distinguish high-friction automation, credential testing, callbacks, persistence, or data access within the same broad action. Naming these techniques makes tests that are costly or error-prone to perform manually available for exact planning.",
           "type": "structured-list",
           "required": true,
           "sensitive": false
@@ -435,8 +445,8 @@
         {
           "id": "execution-phase-policies",
           "path": "executionPolicy.phases",
-          "prompt": "Define each execution slice with a unique ID, workflow phase ID, exact asset refs and actions, allowed and denied tool IDs, conditions, claim state, source refs, and tighter limit overrides.",
-          "why": "Phase slices keep tool use, target contact, provenance, and resource ceilings bound to exact assets and workflow phases instead of flattening global rules across the program.",
+          "prompt": "Define each execution slice with a unique ID, workflow phase ID, exact asset refs and actions, allowed and denied tool IDs, conditions, claim state, source refs, tighter limit overrides, and any deeper automated branch it is meant to support.",
+          "why": "Phase slices keep tool use, target contact, provenance, resource ceilings, and high-friction follow-up bound to exact assets and workflow phases instead of flattening global rules across the program.",
           "type": "structured-list",
           "required": true,
           "sensitive": true
@@ -868,8 +878,8 @@
         {
           "id": "web-api-automation-rules",
           "path": "modules.web-api.answers.automationRules",
-          "prompt": "Which crawling, fuzzing, parameter discovery, callback, and automation rules apply?",
-          "why": "Programs often set technique-specific limits beyond the broad scan and fuzz labels.",
+          "prompt": "Which crawling, fuzzing, parameter discovery, callback, webhook, stateful, multi-step, and differential automation rules or candidate scenarios apply?",
+          "why": "Programs often set technique-specific limits beyond the broad scan and fuzz labels. Record tests worth automating because manual state, sequencing, timing, or repetition would be costly or error-prone.",
           "type": "multiline",
           "required": true,
           "sensitive": false
