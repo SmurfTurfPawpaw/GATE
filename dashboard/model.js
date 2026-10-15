@@ -278,8 +278,8 @@ function displayName(value, maximum = 80) {
 }
 
 function caseDisplayName(value) {
-  if (typeof value !== "string" || !value || value.length > 60 || value !== value.trim()) return null;
-  return /^[A-Za-z][A-Za-z0-9 .'-]*$/u.test(value) ? value : null;
+  if (typeof value !== "string" || !value || value.length > 60) return null;
+  return /^[A-Za-z][A-Za-z0-9 .'-]*$/u.test(value) ? value.trim() : null;
 }
 
 /**

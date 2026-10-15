@@ -1262,3 +1262,27 @@ test("case status is normalized from current binding metadata and runtime failur
   assert.equal(status.cases[2].execution.runningCount, null);
   assert.equal(JSON.stringify(status).includes("PRIVATE_RUNTIME_FAILURE"), false);
 });
+
+test("case projection preserves schema-valid trailing spaces as trimmed display labels", () => {
+  for (const status of ["ready", "stale"]) {
+    for (const label of ["Alpha ", "A" + " ".repeat(59)]) {
+      const projected = sanitizeStatusPayload({ cases: [{
+        id: `case_${"1".repeat(16)}`,
+        displayName: label,
+        status,
+        binding: {
+          program: { id: `program_${"2".repeat(16)}`, current: status === "ready" },
+          project: null
+        },
+        isolation: {
+          stateNamespace: "isolated-directory",
+          processBoundary: "shared-user",
+          networkBoundary: "adapter-dependent"
+        }
+      }] });
+      assert.equal(projected.cases.length, 1);
+      assert.equal(projected.cases[0].displayName, label.startsWith("Alpha") ? "Alpha" : "A");
+      assert.equal(projected.cases[0].status, status);
+    }
+  }
+});

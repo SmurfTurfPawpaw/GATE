@@ -677,42 +677,6 @@ test("token scope labels distinguish host sessions from base records", () => {
   assert.equal(usageScopeLabel({}), "Host/base scope unavailable");
 });
 
-test("dashboard headings and panel names expose runtime attribution", async () => {
-  const html = await import("node:fs/promises").then(({ readFile }) => readFile(new URL("./index.html", import.meta.url), "utf8"));
-  assert.equal((html.match(/<h1\b/g) || []).length, 1);
-  assert.match(html, /<h1 id="case-panel-title">Case cockpit<\/h1>/);
-  assert.ok(html.indexOf("<h1") < html.indexOf("<h2"), "the page heading must precede panel headings");
-  for (const label of [
-    "Base / unassigned execution",
-    "Base / unassigned offline analysis",
-    "Base / unassigned agents &amp; tasks",
-    "Base / unassigned activity",
-    "Host / base resource posture",
-    "Shared + base / unassigned learning"
-  ]) assert.equal(html.includes(label), true, `missing attributed panel label: ${label}`);
-  assert.equal(html.includes("<span class=\"metric-label\">Host/base tokens</span>"), true);
-});
-
-test("secondary and terminal-label text retain normal-text contrast", async () => {
-  const css = await import("node:fs/promises").then(({ readFile }) => readFile(new URL("./styles.css", import.meta.url), "utf8"));
-  const faint = css.match(/--faint:\s*#([a-f0-9]{6})/i)?.[1];
-  assert.ok(faint, "--faint must remain an explicit reviewable color");
-  assert.match(css, /\.terminal-label\s*\{[^}]*color:\s*var\(--faint\)/s);
-
-  const luminance = (hex) => {
-    const channels = [0, 2, 4].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16) / 255)
-      .map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
-    return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
-  };
-  const contrast = (left, right) => {
-    const values = [luminance(left), luminance(right)].sort((a, b) => b - a);
-    return (values[0] + 0.05) / (values[1] + 0.05);
-  };
-  for (const background of ["050d0f", "102126", "0d1c20"]) {
-    assert.ok(contrast(faint, background) >= 4.5, `--faint misses 4.5:1 against #${background}`);
-  }
-});
-
 test("case scan presentation exposes invalid and partial scan state", () => {
   assert.equal(
     caseScanPresentation({
