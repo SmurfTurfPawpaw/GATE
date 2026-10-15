@@ -124,7 +124,7 @@
     "activePhase": {
       "oneOf": [
         {
-          "type": "object"
+          "$ref": "#/$defs/phaseProjection"
         },
         {
           "type": "null"
@@ -134,7 +134,7 @@
     "phases": {
       "type": "object",
       "additionalProperties": {
-        "type": "object"
+        "$ref": "#/$defs/phaseProjection"
       }
     },
     "evidence": {
@@ -323,6 +323,328 @@
     "sha256": {
       "type": "string",
       "pattern": "^[a-f0-9]{64}$"
+    },
+    "phaseProjection": {
+      "type": "object",
+      "properties": {
+        "tests": {
+          "type": "object",
+          "maxProperties": 10000,
+          "additionalProperties": {
+            "$ref": "#/$defs/testProjection"
+          }
+        }
+      }
+    },
+    "testProjection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "testId",
+        "phaseId",
+        "attemptId",
+        "hypothesis",
+        "method",
+        "expectedSignal",
+        "contrarySignal",
+        "learningApplicability",
+        "learningIds",
+        "learningLedgerHeadSha256",
+        "learningProjectionSha256",
+        "basisEvidenceSha256",
+        "priorReviewEntrySha256",
+        "adaptation",
+        "status",
+        "plannedAt",
+        "planSequence",
+        "planEntrySha256",
+        "review"
+      ],
+      "properties": {
+        "testId": {
+          "type": "string",
+          "pattern": "^wtest_[a-f0-9]{32}$"
+        },
+        "phaseId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{1,79}$"
+        },
+        "attemptId": {
+          "type": "string",
+          "pattern": "^wpa_[a-f0-9]{32}$"
+        },
+        "hypothesis": {
+          "$ref": "#/$defs/testLine"
+        },
+        "method": {
+          "$ref": "#/$defs/testLine"
+        },
+        "expectedSignal": {
+          "$ref": "#/$defs/testLine"
+        },
+        "contrarySignal": {
+          "$ref": "#/$defs/testLine"
+        },
+        "learningIds": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^lrn_[A-Za-z0-9][A-Za-z0-9_-]{5,127}$"
+          }
+        },
+        "learningLedgerHeadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "learningProjectionSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "basisEvidenceSha256": {
+          "$ref": "#/$defs/testDigestList"
+        },
+        "priorReviewEntrySha256": {
+          "$ref": "#/$defs/nullableSha256"
+        },
+        "adaptation": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/testLine"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "enum": [
+            "planned",
+            "reviewed"
+          ]
+        },
+        "plannedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "planEntrySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "review": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/testReviewProjection"
+            }
+          ]
+        },
+        "learningApplicability": {
+          "$ref": "#/$defs/learningApplicability"
+        },
+        "planSequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        }
+      }
+    },
+    "testReviewProjection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "disposition",
+        "observation",
+        "evidenceSha256",
+        "metrics",
+        "usefulMistake",
+        "nextStrategy",
+        "reviewedAt",
+        "reviewSequence",
+        "reviewEntrySha256"
+      ],
+      "properties": {
+        "disposition": {
+          "enum": [
+            "supported",
+            "contradicted",
+            "inconclusive",
+            "blocked",
+            "invalid-test"
+          ]
+        },
+        "observation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
+          "pattern": "^[^\\u0000\\r\\n]+$"
+        },
+        "evidenceSha256": {
+          "$ref": "#/$defs/testDigestList"
+        },
+        "metrics": {
+          "$ref": "#/$defs/testMetrics"
+        },
+        "usefulMistake": {
+          "$ref": "#/$defs/testUsefulMistake"
+        },
+        "nextStrategy": {
+          "$ref": "#/$defs/testNextStrategy"
+        },
+        "reviewedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "reviewSequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        },
+        "reviewEntrySha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "testLine": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000,
+      "pattern": "^[^\\u0000\\r\\n]+$"
+    },
+    "nullableSha256": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/sha256"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "testDigestList": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/sha256"
+      }
+    },
+    "testMetrics": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "maxProperties": 32,
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          },
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "const": "unavailable"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "testUsefulMistake": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cause",
+            "change"
+          ],
+          "properties": {
+            "cause": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "pattern": "^[^\\u0000\\r\\n]+$"
+            },
+            "change": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "pattern": "^[^\\u0000\\r\\n]+$"
+            }
+          }
+        }
+      ]
+    },
+    "testNextStrategy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decision",
+        "rationale"
+      ],
+      "properties": {
+        "decision": {
+          "enum": [
+            "stop",
+            "iterate-within-current-envelope",
+            "defer",
+            "requires-new-authority"
+          ]
+        },
+        "rationale": {
+          "$ref": "#/$defs/testLine"
+        }
+      }
+    },
+    "learningApplicabilityRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "component",
+            "workflow",
+            "phase",
+            "tool",
+            "adapter",
+            "test",
+            "environment"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9._-]{1,127}$"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$"
+        },
+        "digest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "learningApplicability": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/learningApplicabilityRef"
+      }
     }
   }
 }

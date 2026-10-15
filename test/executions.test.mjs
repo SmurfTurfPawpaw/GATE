@@ -15,6 +15,7 @@ import {
   recordTechnicalReview,
   revokeEngagement
 } from "../src/lib/engagements.mjs";
+import { consultLearnings } from "../src/lib/learnings.mjs";
 import {
   createExecutionManifest,
   executeExecutionManifest,
@@ -29,8 +30,11 @@ import { validateDocument } from "../src/lib/schema.mjs";
 import {
   addWorkflowEvidence,
   cancelWorkflowExecution,
+  completeWorkflowExecution,
   createWorkflowInstance,
   finishWorkflowPhase,
+  planWorkflowTest,
+  reviewWorkflowTest,
   startWorkflowPhase,
   workflowRuntimeInternals,
   workflowStatus
@@ -39,11 +43,20 @@ import {
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const gate = path.join(repo, "bin", "gate.mjs");
 const workflowDefinition = JSON.parse(fs.readFileSync(path.join(repo, "config", "workflows", "pentest-e2e.json"), "utf8"));
+const fixtureScopes = new WeakMap();
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-execution-"));
   const paths = runtimePaths({ home: path.join(root, "home"), repo });
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const scopes = [];
+  fixtureScopes.set(paths, scopes);
+  t.after(() => {
+    try {
+      for (const scope of scopes) finalizeFixtureCycle(scope, paths);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
   return { root, paths };
 }
 
@@ -174,7 +187,154 @@ function approve(paths, root, options = {}) {
     sourcePhase: "target-and-architecture-map",
     admissionFile
   }, { paths });
-  return { id, target, action, toolId, workflowId, phaseAttemptId: started.projection.activePhase.attemptId };
+  const scope = {
+    id,
+    target,
+    action,
+    toolId,
+    workflowId,
+    phaseAttemptId: started.projection.activePhase.attemptId,
+    feedback: {
+      root,
+      cycle: 0,
+      latestReviewEntrySha256: null,
+      planned: null,
+      evidenceSha256: [],
+      finish: options.finishFeedback !== false
+    }
+  };
+  if (options.feedback !== false) {
+    planFixtureCycle(scope, paths);
+    fixtureScopes.get(paths)?.push(scope);
+  }
+  return scope;
+}
+
+function planFixtureCycle(scope, paths) {
+  const workflow = workflowStatus(scope.workflowId, { paths });
+  const feedbackApplicability = [
+    {
+      kind: "workflow",
+      id: workflow.contract.id,
+      version: String(workflow.contract.version),
+      digest: workflow.contract.sha256
+    },
+    { kind: "phase", id: "active-surface-validation" },
+    { kind: "tool", id: scope.toolId }
+  ];
+  const consultation = consultLearnings({ applicability: feedbackApplicability }, { paths });
+  const priorReviewEntrySha256 = scope.feedback.latestReviewEntrySha256;
+  const planned = planWorkflowTest(scope.workflowId, {
+    phaseId: "active-surface-validation",
+    attemptId: scope.phaseAttemptId,
+    hypothesis: "The bounded execution fixture should produce a terminal result and declared phase evidence.",
+    method: "Run one supervised fixture execution under the active admission and preserve its result.",
+    expectedSignal: "The execution reaches a terminal state with its declared evidence recorded.",
+    contrarySignal: "The execution cannot reach a terminal state or its evidence cannot be preserved.",
+    learningApplicability: feedbackApplicability,
+    learningIds: consultation.selected.map((learning) => learning.id),
+    learningLedgerHeadSha256: consultation.ledgerHeadSha256,
+    learningProjectionSha256: consultation.projectionSha256,
+    basisEvidenceSha256: [],
+    priorReviewEntrySha256,
+    adaptation: priorReviewEntrySha256
+      ? "Retry only the changed manifest or executable condition identified by the prior review."
+      : null
+  }, { paths });
+  scope.feedback.cycle += 1;
+  const phase = workflowDefinition.phases.find((candidate) => candidate.id === "active-surface-validation");
+  const evidenceSha256 = [];
+  for (const evidence of phase.evidence.filter((record) => record.required)) {
+    const file = path.join(scope.feedback.root,
+      `${scope.id}-feedback-${scope.feedback.cycle}-${evidence.id}.txt`);
+    const bytes = Buffer.from(`${evidence.id}: execution feedback cycle ${scope.feedback.cycle}\n`);
+    fs.writeFileSync(file, bytes, { mode: 0o600 });
+    const added = addWorkflowEvidence(scope.workflowId, {
+      phaseId: phase.id,
+      evidenceId: evidence.id,
+      claimState: evidence.claimState,
+      file
+    }, { paths });
+    evidenceSha256.push(added.entry.payload.sha256);
+  }
+  scope.feedback.planned = planned;
+  scope.feedback.evidenceSha256 = evidenceSha256;
+  return planned;
+}
+
+function finalizeFixtureCycle(scope, paths, options = {}) {
+  const planned = scope.feedback?.planned;
+  if (!planned) return null;
+  const projectionFile = workflowRuntimeInternals.workflowPaths(paths, scope.workflowId).workflowProjection;
+  let projection = JSON.parse(fs.readFileSync(projectionFile, "utf8"));
+  let reservation = Object.values(projection.executionReservations)
+    .find((candidate) => candidate.testId === planned.entry.payload.testId);
+  if (reservation?.status === "reserved") {
+    cancelWorkflowExecution(scope.workflowId, {
+      reservationId: reservation.reservationId,
+      reason: "Fixture cleanup terminalized an unused planned execution."
+    }, { paths });
+  } else if (reservation?.status === "claimed") {
+    completeWorkflowExecution(scope.workflowId, {
+      reservationId: reservation.reservationId,
+      status: "blocked",
+      runSha256: "e".repeat(64),
+      terminationReason: "Fixture cleanup terminalized an incomplete claimed execution."
+    }, { paths });
+  }
+  projection = JSON.parse(fs.readFileSync(projectionFile, "utf8"));
+  reservation = Object.values(projection.executionReservations)
+    .find((candidate) => candidate.testId === planned.entry.payload.testId);
+  let reviewEvidenceSha256 = scope.feedback.evidenceSha256;
+  let completedResultBound = false;
+  if (reservation?.status === "completed" && reservation.resultSha256) {
+    const resultFile = path.join(paths.evidence, `execution-${reservation.runId}-result.json`);
+    if (fs.existsSync(resultFile)) {
+      const phase = workflowDefinition.phases.find((candidate) => candidate.id === "active-surface-validation");
+      const evidence = phase.evidence.find((candidate) => candidate.required);
+      const added = addWorkflowEvidence(scope.workflowId, {
+        phaseId: phase.id,
+        evidenceId: evidence.id,
+        claimState: evidence.claimState,
+        file: resultFile
+      }, { paths });
+      assert.equal(added.entry.payload.sha256, reservation.resultSha256);
+      reviewEvidenceSha256 = [reservation.resultSha256];
+      completedResultBound = true;
+    }
+  }
+  const disposition = options.disposition || (reservation ? "inconclusive" : "invalid-test");
+  const reviewed = reviewWorkflowTest(scope.workflowId, {
+    testId: planned.entry.payload.testId,
+    phaseId: planned.entry.payload.phaseId,
+    attemptId: planned.entry.payload.attemptId,
+    planEntrySha256: planned.entry.entrySha256,
+    disposition,
+    observation: reservation
+      ? `The fixture reservation reached terminal state ${reservation.status}.`
+      : "Manifest validation ended before a target-contact reservation was created.",
+    evidenceSha256: reviewEvidenceSha256,
+    metrics: null,
+    usefulMistake: null,
+    nextStrategy: { decision: "stop", rationale: "The focused execution assertion is complete." }
+  }, { paths });
+  scope.feedback.latestReviewEntrySha256 = reviewed.entry.entrySha256;
+  scope.feedback.planned = null;
+  scope.feedback.evidenceSha256 = [];
+  projection = JSON.parse(fs.readFileSync(projectionFile, "utf8"));
+  const finish = options.finish ?? scope.feedback.finish;
+  if (finish && projection.status === "open" &&
+    projection.activePhase?.attemptId === scope.phaseAttemptId) {
+    const tested = completedResultBound;
+    finishWorkflowPhase(scope.workflowId, {
+      phaseId: "active-surface-validation",
+      disposition: tested ? "tested" : "blocked",
+      ...(tested ? {} : {
+        rationale: "The fixture execution did not complete successfully, so it cannot establish tested coverage."
+      })
+    }, { paths });
+  }
+  return reviewed;
 }
 
 function resolver(toolId, executable = process.execPath, riskClass = "A1") {
@@ -484,10 +644,12 @@ test("manifest creation rejects environment, target, argv0, and placeholder mism
   );
 });
 
-test("generic manifest creation rejects an active A3 workflow phase before persistence", (t) => {
+test("generic manifest creation rejects a forged A3 phase before persistence", (t) => {
   requireLane(t);
   const { root, paths } = fixture(t);
-  const scope = approve(paths, root, { id: "a3-generic", target: "a3.example.test" });
+  const scope = approve(paths, root, {
+    id: "a3-generic", target: "a3.example.test", feedback: false
+  });
   const workflowDirectory = path.join(paths.workflows, scope.workflowId);
   const journalFile = path.join(workflowDirectory, "journal.jsonl");
   const projectionFile = path.join(workflowDirectory, "instance.json");
@@ -506,9 +668,11 @@ test("generic manifest creation rejects an active A3 workflow phase before persi
       paths,
       resolveTool: resolver(scope.toolId)
     }),
-    /generic execution lane cannot execute an A3 phase/u
+    /phase start journal entry differs from the installed phase: effectClass/u
   );
-  assert.deepEqual(workflowStatus(scope.workflowId, { paths }).executionReservations, []);
+  const blocked = workflowStatus(scope.workflowId, { paths });
+  assert.equal(blocked.ok, false);
+  assert.match(blocked.blocker, /phase start journal entry differs from the installed phase: effectClass/u);
   assert.deepEqual(fs.readdirSync(paths.executionManifests), []);
 });
 
@@ -538,6 +702,8 @@ test("manifest invariants and launch-time executable identity fail closed", asyn
     reservationId: first.workflow.reservationId,
     reason: "The tampered fixture manifest will not be executed."
   }, { paths });
+  finalizeFixtureCycle(scope, paths, { finish: false, disposition: "invalid-test" });
+  planFixtureCycle(scope, paths);
 
   const second = createExecutionManifest(scope.id, manifestInput(scope, ["{{GATE_TARGET}}"]), {
     paths,
@@ -588,7 +754,9 @@ test("evidence limiting durably records a bounded prefix and terminal audit", as
 test("authorization revocation polling terminates the authenticated process group", async (t) => {
   requireLane(t);
   const { root, paths } = fixture(t);
-  const scope = approve(paths, root, { id: "revoke-running", target: "127.0.0.1" });
+  const scope = approve(paths, root, {
+    id: "revoke-running", target: "127.0.0.1", finishFeedback: false
+  });
   const script = "process.on('SIGTERM',()=>{});setInterval(()=>{},1000);";
   const created = createExecutionManifest(scope.id, manifestInput(scope, ["-e", script, "{{GATE_TARGET}}"]), {
     paths,

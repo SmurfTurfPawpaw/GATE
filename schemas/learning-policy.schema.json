@@ -4,7 +4,7 @@
   "title": "GATE learning policy",
   "type": "object",
   "additionalProperties": false,
-  "required": ["$schema", "apiVersion", "kind", "metadata", "triggers", "record", "scopes", "promotion", "protectedBoundaries", "untrustedInput"],
+  "required": ["$schema", "apiVersion", "kind", "metadata", "triggers", "record", "scopes", "promotion", "consultation", "testFeedback", "protectedBoundaries", "untrustedInput"],
   "properties": {
     "$schema": { "type": "string", "minLength": 1 },
     "apiVersion": { "const": "gate.dev/policy/v1" },
@@ -65,15 +65,43 @@
         }
       }
     },
+    "consultation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["activeOnly", "exactApplicability", "deterministic", "maxRecords", "maxBytes", "conflictBehavior", "hotReloadDuringAttempt"],
+      "properties": {
+        "activeOnly": { "const": true },
+        "exactApplicability": { "const": true },
+        "deterministic": { "const": true },
+        "maxRecords": { "type": "integer", "minimum": 1, "maximum": 32 },
+        "maxBytes": { "type": "integer", "minimum": 512, "maximum": 16384 },
+        "conflictBehavior": { "const": "block" },
+        "hotReloadDuringAttempt": { "const": false }
+      }
+    },
+    "testFeedback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["destination", "hashChained", "reviewIsAdvisory", "routineResultsBecomeLearning", "nextAttemptRequiresExplicitPlan"],
+      "properties": {
+        "destination": { "const": "private-workflow-journal" },
+        "hashChained": { "const": true },
+        "reviewIsAdvisory": { "const": true },
+        "routineResultsBecomeLearning": { "const": false },
+        "nextAttemptRequiresExplicitPlan": { "const": true }
+      }
+    },
     "protectedBoundaries": { "$ref": "#/$defs/tokenList" },
     "untrustedInput": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["mayPropose", "mayDirectlyWritePersistentMemory", "mayChangePolicy"],
+      "required": ["mayPropose", "mayActivate", "mayDirectlyWritePersistentMemory", "mayChangePolicy", "mayLaunchTest"],
       "properties": {
         "mayPropose": { "const": true },
+        "mayActivate": { "const": false },
         "mayDirectlyWritePersistentMemory": { "const": false },
-        "mayChangePolicy": { "const": false }
+        "mayChangePolicy": { "const": false },
+        "mayLaunchTest": { "const": false }
       }
     }
   },

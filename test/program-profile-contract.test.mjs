@@ -281,6 +281,18 @@ test("questionnaire exposes the exact 12-section, 9-module, 13-action, 13-stop, 
 
   const questionnaire = loadProgramProfileQuestionnaire({ repo });
   assert.deepEqual(validateProgramProfileQuestionnaire(questionnaire, { repo }).errors, []);
+  assert.equal(questionnaire.apiVersion, "gate.dev/program-profile-questionnaire/v2");
+  assert.equal(questionnaire.metadata.version, 4);
+  assert.deepEqual(questionnaire.interaction, {
+    style: "choice-first",
+    preferredSurface: "native-choice-controls",
+    deriveBeforeAsk: true,
+    maxQuestionsPerBatch: 3,
+    maxChoicesPerQuestion: 3,
+    recommendation: "best-supported-first",
+    freeText: "short-exact-or-unrepresentable-only",
+    structuredAnswers: "draft-review-or-decomposed-choices"
+  });
   assert.deepEqual(questionnaire.semantics.actions, PROGRAM_PROFILE_ACTIONS);
   assert.deepEqual(questionnaire.semantics.assistanceModes, PROGRAM_PROFILE_ASSISTANCE_MODES);
   assert.deepEqual(questionnaire.semantics.stopConditions, PROGRAM_PROFILE_STOP_CONDITIONS);
@@ -290,6 +302,26 @@ test("questionnaire exposes the exact 12-section, 9-module, 13-action, 13-stop, 
     question.condition.path === "questionnaire.applicableModules" && question.condition.includes === question.module
   ));
   assert.equal(Object.isFrozen(PROGRAM_PROFILE_QUESTIONNAIRE), true);
+
+  const questions = new Map(PROGRAM_PROFILE_QUESTIONS.map((question) => [question.id, question]));
+  assert.match(questions.get("identity-depth").why, /Surface checks alone/u);
+  assert.match(questions.get("identity-success-criteria").prompt, /promising signals/u);
+  assert.match(questions.get("actions-techniques").prompt, /stateful.*webhook/u);
+  assert.match(questions.get("execution-phase-policies").why, /high-friction follow-up/u);
+  assert.match(questions.get("web-api-automation-rules").why, /costly or error-prone/u);
+});
+
+test("questionnaire v2 requires choice-first interaction metadata while v1 remains readable", () => {
+  const questionnaire = loadProgramProfileQuestionnaire({ repo });
+  const missingInteraction = structuredClone(questionnaire);
+  delete missingInteraction.interaction;
+  assert.ok(validateProgramProfileQuestionnaire(missingInteraction, { repo }).errors.some((error) =>
+    error.includes("interaction")
+  ));
+
+  const legacy = structuredClone(missingInteraction);
+  legacy.apiVersion = "gate.dev/program-profile-questionnaire/v1";
+  assert.deepEqual(validateProgramProfileQuestionnaire(legacy, { repo }).errors, []);
 });
 
 test("questionnaire validation requires exact execution-policy questions and assistance choices", () => {
@@ -513,6 +545,33 @@ test("headless answers accept known question ids and reject unknown ids", () => 
   const validation = validateProgramProfileAnswers(unknown, { repo });
   assert.equal(validation.ok, false);
   assert.deepEqual(validation.errors, ["answers contains unknown question id: invented-question"]);
+});
+
+test("answer envelope v2 requires an explicit paired base binding while v1 remains readable", () => {
+  const unbound = answerEnvelope({ "identity-objective": "Create a new private profile." });
+  unbound.apiVersion = "gate.dev/program-profile-answers/v2";
+  unbound.metadata.baseRevision = null;
+  unbound.metadata.baseProfileSha256 = null;
+  assert.deepEqual(validateProgramProfileAnswers(unbound, { repo }).errors, []);
+
+  const missing = structuredClone(unbound);
+  delete missing.metadata.baseProfileSha256;
+  assert.ok(validateProgramProfileAnswers(missing, { repo }).errors.some((error) =>
+    error.includes("metadata.baseProfileSha256 is required")
+  ));
+
+  const unpaired = structuredClone(unbound);
+  unpaired.metadata.baseRevision = 1;
+  assert.ok(validateProgramProfileAnswers(unpaired, { repo }).errors.some((error) =>
+    error.includes("must both be null or both identify a base profile")
+  ));
+
+  const legacyWithBinding = answerEnvelope({});
+  legacyWithBinding.metadata.baseRevision = 1;
+  legacyWithBinding.metadata.baseProfileSha256 = "a".repeat(64);
+  assert.ok(validateProgramProfileAnswers(legacyWithBinding, { repo }).errors.some((error) =>
+    error.includes("v1 cannot claim a v2 base binding")
+  ));
 });
 
 test("normalization is pure and produces stable ids, vocabularies, and source references", () => {

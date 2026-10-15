@@ -15,6 +15,7 @@ import {
   createEngagement,
   recordTechnicalReview
 } from "../src/lib/engagements.mjs";
+import { consultLearnings } from "../src/lib/learnings.mjs";
 import {
   createManagedExecutionManifest,
   executeExecutionManifest,
@@ -30,8 +31,12 @@ import { canonicalSha256, currentRuntimePlatform } from "../src/lib/tool-runtime
 import { toolPlan } from "../src/lib/tools.mjs";
 import {
   addWorkflowEvidence,
+  cancelWorkflowExecution,
+  completeWorkflowExecution,
   createWorkflowInstance,
   finishWorkflowPhase,
+  planWorkflowTest,
+  reviewWorkflowTest,
   startWorkflowPhase,
   stopWorkflow,
   workflowRuntimeInternals,
@@ -48,6 +53,7 @@ const executionLane = executionCapability();
 const managedTest = executionLane.laneAvailable && new Set(["linux-x64", "linux-arm64"]).has(platform.key)
   ? test
   : test.skip;
+const fixtureScopes = new WeakMap();
 
 function sha256(bytes) {
   return crypto.createHash("sha256").update(bytes).digest("hex");
@@ -218,7 +224,15 @@ function fixture(t) {
       reasons: []
     };
   };
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const scopes = [];
+  fixtureScopes.set(paths, scopes);
+  t.after(() => {
+    try {
+      for (const scope of scopes) finalizeFixtureCycle(scope, paths);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
   return { root, contractRepo, paths, verifyManagedTool, runSmoke };
 }
 
@@ -332,13 +346,131 @@ function approve(paths, root, { id, target, toolId, exclude = [] }) {
     sourcePhase: "target-and-architecture-map",
     admissionFile
   }, { paths });
-  return {
+  const scope = {
     id,
     target,
     toolId,
     workflowId,
-    phaseAttemptId: started.projection.activePhase.attemptId
+    phaseAttemptId: started.projection.activePhase.attemptId,
+    feedback: { root, planned: null, evidenceSha256: [] }
   };
+  planFixtureCycle(scope, paths);
+  fixtureScopes.get(paths)?.push(scope);
+  return scope;
+}
+
+function planFixtureCycle(scope, paths) {
+  const workflow = workflowStatus(scope.workflowId, { paths });
+  const feedbackApplicability = [
+    {
+      kind: "workflow",
+      id: workflow.contract.id,
+      version: String(workflow.contract.version),
+      digest: workflow.contract.sha256
+    },
+    { kind: "phase", id: "active-surface-validation" },
+    { kind: "tool", id: scope.toolId }
+  ];
+  const consultation = consultLearnings({ applicability: feedbackApplicability }, { paths });
+  const planned = planWorkflowTest(scope.workflowId, {
+    phaseId: "active-surface-validation",
+    attemptId: scope.phaseAttemptId,
+    hypothesis: "The reviewed managed adapter should produce a terminal bounded observation.",
+    method: "Run one managed adapter fixture under the active admission and preserve declared evidence.",
+    expectedSignal: "The adapter reaches a terminal state and records the phase evidence.",
+    contrarySignal: "The adapter cannot reach a terminal state or preserve its declared evidence.",
+    learningApplicability: feedbackApplicability,
+    learningIds: consultation.selected.map((learning) => learning.id),
+    learningLedgerHeadSha256: consultation.ledgerHeadSha256,
+    learningProjectionSha256: consultation.projectionSha256,
+    basisEvidenceSha256: [],
+    priorReviewEntrySha256: null,
+    adaptation: null
+  }, { paths });
+  const phase = sourceWorkflow.phases.find((candidate) => candidate.id === "active-surface-validation");
+  const evidenceSha256 = [];
+  for (const evidence of phase.evidence.filter((record) => record.required)) {
+    const file = path.join(scope.feedback.root, `${scope.id}-feedback-${evidence.id}.txt`);
+    fs.writeFileSync(file, `${evidence.id}: managed adapter feedback fixture\n`, { mode: 0o600 });
+    const added = addWorkflowEvidence(scope.workflowId, {
+      phaseId: phase.id,
+      evidenceId: evidence.id,
+      claimState: evidence.claimState,
+      file
+    }, { paths });
+    evidenceSha256.push(added.entry.payload.sha256);
+  }
+  scope.feedback.planned = planned;
+  scope.feedback.evidenceSha256 = evidenceSha256;
+}
+
+function finalizeFixtureCycle(scope, paths) {
+  const planned = scope.feedback?.planned;
+  if (!planned) return;
+  const projectionFile = workflowRuntimeInternals.workflowPaths(paths, scope.workflowId).workflowProjection;
+  let projection = JSON.parse(fs.readFileSync(projectionFile, "utf8"));
+  let reservation = Object.values(projection.executionReservations)
+    .find((candidate) => candidate.testId === planned.entry.payload.testId);
+  if (reservation?.status === "reserved") {
+    cancelWorkflowExecution(scope.workflowId, {
+      reservationId: reservation.reservationId,
+      reason: "Fixture cleanup terminalized an unused managed execution."
+    }, { paths });
+  } else if (reservation?.status === "claimed") {
+    completeWorkflowExecution(scope.workflowId, {
+      reservationId: reservation.reservationId,
+      status: "blocked",
+      runSha256: "e".repeat(64),
+      terminationReason: "Fixture cleanup terminalized an incomplete managed execution."
+    }, { paths });
+  }
+  projection = JSON.parse(fs.readFileSync(projectionFile, "utf8"));
+  reservation = Object.values(projection.executionReservations)
+    .find((candidate) => candidate.testId === planned.entry.payload.testId);
+  let reviewEvidenceSha256 = scope.feedback.evidenceSha256;
+  let completedResultBound = false;
+  if (reservation?.status === "completed" && reservation.resultSha256) {
+    const resultFile = path.join(paths.evidence, `execution-${reservation.runId}-result.json`);
+    if (fs.existsSync(resultFile)) {
+      const phase = sourceWorkflow.phases.find((candidate) => candidate.id === "active-surface-validation");
+      const evidence = phase.evidence.find((candidate) => candidate.required);
+      const added = addWorkflowEvidence(scope.workflowId, {
+        phaseId: phase.id,
+        evidenceId: evidence.id,
+        claimState: evidence.claimState,
+        file: resultFile
+      }, { paths });
+      assert.equal(added.entry.payload.sha256, reservation.resultSha256);
+      reviewEvidenceSha256 = [reservation.resultSha256];
+      completedResultBound = true;
+    }
+  }
+  reviewWorkflowTest(scope.workflowId, {
+    testId: planned.entry.payload.testId,
+    phaseId: planned.entry.payload.phaseId,
+    attemptId: planned.entry.payload.attemptId,
+    planEntrySha256: planned.entry.entrySha256,
+    disposition: reservation ? "inconclusive" : "invalid-test",
+    observation: reservation
+      ? `The managed fixture reservation reached terminal state ${reservation.status}.`
+      : "Managed manifest validation ended before a target-contact reservation was created.",
+    evidenceSha256: reviewEvidenceSha256,
+    metrics: null,
+    usefulMistake: null,
+    nextStrategy: { decision: "stop", rationale: "The focused managed adapter assertion is complete." }
+  }, { paths });
+  scope.feedback.planned = null;
+  projection = JSON.parse(fs.readFileSync(projectionFile, "utf8"));
+  if (projection.status === "open" && projection.activePhase?.attemptId === scope.phaseAttemptId) {
+    const tested = completedResultBound;
+    finishWorkflowPhase(scope.workflowId, {
+      phaseId: "active-surface-validation",
+      disposition: tested ? "tested" : "blocked",
+      ...(tested ? {} : {
+        rationale: "The managed fixture execution did not complete successfully, so it cannot establish tested coverage."
+      })
+    }, { paths });
+  }
 }
 
 function managedInput(scope, adapterId, operation) {

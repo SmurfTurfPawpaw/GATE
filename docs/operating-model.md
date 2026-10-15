@@ -250,7 +250,7 @@ YYYY-MM-DD | Cause: what happened | Change: the durable behavior or configuratio
 
 Sensitive detail belongs in the private JSONL record. The public line explains behavior without naming targets, credentials, private paths, or unreleased findings.
 
-A lesson is complete only when the related behavior, configuration, test, or documentation changes. The operating contract assigns deduplication, redaction, validation, and project or repository promotion to No Mistakes, but v0.1 does not invoke that workflow automatically. Run it externally and retain truthful evidence. New evidence may supersede or revert a lesson; history is retained.
+A lesson is complete only when the related behavior, configuration, test, or documentation changes. The operating contract assigns deduplication, redaction, validation, and project or repository promotion to No Mistakes, but v0.1 does not invoke that workflow automatically. Run it externally and retain truthful evidence. New evidence may replace or revert effective guidance only through a reviewed candidate whose digest already binds the predecessor IDs; the append-only history is retained and replaced ancestors are presented as superseded.
 
 ## Evidence and reports
 

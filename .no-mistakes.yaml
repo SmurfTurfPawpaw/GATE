@@ -26,6 +26,7 @@ protected_paths:
   - ".no-mistakes.yaml"
   - ".github/**"
   - "AGENTS.md"
+  - "OPINIONS.md"
   - "SECURITY.md"
   - "package.json"
   - "package-lock.json"

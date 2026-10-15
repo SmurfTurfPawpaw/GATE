@@ -18,7 +18,7 @@ Set `GATE_HOME` to a private directory outside the repository before running com
 
 ## Choose the right contract
 
-Read [AGENTS.md](AGENTS.md), [docs/architecture.md](docs/architecture.md), and the relevant policy and schema before editing. Each state transition has one owner. Avoid a parallel workflow that competes with Firstmate, Treehouse, No Mistakes, GATE publication authority, or the engagement broker.
+Read [AGENTS.md](AGENTS.md), [OPINIONS.md](OPINIONS.md), [docs/architecture.md](docs/architecture.md), and the relevant policy and schema before editing. `OPINIONS.md` guides choices where enforced contracts leave room for judgment; it does not grant execution authority. Each state transition has one owner. Avoid a parallel workflow that competes with Firstmate, Treehouse, No Mistakes, GATE publication authority, or the engagement broker.
 
 Keep pull requests focused. Explain the concrete problem, resulting behavior, evidence, tests, and remaining limitations. A change that alters public behavior should update the corresponding documentation and schema or policy when applicable.
 

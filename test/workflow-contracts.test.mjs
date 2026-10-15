@@ -17,6 +17,18 @@ const engagementPolicy = readJson("policies/engagements.json");
 const clone = (value) => structuredClone(value);
 const semanticErrors = (candidate) => pentestWorkflowSemanticErrors(candidate, { catalog, engagementPolicy });
 
+test("the workflow requires evidence-led depth without treating custom harnesses as authority or capability", () => {
+  const depthPrinciples = [
+    "Treat baseline scans as reconnaissance: when evidence is interesting, contradictory, or unexplained, form the next discriminating hypothesis across roles, states, sequences, timing, concurrency, encodings, protocols, and trust boundaries.",
+    "When setup, replay, mutation, timing, or correlation would make a useful test too costly by hand, prefer the smallest reproducible custom harness that can answer the hypothesis.",
+    "A custom harness does not grant scope or prove execution capability; validate it on a local fixture or saved evidence and bind its exact source, dependency, configuration, and input digests.",
+    "Use a harness for target contact only through the phase's existing admission, effect, bounds, and stop conditions; when no reviewed execution path binds it, record the test blocked or unverified."
+  ];
+
+  assert.equal(workflow.metadata.version, 2);
+  for (const principle of depthPrinciples) assert.ok(workflow.principles.includes(principle));
+});
+
 test("the workflow uses the exact ordered 18-domain contract", () => {
   assert.equal(PENTEST_COVERAGE_DOMAINS.length, 18);
   assert.deepEqual(workflow.coverageDomains, PENTEST_COVERAGE_DOMAINS);

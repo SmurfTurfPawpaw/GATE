@@ -2,35 +2,343 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://gate.local/schemas/learning.schema.json",
   "title": "GATE learning record",
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["apiVersion", "id", "at", "scope", "cause", "change", "evidence", "status", "sensitivity", "supersedes", "configurationRefs"],
-  "properties": {
-    "apiVersion": { "const": "gate.learning/v1" },
-    "id": { "type": "string", "pattern": "^lrn_[A-Za-z0-9][A-Za-z0-9_-]{5,127}$" },
-    "at": { "type": "string", "format": "date-time" },
-    "scope": { "enum": ["session", "project", "repository"] },
-    "cause": { "$ref": "#/$defs/oneLine" },
-    "change": { "$ref": "#/$defs/oneLine" },
-    "evidence": {
+  "oneOf": [
+    { "$ref": "#/$defs/v1" },
+    { "$ref": "#/$defs/v2" }
+  ],
+  "$defs": {
+    "oneLine": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "pattern": "^[^\\r\\n]+$"
+    },
+    "learningId": {
+      "type": "string",
+      "pattern": "^lrn_[A-Za-z0-9][A-Za-z0-9_-]{5,127}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "gitSha": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}$"
+    },
+    "evidenceRefs": {
       "type": "array",
       "minItems": 1,
+      "maxItems": 64,
       "uniqueItems": true,
-      "items": { "type": "string", "pattern": "^(event|evidence|private|commit)://[^\\s]+$" }
-    },
-    "status": { "enum": ["proposed", "active", "superseded", "reverted"] },
-    "sensitivity": { "enum": ["public", "private"] },
-    "supersedes": {
-      "type": ["string", "null"],
-      "pattern": "^lrn_[A-Za-z0-9][A-Za-z0-9_-]{5,127}$"
+      "items": {
+        "type": "string",
+        "pattern": "^(event|evidence|private|commit)://[^\\s]+$"
+      }
     },
     "configurationRefs": {
       "type": "array",
+      "maxItems": 64,
       "uniqueItems": true,
-      "items": { "type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\u0000]+$" }
+      "items": {
+        "type": "string",
+        "maxLength": 500,
+        "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\u0000]+$"
+      }
+    },
+    "v1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "id",
+        "at",
+        "scope",
+        "cause",
+        "change",
+        "evidence",
+        "status",
+        "sensitivity",
+        "supersedes",
+        "configurationRefs"
+      ],
+      "properties": {
+        "apiVersion": { "const": "gate.learning/v1" },
+        "id": { "$ref": "#/$defs/learningId" },
+        "at": { "type": "string", "format": "date-time" },
+        "scope": { "enum": ["session", "project", "repository"] },
+        "cause": { "$ref": "#/$defs/oneLine" },
+        "change": { "$ref": "#/$defs/oneLine" },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^(event|evidence|private|commit)://[^\\s]+$"
+          }
+        },
+        "status": { "enum": ["proposed", "active", "superseded", "reverted"] },
+        "sensitivity": { "enum": ["public", "private"] },
+        "supersedes": {
+          "oneOf": [
+            { "$ref": "#/$defs/learningId" },
+            { "type": "null" }
+          ]
+        },
+        "configurationRefs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\u0000]+$"
+          }
+        }
+      }
+    },
+    "applicabilityRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": {
+          "enum": ["component", "workflow", "phase", "tool", "adapter", "test", "environment"]
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9._-]{1,127}$"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$"
+        },
+        "digest": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "candidatePromotion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "candidateId",
+        "candidateSha256",
+        "validatedAt",
+        "validationRefs",
+        "changeRefs",
+        "review",
+        "conflictsWith",
+        "replaces"
+      ],
+      "properties": {
+        "state": { "const": "candidate" },
+        "candidateId": { "type": "null" },
+        "candidateSha256": { "type": "null" },
+        "validatedAt": { "type": "null" },
+        "validationRefs": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "changeRefs": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "review": { "type": "null" },
+        "conflictsWith": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "replaces": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/learningId" }
+        }
+      }
+    },
+    "reviewAttestation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "owner",
+        "attestationRef",
+        "attestationSha256",
+        "candidateSha256",
+        "headSha"
+      ],
+      "properties": {
+        "owner": { "const": "no-mistakes" },
+        "attestationRef": {
+          "type": "string",
+          "pattern": "^evidence://no-mistakes/[^\\s]+$"
+        },
+        "attestationSha256": { "$ref": "#/$defs/sha256" },
+        "candidateSha256": { "$ref": "#/$defs/sha256" },
+        "headSha": { "$ref": "#/$defs/gitSha" }
+      }
+    },
+    "validatedPromotion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "candidateId",
+        "candidateSha256",
+        "validatedAt",
+        "validationRefs",
+        "changeRefs",
+        "review",
+        "conflictsWith",
+        "replaces"
+      ],
+      "properties": {
+        "state": { "const": "validated" },
+        "candidateId": { "$ref": "#/$defs/learningId" },
+        "candidateSha256": { "$ref": "#/$defs/sha256" },
+        "validatedAt": { "type": "string", "format": "date-time" },
+        "validationRefs": { "$ref": "#/$defs/evidenceRefs" },
+        "changeRefs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^(evidence|commit)://[^\\s]+$"
+          }
+        },
+        "review": { "$ref": "#/$defs/reviewAttestation" },
+        "conflictsWith": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/learningId" }
+        },
+        "replaces": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/learningId" }
+        }
+      }
+    },
+    "v2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "id",
+        "at",
+        "scope",
+        "cause",
+        "change",
+        "evidence",
+        "status",
+        "sensitivity",
+        "supersedes",
+        "configurationRefs",
+        "trigger",
+        "domain",
+        "cycle",
+        "applicability",
+        "promotion"
+      ],
+      "properties": {
+        "apiVersion": { "const": "gate.learning/v2" },
+        "id": { "$ref": "#/$defs/learningId" },
+        "at": { "type": "string", "format": "date-time" },
+        "scope": { "enum": ["session", "project", "repository"] },
+        "cause": { "$ref": "#/$defs/oneLine" },
+        "change": { "$ref": "#/$defs/oneLine" },
+        "evidence": { "$ref": "#/$defs/evidenceRefs" },
+        "status": { "enum": ["proposed", "active", "superseded", "reverted"] },
+        "sensitivity": { "enum": ["public", "private"] },
+        "supersedes": {
+          "oneOf": [
+            { "$ref": "#/$defs/learningId" },
+            { "type": "null" }
+          ]
+        },
+        "configurationRefs": { "$ref": "#/$defs/configurationRefs" },
+        "trigger": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{1,127}$"
+        },
+        "domain": {
+          "enum": ["active-testing", "software-testing", "orchestration", "tooling", "general"]
+        },
+        "cycle": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["hypothesis", "method", "outcome", "lesson", "nextAdjustment"],
+          "properties": {
+            "hypothesis": { "$ref": "#/$defs/oneLine" },
+            "method": { "$ref": "#/$defs/oneLine" },
+            "outcome": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["disposition", "summary"],
+              "properties": {
+                "disposition": {
+                  "enum": ["confirmed", "contradicted", "inconclusive", "blocked", "error"]
+                },
+                "summary": { "$ref": "#/$defs/oneLine" }
+              }
+            },
+            "lesson": { "$ref": "#/$defs/oneLine" },
+            "nextAdjustment": { "$ref": "#/$defs/oneLine" }
+          }
+        },
+        "applicability": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/applicabilityRef" }
+        },
+        "promotion": {
+          "oneOf": [
+            { "$ref": "#/$defs/candidatePromotion" },
+            { "$ref": "#/$defs/validatedPromotion" }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "promotion": {
+                "properties": { "state": { "const": "candidate" } },
+                "required": ["state"]
+              }
+            },
+            "required": ["promotion"]
+          },
+          "then": {
+            "properties": {
+              "status": { "const": "proposed" },
+              "sensitivity": { "const": "private" },
+              "supersedes": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "promotion": {
+                "properties": { "state": { "const": "validated" } },
+                "required": ["state"]
+              }
+            },
+            "required": ["promotion"]
+          },
+          "then": {
+            "properties": {
+              "status": { "const": "active" }
+            }
+          }
+        }
+      ]
     }
-  },
-  "$defs": {
-    "oneLine": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "^[^\\r\\n]+$" }
   }
 }

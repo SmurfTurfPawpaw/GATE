@@ -191,6 +191,9 @@ test("format guidance uses valid field-specific scalar examples", () => {
   assert.match(guidance("data-retention-days"), /\n30$/u);
   assert.match(guidance("data-classification"), /\nconfidential$/u);
   assert.match(guidance("attestation-operator"), /local-operator/u);
+  assert.match(guidance("identity-success-criteria"), /Every promising signal/u);
+  assert.match(guidance("identity-success-criteria"), /high-friction scenario/u);
+  assert.match(guidance("web-api-automation-rules"), /callback, webhook, role and tenant/u);
   assert.match(guidance("architecture-unknowns"), /use \[\] when the recorded answer is none/u);
   assert.match(guidance("architecture-unknowns"), /\n\[\]$/u);
   assert.match(guidance("authority-valid-from"), /2026-01-01T00:00:00Z/u);
@@ -199,6 +202,26 @@ test("format guidance uses valid field-specific scalar examples", () => {
     assert.match(guidance(id), /\nAlternative: null$/u);
     assert.doesNotMatch(guidance(id), /\(or null\)/u);
   }
+});
+
+test("terminal fallback renders numbered choices and stores their canonical values", () => {
+  const question = (id) => PROGRAM_PROFILE_QUESTIONS.find((candidate) => candidate.id === id);
+  const depth = question("identity-depth");
+  assert.match(cliInternals.questionChoicePrompt(depth), /1\. targeted/u);
+  assert.match(cliInternals.questionChoicePrompt(depth), /2\. thorough/u);
+  assert.equal(cliInternals.parseQuestionAnswer(depth, "2"), "thorough");
+  assert.equal(cliInternals.parseQuestionAnswer(depth, "exhaustive"), "exhaustive");
+  assert.throws(() => cliInternals.parseQuestionAnswer(depth, "9"), /between 1 and 3/u);
+
+  const assistance = question("execution-requested-assistance-modes");
+  assert.deepEqual(cliInternals.parseQuestionAnswer(assistance, "4,1,4"), ["plan", "execute"]);
+  assert.deepEqual(cliInternals.parseQuestionAnswer(assistance, "report,analyze"), ["analyze", "report"]);
+
+  const attestation = question("attestation-answers-complete");
+  assert.match(cliInternals.questionChoicePrompt(attestation), /1\. yes[\s\S]*2\. no/u);
+  assert.equal(cliInternals.parseQuestionAnswer(attestation, "1"), true);
+  assert.equal(cliInternals.parseQuestionAnswer(attestation, "2"), false);
+  assert.equal(cliInternals.parseQuestionAnswer(attestation, "0"), false);
 });
 
 test("persisted legacy values are escaped before terminal display", () => {
@@ -228,6 +251,11 @@ test("structured format examples use coherent architecture and execution referen
   const assets = example("scope-assets");
   const actions = example("actions-all");
   const phases = example("execution-phase-policies");
+  const namedTechniques = example("actions-techniques");
+  assert.equal(namedTechniques[0].id, "webhook-open-connection-mutation");
+  assert.equal(namedTechniques[0].action, "exploit-stateful");
+  assert.equal(namedTechniques[0].parameters.stateModel, "connect-mutate-observe-cleanup");
+  assert.equal(namedTechniques[0].conditions.length > 0, true);
   const assetIds = new Set(assets.map(({ id }) => id));
   assert.deepEqual(Object.keys(assets[0].actionOverrides), PROGRAM_PROFILE_ACTIONS);
   assert.deepEqual(Object.keys(assets[0].limitOverrides), [
@@ -394,21 +422,25 @@ test("resume maps a ready-required empty list back to its exact question", { tim
   const paths = runtimePaths({ repo, home });
   const id = "attestation-resume-profile";
   const now = "2026-10-14T00:00:00.000Z";
+  const attestedAt = "2026-10-14T00:01:00.000Z";
   createProgramProfile(id, {}, { paths, now });
-  const profile = resumeProgramProfile(id, { paths }).profile;
+  const current = resumeProgramProfile(id, { paths });
+  const profile = current.profile;
   const answers = Object.fromEntries(PROGRAM_PROFILE_QUESTIONS
     .filter((question) => question.section && question.required)
     .map((question) => [
       question.id,
-      question.id === "attestation-at" ? now : structuredClone(profileValueAt(profile, question.path))
+      question.id === "attestation-at"
+        ? attestedAt
+        : ["attestation-answers-complete", "attestation-sources-reviewed", "attestation-scope-reviewed"].includes(question.id)
+          ? true
+          : structuredClone(profileValueAt(profile, question.path))
     ]));
-  applyProgramProfileAnswers(id, {
-    $schema: "https://gate.local/schemas/bug-bounty-program-profile-answers.schema.json",
-    apiVersion: "gate.dev/program-profile-answers/v1",
-    kind: "BugBountyProgramProfileAnswers",
-    metadata: { programId: id, title: "Attestation resume fixture", updatedAt: now },
-    answers
-  }, { paths, now: "2026-10-14T00:01:00.000Z" });
+  const answerEnvelope = structuredClone(current.answers);
+  answerEnvelope.metadata.title = "Attestation resume fixture";
+  answerEnvelope.metadata.updatedAt = now;
+  answerEnvelope.answers = answers;
+  applyProgramProfileAnswers(id, answerEnvelope, { paths, now: "2026-10-14T00:01:00.000Z" });
 
   const input = new PassThrough();
   let transcript = "";
@@ -505,15 +537,30 @@ test("headless answer files create and resume a private draft without activating
   assert.equal(created.status, 0, created.stderr);
   assert.equal(JSON.parse(created.stdout).id, "headless-profile");
 
+  const unboundResume = invoke([
+    "bounty", "profile", "resume", "headless-profile", "--answers", answersFile, "--json"
+  ], home);
+  assert.notEqual(unboundResume.status, 0);
+  assert.match(unboundResume.stderr, /not bound to a base profile/u);
+
+  const status = invoke(["bounty", "profile", "status", "headless-profile", "--json"], home);
+  assert.equal(status.status, 0, status.stderr);
+  const current = JSON.parse(status.stdout);
+  const boundAnswers = JSON.parse(fs.readFileSync(answersFile, "utf8"));
+  boundAnswers.apiVersion = "gate.dev/program-profile-answers/v2";
+  boundAnswers.metadata.baseRevision = current.profile.revision;
+  boundAnswers.metadata.baseProfileSha256 = current.profileSha256;
+  fs.writeFileSync(answersFile, `${JSON.stringify(boundAnswers, null, 2)}\n`, { mode: 0o600 });
+
   const resumed = invoke([
     "bounty", "profile", "resume", "headless-profile", "--answers", answersFile, "--json"
   ], home);
   assert.equal(resumed.status, 0, resumed.stderr);
   assert.equal(JSON.parse(resumed.stdout).id, "headless-profile");
 
-  const status = invoke(["bounty", "profile", "status", "headless-profile", "--json"], home);
-  assert.equal(status.status, 0, status.stderr);
-  assert.equal(JSON.parse(status.stdout).id, "headless-profile");
+  const updatedStatus = invoke(["bounty", "profile", "status", "headless-profile", "--json"], home);
+  assert.equal(updatedStatus.status, 0, updatedStatus.stderr);
+  assert.equal(JSON.parse(updatedStatus.stdout).id, "headless-profile");
 
   const shown = invoke([
     "bounty", "profile", "show", "headless-profile", "--format", "json", "--json"

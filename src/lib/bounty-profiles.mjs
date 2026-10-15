@@ -45,7 +45,7 @@ const MAX_PROVIDER_BYTES = 1024 * 1024;
 const MAX_STATE_BINDING_BYTES = 16 * 1024;
 const MAX_TRANSACTION_INTENT_BYTES = 32 * 1024;
 const PROFILE_SCHEMA_REF = "https://gate.local/schemas/bug-bounty-program-profile.schema.json";
-const COMPILATION_CONTRACT_VERSION = "gate.dev/program-profile-compilation/v2";
+const COMPILATION_CONTRACT_VERSION = "gate.dev/program-profile-compilation/v3";
 const PROVIDER_TEMPLATE_ID = "replace-provider";
 const PROVIDER_TEMPLATE_MODEL = "replace-model";
 const PROVIDER_TEMPLATE_EFFECTIVE_AT = "2026-10-14T00:00:00Z";
@@ -601,6 +601,13 @@ function substantiveProfileSha256(profile) {
   return canonicalSha256(value);
 }
 
+function substantiveAnswersSha256(envelope, options = {}) {
+  const attestationIds = new Set(attestationQuestionIds(options));
+  return canonicalSha256(Object.fromEntries(
+    Object.entries(envelope?.answers || {}).filter(([id]) => !attestationIds.has(id))
+  ));
+}
+
 function attestationClaimsComplete(attestation) {
   return Boolean(
     attestation?.operator &&
@@ -626,29 +633,30 @@ function clearAttestationAnswers(envelope, options = {}) {
   for (const id of attestationQuestionIds(options)) delete envelope.answers[id];
 }
 
-function suppliedAttestationIsFresh(value, overlay, suppliedEnvelope, existingEnvelope, options = {}) {
+function attestationClaims(attestation) {
+  const claims = structuredClone(attestation || {});
+  delete claims.attestedRevision;
+  return claims;
+}
+
+function suppliedAttestationIsFresh(value, overlay, suppliedEnvelope, currentProfile, options = {}) {
   if (!attestationClaimsComplete(value.attestation)) return false;
   const questions = questionnaireRecords(options).questions
     .filter((item) => String(item.path || "").startsWith("attestation."));
   if (suppliedEnvelope) {
     const ids = questions.map((item) => item.id);
     if (!ids.every((id) => Object.hasOwn(suppliedEnvelope.answers || {}, id))) return false;
-    if (!existingEnvelope) return true;
-    const changed = ids.filter((id) =>
-      canonicalSha256(existingEnvelope.answers?.[id]) !== canonicalSha256(suppliedEnvelope.answers?.[id])
-    );
-    const timestampId = questions.find((item) => item.path === "attestation.attestedAt")?.id;
-    return options.requireNewTimestamp ? Boolean(timestampId && changed.includes(timestampId)) : changed.length > 0;
+  } else if (!questions.every((item) => pathPresent(overlay, item.path))) {
+    return false;
   }
-  // Raw profile overlays are supported for programmatic imports. Treat them
-  // as an explicit re-attestation only when they carry the complete answer
-  // set, and require a changed attestation timestamp after substantive edits.
-  if (!questions.every((item) => pathPresent(overlay, item.path))) return false;
-  if (!existingEnvelope) return true;
-  if (!options.requireNewTimestamp) return true;
-  const timestamp = questions.find((item) => item.path === "attestation.attestedAt");
-  return Boolean(timestamp && canonicalSha256(valueAtPath(overlay, timestamp.path)) !==
-    canonicalSha256(existingEnvelope.answers?.[timestamp.id]));
+  if (!currentProfile) return true;
+  if (canonicalSha256(attestationClaims(value.attestation)) ===
+      canonicalSha256(attestationClaims(currentProfile.attestation))) return false;
+  const suppliedAt = Date.parse(value.attestation.attestedAt);
+  const floors = [currentProfile.metadata?.updatedAt, currentProfile.attestation?.attestedAt]
+    .map((item) => Date.parse(item))
+    .filter(Number.isFinite);
+  return Number.isFinite(suppliedAt) && floors.every((floor) => suppliedAt > floor);
 }
 
 function setAtPath(value, dottedPath, replacement) {
@@ -688,7 +696,8 @@ function overlayFromAnswerEnvelope(envelope, options = {}) {
 function normalizedAnswersInput(id, input, options = {}) {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("program profile answers must be an object");
   assertRawAnswersSafe(input);
-  if (input.kind === "BugBountyProgramProfileAnswers" || input.apiVersion === "gate.dev/program-profile-answers/v1") {
+  if (input.kind === "BugBountyProgramProfileAnswers" ||
+      ["gate.dev/program-profile-answers/v1", "gate.dev/program-profile-answers/v2"].includes(input.apiVersion)) {
     if (input.metadata?.programId !== id) throw new Error("program profile answer envelope does not match the requested program id");
     return { overlay: overlayFromAnswerEnvelope(input, options), envelope: structuredClone(input) };
   }
@@ -741,15 +750,66 @@ function mergedAnswerEnvelope(id, profile, inputOverlay, suppliedEnvelope, exist
   }
   return {
     $schema: "https://gate.local/schemas/bug-bounty-program-profile-answers.schema.json",
-    apiVersion: "gate.dev/program-profile-answers/v1",
+    apiVersion: "gate.dev/program-profile-answers/v2",
     kind: "BugBountyProgramProfileAnswers",
     metadata: {
       programId: id,
       title: profile.metadata.title,
-      updatedAt: at
+      updatedAt: at,
+      baseRevision: null,
+      baseProfileSha256: null
     },
     answers
   };
+}
+
+function bindAnswerEnvelope(envelope, profile, profileSha256 = canonicalSha256(profile)) {
+  const bound = structuredClone(envelope);
+  bound.apiVersion = "gate.dev/program-profile-answers/v2";
+  bound.metadata = {
+    ...bound.metadata,
+    programId: profile.metadata.id,
+    title: profile.metadata.title,
+    baseRevision: profile.metadata.revision,
+    baseProfileSha256: profileSha256
+  };
+  return bound;
+}
+
+function assertAnswerMutationBase(stored, envelope, options = {}) {
+  let expectedRevision;
+  let expectedProfileSha256;
+  if (envelope) {
+    if (envelope.apiVersion !== "gate.dev/program-profile-answers/v2" ||
+        envelope.metadata.baseRevision === null || envelope.metadata.baseProfileSha256 === null) {
+      throw new Error(
+        "program profile answer envelope is not bound to a base profile; reload current answers and use gate.dev/program-profile-answers/v2"
+      );
+    }
+    expectedRevision = envelope.metadata.baseRevision;
+    expectedProfileSha256 = envelope.metadata.baseProfileSha256;
+  } else {
+    expectedRevision = options.expectedRevision;
+    expectedProfileSha256 = options.expectedProfileSha256;
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1 ||
+        !/^[a-f0-9]{64}$/u.test(expectedProfileSha256 || "")) {
+      throw new Error("raw program profile updates require expectedRevision and expectedProfileSha256 from the current profile");
+    }
+  }
+  if (options.expectedRevision !== undefined && options.expectedRevision !== expectedRevision) {
+    throw new Error("program profile update has conflicting expected revisions");
+  }
+  if (options.expectedProfileSha256 !== undefined && options.expectedProfileSha256 !== expectedProfileSha256) {
+    throw new Error("program profile update has conflicting expected profile digests");
+  }
+  if (stored.profile.metadata.revision !== expectedRevision) {
+    throw new Error(`program profile revision changed: expected ${expectedRevision}, observed ${stored.profile.metadata.revision}`);
+  }
+  if (stored.binding.profileSha256 !== expectedProfileSha256) {
+    throw new Error(
+      `program profile digest changed: expected ${expectedProfileSha256}, observed ${stored.binding.profileSha256}`
+    );
+  }
 }
 
 function normalizeProfileProgress(profile, envelope, options = {}) {
@@ -1403,6 +1463,10 @@ export function createProgramProfile(id, answers = {}, options = {}) {
   const cleanId = cleanProfileId(id);
   const paths = bountyPaths(options);
   const { overlay, envelope } = normalizedAnswersInput(cleanId, answers, { paths });
+  if (envelope?.apiVersion === "gate.dev/program-profile-answers/v2" &&
+      (envelope.metadata.baseRevision !== null || envelope.metadata.baseProfileSha256 !== null)) {
+    throw new Error("program profile create requires an unbound v2 answer envelope with null base fields");
+  }
   const at = options.now || new Date().toISOString();
   let value = deepMerge(initialProfile(cleanId, {
     now: at,
@@ -1419,13 +1483,14 @@ export function createProgramProfile(id, answers = {}, options = {}) {
     createdAt: at,
     updatedAt: at
   };
-  const answerEnvelope = mergedAnswerEnvelope(cleanId, value, overlay, envelope, null, { paths, now: at });
+  let answerEnvelope = mergedAnswerEnvelope(cleanId, value, overlay, envelope, null, { paths, now: at });
   value.attestation.attestedRevision = suppliedAttestationIsFresh(value, overlay, envelope, null, { paths })
     ? value.metadata.revision
     : null;
   value = normalizeProfileProgress(value, answerEnvelope, { paths, now: at });
   assertValidProgramProfile(value, { paths });
   assertProfileSafe(value);
+  answerEnvelope = bindAnswerEnvelope(answerEnvelope, value);
   const answerValidation = validateProgramProfileAnswers(answerEnvelope, { paths });
   if (!answerValidation.ok) throw new Error(`program profile answers validation failed: ${answerValidation.errors.join("; ")}`);
   ensureProfileDirectory(paths, cleanId);
@@ -1449,11 +1514,9 @@ export function applyProgramProfileAnswers(id, answers, options = {}) {
   return withProfileLock(paths, cleanId, () => {
     const stored = loadStoredProfileState(paths, cleanId);
     const current = stored.profile;
-    if (options.expectedRevision !== undefined && current.metadata.revision !== options.expectedRevision) {
-      throw new Error(`program profile revision changed: expected ${options.expectedRevision}, observed ${current.metadata.revision}`);
-    }
     const existingEnvelope = stored.answers;
     const { overlay, envelope } = normalizedAnswersInput(cleanId, answers, { paths });
+    assertAnswerMutationBase(stored, envelope, options);
     const at = options.now || new Date().toISOString();
     let value = deepMerge(current, overlay);
     value.$schema = PROFILE_SCHEMA_REF;
@@ -1466,17 +1529,17 @@ export function applyProgramProfileAnswers(id, answers, options = {}) {
       createdAt: current.metadata.createdAt,
       updatedAt: at
     };
-    const answerEnvelope = mergedAnswerEnvelope(cleanId, value, overlay, envelope, existingEnvelope, { paths, now: at });
-    const substantiveChange = substantiveProfileSha256(current) !== substantiveProfileSha256(value);
-    const freshAttestation = suppliedAttestationIsFresh(value, overlay, envelope, existingEnvelope, {
-      paths,
-      requireNewTimestamp: substantiveChange
-    });
+    let answerEnvelope = mergedAnswerEnvelope(cleanId, value, overlay, envelope, existingEnvelope, { paths, now: at });
+    const substantiveChange = substantiveProfileSha256(current) !== substantiveProfileSha256(value) ||
+      substantiveAnswersSha256(existingEnvelope, { paths }) !== substantiveAnswersSha256(answerEnvelope, { paths });
+    const attestationChanged = canonicalSha256(attestationClaims(current.attestation)) !==
+      canonicalSha256(attestationClaims(value.attestation));
+    const freshAttestation = suppliedAttestationIsFresh(value, overlay, envelope, current, { paths });
     if (substantiveChange && !freshAttestation) {
       clearAttestation(value);
       clearAttestationAnswers(answerEnvelope, { paths });
     } else if (attestationClaimsComplete(value.attestation) &&
-        (freshAttestation || current.attestation?.attestedRevision === current.metadata.revision)) {
+        (freshAttestation || (!attestationChanged && current.attestation?.attestedRevision === current.metadata.revision))) {
       value.attestation.attestedRevision = value.metadata.revision;
     } else {
       value.attestation.attestedRevision = null;
@@ -1484,6 +1547,7 @@ export function applyProgramProfileAnswers(id, answers, options = {}) {
     value = normalizeProfileProgress(value, answerEnvelope, { paths, now: at });
     assertValidProgramProfile(value, { paths });
     assertProfileSafe(value);
+    answerEnvelope = bindAnswerEnvelope(answerEnvelope, value);
     const answerValidation = validateProgramProfileAnswers(answerEnvelope, { paths });
     if (!answerValidation.ok) throw new Error(`program profile answers validation failed: ${answerValidation.errors.join("; ")}`);
     const state = writeProfileState(paths, cleanId, value, answerEnvelope);
@@ -1504,7 +1568,7 @@ export function resumeProgramProfile(id, options = {}) {
   return withProfileLock(paths, cleanId, () => {
     const stored = loadStoredProfileState(paths, cleanId);
     const profile = stored.profile;
-    const envelope = stored.answers;
+    const envelope = bindAnswerEnvelope(stored.answers, profile, stored.binding.profileSha256);
     return {
       profile,
       answers: envelope,
@@ -1609,11 +1673,27 @@ function decisionLine(label, item) {
   return `- ${label}: **${item.disposition}** (${item.claimState})${sources}${conditions}`;
 }
 
+function explorationInstructions(depth) {
+  const depthDirective = {
+    targeted: "Pursue promising signals deeply when they bear on the narrow objective; record relevant deferred branches instead of treating them as covered.",
+    thorough: "Complete the baseline map, then prioritize and test promising signals and applicable high-friction scenarios across the selected coverage.",
+    exhaustive: "Systematically enumerate, test, and disposition relevant hypotheses and high-friction scenarios across every applicable coverage domain."
+  }[depth] || "Apply the recorded depth and preserve every untested branch as an explicit limitation.";
+  return {
+    depthDirective,
+    surfaceRole: "Use surface checks to build the map and generate leads; scanner or baseline completion alone is not assessment completion.",
+    onPromisingSignal: "Treat anomalous, differential, state-dependent, boundary-crossing, or internally inconsistent observations as candidate signals. Record the evidence, form a testable hypothesis, and choose a discriminating follow-up within the compiled task bounds.",
+    automationPriority: "Prefer repeatable automation when state, sequencing, timing, concurrency, callbacks or webhooks, role or tenant matrices, or large differential sets make a permitted test costly or error-prone to perform manually.",
+    completionRule: "Before claiming completion, give every promising signal a recorded hypothesis and observed, inferred, or unverified conclusion, and every applicable workstream a tested, not-applicable, blocked, or untested disposition."
+  };
+}
+
 function operatorReview(profile, verification) {
   const executionPolicy = exactExecutionPolicy(profile);
   const modulePolicy = executionPolicy.modulePolicy;
   const effectiveActionDispositions = executionPolicy.globalCeilings.effectiveActionDispositions;
   const executableActions = conservativeExecutableActions(profile, executionPolicy);
+  const exploration = explorationInstructions(profile.identity.depth);
   const lines = [
     `# ${profile.metadata.title}`,
     "",
@@ -1627,6 +1707,32 @@ function operatorReview(profile, verification) {
     profile.identity.objective,
     "",
     `Depth: ${profile.identity.depth}`,
+    "",
+    "## Assessment strategy",
+    "",
+    `- Depth directive: ${exploration.depthDirective}`,
+    `- Surface role: ${exploration.surfaceRole}`,
+    `- Signal follow-up: ${exploration.onPromisingSignal}`,
+    `- Automation priority: ${exploration.automationPriority}`,
+    `- Completion rule: ${exploration.completionRule}`,
+    "",
+    "### Deliverables",
+    "",
+    ...(profile.identity.deliverables.length
+      ? profile.identity.deliverables.map((item) => `- ${item}`)
+      : ["- None recorded."]),
+    "",
+    "### Success criteria",
+    "",
+    ...(profile.identity.successCriteria.length
+      ? profile.identity.successCriteria.map((item) => `- ${item}`)
+      : ["- None recorded."]),
+    "",
+    "### Named technique rules",
+    "",
+    ...(profile.techniquePolicy.techniques.length
+      ? profile.techniquePolicy.techniques.map((item) => decisionLine(`\`${item.id}\` — ${item.name} [${item.action}]`, item))
+      : ["- None recorded."]),
     "",
     "## Authorization",
     "",
@@ -1973,7 +2079,7 @@ function modelContext(profile, verification, input) {
       .map((id) => ({ id, ...profile.modules[id] }))
   };
   return {
-    apiVersion: "gate.dev/model-context/v2",
+    apiVersion: "gate.dev/model-context/v3",
     kind: "ModelContextPacket",
     metadata: {
       id: `context-${input.compilationId.slice(0, 24)}`,
@@ -2052,7 +2158,8 @@ function modelContext(profile, verification, input) {
       noAssumptions: true,
       onMissingContext: "Return one structured list of missing facts and do not broaden scope.",
       onIncompatibleCapability: "Name the unavailable capability and stop that route.",
-      authorizationStatement: "Use only the exact authorization, selectors, actions, limits, destinations, stops, and cleanup rules in this packet."
+      authorizationStatement: "Use only the exact authorization, selectors, actions, limits, destinations, stops, and cleanup rules in this packet.",
+      ...explorationInstructions(profile.identity.depth)
     }
   };
 }

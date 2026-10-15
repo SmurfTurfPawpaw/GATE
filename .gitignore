@@ -1,6 +1,8 @@
 # GATE private/runtime state
 .gate/
 .gate-home/
+/memory/.gate-learning-locks/
+/memory/learnings.jsonl.lock
 .env
 .env.*
 !.env.example

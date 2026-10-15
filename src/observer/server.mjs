@@ -5,7 +5,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { buildStatus } from "../lib/status.mjs";
-import { redactSensitiveHeaders } from "../lib/text.mjs";
+import { assertNoLikelySecret, redactSensitiveHeaders } from "../lib/text.mjs";
 
 const EVENT_STATUSES = new Set([
   "queued",
@@ -31,6 +31,9 @@ const EFFECT_CLASSES = new Set([
 const LEARNING_SCOPES = new Set(["session", "project", "repository"]);
 const LEARNING_STATUSES = new Set(["proposed", "active", "superseded", "reverted"]);
 const LEARNING_SENSITIVITIES = new Set(["public", "private"]);
+const LEARNING_DOMAINS = new Set(["active-testing", "software-testing", "orchestration", "tooling", "general"]);
+const LEARNING_OUTCOMES = new Set(["confirmed", "contradicted", "inconclusive", "blocked", "error"]);
+const LEARNING_APPLICABILITY_KINDS = new Set(["component", "workflow", "phase", "tool", "adapter", "test", "environment"]);
 const USAGE_AVAILABILITY = new Set(["exact", "estimated", "unavailable"]);
 const UPSTREAM_INTEGRITY = new Set(["verified", "receipt-only", "commit-only", "invalid", "not-installed"]);
 const PROJECT_STATUSES = new Set(["ready", "invalid"]);
@@ -228,10 +231,25 @@ function safeLearningText(value) {
   const redacted = text
     .replace(/\b(?:https?|file):\/\/\S+/giu, "[reference withheld]")
     .replace(/\b[A-Za-z]:[\\/][^\s,;]+/gu, "[path withheld]")
-    .replace(/(^|\s)(?:~\/|\/(?:[^\s/]+\/)+[^\s,;]*)/gu, "$1[path withheld]")
+    .replace(/(^|\s)(?:~\/[^\s,;]*|\/[^\s,;]+)/gu, "$1[path withheld]")
     .replace(/\b(?:sk|pk|ghp|github_pat|xox[baprs])-?[A-Za-z0-9_-]{12,}\b/giu, "[secret withheld]")
     .replace(/\b(?:api[-_ ]?key|access[-_ ]?token)\s*[:=]\s*\S+/giu, "[secret withheld]");
-  return redactSensitiveHeaders(redacted).slice(0, 240);
+  const sanitized = redactSensitiveHeaders(redacted);
+  try {
+    assertNoLikelySecret(sanitized, "observer learning narrative");
+  } catch {
+    return "Learning detail withheld.";
+  }
+  const colonCandidates = sanitized.match(/\[?[A-Fa-f0-9:]{2,}\]?/gu) || [];
+  if (/private:\/\//iu.test(sanitized) ||
+    /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/u.test(sanitized) ||
+    /\b(?:\d{1,3}\.){3}\d{1,3}\b/u.test(sanitized) ||
+    colonCandidates.some((candidate) => net.isIP(candidate.replace(/^\[|\]$/gu, "")) === 6) ||
+    /(?<![A-Za-z0-9_.-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\b/iu.test(sanitized) ||
+    /\b[A-Za-z0-9][A-Za-z0-9_-]*[-_.](?:prod(?:uction)?|stag(?:e|ing)?|dev(?:elopment)?|qa|uat)\b/iu.test(sanitized)) {
+    return "Learning detail withheld.";
+  }
+  return sanitized.slice(0, 240);
 }
 
 function identifier(value, maximum = 160) {
@@ -335,10 +353,111 @@ export function projectEvent(value) {
   };
 }
 
-/** Apply the same strict allowlist to gate.learning/v1 records. */
+function hasOnlyKeys(value, allowed) {
+  return Object.keys(value).every((key) => allowed.has(key));
+}
+
+function uniqueArray(value, minimum, maximum, predicate) {
+  return Array.isArray(value) && value.length >= minimum && value.length <= maximum &&
+    value.every(predicate) && new Set(value.map((item) => JSON.stringify(item))).size === value.length;
+}
+
+function learningApplicabilityKey(value) {
+  return JSON.stringify(value.map((item) => [
+    item.kind,
+    item.id,
+    item.version ?? "",
+    item.digest ?? ""
+  ]).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))));
+}
+
+function validV2LearningExtension(learning) {
+  const rootKeys = new Set([
+    "apiVersion", "id", "at", "scope", "cause", "change", "evidence", "status", "sensitivity",
+    "supersedes", "configurationRefs", "trigger", "domain", "cycle", "applicability", "promotion"
+  ]);
+  if (!hasOnlyKeys(learning, rootKeys) || Object.keys(learning).length !== rootKeys.size) return false;
+  const evidenceValid = uniqueArray(learning.evidence, 1, 64, (item) => {
+    return typeof item === "string" && /^(?:event|evidence|private|commit):\/\/\S+$/u.test(item);
+  });
+  const configurationValid = uniqueArray(learning.configurationRefs, 0, 64, (item) => {
+    return typeof item === "string" && item.length <= 500 && !item.startsWith("/") &&
+      !/(?:^|\/)\.\.(?:\/|$)/u.test(item) && !/[\u0000\r\n]/u.test(item);
+  });
+  if (!evidenceValid || !configurationValid) return false;
+  if (learning.sensitivity === "public" && learning.evidence.some((item) => item.startsWith("private://"))) return false;
+  if (typeof learning.trigger !== "string" || !/^[a-z][a-z0-9-]{1,127}$/u.test(learning.trigger)) return false;
+  if (!LEARNING_DOMAINS.has(learning.domain)) return false;
+
+  const cycle = object(learning.cycle);
+  const outcome = object(cycle?.outcome);
+  if (!cycle || !hasOnlyKeys(cycle, new Set(["hypothesis", "method", "outcome", "lesson", "nextAdjustment"])) ||
+    !boundedString(cycle.hypothesis, 500) || !boundedString(cycle.method, 500) ||
+    !boundedString(cycle.lesson, 500) || !boundedString(cycle.nextAdjustment, 500) ||
+    !outcome || !hasOnlyKeys(outcome, new Set(["disposition", "summary"])) ||
+    !LEARNING_OUTCOMES.has(outcome.disposition) || !boundedString(outcome.summary, 500)) {
+    return false;
+  }
+
+  const applicabilityValid = uniqueArray(learning.applicability, 1, 16, (candidate) => {
+    const item = object(candidate);
+    if (!item || !hasOnlyKeys(item, new Set(["kind", "id", "version", "digest"]))) return false;
+    if (!LEARNING_APPLICABILITY_KINDS.has(item.kind) || typeof item.id !== "string" || !/^[a-z][a-z0-9._-]{1,127}$/u.test(item.id)) return false;
+    if (item.version !== undefined && (typeof item.version !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/u.test(item.version))) return false;
+    return item.digest === undefined || typeof item.digest === "string" && /^[a-f0-9]{64}$/u.test(item.digest);
+  });
+  const applicabilityKeys = Array.isArray(learning.applicability)
+    ? learning.applicability.map((item) => [item.kind, item.id, item.version ?? "", item.digest ?? ""].join("\u0000"))
+    : [];
+  if (!applicabilityValid || new Set(applicabilityKeys).size !== applicabilityKeys.length) return false;
+
+  const promotion = object(learning.promotion);
+  const promotionKeys = new Set([
+    "state", "candidateId", "candidateSha256", "validatedAt", "validationRefs", "changeRefs", "review", "conflictsWith", "replaces"
+  ]);
+  if (!promotion || !hasOnlyKeys(promotion, promotionKeys)) return false;
+  const conflictsValid = uniqueArray(promotion.conflictsWith, 0, 64, (item) => {
+    return typeof item === "string" && /^lrn_[A-Za-z0-9][A-Za-z0-9_-]{5,127}$/u.test(item);
+  });
+  const replacesValid = uniqueArray(promotion.replaces, 0, 64, (item) => {
+    return typeof item === "string" && /^lrn_[A-Za-z0-9][A-Za-z0-9_-]{5,127}$/u.test(item);
+  });
+  if (promotion.state === "candidate") {
+    return learning.status === "proposed" && learning.sensitivity === "private" && learning.supersedes === null &&
+      promotion.candidateId === null && promotion.candidateSha256 === null && promotion.validatedAt === null &&
+      Array.isArray(promotion.validationRefs) && promotion.validationRefs.length === 0 &&
+      Array.isArray(promotion.changeRefs) && promotion.changeRefs.length === 0 && promotion.review === null &&
+      conflictsValid && promotion.conflictsWith.length === 0 && replacesValid;
+  }
+  if (promotion.state !== "validated") return false;
+  const learningId = typeof promotion.candidateId === "string" && /^lrn_[A-Za-z0-9][A-Za-z0-9_-]{5,127}$/u.test(promotion.candidateId);
+  const digest = typeof promotion.candidateSha256 === "string" && /^[a-f0-9]{64}$/u.test(promotion.candidateSha256);
+  const validatedAt = timestamp(promotion.validatedAt);
+  const validationRefs = uniqueArray(promotion.validationRefs, 1, 64, (item) => {
+    return typeof item === "string" && /^(?:event|evidence|private|commit):\/\/\S+$/u.test(item);
+  });
+  const privateEvidenceInPublic = learning.sensitivity === "public" && Array.isArray(promotion.validationRefs) &&
+    promotion.validationRefs.some((item) => typeof item === "string" && item.startsWith("private://"));
+  const changeRefs = uniqueArray(promotion.changeRefs, 1, 64, (item) => {
+    return typeof item === "string" && /^(?:evidence|commit):\/\/\S+$/u.test(item);
+  });
+  const review = object(promotion.review);
+  const reviewValid = review && hasOnlyKeys(review, new Set([
+    "owner", "attestationRef", "attestationSha256", "candidateSha256", "headSha"
+  ])) &&
+    Object.keys(review).length === 5 && review.owner === "no-mistakes" &&
+    typeof review.attestationRef === "string" && /^evidence:\/\/no-mistakes\/\S+$/u.test(review.attestationRef) &&
+    typeof review.attestationSha256 === "string" && /^[a-f0-9]{64}$/u.test(review.attestationSha256) &&
+    review.candidateSha256 === promotion.candidateSha256 &&
+    typeof review.headSha === "string" && /^[a-f0-9]{40}$/u.test(review.headSha);
+  return Boolean(!privateEvidenceInPublic && learning.status === "active" && learning.supersedes === promotion.candidateId && learningId && digest &&
+    validatedAt && validationRefs && changeRefs && reviewValid && conflictsValid && replacesValid);
+}
+
+/** Apply a strict common allowlist to validated gate.learning/v1 and v2 records. */
 export function projectLearning(value) {
   const learning = object(value);
-  if (!learning || learning.apiVersion !== "gate.learning/v1") return null;
+  if (!learning || !["gate.learning/v1", "gate.learning/v2"].includes(learning.apiVersion)) return null;
   const learningId = typeof learning.id === "string" && /^lrn_[A-Za-z0-9][A-Za-z0-9_-]{5,127}$/u.test(learning.id)
     ? learning.id
     : null;
@@ -365,8 +484,9 @@ export function projectLearning(value) {
         return typeof item === "string" && item.length <= 500 && !item.startsWith("/") && !/(?:^|\/)\.\.(?:\/|$)/u.test(item) && !/[\u0000\r\n]/u.test(item);
       }))]
     : [];
+  if (learning.apiVersion === "gate.learning/v2" && !validV2LearningExtension(learning)) return null;
   return {
-    apiVersion: "gate.learning/v1",
+    apiVersion: learning.apiVersion,
     id: learningId,
     at,
     scope,
@@ -610,17 +730,22 @@ function publicEvent(event) {
   };
 }
 
-function publicLearning(learning) {
+function publicLearning(learning, effectiveStatus = learning.status) {
   const privateRecord = learning.sensitivity === "private";
+  const publicId = (value) => value === null
+    ? null
+    : !privateRecord && /^lrn_[0-9]{14}_[a-f0-9]{8}$/u.test(value)
+      ? value
+      : opaqueId("learning", value);
   return {
-    id: learning.id,
+    id: publicId(learning.id),
     at: learning.at,
     scope: learning.scope,
     cause: privateRecord ? "Private learning recorded." : safeLearningText(learning.cause),
     change: privateRecord ? "Details withheld from observer." : safeLearningText(learning.change),
-    status: learning.status,
+    status: effectiveStatus,
     sensitivity: learning.sensitivity,
-    supersedes: learning.supersedes,
+    supersedes: publicId(learning.supersedes),
     evidenceCount: learning.evidence.length,
     configurationCount: learning.configurationRefs.length
   };
@@ -1015,8 +1140,25 @@ export function projectSnapshot(rawStatus, paths) {
   const raw = object(rawStatus) || {};
   const events = Array.isArray(raw.events) ? raw.events.map(projectEvent).filter(Boolean) : [];
   events.sort((left, right) => Date.parse(right.at) - Date.parse(left.at));
-  const learnings = Array.isArray(raw.learnings) ? raw.learnings.map(projectLearning).filter(Boolean) : [];
-  learnings.sort((left, right) => Date.parse(right.at) - Date.parse(left.at));
+  const learningPairs = Array.isArray(raw.learnings)
+    ? raw.learnings.map((source) => ({ source, projected: projectLearning(source) }))
+      .filter(({ projected }) => Boolean(projected))
+    : [];
+  const learningById = new Map(learningPairs.map((pair) => [pair.source.id, pair]));
+  const replacedLearningIds = new Set();
+  for (const pair of learningPairs) {
+    const source = pair.source;
+    if (source.apiVersion !== "gate.learning/v2" || source.status !== "active" || source.promotion?.state !== "validated") continue;
+    for (const replacedId of source.promotion.replaces) {
+      const target = learningById.get(replacedId)?.source;
+      if (!target || target.apiVersion !== "gate.learning/v2" || target.status !== "active" ||
+        target.promotion?.state !== "validated" || target.sensitivity !== source.sensitivity ||
+        target.domain !== source.domain ||
+        learningApplicabilityKey(target.applicability) !== learningApplicabilityKey(source.applicability)) continue;
+      replacedLearningIds.add(replacedId);
+    }
+  }
+  learningPairs.sort((left, right) => Date.parse(right.projected.at) - Date.parse(left.projected.at));
   const agents = latestBy(
     events,
     (event) => event.agent ? [event.runId, event.taskId || "", event.agent].join(":") : null
@@ -1106,7 +1248,13 @@ export function projectSnapshot(rawStatus, paths) {
       upstreams: Array.isArray(raw.upstreams) ? raw.upstreams.map(summarizeUpstream).filter(Boolean) : []
     },
     events: { apiVersion: OBSERVER_API_VERSION, at: generatedAt, events: events.map(publicEvent) },
-    learnings: { apiVersion: OBSERVER_API_VERSION, at: generatedAt, learnings: learnings.map(publicLearning) }
+    learnings: {
+      apiVersion: OBSERVER_API_VERSION,
+      at: generatedAt,
+      learnings: learningPairs.map(({ source, projected }) =>
+        publicLearning(projected, replacedLearningIds.has(source.id) ? "superseded" : projected.status)
+      )
+    }
   };
 }
 

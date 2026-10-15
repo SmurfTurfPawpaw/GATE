@@ -7,7 +7,12 @@
   "required": ["$schema", "apiVersion", "kind", "metadata", "answers"],
   "properties": {
     "$schema": { "type": "string", "minLength": 1 },
-    "apiVersion": { "const": "gate.dev/program-profile-answers/v1" },
+    "apiVersion": {
+      "enum": [
+        "gate.dev/program-profile-answers/v1",
+        "gate.dev/program-profile-answers/v2"
+      ]
+    },
     "kind": { "const": "BugBountyProgramProfileAnswers" },
     "metadata": {
       "type": "object",
@@ -16,7 +21,19 @@
       "properties": {
         "programId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$" },
         "title": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "^[^\\r\\n]+$" },
-        "updatedAt": { "type": "string", "format": "date-time" }
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "baseRevision": {
+          "oneOf": [
+            { "type": "integer", "minimum": 1 },
+            { "type": "null" }
+          ]
+        },
+        "baseProfileSha256": {
+          "oneOf": [
+            { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+            { "type": "null" }
+          ]
+        }
       }
     },
     "answers": {
