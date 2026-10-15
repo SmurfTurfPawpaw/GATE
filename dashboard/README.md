@@ -36,7 +36,7 @@ Every endpoint returns a server-side allowlisted `gate.observer/v1` projection. 
 The status response contains:
 
 - `apiVersion`, fixed to `gate.observer/v1`, and snapshot generation time `at`;
-- aggregate `state` and `counts` that fold projected case queued, running, waiting, blocked, failed, and succeeded counts into base-state counts; `unknown`, agent, and task counts describe base/unassigned state only;
+- aggregate `state` and `counts` that fold projected case queued, running, waiting, blocked, failed, succeeded, and unknown counts into base-state counts; agent and task counts describe base/unassigned state only;
 - `agents` and `tasks` derived only from the latest valid base/unassigned GATE events, with process-scoped member, run, and task pseudonyms plus public component label, stage, status, effect class, and timestamps;
 - host/base `usage`, containing availability, source, nullable token counts, process-scoped session pseudonyms, and nullable context and bounded-loop budget measurements;
 - `budget`, the configured bounded-loop limit and its source; v0.1 does not measure budget consumption;
