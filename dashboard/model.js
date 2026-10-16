@@ -231,6 +231,7 @@ const PROFILE_SETUP_NEXT_SECTIONS = new Set([
 ]);
 const PROFILE_SETUP_RECOMMENDATION_MODES = new Set(["policy", "proposal", "mixed"]);
 const PROFILE_SETUP_FRESHNESS = new Set(["fresh", "stale"]);
+const PROFILE_SETUP_SCAN_AVAILABILITY = new Set(["available", "unavailable"]);
 const ENGAGEMENT_SCAN_AVAILABILITY = new Set(["loaded", "not-loaded", "unavailable"]);
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/;
 const EVENT_KIND = /^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+$/;
@@ -689,6 +690,7 @@ function caseScanShape(input) {
 
 function profileSetupShape(input) {
   const value = record(input);
+  const hasNextSection = Object.hasOwn(value, "nextSection");
   const id = typeof value.id === "string" && PROGRAM_ID.test(value.id) ? value.id : null;
   const stage = enumValue(value.stage, PROFILE_SETUP_STAGES, null);
   const readiness = enumValue(value.readiness, PROFILE_SETUP_READINESS, null);
@@ -704,8 +706,16 @@ function profileSetupShape(input) {
     : enumValue(value.recommendationMode, PROFILE_SETUP_RECOMMENDATION_MODES, null);
   const updatedAt = timestamp(value.updatedAt);
   const setupFreshness = enumValue(value.freshness, PROFILE_SETUP_FRESHNESS, null);
+  const ready = stage === "ready" && readiness === "ready";
+  const nonReady = stage !== "ready" && readiness === "not-ready";
+  const completeProgress = answered !== null && total !== null && total > 0 && answered === total;
+  const pendingProgress = answered !== null && total !== null && total > 0 && answered < total;
+  const stateConsistent = ready
+    ? completeProgress && blockerCount === 0 && nextSection === null
+    : nonReady && blockerCount !== null && blockerCount > 0 &&
+      ((completeProgress && nextSection === null) || (pendingProgress && nextSection !== null));
   if (!id || value.displayName !== null || !stage || !readiness || answered === null || total === null || answered > total ||
-      blockerCount === null || !updatedAt || !setupFreshness ||
+      blockerCount === null || !updatedAt || !setupFreshness || !hasNextSection || !stateConsistent ||
       (value.nextSection !== null && nextSection === null) ||
       (value.recommendationMode !== null && recommendationMode === null)) return null;
   return {
@@ -724,17 +734,19 @@ function profileSetupShape(input) {
 
 function profileSetupScanShape(input) {
   const value = record(input);
+  const availability = enumValue(value.availability, PROFILE_SETUP_SCAN_AVAILABILITY, "unavailable");
   return {
-    discovered: count(value.discovered),
-    scanned: count(value.scanned),
-    omitted: count(value.omitted),
-    invalid: count(value.invalid),
+    availability,
+    discovered: availability === "available" ? count(value.discovered) : null,
+    scanned: availability === "available" ? count(value.scanned) : null,
+    omitted: availability === "available" ? count(value.omitted) : null,
+    invalid: availability === "available" ? count(value.invalid) : null,
     visible: count(value.visible),
-    representedByCases: count(value.representedByCases),
+    representedByCases: availability === "available" ? count(value.representedByCases) : null,
     discoveredAtLeast: typeof value.discoveredAtLeast === "boolean" ? value.discoveredAtLeast : false,
     omittedAtLeast: typeof value.omittedAtLeast === "boolean" ? value.omittedAtLeast : false,
-    complete: typeof value.complete === "boolean" ? value.complete : false,
-    truncated: typeof value.truncated === "boolean" ? value.truncated : true
+    complete: availability === "available" && value.complete === true,
+    truncated: availability === "unavailable" || (typeof value.truncated === "boolean" ? value.truncated : true)
   };
 }
 

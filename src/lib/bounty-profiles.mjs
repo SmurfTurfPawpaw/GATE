@@ -1655,6 +1655,170 @@ function listProfileDirectories(paths) {
   return entries.sort((left, right) => String(left.id || left.entry).localeCompare(String(right.id || right.entry)));
 }
 
+function programSetupPathsOverlap(left, right) {
+  return isContained(left, right) || isContained(right, left);
+}
+
+function programSetupProspectiveRealPath(candidate) {
+  let current = path.resolve(candidate);
+  const missing = [];
+  while (true) {
+    try {
+      const real = fs.realpathSync.native ? fs.realpathSync.native(current) : fs.realpathSync(current);
+      return path.resolve(real, ...missing.reverse());
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      const parent = path.dirname(current);
+      if (parent === current) throw error;
+      missing.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+function assertProgramSetupUnscopedRoot(home, canonicalHome) {
+  const visited = new Set();
+  for (const candidate of [home, canonicalHome]) {
+    let current = path.resolve(candidate);
+    while (!visited.has(current)) {
+      visited.add(current);
+      try {
+        fs.lstatSync(path.join(current, ".case-binding.json"));
+        throw new Error("program profile setup root must not be a case state root or its descendant");
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+      const parent = path.dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+  }
+}
+
+function ensureProgramProfileSetupRoot(options = {}) {
+  const supplied = bountyPaths(options);
+  if (supplied.caseId !== null && supplied.caseId !== undefined) {
+    throw new Error("program profile setup scan requires the shared runtime root");
+  }
+  const expected = runtimePaths({ home: supplied.home, repo: supplied.repo, env: options.env });
+  const home = path.resolve(expected.home);
+  const repo = path.resolve(expected.repo);
+  const programs = path.resolve(expected.programs);
+  if (path.resolve(supplied.programs) !== programs || path.resolve(supplied.stateHome || supplied.home) !== home) {
+    throw new Error("program profile setup paths do not match the shared runtime root");
+  }
+  if (home === path.parse(home).root) throw new Error("GATE_HOME cannot be a filesystem root");
+  if (programSetupPathsOverlap(home, repo)) throw new Error("GATE_HOME and the GATE repository must not overlap");
+  const canonicalHome = programSetupProspectiveRealPath(home);
+  const canonicalRepo = programSetupProspectiveRealPath(repo);
+  if (programSetupPathsOverlap(canonicalHome, canonicalRepo)) {
+    throw new Error("GATE_HOME and the GATE repository must not overlap after resolving parent links");
+  }
+  assertProgramSetupUnscopedRoot(home, canonicalHome);
+  fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+  securePrivateDirectory(home, { create: false, label: "GATE_HOME" });
+  securePrivateDirectory(programs, { label: "private program profile root" });
+  const canonicalPrograms = programSetupProspectiveRealPath(programs);
+  if (canonicalPrograms === canonicalHome || !isContained(canonicalHome, canonicalPrograms)) {
+    throw new Error("program profile storage must remain below GATE_HOME after resolving parent links");
+  }
+  return { ...expected, programs };
+}
+
+function boundedProgramSetupEntries(directory, maximum, label) {
+  const entries = [];
+  const handle = fs.opendirSync(directory);
+  try {
+    while (entries.length <= maximum) {
+      const entry = handle.readSync();
+      if (!entry) break;
+      entries.push(entry.name);
+    }
+  } finally {
+    handle.closeSync();
+  }
+  if (entries.length > maximum) throw new Error(`${label} exceeds its ${maximum}-entry bound`);
+  return entries;
+}
+
+function auditProgramProfileSetupEntries(paths, id) {
+  const directory = profileDirectory(paths, id);
+  securePrivateDirectory(directory, { create: false, label: `private program profile ${id}` });
+  const allowed = new Set([
+    PROFILE_FILE,
+    ANSWERS_FILE,
+    STATE_BINDING_FILE,
+    COMPILED_DIRECTORY,
+    TRANSACTIONS_DIRECTORY,
+    LOCK_FILE,
+    LOCK_SERIALIZATION_FILE
+  ]);
+  const entries = boundedProgramSetupEntries(directory, allowed.size, `program profile ${id}`);
+  for (const entry of entries) {
+    if (!allowed.has(entry)) throw new Error(`program profile contains an unexpected entry: ${entry}`);
+    const file = path.join(directory, entry);
+    if ([COMPILED_DIRECTORY, TRANSACTIONS_DIRECTORY].includes(entry)) {
+      securePrivateDirectory(file, { create: false, label: `private program profile directory ${entry} for ${id}` });
+    } else {
+      securePrivateFile(file, { allowMissing: false, label: `private program profile entry ${entry}` });
+    }
+  }
+  if (entries.includes(TRANSACTIONS_DIRECTORY) &&
+      boundedProgramSetupEntries(transactionsRoot(paths, id), 0, `program profile transaction root ${id}`).length) {
+    throw new Error(`program profile ${id} has an interrupted state transaction requiring locked recovery`);
+  }
+}
+
+function loadProgramProfileSetupState(paths, id) {
+  auditProgramProfileSetupEntries(paths, id);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const before = readStateBindingRecord(paths, id);
+    const profileBytes = readPrivateFileBounded(
+      profileFile(paths, id),
+      MAX_PROFILE_BYTES,
+      null,
+      { label: `program profile ${id}` }
+    );
+    const answerBytes = readPrivateFileBounded(
+      answersFile(paths, id),
+      MAX_ANSWERS_BYTES,
+      null,
+      { label: `program profile answers ${id}` }
+    );
+    const after = readStateBindingRecord(paths, id);
+    if (!before.bytes.equals(after.bytes)) {
+      if (attempt === 0) continue;
+      throw new Error(`program profile ${id} changed while its bound state was read`);
+    }
+    const binding = before.binding;
+    if (sha256Bytes(profileBytes) !== binding.profileSha256 || sha256Bytes(answerBytes) !== binding.answersSha256) {
+      throw new Error(`program profile ${id} profile/answers state binding does not match`);
+    }
+    let profile;
+    let answers;
+    try {
+      profile = JSON.parse(profileBytes.toString("utf8"));
+      answers = JSON.parse(answerBytes.toString("utf8"));
+    } catch (error) {
+      throw new Error(`program profile ${id} bound state is not valid JSON`, { cause: error });
+    }
+    if (profile.metadata?.revision !== binding.revision || profile.metadata?.id !== id ||
+        answers.metadata?.programId !== id) {
+      throw new Error(`program profile ${id} bound state identity does not match`);
+    }
+    const profileValidation = validateProgramProfile(profile, { paths });
+    if (!profileValidation.ok) {
+      throw new Error(`program profile validation failed: ${profileValidation.errors.join("; ")}`);
+    }
+    const answerValidation = validateProgramProfileAnswers(answers, { paths });
+    if (!answerValidation.ok) {
+      throw new Error(`program profile answers validation failed: ${answerValidation.errors.join("; ")}`);
+    }
+    return { binding, profile, answers };
+  }
+  throw new Error(`program profile ${id} changed while its bound state was read`);
+}
+
 function scanProgramProfileSetupNames(paths) {
   const names = [];
   const directory = fs.opendirSync(paths.programs);
@@ -1718,8 +1882,7 @@ function programProfileSetupStage(profile, verification) {
 // answer, digest, path, authorization, or blocker detail. The observer applies
 // its process-local opaque identifier after this bounded, binding-checked read.
 export function programProfileSetupFleetStatus(options = {}) {
-  const paths = bountyPaths(options);
-  ensurePrograms(paths);
+  const paths = ensureProgramProfileSetupRoot(options);
   const result = scanProgramProfileSetupNames(paths);
   const profiles = [];
   let invalid = 0;
@@ -1729,7 +1892,7 @@ export function programProfileSetupFleetStatus(options = {}) {
       continue;
     }
     try {
-      const stored = loadStoredProfileState(paths, name);
+      const stored = loadProgramProfileSetupState(paths, name);
       const verification = verifyProfileValue(stored.profile, name, { ...options, paths });
       if (!verification.structuralValid || stored.profile.metadata.id !== name) {
         invalid += 1;

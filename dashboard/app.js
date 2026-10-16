@@ -454,6 +454,9 @@ export function profileSetupPresentation(setup = {}, now = Date.now()) {
 
 export function profileSetupScanPresentation(scan = {}, visibleCount = 0) {
   const visible = Number.isFinite(scan.visible) ? scan.visible : Number.isFinite(visibleCount) ? visibleCount : 0;
+  if (scan.availability === "unavailable") {
+    return `${visible} cached setup${visible === 1 ? "" : "s"} visible · scan unavailable · partial`;
+  }
   const scanned = Number.isFinite(scan.scanned) ? scan.scanned : visible;
   const discovered = Number.isFinite(scan.discovered) ? scan.discovered : visible;
   const represented = Number.isFinite(scan.representedByCases) ? scan.representedByCases : 0;

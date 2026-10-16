@@ -781,6 +781,10 @@ test("private profile setup rows show guided progress without inventing a target
     }, 2),
     "2 setups visible / 5+ discovered · 2 represented by cases · 1+ omitted · 1 invalid · partial"
   );
+  assert.equal(
+    profileSetupScanPresentation({ availability: "unavailable", visible: 1, complete: false, truncated: true }, 1),
+    "1 cached setup visible · scan unavailable · partial"
+  );
 });
 
 test("invalid case tombstones render unavailable binding and isolation metadata", () => {

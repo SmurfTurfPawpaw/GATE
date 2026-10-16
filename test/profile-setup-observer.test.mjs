@@ -45,13 +45,13 @@ function rawStatus(overrides = {}) {
   };
 }
 
-function rawCase(programId) {
+function rawCase(programId, options = {}) {
   return {
-    id: "private-duplicate-case",
-    displayName: "Duplicate case",
-    status: "ready",
+    id: options.id || "private-duplicate-case",
+    displayName: options.displayName || "Duplicate case",
+    status: options.status || "ready",
     binding: {
-      program: { id: programId, current: true },
+      program: { id: programId, current: options.programCurrent ?? true },
       project: null
     },
     isolation: {
@@ -61,6 +61,20 @@ function rawCase(programId) {
     },
     runtimeHealth: { status: "unavailable", reason: "runtime-observation-failed" },
     runtime: null
+  };
+}
+
+function rawSetup(id, overrides = {}) {
+  return {
+    id,
+    stage: "questionnaire",
+    readiness: "not-ready",
+    progress: { answered: 10, total: 66 },
+    blockerCount: 3,
+    nextSection: "authority-sources",
+    recommendationMode: null,
+    updatedAt: observedAt,
+    ...overrides
   };
 }
 
@@ -128,6 +142,23 @@ test("profile setup scan bounds discovery and fails closed on invalid entries", 
   assert.equal(fleet.scan.truncated, true);
 });
 
+test("profile setup scan does not enumerate unrelated runtime roots after bounded initialization", (t) => {
+  const { paths } = fixture(t);
+  createProgramProfile("bounded-root-profile", {}, { paths, now: observedAt });
+  fs.writeFileSync(
+    path.join(paths.executionSandboxes, "UNRELATED_RUNTIME_ENTRY_PRIVATE_CANARY"),
+    "not a sandbox directory",
+    { mode: 0o600 }
+  );
+
+  const fleet = programProfileSetupFleetStatus({ paths, now: observedAt });
+  assert.equal(fleet.profiles.length, 1);
+  assert.equal(fleet.profiles[0].id, "bounded-root-profile");
+  assert.equal(fleet.scan.scanned, 1);
+  assert.equal(fleet.scan.complete, true);
+  assert.equal(JSON.stringify(fleet).includes("UNRELATED_RUNTIME_ENTRY_PRIVATE_CANARY"), false);
+});
+
 test("observer projects opaque intake aggregates, rejects malformed rows, and removes case duplicates", () => {
   const duplicateProgram = "DUPLICATE_PROGRAM_PRIVATE_CANARY";
   const visibleProgram = "VISIBLE_PROGRAM_PRIVATE_CANARY";
@@ -160,7 +191,7 @@ test("observer projects opaque intake aggregates, rejects malformed rows, and re
         readiness: "not-ready",
         progress: { answered: 66, total: 66 },
         blockerCount: 2,
-        nextSection: "conditional-modules",
+        nextSection: null,
         recommendationMode: "mixed",
         updatedAt: observedAt,
         blockers: ["EXACT_BLOCKER_TEXT_PRIVATE_CANARY"],
@@ -198,13 +229,14 @@ test("observer projects opaque intake aggregates, rejects malformed rows, and re
     readiness: "not-ready",
     progress: { answered: 66, total: 66 },
     blockerCount: 2,
-    nextSection: "conditional-modules",
+    nextSection: null,
     recommendationMode: "mixed",
     updatedAt: observedAt,
     freshness: "fresh"
   });
   assert.match(status.profileSetups[0].id, /^program_[a-f0-9]{16}$/u);
   assert.deepEqual(status.profileSetupScan, {
+    availability: "available",
     discovered: 3,
     scanned: 3,
     omitted: 0,
@@ -228,6 +260,210 @@ test("observer projects opaque intake aggregates, rejects malformed rows, and re
     "SOURCE_ID_PRIVATE_CANARY",
     "PROFILE_PATH_PRIVATE_CANARY"
   ]) assert.equal(serialized.includes(canary), false, `profile setup projection leaked ${canary}`);
+});
+
+test("a stale case program binding does not hide the current profile setup", () => {
+  const programId = "STALE_BINDING_PROGRAM_PRIVATE_CANARY";
+  const status = projectSnapshot(rawStatus({
+    cases: [rawCase(programId, {
+      id: "stale-binding-case",
+      displayName: "Stale binding case",
+      status: "stale",
+      programCurrent: false
+    })],
+    caseScan: {
+      discovered: 1,
+      scanned: 1,
+      omitted: 0,
+      invalid: 0,
+      complete: true,
+      truncated: false
+    },
+    profileSetups: [{
+      id: programId,
+      stage: "questionnaire",
+      readiness: "not-ready",
+      progress: { answered: 10, total: 66 },
+      blockerCount: 3,
+      nextSection: "authority-sources",
+      recommendationMode: null,
+      updatedAt: observedAt
+    }],
+    profileSetupScan: {
+      discovered: 1,
+      scanned: 1,
+      omitted: 0,
+      invalid: 0,
+      complete: true,
+      truncated: false
+    }
+  }), { repo }).status;
+
+  assert.equal(status.cases[0].binding.program.current, false);
+  assert.equal(status.profileSetups.length, 1);
+  assert.equal(status.profileSetupScan.visible, 1);
+  assert.equal(status.profileSetupScan.representedByCases, 0);
+  assert.equal(JSON.stringify(status).includes(programId), false);
+});
+
+test("profile setup projection accounts for rows beyond its hard limit", () => {
+  const profileSetups = Array.from({ length: 34 }, (_, index) => rawSetup(
+    `OVERFLOW_PROGRAM_PRIVATE_CANARY_${String(index).padStart(2, "0")}`
+  ));
+  const status = projectSnapshot(rawStatus({
+    profileSetups,
+    profileSetupScan: {
+      discovered: 34,
+      scanned: 34,
+      omitted: 0,
+      invalid: 0,
+      complete: true,
+      truncated: false
+    }
+  }), { repo }).status;
+
+  assert.equal(status.profileSetups.length, 32);
+  assert.deepEqual(status.profileSetupScan, {
+    availability: "available",
+    discovered: 34,
+    scanned: 32,
+    omitted: 2,
+    invalid: 0,
+    visible: 32,
+    representedByCases: 0,
+    discoveredAtLeast: false,
+    omittedAtLeast: false,
+    complete: false,
+    truncated: true
+  });
+  assert.equal(
+    status.profileSetupScan.scanned + status.profileSetupScan.omitted,
+    status.profileSetupScan.discovered
+  );
+  assert.equal(JSON.stringify(status).includes("OVERFLOW_PROGRAM_PRIVATE_CANARY"), false);
+});
+
+test("profile setup projection rejects contradictory lifecycle aggregates", () => {
+  const contradictions = [
+    rawSetup("contradiction-ready-readiness", {
+      stage: "ready", readiness: "not-ready", progress: { answered: 66, total: 66 }, blockerCount: 0, nextSection: null
+    }),
+    rawSetup("contradiction-ready-blocker", {
+      stage: "ready", readiness: "ready", progress: { answered: 66, total: 66 }, blockerCount: 1, nextSection: null
+    }),
+    rawSetup("contradiction-ready-progress", {
+      stage: "ready", readiness: "ready", progress: { answered: 65, total: 66 }, blockerCount: 0, nextSection: null
+    }),
+    rawSetup("contradiction-ready-next", {
+      stage: "ready", readiness: "ready", progress: { answered: 66, total: 66 }, blockerCount: 0, nextSection: "reporting-disclosure"
+    }),
+    rawSetup("contradiction-draft-readiness", {
+      stage: "questionnaire", readiness: "ready"
+    }),
+    rawSetup("contradiction-draft-blocker", {
+      blockerCount: 0
+    }),
+    rawSetup("contradiction-draft-next-missing", {
+      nextSection: null
+    }),
+    rawSetup("contradiction-review-next-present", {
+      stage: "operator-review", progress: { answered: 66, total: 66 }, nextSection: "reporting-disclosure"
+    })
+  ];
+  const status = projectSnapshot(rawStatus({
+    profileSetups: contradictions,
+    profileSetupScan: {
+      discovered: contradictions.length,
+      scanned: contradictions.length,
+      omitted: 0,
+      invalid: 0,
+      complete: true,
+      truncated: false
+    }
+  }), { repo }).status;
+
+  assert.equal(status.profileSetups.length, 0);
+  assert.equal(status.profileSetupScan.invalid, contradictions.length);
+  assert.equal(status.profileSetupScan.complete, false);
+  assert.equal(status.profileSetupScan.truncated, false);
+});
+
+test("a cold profile scan failure preserves fresh status and reports unavailable setup coverage", async (t) => {
+  const paths = { repo };
+  const origin = await listen(t, {
+    paths,
+    statusBuilder: () => rawStatus({ at: "2026-10-16T08:00:01.000Z" }),
+    profileSetupBuilder: () => {
+      throw new Error("COLD_PROFILE_SCAN_FAILURE_PRIVATE_CANARY");
+    }
+  });
+
+  const response = await fetch(`${origin}/api/status`);
+  const status = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(status.at, "2026-10-16T08:00:01.000Z");
+  assert.deepEqual(status.profileSetups, []);
+  assert.deepEqual(status.profileSetupScan, {
+    availability: "unavailable",
+    discovered: null,
+    scanned: null,
+    omitted: null,
+    invalid: null,
+    visible: 0,
+    representedByCases: null,
+    discoveredAtLeast: false,
+    omittedAtLeast: false,
+    complete: false,
+    truncated: true
+  });
+  assert.equal(JSON.stringify(status).includes("COLD_PROFILE_SCAN_FAILURE_PRIVATE_CANARY"), false);
+});
+
+test("a warm profile scan failure advances status while retaining stale setup rows as incomplete", async (t) => {
+  const paths = { repo };
+  let statusCalls = 0;
+  let setupCalls = 0;
+  const origin = await listen(t, {
+    paths,
+    statusBuilder: () => rawStatus({
+      at: statusCalls++ === 0 ? "2026-10-16T08:00:01.000Z" : "2026-10-16T08:00:02.000Z"
+    }),
+    profileSetupBuilder: () => {
+      setupCalls += 1;
+      if (setupCalls > 1) throw new Error("WARM_PROFILE_SCAN_FAILURE_PRIVATE_CANARY");
+      return {
+        profiles: [rawSetup("warm-private-program")],
+        scan: {
+          discovered: 1,
+          scanned: 1,
+          omitted: 0,
+          invalid: 0,
+          complete: true,
+          truncated: false
+        }
+      };
+    }
+  });
+
+  const first = await (await fetch(`${origin}/api/status`)).json();
+  assert.equal(first.at, "2026-10-16T08:00:01.000Z");
+  assert.equal(first.profileSetups[0].freshness, "fresh");
+  assert.equal(first.profileSetupScan.availability, "available");
+  assert.equal(first.profileSetupScan.complete, true);
+
+  await new Promise((resolve) => setTimeout(resolve, 275));
+  const secondResponse = await fetch(`${origin}/api/status`);
+  const second = await secondResponse.json();
+  assert.equal(secondResponse.status, 200);
+  assert.equal(second.at, "2026-10-16T08:00:02.000Z", "fresh base status must not freeze with the setup cache");
+  assert.equal(second.profileSetups.length, 1);
+  assert.equal(second.profileSetups[0].id, first.profileSetups[0].id);
+  assert.equal(second.profileSetups[0].freshness, "stale");
+  assert.equal(second.profileSetupScan.availability, "unavailable");
+  assert.equal(second.profileSetupScan.complete, false);
+  assert.equal(second.profileSetupScan.truncated, true);
+  assert.equal(second.profileSetupScan.visible, 1);
+  assert.equal(JSON.stringify(second).includes("WARM_PROFILE_SCAN_FAILURE_PRIVATE_CANARY"), false);
 });
 
 test("observer API reads the bounded private fleet and marks cached setup state stale", async (t) => {
@@ -258,5 +494,8 @@ test("observer API reads the bounded private fleet and marks cached setup state 
   const fallback = await fallbackResponse.json();
   assert.equal(fallbackResponse.status, 200);
   assert.equal(fallback.profileSetups[0].freshness, "stale");
+  assert.equal(fallback.profileSetupScan.availability, "unavailable");
+  assert.equal(fallback.profileSetupScan.complete, false);
+  assert.equal(fallback.profileSetupScan.truncated, true);
   assert.equal(JSON.stringify(fallback).includes("HTTP_STATUS_FAILURE_PRIVATE_CANARY"), false);
 });

@@ -1294,6 +1294,7 @@ test("profile setup projection preserves guided progress while withholding priva
       freshness: "fresh"
     }],
     profileSetupScan: {
+      availability: "available",
       discovered: 3,
       scanned: 2,
       omitted: 1,
@@ -1321,6 +1322,7 @@ test("profile setup projection preserves guided progress while withholding priva
     freshness: "fresh"
   }]);
   assert.deepEqual(status.profileSetupScan, {
+    availability: "available",
     discovered: 3,
     scanned: 2,
     omitted: 1,
@@ -1337,6 +1339,49 @@ test("profile setup projection preserves guided progress while withholding priva
     "PRIVATE_ANSWERS_CANARY", "PRIVATE_TARGET_CANARY", "PRIVATE_SOURCE_CANARY",
     "PRIVATE_DISPLAY_CANARY", "PRIVATE_FILENAME_CANARY"
   ]) assert.equal(serialized.includes(canary), false, `profile setup projection leaked ${canary}`);
+});
+
+test("profile setup browser projection preserves unavailable scan truth and rejects contradictory readiness", () => {
+  const status = sanitizeStatusPayload({
+    profileSetups: [{
+      id: `program_${"c".repeat(16)}`,
+      displayName: null,
+      stage: "ready",
+      readiness: "ready",
+      progress: { answered: 65, total: 66 },
+      blockerCount: 0,
+      nextSection: null,
+      recommendationMode: null,
+      updatedAt: "2026-10-16T08:00:00.000Z",
+      freshness: "fresh"
+    }],
+    profileSetupScan: {
+      availability: "unavailable",
+      discovered: 999,
+      scanned: 999,
+      omitted: 0,
+      invalid: 0,
+      visible: 0,
+      representedByCases: 999,
+      complete: true,
+      truncated: false
+    }
+  });
+
+  assert.deepEqual(status.profileSetups, []);
+  assert.deepEqual(status.profileSetupScan, {
+    availability: "unavailable",
+    discovered: null,
+    scanned: null,
+    omitted: null,
+    invalid: null,
+    visible: 0,
+    representedByCases: null,
+    discoveredAtLeast: false,
+    omittedAtLeast: false,
+    complete: false,
+    truncated: true
+  });
 });
 
 test("case projection preserves schema-valid trailing spaces as trimmed display labels", () => {
