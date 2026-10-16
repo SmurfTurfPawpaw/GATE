@@ -63,6 +63,45 @@ test("observer usage preserves last occurrence order for duplicate usage IDs", a
   assert.equal(projected.sessions[0].totalTokens, 30);
 });
 
+test("host-session scanning keeps its public source when canonical fallback records coexist", () => {
+  const projected = projectUsage({
+    availability: "exact",
+    source: "codex-session-jsonl:host-session-roots",
+    totals: { inputTokens: 20, cachedInputTokens: 8, outputTokens: 5, reasoningTokens: 2, totalTokens: 25 },
+    sessions: [{
+      id: "private-host-session",
+      modifiedAt: at,
+      provider: "openai",
+      model: "gpt-6",
+      source: "codex-session-jsonl:host-session-roots",
+      availability: "exact",
+      contextWindow: 200000,
+      usage: { inputTokens: 20, cachedInputTokens: 8, outputTokens: 5, reasoningTokens: 2, totalTokens: 25 }
+    }],
+    records: [{
+      apiVersion: "gate.usage/v1",
+      id: "use_fallback_record",
+      at,
+      runId: "run_fallback",
+      taskId: null,
+      agent: "codex",
+      provider: "openai",
+      model: "gpt-6",
+      availability: "exact",
+      measure: "cumulative",
+      inputTokens: 999,
+      cachedInputTokens: 999,
+      outputTokens: 999,
+      reasoningTokens: 999,
+      totalTokens: 999,
+      source: "gate-token-log"
+    }]
+  });
+  assert.equal(projected.source, "codex-session-jsonl");
+  assert.equal(projected.totalTokens, 25);
+  assert.equal(projected.sessions[0].source, "codex-session-jsonl");
+});
+
 function canonicalEvent(overrides = {}) {
   return {
     apiVersion: "gate.event/v1",

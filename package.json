@@ -9,6 +9,9 @@
   },
   "scripts": {
     "check": "node ./bin/gate.mjs validate",
+    "cockpit": "node ./cockpit/companion/cli.mjs --open",
+    "cockpit:build": "node ./cockpit/scripts/build-site.mjs",
+    "cockpit:test": "node --test ./cockpit/test/*.test.mjs",
     "dashboard": "node ./bin/gate.mjs up",
     "doctor": "node ./bin/gate.mjs doctor --full",
     "test": "node --test",

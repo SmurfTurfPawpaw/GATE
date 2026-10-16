@@ -1,0 +1,92 @@
+{
+  "schema": "gate.public-cockpit/v1",
+  "mode": "preview",
+  "site": {
+    "version": "0.2.0"
+  },
+  "gate": {
+    "version": "0.1.2"
+  },
+  "snapshot": {
+    "generatedAt": "2026-10-16T11:15:00Z",
+    "validUntil": null
+  },
+  "aggregate": {
+    "overallProgress": 34,
+    "testsPassed": 27,
+    "testsTotal": 42,
+    "tokenStatus": "available",
+    "tokensUsed": 18400,
+    "tokenBudget": 50000,
+    "learningCount": 18,
+    "blockerCount": 1
+  },
+  "campaigns": [
+    {
+      "alias": "Campaign 1",
+      "stage": "testing",
+      "progress": 46,
+      "attention": "steady",
+      "freshness": "preview",
+      "codex": "working",
+      "currentAction": "running-tests"
+    },
+    {
+      "alias": "Campaign 2",
+      "stage": "intake",
+      "progress": 18,
+      "attention": "response-needed",
+      "freshness": "preview",
+      "codex": "waiting",
+      "currentAction": "awaiting-reply"
+    }
+  ],
+  "decision": {
+    "id": "dec_0123456789abcdef",
+    "revision": 1,
+    "expiresAt": null,
+    "state": "waiting",
+    "campaign": "Campaign 2",
+    "prompt": "choose-depth",
+    "choices": ["recommended-depth", "balanced-depth", "pause"],
+    "recommended": "recommended-depth"
+  },
+  "activity": [
+    {
+      "at": "2026-10-16T11:14:00Z",
+      "campaign": "Campaign 2",
+      "category": "profile",
+      "completed": 14,
+      "total": 70,
+      "result": "attention",
+      "progress": 20
+    },
+    {
+      "at": "2026-10-16T11:10:00Z",
+      "campaign": "Campaign 1",
+      "category": "test",
+      "completed": 27,
+      "total": 42,
+      "result": "passed",
+      "progress": 64
+    },
+    {
+      "at": "2026-10-16T11:04:00Z",
+      "campaign": "Campaign 1",
+      "category": "learn",
+      "completed": 18,
+      "total": 18,
+      "result": "recorded",
+      "progress": 100
+    },
+    {
+      "at": "2026-10-16T10:58:00Z",
+      "campaign": "Campaign 2",
+      "category": "map",
+      "completed": 9,
+      "total": 30,
+      "result": "progress",
+      "progress": 30
+    }
+  ]
+}

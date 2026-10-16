@@ -202,8 +202,30 @@ These commands use the current package interface:
 unset GATE_CASE
 npm run doctor
 npm run validate
+
+# Terminal 1 after validation:
+npm run dashboard
+
+# Terminal 2, from the same checkout:
+npm run cockpit
+```
+
+When Codex Desktop or Codex CLI keeps its sessions on Windows while GATE runs in WSL, set `CODEX_HOME` only for the observer terminal. A portable auto-detection sequence is:
+
+```bash
+windows_profile="$(/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe \
+  -NoProfile -NonInteractive -Command '[Environment]::GetFolderPath("UserProfile")' 2>/dev/null | tr -d '\r')"
+windows_codex_home="$(wslpath -u "$windows_profile")/.codex"
+case "$windows_codex_home" in
+  /mnt/[a-z]/*/.codex) ;;
+  *) echo "Windows Codex home was not detected" >&2; exit 1 ;;
+esac
+test -d "$windows_codex_home/sessions"
+export CODEX_HOME="$windows_codex_home"
 npm run dashboard
 ```
+
+This reads only token-count records from the selected session tails. `GATE_HOME` remains unchanged. The browser receives allowlisted counters and provenance only; session paths, IDs, prompts, and raw log records remain server-side. A manual symbolic override such as `CODEX_HOME=/mnt/c/Users/WINDOWS_USER/.codex npm run dashboard` is equivalent and should stay outside tracked files.
 
 For ordinary repository work, start Codex with only the checkout writable:
 
@@ -223,7 +245,19 @@ In v0.1, any process with write access to all of `GATE_HOME` can change case sco
 
 Operations that need Npcap, a debugger, a certificate store, USB, or another host capability are operator-run native operations today. Record their versions, exact commands, and bounded evidence manually. Narrow native capability providers and their event bridges are a target design; v0.1 does not supply them.
 
-The dashboard binds to `127.0.0.1:4173` by default. Open `http://127.0.0.1:4173` from Windows. WSL normally forwards the loopback port automatically. Do not bind the observer to a LAN address; it is a local view of private operational state. `gate up` rejects `--case`, `GATE_CASE`, and `--unassigned` because it builds the bounded fleet view. A snapshot projects at most 32 cases selected from a discovery window of 1,024; lower-bound and completeness fields expose omissions. See the [dashboard guide](../dashboard/README.md) for build badge verification and the required restart and reload after updates.
+The observer binds to `127.0.0.1:4173` by default. Open `http://127.0.0.1:4173` from Windows for the detailed read-only diagnostic view. WSL normally forwards the loopback port automatically. Do not bind the observer to a LAN address; it is a local view of private operational state. `gate up` rejects `--case`, `GATE_CASE`, and `--unassigned` because it builds the bounded fleet view. A snapshot projects at most 32 cases selected from a discovery window of 1,024; lower-bound and completeness fields expose omissions. See the [dashboard guide](../dashboard/README.md) for build badge verification and the required restart and reload after updates.
+
+`npm run cockpit` starts the private interactive surface on a separate ephemeral loopback port, injects an in-memory session and CSRF capability into its launch URL, owns one dedicated Codex app-server thread, and fetches the observer's bounded projection server-side. Keep the printed URL private and keep both terminals open. The exact boundary and override options are in [Local cockpit companion](local-companion.md).
+
+The public Pages workflow runs the cockpit boundary tests and publishes only the allowlisted `cockpit/_site` artifact. Configure **Settings → Pages → Source: GitHub Actions** once before its first deployment. For a local review that does not collide with the observer port:
+
+```bash
+npm run cockpit:test
+npm run cockpit:build
+python3 -m http.server 4174 --bind 127.0.0.1 -d cockpit/_site
+```
+
+Open `http://127.0.0.1:4174/`. This is a static `PREVIEW · NOT LIVE`; it has no companion bridge, private API, observer response, or runtime state.
 
 The startup banner and browser case terminals use `operator.displayName` from the merged configuration. The tracked default is `Giovanni`. To use another local display name without changing the repository, place an overlay at `$HOME/.config/gate/config.json`:
 
@@ -235,7 +269,7 @@ The startup banner and browser case terminals use `operator.displayName` from th
 }
 ```
 
-Browser case terminals show sanitized structured lifecycle state rather than a shell. They never expose raw PTY data, stdout or stderr, argv, commands, targets, evidence, or private paths. Their spinner and progress bar remain indeterminate while active unless a producer supplies a trustworthy completed and total count. Host-wide Codex session usage remains aggregate; per-case token attribution is unavailable until case-bound token records exist.
+Browser case terminals show sanitized structured lifecycle state rather than a shell. They never expose raw PTY data, stdout or stderr, argv, commands, targets, evidence, or private paths. Their spinner and progress bar remain indeterminate while active unless a producer supplies a trustworthy completed and total count. The cockpit token rail keeps dedicated-thread or host counters visible and labels their provenance. Host-wide usage remains separate; a case shows `Awaiting attribution` until canonical case-bound token records exist.
 
 Run the smoke suite after a runtime, dependency, or host change:
 
@@ -446,11 +480,13 @@ codex login
 export GH_TOKEN="$(gh auth token)"
 ```
 
-If the dashboard does not open from Windows, confirm it is listening inside WSL and retry the loopback address:
+If the observer dashboard does not open from Windows, confirm it is listening inside WSL and retry the loopback address:
 
 ```bash
 curl http://127.0.0.1:4173/api/status
 ```
+
+If the interactive cockpit reports that Codex is unavailable, run `codex login status`, repair the login if needed, confirm the observer command is still running, and restart `npm run cockpit`. A missing observer affects the fleet projection; the dedicated private conversation can still start independently.
 
 If Docker commands exist but `docker info` fails, start Docker Desktop and confirm WSL integration for the selected distribution. Docker remains optional for base GATE operation.
 

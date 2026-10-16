@@ -63,6 +63,8 @@ For each meaningful test or execution attempt, preserve a private review of the 
 - **GATE offline-analysis lane** owns project-bound snapshots and the fixed zero-network REA PE-resource operation. It does not grant target-contact authority, execute a supplied artifact, or turn extracted endpoints into scope.
 - **REA** analyzes saved evidence. It does not acquire traffic or authorize active operations.
 - **Observer** is read-only.
+- **Public cockpit** is a static presentation preview. Its Pages build publishes only the reviewed allowlist under `cockpit/_site`; it does not receive local observer state or an interactive bridge.
+- **Local cockpit companion** owns one loopback-only operator surface and one dedicated Codex app-server thread. It may read the observer's bounded projection, but it does not expose hidden reasoning or raw operations, grant execution authority, replace Program Profile local capture, or make private state public.
 
 ## Make operator questions choice-first
 

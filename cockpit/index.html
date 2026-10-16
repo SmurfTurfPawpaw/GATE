@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#07100f">
+    <meta name="referrer" content="no-referrer">
+    <meta name="robots" content="noindex, nofollow, noarchive, nosnippet">
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-src 'none'; object-src 'none'; worker-src 'none'; manifest-src 'self'; upgrade-insecure-requests"
+    >
+    <meta name="description" content="A privacy-bounded public status view for GATE campaigns.">
+    <title>GATE · Public Cockpit</title>
+    <link rel="icon" href="./assets/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="./assets/styles.css">
+    <script type="module" src="./assets/app.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#cockpit">Skip to cockpit</a>
+
+    <div class="ambient ambient-one" aria-hidden="true"></div>
+    <div class="ambient ambient-two" aria-hidden="true"></div>
+
+    <header class="site-header">
+      <a class="brand" href="./" aria-label="GATE public cockpit home">
+        <span class="brand-mark" aria-hidden="true">G</span>
+        <span>
+          <strong>GATE</strong>
+          <small>PUBLIC COCKPIT</small>
+        </span>
+      </a>
+
+      <div class="version-rail" aria-label="Build versions">
+        <span class="version-badge"><span>Site</span> <strong id="site-version">v—</strong></span>
+        <span class="version-badge gate-version"><span>GATE</span> <strong id="gate-version">v—</strong></span>
+      </div>
+    </header>
+
+    <div class="mode-banner mode-preview" id="mode-banner" role="status" aria-live="polite">
+      <strong>PREVIEW · NOT LIVE</strong>
+      <span>Example data for interface review. Interaction requires the local companion.</span>
+    </div>
+
+    <section class="token-rail" aria-label="Token telemetry" aria-live="polite">
+      <div class="token-rail-title">
+        <small id="token-rail-scope">HOST / SESSION TOKENS</small>
+        <strong id="token-provenance" class="token-provenance unavailable">UNAVAILABLE</strong>
+      </div>
+      <dl class="token-breakdown">
+        <div><dt>Input</dt><dd id="token-input-detail">—</dd></div>
+        <div><dt>Cached</dt><dd id="token-cached-detail">—</dd></div>
+        <div><dt>Output</dt><dd id="token-output-detail">—</dd></div>
+        <div><dt>Total</dt><dd id="token-total-detail">—</dd></div>
+        <div><dt>Cost</dt><dd id="token-cost-detail">—</dd></div>
+      </dl>
+      <p id="token-attribution">Awaiting attribution</p>
+    </section>
+
+    <main id="cockpit" tabindex="-1">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-intro">
+          <p class="eyebrow"><span class="signal-dot" aria-hidden="true"></span> OPERATOR VIEW</p>
+          <h1 id="hero-title">Welcome, Giovanni.</h1>
+          <p class="hero-copy">Progress first. See what is moving, what needs you, and what GATE learned.</p>
+        </div>
+        <article class="progress-summary" aria-labelledby="overall-title">
+          <div class="progress-ring" id="progress-ring" role="progressbar" aria-labelledby="overall-title" aria-valuemin="0" aria-valuemax="100">
+            <span><strong id="overall-progress">—</strong><small>%</small></span>
+          </div>
+          <div class="progress-copy">
+            <small id="overall-title">OVERALL PROGRESS</small>
+            <strong id="current-action">Waiting for snapshot</strong>
+            <div class="snapshot-state" id="snapshot-state" role="status" aria-live="polite">
+              <span class="state-orb" aria-hidden="true"></span>
+              <span id="snapshot-label">Connecting…</span>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <aside class="panel decision-panel" id="decision-panel" aria-labelledby="decision-title">
+        <header class="panel-heading decision-heading">
+          <div>
+            <p class="section-kicker">CODEX CONVERSATION</p>
+            <h2 id="decision-title">Your next decision</h2>
+          </div>
+          <span class="connection-state" id="connection-state"><i aria-hidden="true"></i> Bridge unavailable</span>
+        </header>
+        <div class="decision-layout">
+          <div>
+            <div class="conversation" id="conversation" aria-live="polite">
+              <div class="conversation-empty">Waiting for a valid decision signal.</div>
+            </div>
+            <div class="choice-list" id="choice-list"></div>
+          </div>
+          <form class="message-composer" id="message-composer">
+            <label for="message-input">Message Codex through the local companion</label>
+            <textarea id="message-input" rows="3" maxlength="1000" disabled aria-describedby="message-hint message-status" placeholder="Local companion required"></textarea>
+            <div class="composer-footer">
+              <span id="message-count">0 / 1000</span>
+              <button id="message-send" type="submit" disabled>Send message</button>
+            </div>
+            <p id="message-hint">Private local companion only. Project context and URLs are supported; do not include credentials or secrets.</p>
+            <p id="message-status" role="status" aria-live="polite">Composer unavailable in preview.</p>
+          </form>
+        </div>
+        <p class="bridge-note" id="bridge-note">Preview only. Interaction requires the local GATE companion.</p>
+      </aside>
+
+      <section class="metric-grid" aria-label="Fleet overview">
+        <article class="metric-card">
+          <span class="metric-icon" aria-hidden="true">◫</span>
+          <div><small id="campaign-metric-label">ACTIVE</small><strong id="campaign-count">—</strong></div>
+          <p id="campaign-summary">Campaigns</p>
+        </article>
+        <article class="metric-card">
+          <span class="metric-icon" aria-hidden="true">✓</span>
+          <div><small id="test-metric-label">TESTS</small><strong id="test-count">—</strong></div>
+          <p id="test-summary">Passed / total</p>
+        </article>
+        <article class="metric-card">
+          <span class="metric-icon" aria-hidden="true">◌</span>
+          <div><small id="token-metric-label">TOKEN USAGE</small><strong id="token-usage">—</strong></div>
+          <p id="token-summary">Availability unknown</p>
+        </article>
+        <article class="metric-card attention-card question-metric">
+          <span class="metric-icon" aria-hidden="true">◆</span>
+          <div><small id="question-metric-label">NEEDS GIOVANNI</small><strong id="question-count">—</strong></div>
+          <p id="question-summary">Checking Codex queues</p>
+        </article>
+      </section>
+
+      <details class="secondary-metrics">
+        <summary>More system numbers <span>Learnings, blockers, freshness</span></summary>
+        <section class="secondary-metric-grid" aria-label="Secondary fleet overview">
+          <article class="metric-card">
+            <span class="metric-icon" aria-hidden="true">↗</span>
+            <div><small>LEARNINGS</small><strong id="learning-count">—</strong></div>
+            <p id="learning-summary">Retained</p>
+          </article>
+          <article class="metric-card blocker-card">
+            <span class="metric-icon" aria-hidden="true">!</span>
+            <div><small>BLOCKERS</small><strong id="blocker-count">—</strong></div>
+            <p id="blocker-summary">Need resolution</p>
+          </article>
+          <article class="metric-card">
+            <span class="metric-icon" aria-hidden="true">↻</span>
+            <div><small>FRESHNESS</small><strong id="freshness-value">—</strong></div>
+            <p id="freshness-summary">Snapshot unavailable</p>
+          </article>
+        </section>
+      </details>
+
+      <div class="workspace-grid">
+        <section class="panel fleet-panel" aria-labelledby="fleet-title">
+          <header class="panel-heading">
+            <div>
+            <p class="section-kicker">CAMPAIGN WORKSPACES</p>
+              <h2 id="fleet-title">Campaign fleet</h2>
+            </div>
+            <span class="privacy-chip">Aliases only</span>
+          </header>
+          <div class="campaign-list" id="campaign-list" aria-live="polite">
+            <div class="empty-state">
+              <span aria-hidden="true">···</span>
+              <p>Waiting for a valid public snapshot.</p>
+            </div>
+          </div>
+        </section>
+
+      </div>
+
+      <section class="panel terminal-panel" aria-labelledby="activity-title">
+          <header class="terminal-heading">
+            <div class="terminal-controls" aria-hidden="true"><i></i><i></i><i></i></div>
+            <div>
+              <p class="section-kicker">STRUCTURED ACTIVITY MIRROR</p>
+              <h2 id="activity-title">What GATE is doing</h2>
+            </div>
+            <span class="feed-state"><i aria-hidden="true"></i> SANITIZED SNAPSHOT</span>
+          </header>
+          <ol class="activity-feed" id="activity-feed" aria-label="Sanitized campaign activity">
+            <li class="terminal-line muted"><time>--:--</time><span>Waiting for a valid public snapshot</span></li>
+          </ol>
+          <div class="terminal-command" aria-hidden="true">
+            <span>gate@cockpit:~$</span>
+            <span class="cursor"></span>
+          </div>
+      </section>
+
+      <section class="boundary-note" aria-label="Privacy boundary">
+        <span class="boundary-icon" aria-hidden="true">⌁</span>
+        <div>
+          <strong>Public by design, opaque by default.</strong>
+          <p>This view accepts a fixed allowlist of broad status signals and checked-in decision copy. Targets, findings, tools, raw prompts, evidence, and operator answers never belong in this payload.</p>
+        </div>
+        <span class="schema-label">gate.public-cockpit/v1</span>
+      </section>
+    </main>
+
+    <footer>
+      <span>GATE // Welcome, Giovanni.</span>
+      <span id="snapshot-time">Snapshot unavailable</span>
+    </footer>
+
+    <noscript><p class="noscript">JavaScript is required to validate and display the bounded public snapshot.</p></noscript>
+  </body>
+</html>
