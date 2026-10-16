@@ -4,6 +4,7 @@ import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { programProfileSetupFleetStatus } from "../lib/bounty-profiles.mjs";
 import { buildStatus } from "../lib/status.mjs";
 import { sanitizeOperatorDisplayName, terminalWelcomeBanner } from "../lib/terminal-ui.mjs";
 import { assertNoLikelySecret, redactSensitiveHeaders } from "../lib/text.mjs";
@@ -50,6 +51,24 @@ const CASE_RUNTIME_HEALTH_REASONS = new Set(["invalid-case", "runtime-observatio
 const CASE_STATE_NAMESPACES = new Set(["isolated-directory"]);
 const CASE_PROCESS_BOUNDARIES = new Set(["shared-user"]);
 const CASE_NETWORK_BOUNDARIES = new Set(["adapter-dependent"]);
+const PROFILE_SETUP_STAGES = new Set(["questionnaire", "operator-review", "ready", "superseded"]);
+const PROFILE_SETUP_READINESS = new Set(["not-ready", "ready"]);
+const PROFILE_SETUP_NEXT_SECTIONS = new Set([
+  "identity-objectives",
+  "authority-sources",
+  "actions-techniques",
+  "limits-schedule",
+  "scope-assets",
+  "accounts-identities",
+  "architecture-data-flows",
+  "workflow-coverage",
+  "data-evidence",
+  "stops-escalation-cleanup",
+  "reporting-disclosure",
+  "ambiguities-attestation",
+  "conditional-modules"
+]);
+const PROFILE_SETUP_RECOMMENDATION_MODES = new Set(["policy", "proposal", "mixed"]);
 const EXECUTION_MODES = new Set(["supervised-generic"]);
 const EXECUTION_REASONS = new Set([
   "unsupported-platform",
@@ -199,6 +218,7 @@ const WORKFLOW_CONTROLS = new Set(["enforced", "measured-only", "unavailable"]);
 const MAX_TOOL_RUNTIMES = 256;
 const MAX_WORKFLOW_RECORDS = 64;
 const MAX_CASE_RECORDS = 32;
+const MAX_PROFILE_SETUP_RECORDS = 32;
 const ENGAGEMENT_STATUSES = new Set(["draft", "proposed", "approved", "active", "paused", "closed", "expired", "revoked"]);
 const TECHNICAL_REVIEW_STATUSES = new Set(["pending", "passed", "failed"]);
 const OPERATOR_RECEIPT_STATUSES = new Set(["pending", "approved", "revoked"]);
@@ -1321,6 +1341,62 @@ function summarizeCaseScan(value, visible) {
   };
 }
 
+function summarizeProfileSetup(value) {
+  const setup = object(value);
+  const privateId = id(setup?.id);
+  const stage = safeEnum(setup?.stage, PROFILE_SETUP_STAGES, null);
+  const readiness = safeEnum(setup?.readiness, PROFILE_SETUP_READINESS, null);
+  const progress = object(setup?.progress);
+  const answered = nonNegativeInteger(progress?.answered);
+  const total = nonNegativeInteger(progress?.total);
+  const blockerCount = nonNegativeInteger(setup?.blockerCount);
+  const nextSection = setup?.nextSection === null
+    ? null
+    : safeEnum(setup?.nextSection, PROFILE_SETUP_NEXT_SECTIONS, null);
+  const recommendationMode = setup?.recommendationMode === null || setup?.recommendationMode === undefined
+    ? null
+    : safeEnum(setup?.recommendationMode, PROFILE_SETUP_RECOMMENDATION_MODES, null);
+  const updatedAt = timestamp(setup?.updatedAt);
+  if (!privateId || !stage || !readiness || answered === null || total === null || answered > total ||
+      blockerCount === null || updatedAt === null ||
+      (setup?.nextSection !== null && setup?.nextSection !== undefined && nextSection === null) ||
+      (setup?.recommendationMode !== null && setup?.recommendationMode !== undefined && recommendationMode === null)) {
+    return null;
+  }
+  return {
+    id: opaqueId("program", privateId),
+    displayName: null,
+    stage,
+    readiness,
+    progress: { answered, total },
+    blockerCount,
+    nextSection,
+    recommendationMode,
+    updatedAt,
+    freshness: "fresh"
+  };
+}
+
+function summarizeProfileSetupScan(value, visible, representedByCases, projectionInvalid) {
+  const scan = object(value) || {};
+  const discovered = nonNegativeInteger(scan.discovered);
+  const scanned = nonNegativeInteger(scan.scanned);
+  const omitted = nonNegativeInteger(scan.omitted);
+  const invalid = nonNegativeInteger(scan.invalid);
+  return {
+    discovered: discovered ?? visible + representedByCases,
+    scanned: scanned ?? visible + representedByCases,
+    omitted: omitted ?? 0,
+    invalid: (invalid ?? 0) + projectionInvalid,
+    visible,
+    representedByCases,
+    discoveredAtLeast: typeof scan.discoveredAtLeast === "boolean" ? scan.discoveredAtLeast : false,
+    omittedAtLeast: typeof scan.omittedAtLeast === "boolean" ? scan.omittedAtLeast : false,
+    complete: (typeof scan.complete === "boolean" ? scan.complete : false) && projectionInvalid === 0,
+    truncated: typeof scan.truncated === "boolean" ? scan.truncated : true
+  };
+}
+
 function summarizeEngagementScan(value) {
   const scan = object(value) || {};
   const notLoaded = scan.availability === "not-loaded";
@@ -1411,6 +1487,23 @@ export function projectSnapshot(rawStatus, paths) {
   const cases = Array.isArray(raw.cases)
     ? raw.cases.slice(0, MAX_CASE_RECORDS).map((value) => summarizeCase(value, paths)).filter(Boolean)
     : [];
+  const representedPrograms = new Set(cases.map((item) => item.binding?.program?.id).filter(Boolean));
+  const projectedProfileSetupRows = Array.isArray(raw.profileSetups)
+    ? raw.profileSetups.slice(0, MAX_PROFILE_SETUP_RECORDS).map(summarizeProfileSetup).filter(Boolean)
+    : [];
+  const profileSetupIdCounts = new Map();
+  for (const item of projectedProfileSetupRows) {
+    profileSetupIdCounts.set(item.id, (profileSetupIdCounts.get(item.id) || 0) + 1);
+  }
+  const projectedProfileSetups = projectedProfileSetupRows.filter((item) => profileSetupIdCounts.get(item.id) === 1);
+  const profileSetupProjectionInvalid = Array.isArray(raw.profileSetups)
+    ? raw.profileSetups.slice(0, MAX_PROFILE_SETUP_RECORDS).length - projectedProfileSetups.length
+    : 0;
+  const representedByCases = projectedProfileSetups.reduce(
+    (total, item) => total + (representedPrograms.has(item.id) ? 1 : 0),
+    0
+  );
+  const profileSetups = projectedProfileSetups.filter((item) => !representedPrograms.has(item.id));
   for (const key of ["queued", "running", "waiting", "blocked", "failed", "succeeded", "unknown"]) {
     counts[key] += cases.reduce((total, item) => total + Number(item.counts?.[key] || 0), 0);
   }
@@ -1485,6 +1578,13 @@ export function projectSnapshot(rawStatus, paths) {
       },
       cases,
       caseScan: summarizeCaseScan(raw.caseScan, cases.length),
+      profileSetups,
+      profileSetupScan: summarizeProfileSetupScan(
+        raw.profileSetupScan,
+        profileSetups.length,
+        representedByCases,
+        profileSetupProjectionInvalid
+      ),
       engagements: Array.isArray(raw.engagements)
         ? raw.engagements.map((value) => summarizeEngagement(value, execution)).filter(Boolean)
         : [],
@@ -1628,6 +1728,9 @@ export function createObserver(options = {}) {
   // dashboard-root trust boundary.
   const staticAssets = preloadStaticAssets(dashboardRoot);
   const statusBuilder = options.statusBuilder || buildStatus;
+  const profileSetupBuilder = options.profileSetupBuilder === null
+    ? null
+    : options.profileSetupBuilder || (paths.home ? programProfileSetupFleetStatus : null);
   const requestedRefreshMs = Number(options.refreshMs ?? 2_000);
   const refreshMs = Number.isFinite(requestedRefreshMs) ? Math.max(250, requestedRefreshMs) : 2_000;
   let cached = null;
@@ -1638,10 +1741,16 @@ export function createObserver(options = {}) {
     const now = Date.now();
     if (cached && now - cachedAt < refreshMs) return cached;
     if (inFlight) return inFlight;
-    inFlight = Promise.resolve()
-      .then(() => statusBuilder({ paths }))
-      .then((status) => {
-        cached = projectSnapshot(status, paths);
+    const statusPromise = Promise.resolve().then(() => statusBuilder({ paths }));
+    const profileSetupPromise = profileSetupBuilder
+      ? Promise.resolve().then(() => profileSetupBuilder({ paths }))
+      : Promise.resolve(null);
+    inFlight = Promise.all([statusPromise, profileSetupPromise])
+      .then(([status, setupFleet]) => {
+        const input = setupFleet
+          ? { ...status, profileSetups: setupFleet.profiles, profileSetupScan: setupFleet.scan }
+          : status;
+        cached = projectSnapshot(input, paths);
         cachedAt = Date.now();
         return cached;
       })
@@ -1661,6 +1770,9 @@ export function createObserver(options = {}) {
                 ...item,
                 telemetry: { ...item.telemetry, freshness: "stale" }
               }))
+            : [],
+          profileSetups: Array.isArray(cached.status.profileSetups)
+            ? cached.status.profileSetups.map((item) => ({ ...item, freshness: "stale" }))
             : []
         }
       };
