@@ -2,6 +2,8 @@
 
 The observer is a dependency-free, read-only browser view of GATE's bounded case fleet plus base/unassigned event, supervised-execution, offline-analysis, engagement, and project metadata, with shared learning, upstream, managed-runtime, and host token metadata. Its default view is a compact campaign table. Selecting a row opens one dominant terminal-style live-activity panel; lower-level base and host diagnostics remain available under the collapsed **System health** disclosure. It reads the current `buildStatus` snapshot; it does not connect to a Codex app-server feed. Token availability depends on records that GATE can read from its private runtime state, and unknown measurements remain `null`.
 
+The top bar shows the package version, abbreviated Git commit, and the source state observed when the server started. Its accessible label and `/healthz` expose the full commit. `modified` means the checkout had tracked or untracked changes, or integrity-hiding index flags, while the dashboard was snapshotted; `unavailable` means GATE could not verify the corresponding value. Restart the observer and reload the page after updating the checkout so the badge and snapshotted dashboard assets move to the new build together.
+
 Run it with:
 
 ```bash

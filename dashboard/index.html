@@ -17,12 +17,26 @@
     <a class="skip-link" href="#workspace">Skip to campaign fleet</a>
 
     <header class="topbar">
-      <div class="brand" aria-label="GATE Fleet Board">
-        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
-        <span>
-          <strong>GATE</strong>
-          <small>fleet board</small>
-        </span>
+      <div class="brand-cluster">
+        <div class="brand" aria-label="GATE Fleet Board">
+          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span>
+            <strong>GATE</strong>
+            <small>fleet board</small>
+          </span>
+        </div>
+        <div
+          id="build-identity"
+          class="build-identity build-state-__GATE_SOURCE_STATE__"
+          role="status"
+          aria-label="GATE version __GATE_VERSION__; Git commit __GATE_COMMIT_FULL__; source __GATE_SOURCE_STATE__"
+          title="GATE version __GATE_VERSION__ · Git commit __GATE_COMMIT_FULL__ · source __GATE_SOURCE_STATE__"
+        >
+          <span class="build-version">__GATE_VERSION_LABEL__</span>
+          <span class="build-divider" aria-hidden="true">·</span>
+          <span class="build-commit">build __GATE_COMMIT_SHORT__</span>
+          <span class="build-source-state">__GATE_SOURCE_STATE__</span>
+        </div>
       </div>
 
       <div class="system-state" aria-live="polite">

@@ -4,6 +4,7 @@ import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { normalizeBuildIdentity, observeBuildIdentity } from "../lib/build-identity.mjs";
 import { programProfileSetupFleetStatus } from "../lib/bounty-profiles.mjs";
 import { buildStatus } from "../lib/status.mjs";
 import { sanitizeOperatorDisplayName, terminalWelcomeBanner } from "../lib/terminal-ui.mjs";
@@ -1808,6 +1809,19 @@ function preloadStaticFile(root, relative) {
   }
 }
 
+function decorateIndexAsset(asset, buildIdentity) {
+  const replacements = new Map([
+    ["__GATE_VERSION__", buildIdentity.version ?? "unavailable"],
+    ["__GATE_VERSION_LABEL__", buildIdentity.version ? `v${buildIdentity.version}` : "version unavailable"],
+    ["__GATE_COMMIT_SHORT__", buildIdentity.commitShort ?? "unavailable"],
+    ["__GATE_COMMIT_FULL__", buildIdentity.commit ?? "unavailable"],
+    ["__GATE_SOURCE_STATE__", buildIdentity.state]
+  ]);
+  let body = asset.body.toString("utf8");
+  for (const [placeholder, replacement] of replacements) body = body.replaceAll(placeholder, replacement);
+  return { ...asset, body: Buffer.from(body, "utf8") };
+}
+
 function preloadStaticAssets(root) {
   const byFile = new Map();
   for (const relative of new Set(STATIC_FILES.values())) {
@@ -1820,6 +1834,42 @@ function preloadStaticAssets(root) {
       return asset ? [[pathname, asset]] : [];
     })
   );
+}
+
+function decorateStaticAssets(assets, buildIdentity) {
+  const decorated = new Map();
+  let indexAsset;
+  for (const [pathname, asset] of assets) {
+    if (STATIC_FILES.get(pathname) === "index.html") {
+      indexAsset ||= decorateIndexAsset(asset, buildIdentity);
+      decorated.set(pathname, indexAsset);
+    } else {
+      decorated.set(pathname, asset);
+    }
+  }
+  return decorated;
+}
+
+function identitiesMatch(left, right) {
+  return left.version === right.version && left.commit === right.commit && left.state === right.state;
+}
+
+function reconcileBuildIdentity(left, right) {
+  if (identitiesMatch(left, right)) return left;
+  const version = left.version && left.version === right.version ? left.version : null;
+  const commit = left.commit && left.commit === right.commit ? left.commit : null;
+  const state = commit && (left.state === "modified" || right.state === "modified")
+    ? "modified"
+    : "unavailable";
+  return normalizeBuildIdentity({ version, commit, state });
+}
+
+function safelyObserveBuildIdentity(observer, repo) {
+  try {
+    return normalizeBuildIdentity(observer(repo));
+  } catch {
+    return normalizeBuildIdentity(null);
+  }
 }
 
 function unavailableProfileSetupScan(visible) {
@@ -1877,10 +1927,22 @@ export function createObserver(options = {}) {
   const host = options.host || "127.0.0.1";
   if (!isLoopbackHost(host)) throw new Error("observer must bind to a loopback address");
   const dashboardRoot = path.resolve(options.dashboardRoot || path.join(paths.repo, "dashboard"));
+  const suppliedBuildIdentity = options.buildIdentity === undefined
+    ? null
+    : normalizeBuildIdentity(options.buildIdentity);
+  const identityObserver = typeof options.buildIdentityObserver === "function"
+    ? options.buildIdentityObserver
+    : observeBuildIdentity;
+  const identityBeforeSnapshot = suppliedBuildIdentity || safelyObserveBuildIdentity(identityObserver, paths.repo);
   // Static content is snapshotted before the server can listen. Requests never
   // reopen a path, so later replacement or symlink exchange cannot cross the
   // dashboard-root trust boundary.
-  const staticAssets = preloadStaticAssets(dashboardRoot);
+  const preloadedStaticAssets = preloadStaticAssets(dashboardRoot);
+  const buildIdentity = suppliedBuildIdentity || reconcileBuildIdentity(
+    identityBeforeSnapshot,
+    safelyObserveBuildIdentity(identityObserver, paths.repo)
+  );
+  const staticAssets = decorateStaticAssets(preloadedStaticAssets, buildIdentity);
   const statusBuilder = options.statusBuilder || buildStatus;
   const profileSetupBuilder = options.profileSetupBuilder === null
     ? null
@@ -1960,7 +2022,12 @@ export function createObserver(options = {}) {
       return json(response, 400, { error: "bad request" }, method);
     }
     if (pathname === "/healthz") {
-      return json(response, 200, { ok: true, service: "gate-observer", at: new Date().toISOString() }, method);
+      return json(response, 200, {
+        ok: true,
+        service: "gate-observer",
+        at: new Date().toISOString(),
+        build: buildIdentity
+      }, method);
     }
     if (pathname === "/api/status" || pathname === "/api/events" || pathname === "/api/learnings") {
       try {
