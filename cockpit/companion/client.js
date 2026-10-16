@@ -1,3 +1,6 @@
+// Register renderer listeners before delivering the initial private state.
+import "../assets/app.js";
+
 const parameters = new URLSearchParams(globalThis.location.hash.slice(1));
 const session = parameters.get("session");
 const csrf = parameters.get("csrf");
