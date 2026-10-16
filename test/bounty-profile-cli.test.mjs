@@ -535,6 +535,34 @@ test("skip advances without writing a required answer and leaves resume anchored
   );
 });
 
+test("skip keeps optional fields unset and directs operators to edit instead of resume", { timeout: 5000 }, async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-bounty-optional-skip-"));
+  const paths = runtimePaths({ repo, home: path.join(root, "home") });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (const [index, questionId] of [
+    "authority-program-url",
+    "authority-valid-from",
+    "authority-valid-until",
+    "accounts-identity-provider-notes"
+  ].entries()) {
+    const id = `optional-skip-${index}`;
+    createProgramProfile(id, {}, { paths, now: "2026-10-16T00:00:00.000Z" });
+    const before = resumeProgramProfile(id, { paths });
+    const skipped = await runInteractiveQuestionnaire(t, {
+      id, paths, responses: [`edit ${questionId}\n`, "skip\n", "quit\n"]
+    });
+    assert.equal(skipped.result.outcome, "saved", skipped.transcript);
+    assert.ok(skipped.transcript.includes(`Left ${questionId} unset; revisit it with edit ${questionId}.`));
+    assert.doesNotMatch(skipped.transcript, /resume will return to it/u);
+    assert.deepEqual(resumeProgramProfile(id, { paths }).answers, before.answers);
+    const resumed = await runInteractiveQuestionnaire(t, {
+      id, paths, responses: ["quit\n"]
+    });
+    assert.match(resumed.transcript, /identity-program-name/u);
+    assert.ok(!resumed.transcript.includes(questionId));
+  }
+});
+
 test("profile wizard session reuses one loopback launch path for automatic guided handoff", async () => {
   const paths = { marker: "private-paths" };
   const recommendations = { marker: "private-recommendations" };

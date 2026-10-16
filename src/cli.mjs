@@ -1064,7 +1064,9 @@ async function runProgramProfileQuestionnaire(id, mode, options = {}) {
           terminalOutput.write(`Kept the saved answer for ${question.id}; moved to the next question.\n`);
         } else {
           deferred = true;
-          terminalOutput.write(`Left ${question.id} unresolved; resume will return to it.\n`);
+          terminalOutput.write(question.required
+            ? `Left ${question.id} unresolved; resume will return to it.\n`
+            : `Left ${question.id} unset; revisit it with edit ${question.id}.\n`);
         }
         index += 1;
         continue;
