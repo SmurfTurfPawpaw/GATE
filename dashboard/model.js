@@ -7,7 +7,8 @@
 
 const RECORD_LIMIT = 100;
 const CASE_LIMIT = 64;
-const PROFILE_SETUP_LIMIT = 64;
+const CASE_SCAN_LIMIT = 32;
+const PROFILE_SETUP_LIMIT = 32;
 const TOOL_RUNTIME_LIMIT = 256;
 const STRING_LIMIT = 160;
 const MAX_COUNT = Number.MAX_SAFE_INTEGER;
@@ -675,24 +676,53 @@ function caseShape(input) {
   };
 }
 
-function caseScanShape(input) {
+function caseScanShape(input, visibleCases) {
   const value = record(input);
   const hasLegacyObservation = ["discovered", "scanned", "omitted", "invalid", "complete", "truncated"]
     .some((field) => Object.hasOwn(value, field));
   const availability = Object.hasOwn(value, "availability")
     ? enumValue(value.availability, CASE_SCAN_AVAILABILITY, "unavailable")
-    : hasLegacyObservation ? "available" : "unavailable";
+    : value.attempted === false
+      ? "unavailable"
+      : hasLegacyObservation || value.attempted === true ? "available" : "unavailable";
   const unavailable = availability === "unavailable";
+  if (unavailable) {
+    return {
+      availability,
+      discovered: null,
+      scanned: null,
+      omitted: null,
+      invalid: null,
+      discoveredAtLeast: false,
+      omittedAtLeast: false,
+      complete: false,
+      truncated: true
+    };
+  }
+  const discovered = count(value.discovered);
+  const scanned = count(value.scanned);
+  const omitted = count(value.omitted);
+  const invalid = count(value.invalid);
+  const discoveredAtLeast = typeof value.discoveredAtLeast === "boolean" ? value.discoveredAtLeast : false;
+  const omittedAtLeast = typeof value.omittedAtLeast === "boolean" ? value.omittedAtLeast : false;
+  const countsConsistent = [discovered, scanned, omitted, invalid].every((item) => item !== null) &&
+    scanned <= CASE_SCAN_LIMIT && invalid <= scanned && visibleCases <= scanned &&
+    discovered === scanned + omitted;
+  const exactCoverage = countsConsistent && scanned === visibleCases && omitted === 0 && invalid === 0 &&
+    !discoveredAtLeast && !omittedAtLeast;
+  const contradictoryCompleteClaim = value.complete === true &&
+    (value.truncated !== false || !exactCoverage);
   return {
     availability,
-    discovered: unavailable ? null : count(value.discovered),
-    scanned: unavailable ? null : count(value.scanned),
-    omitted: unavailable ? null : count(value.omitted),
-    invalid: unavailable ? null : count(value.invalid),
-    discoveredAtLeast: unavailable ? false : typeof value.discoveredAtLeast === "boolean" ? value.discoveredAtLeast : false,
-    omittedAtLeast: unavailable ? false : typeof value.omittedAtLeast === "boolean" ? value.omittedAtLeast : false,
-    complete: !unavailable && value.complete === true,
-    truncated: unavailable || (typeof value.truncated === "boolean" ? value.truncated : true)
+    discovered,
+    scanned,
+    omitted,
+    invalid,
+    discoveredAtLeast,
+    omittedAtLeast,
+    complete: value.complete === true && value.truncated === false && exactCoverage,
+    truncated: (typeof value.truncated === "boolean" ? value.truncated : true) || !countsConsistent ||
+      omitted > 0 || discoveredAtLeast || omittedAtLeast || contradictoryCompleteClaim
   };
 }
 
@@ -714,14 +744,16 @@ function profileSetupShape(input) {
     : enumValue(value.recommendationMode, PROFILE_SETUP_RECOMMENDATION_MODES, null);
   const updatedAt = timestamp(value.updatedAt);
   const setupFreshness = enumValue(value.freshness, PROFILE_SETUP_FRESHNESS, null);
-  const ready = stage === "ready" && readiness === "ready";
-  const nonReady = stage !== "ready" && readiness === "not-ready";
-  const completeProgress = answered !== null && total !== null && total > 0 && answered === total;
-  const pendingProgress = answered !== null && total !== null && total > 0 && answered < total;
-  const stateConsistent = ready
-    ? completeProgress && blockerCount === 0 && nextSection === null
-    : nonReady && blockerCount !== null && blockerCount > 0 &&
-      ((completeProgress && nextSection === null) || (pendingProgress && nextSection !== null));
+  const boundedProgress = answered !== null && total !== null && answered <= total;
+  const completeProgress = boundedProgress && total > 0 && answered === total;
+  const pendingProgress = boundedProgress && answered < total;
+  const stateConsistent = stage === "questionnaire"
+    ? readiness === "not-ready" && pendingProgress && blockerCount > 0 && nextSection !== null
+    : stage === "operator-review"
+      ? readiness === "not-ready" && completeProgress && blockerCount > 0 && nextSection === null
+      : stage === "ready"
+        ? readiness === "ready" && completeProgress && blockerCount === 0 && nextSection === null
+        : stage === "superseded" && readiness === "not-ready" && boundedProgress && nextSection === null;
   if (!id || value.displayName !== null || !stage || !readiness || answered === null || total === null || answered > total ||
       blockerCount === null || !updatedAt || !setupFreshness || !hasNextSection || !stateConsistent ||
       (value.nextSection !== null && nextSection === null) ||
@@ -740,21 +772,55 @@ function profileSetupShape(input) {
   };
 }
 
-function profileSetupScanShape(input) {
+function profileSetupScanShape(input, visibleSetups, visibleCases) {
   const value = record(input);
   const availability = enumValue(value.availability, PROFILE_SETUP_SCAN_AVAILABILITY, "unavailable");
+  const visible = count(visibleSetups) ?? 0;
+  if (availability === "unavailable") {
+    return {
+      availability,
+      discovered: null,
+      scanned: null,
+      omitted: null,
+      invalid: null,
+      visible,
+      representedByCases: null,
+      discoveredAtLeast: false,
+      omittedAtLeast: false,
+      complete: false,
+      truncated: true
+    };
+  }
+  const discovered = count(value.discovered);
+  const scanned = count(value.scanned);
+  const omitted = count(value.omitted);
+  const invalid = count(value.invalid);
+  const rawVisible = count(value.visible);
+  const representedByCases = count(value.representedByCases);
+  const discoveredAtLeast = typeof value.discoveredAtLeast === "boolean" ? value.discoveredAtLeast : false;
+  const omittedAtLeast = typeof value.omittedAtLeast === "boolean" ? value.omittedAtLeast : false;
+  const countersPresent = [discovered, scanned, omitted, invalid, rawVisible, representedByCases]
+    .every((item) => item !== null);
+  const countsConsistent = countersPresent && scanned <= PROFILE_SETUP_LIMIT && rawVisible === visible &&
+    representedByCases <= visibleCases && discovered === scanned + omitted &&
+    visible + representedByCases + invalid === scanned;
+  const exactCoverage = countsConsistent && omitted === 0 && invalid === 0 &&
+    !discoveredAtLeast && !omittedAtLeast;
+  const contradictoryCompleteClaim = value.complete === true &&
+    (value.truncated !== false || !exactCoverage);
   return {
     availability,
-    discovered: availability === "available" ? count(value.discovered) : null,
-    scanned: availability === "available" ? count(value.scanned) : null,
-    omitted: availability === "available" ? count(value.omitted) : null,
-    invalid: availability === "available" ? count(value.invalid) : null,
-    visible: count(value.visible),
-    representedByCases: availability === "available" ? count(value.representedByCases) : null,
-    discoveredAtLeast: typeof value.discoveredAtLeast === "boolean" ? value.discoveredAtLeast : false,
-    omittedAtLeast: typeof value.omittedAtLeast === "boolean" ? value.omittedAtLeast : false,
-    complete: availability === "available" && value.complete === true,
-    truncated: availability === "unavailable" || (typeof value.truncated === "boolean" ? value.truncated : true)
+    discovered,
+    scanned,
+    omitted,
+    invalid,
+    visible,
+    representedByCases,
+    discoveredAtLeast,
+    omittedAtLeast,
+    complete: value.complete === true && value.truncated === false && exactCoverage,
+    truncated: (typeof value.truncated === "boolean" ? value.truncated : true) ||
+      !countsConsistent || omitted > 0 || discoveredAtLeast || omittedAtLeast || contradictoryCompleteClaim
   };
 }
 
@@ -937,6 +1003,12 @@ export function sanitizeStatusPayload(input) {
     .slice(0, RECORD_LIMIT)
     .map(agentShape)
     .filter(Boolean);
+  const cases = Array.isArray(value.cases)
+    ? value.cases.slice(0, CASE_LIMIT).map(caseShape).filter(Boolean)
+    : [];
+  const profileSetups = Array.isArray(value.profileSetups)
+    ? value.profileSetups.slice(0, PROFILE_SETUP_LIMIT).map(profileSetupShape).filter(Boolean)
+    : [];
   const telemetry = record(value.telemetry);
   const telemetryState = enumValue(telemetry.freshness, FRESHNESS, "unknown");
 
@@ -946,14 +1018,10 @@ export function sanitizeStatusPayload(input) {
     state: status(firstDefined(value.state, value.status)),
     counts: safeCounts(value.counts),
     agents,
-    cases: Array.isArray(value.cases)
-      ? value.cases.slice(0, CASE_LIMIT).map(caseShape).filter(Boolean)
-      : [],
-    caseScan: caseScanShape(value.caseScan),
-    profileSetups: Array.isArray(value.profileSetups)
-      ? value.profileSetups.slice(0, PROFILE_SETUP_LIMIT).map(profileSetupShape).filter(Boolean)
-      : [],
-    profileSetupScan: profileSetupScanShape(value.profileSetupScan),
+    cases,
+    caseScan: caseScanShape(value.caseScan, cases.length),
+    profileSetups,
+    profileSetupScan: profileSetupScanShape(value.profileSetupScan, profileSetups.length, cases.length),
     engagementScan: engagementScanShape(value.engagementScan),
     execution: executionShape(value.execution),
     workflows: workflowsShape(value.workflows),

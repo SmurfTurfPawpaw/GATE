@@ -737,13 +737,21 @@ export function restoreCaseRenderContinuity(caseGrid, snapshot = {}) {
 
 export function caseScanPresentation(scan = {}, visibleCount = 0) {
   const visible = Number.isFinite(visibleCount) && visibleCount >= 0 ? visibleCount : 0;
+  if (scan.availability === "unavailable" ||
+      (Object.hasOwn(scan, "availability") && scan.availability !== "available")) {
+    return `${visible} case${visible === 1 ? "" : "s"} visible · scan unavailable · partial`;
+  }
   const scanned = Number.isFinite(scan.scanned) ? scan.scanned : visible;
   const discovered = Number.isFinite(scan.discovered) ? scan.discovered : visible;
   const omitted = Number.isFinite(scan.omitted) ? scan.omitted : Math.max(0, discovered - scanned);
   const invalid = Number.isFinite(scan.invalid) ? scan.invalid : 0;
   const discoveredLabel = `${discovered}${scan.discoveredAtLeast === true ? "+" : ""}`;
   const omittedLabel = `${omitted}${scan.omittedAtLeast === true ? "+" : ""}`;
-  return `${scanned} scanned / ${discoveredLabel} discovered${omitted ? ` · ${omittedLabel} omitted` : ""}${invalid ? ` · ${invalid} invalid` : ""}${scan.complete === true ? "" : " · partial"}`;
+  const coverageConsistent = discovered === scanned + omitted && scanned >= visible;
+  const complete = scan.complete === true && scan.truncated === false && coverageConsistent &&
+    scanned === visible && omitted === 0 && invalid === 0 && scan.discoveredAtLeast !== true &&
+    scan.omittedAtLeast !== true;
+  return `${scanned} scanned / ${discoveredLabel} discovered${omitted ? ` · ${omittedLabel} omitted` : ""}${invalid ? ` · ${invalid} invalid` : ""}${complete ? "" : " · partial"}`;
 }
 
 export function offlineAnalysisPresentation(analysis = {}) {
@@ -1377,7 +1385,8 @@ function renderCases() {
   );
   view.caseScan.classList.toggle(
     "attention",
-    scan.complete !== true || scan.truncated === true || Number(scan.invalid || 0) > 0 ||
+    scan.availability !== "available" || scan.complete !== true || scan.truncated === true ||
+      Number(scan.invalid || 0) > 0 ||
       setupScan.complete !== true || setupScan.truncated === true || Number(setupScan.invalid || 0) > 0
   );
 

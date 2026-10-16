@@ -1871,11 +1871,10 @@ function programProfileSetupProgress(profile, envelope, options = {}) {
   };
 }
 
-function programProfileSetupStage(profile, verification) {
-  if (verification.ready === true) return "ready";
-  if (profile.metadata.status === "needs-operator-review") return "operator-review";
+function programProfileSetupStage(profile, verification, progress) {
   if (profile.metadata.status === "superseded") return "superseded";
-  return "questionnaire";
+  if (progress.answered < progress.total) return "questionnaire";
+  return verification.ready === true ? "ready" : "operator-review";
 }
 
 // This read-only fleet view deliberately contains no title, target, source,
@@ -1899,13 +1898,14 @@ export function programProfileSetupFleetStatus(options = {}) {
         continue;
       }
       const progress = programProfileSetupProgress(stored.profile, stored.answers, { paths });
+      const stage = programProfileSetupStage(stored.profile, verification, progress);
       profiles.push({
         id: name,
-        stage: programProfileSetupStage(stored.profile, verification),
-        readiness: verification.ready === true ? "ready" : "not-ready",
+        stage,
+        readiness: stage === "ready" ? "ready" : "not-ready",
         progress: { answered: progress.answered, total: progress.total },
-        blockerCount: verification.blockers.length,
-        nextSection: progress.nextSection,
+        blockerCount: stage === "questionnaire" ? Math.max(1, verification.blockers.length) : verification.blockers.length,
+        nextSection: stage === "questionnaire" ? progress.nextSection : null,
         recommendationMode: null,
         updatedAt: stored.profile.metadata.updatedAt
       });

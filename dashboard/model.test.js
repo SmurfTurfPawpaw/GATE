@@ -1042,8 +1042,8 @@ test("case cockpit projection keeps only bounded lifecycle metadata and an exact
     invalid: 1,
     discoveredAtLeast: false,
     omittedAtLeast: false,
-    complete: true,
-    truncated: false
+    complete: false,
+    truncated: true
   });
   assert.deepEqual(status.engagementScan, {
     availability: "loaded",
@@ -1268,6 +1268,28 @@ test("case scan availability survives sanitization and unavailable claims fail c
   });
   assert.equal(legacyAvailable.caseScan.availability, "available");
   assert.equal(legacyAvailable.caseScan.complete, true);
+
+  const notAttempted = sanitizeStatusPayload({
+    caseScan: { attempted: false, discovered: 0, scanned: 0, omitted: 0, invalid: 0, complete: true, truncated: false }
+  });
+  assert.equal(notAttempted.caseScan.availability, "unavailable");
+  assert.equal(notAttempted.caseScan.complete, false);
+  assert.equal(notAttempted.caseScan.truncated, true);
+
+  const contradictory = sanitizeStatusPayload({
+    caseScan: {
+      availability: "available",
+      discovered: 0,
+      scanned: 1,
+      omitted: 0,
+      invalid: 0,
+      complete: true,
+      truncated: false
+    }
+  });
+  assert.equal(contradictory.caseScan.availability, "available");
+  assert.equal(contradictory.caseScan.complete, false);
+  assert.equal(contradictory.caseScan.truncated, true);
 });
 
 test("case status is normalized from current binding metadata and runtime failures stay separate", () => {
@@ -1450,6 +1472,73 @@ test("profile setup browser projection preserves unavailable scan truth and reje
   assert.equal(invalidAvailability.profileSetupScan.complete, false);
   assert.equal(invalidAvailability.profileSetupScan.truncated, true);
   assert.equal(JSON.stringify(invalidAvailability).includes("PRIVATE_INVALID_PROFILE_SCAN_AVAILABILITY_CANARY"), false);
+});
+
+test("profile setup browser projection enforces the stage matrix and scan accounting", () => {
+  const row = (suffix, overrides = {}) => ({
+    id: `program_${suffix.repeat(16)}`,
+    displayName: null,
+    stage: "questionnaire",
+    readiness: "not-ready",
+    progress: { answered: 10, total: 66 },
+    blockerCount: 2,
+    nextSection: "scope-assets",
+    recommendationMode: null,
+    updatedAt: "2026-10-16T08:00:00.000Z",
+    freshness: "fresh",
+    ...overrides
+  });
+  const status = sanitizeStatusPayload({
+    profileSetups: [
+      row("1"),
+      row("2", { stage: "operator-review", progress: { answered: 66, total: 66 }, nextSection: null }),
+      row("3", {
+        stage: "ready", readiness: "ready", progress: { answered: 66, total: 66 }, blockerCount: 0, nextSection: null
+      }),
+      row("4", { stage: "superseded", blockerCount: 0, nextSection: null }),
+      row("5", { progress: { answered: 66, total: 66 }, nextSection: null }),
+      row("6", { stage: "operator-review" }),
+      row("7", { stage: "superseded" })
+    ],
+    profileSetupScan: {
+      availability: "available",
+      discovered: 7,
+      scanned: 7,
+      omitted: 0,
+      invalid: 3,
+      visible: 4,
+      representedByCases: 0,
+      complete: true,
+      truncated: false
+    }
+  });
+
+  assert.deepEqual(status.profileSetups.map((item) => item.stage), [
+    "questionnaire", "operator-review", "ready", "superseded"
+  ]);
+  assert.equal(status.profileSetupScan.visible, 4);
+  assert.equal(status.profileSetupScan.scanned, 7);
+  assert.equal(status.profileSetupScan.invalid, 3);
+  assert.equal(status.profileSetupScan.complete, false);
+  assert.equal(status.profileSetupScan.truncated, true);
+
+  const missingAccounting = sanitizeStatusPayload({
+    profileSetups: [row("8")],
+    profileSetupScan: {
+      availability: "available",
+      discovered: 2,
+      scanned: 2,
+      omitted: 0,
+      invalid: 0,
+      visible: 1,
+      representedByCases: 0,
+      complete: true,
+      truncated: false
+    }
+  });
+  assert.equal(missingAccounting.profileSetupScan.visible, 1);
+  assert.equal(missingAccounting.profileSetupScan.complete, false);
+  assert.equal(missingAccounting.profileSetupScan.truncated, true);
 });
 
 test("case projection preserves schema-valid trailing spaces as trimmed display labels", () => {

@@ -8,6 +8,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { sanitizeStatusPayload } from "../dashboard/model.js";
+import { caseScanPresentation, fleetSummaryPresentation } from "../dashboard/app.js";
 
 import { buildStatus } from "../src/lib/status.mjs";
 import { runtimePaths } from "../src/lib/paths.mjs";
@@ -471,6 +472,65 @@ function statusFixture(overrides = {}) {
   };
 }
 
+test("unavailable case scans stay unavailable through projection, sanitization, and fleet summary", () => {
+  const exactProfileScan = {
+    availability: "available",
+    discovered: 0,
+    scanned: 0,
+    omitted: 0,
+    invalid: 0,
+    complete: true,
+    truncated: false
+  };
+  for (const caseScan of [{
+    availability: "unavailable",
+    discovered: 0,
+    scanned: 0,
+    omitted: 0,
+    invalid: 0,
+    complete: true,
+    truncated: false,
+    detail: "CASE_SCAN_UNAVAILABLE_PRIVATE_CANARY"
+  }, {
+    attempted: false,
+    discovered: 0,
+    scanned: 0,
+    omitted: 0,
+    invalid: 0,
+    complete: true,
+    truncated: false
+  }]) {
+    const projected = projectSnapshot(statusFixture({
+      cases: [],
+      caseScan,
+      profileSetups: [],
+      profileSetupScan: exactProfileScan
+    }), paths).status;
+    assert.deepEqual(projected.caseScan, {
+      availability: "unavailable",
+      discovered: null,
+      scanned: null,
+      omitted: null,
+      invalid: null,
+      discoveredAtLeast: false,
+      omittedAtLeast: false,
+      complete: false,
+      truncated: true
+    });
+
+    const dashboard = sanitizeStatusPayload(projected);
+    assert.equal(dashboard.caseScan.availability, "unavailable");
+    assert.equal(dashboard.caseScan.complete, false);
+    assert.equal(dashboard.caseScan.truncated, true);
+    const summary = fleetSummaryPresentation(dashboard);
+    assert.equal(summary.availability, "lower-bound");
+    assert.equal(summary.activeLabel, "0+");
+    assert.equal(caseScanPresentation(dashboard.caseScan, dashboard.cases.length),
+      "0 cases visible · scan unavailable · partial");
+    assert.equal(JSON.stringify(dashboard).includes("CASE_SCAN_UNAVAILABLE_PRIVATE_CANARY"), false);
+  }
+});
+
 function caseFixture({
   id = "private-alpha-case",
   displayName = "Alpha assessment",
@@ -870,7 +930,15 @@ test("observer publishes multiple isolated cases with opaque bindings and metada
         runtime: secondRuntime
       })
     ],
-    caseScan: { discovered: 2, scanned: 2, omitted: 0, complete: true, truncated: false, root: "/private/CASE_SCAN_PATH_CANARY" }
+    caseScan: {
+      discovered: 2,
+      scanned: 2,
+      omitted: 0,
+      invalid: 0,
+      complete: true,
+      truncated: false,
+      root: "/private/CASE_SCAN_PATH_CANARY"
+    }
   });
   const { origin } = await listen(t, async () => raw);
   const response = await fetch(`${origin}/api/status`);
@@ -879,6 +947,7 @@ test("observer publishes multiple isolated cases with opaque bindings and metada
 
   assert.deepEqual(status.operator, { displayName: "Giovanni" });
   assert.deepEqual(status.caseScan, {
+    availability: "available",
     discovered: 2,
     scanned: 2,
     omitted: 0,
@@ -1012,6 +1081,7 @@ test("stale cases retain sanitized monitoring while invalid rows become blocked 
   assert.deepEqual(invalid.workflows.instances, []);
   assert.equal(invalid.learningCount, 0);
   assert.deepEqual(status.caseScan, {
+    availability: "available",
     discovered: 3,
     scanned: 3,
     omitted: 0,
@@ -1060,6 +1130,7 @@ test("case projection is bounded and preserves the existing top-level observer l
   assert.equal(new Set(projected.status.cases.map((item) => item.id)).size, 32);
   assert.ok(projected.status.cases.every((item) => /^case_[a-f0-9]{16}$/u.test(item.id)));
   assert.deepEqual(projected.status.caseScan, {
+    availability: "available",
     discovered: 33,
     scanned: 32,
     omitted: 1,
@@ -1083,6 +1154,7 @@ test("case projection is bounded and preserves the existing top-level observer l
     }
   }), paths).status.caseScan;
   assert.deepEqual(lowerBound, {
+    availability: "available",
     discovered: 1024,
     scanned: 32,
     omitted: 992,
@@ -1697,6 +1769,11 @@ test("dashboard routes use an exact allowlist and strict browser headers", async
     assert.equal(response.headers.get("cache-control"), "no-store");
     assert.match(response.headers.get("content-security-policy"), /default-src 'self'/);
     assert.equal(response.headers.get("cross-origin-resource-policy"), "same-origin");
+    if (pathname === "/") {
+      const body = await response.text();
+      assert.match(body, /Cases: scan unavailable · pending · Profiles: scan unavailable · pending/u);
+      assert.doesNotMatch(body, /Cases: 0 scanned \/ 0 discovered/u);
+    }
   }
 
   for (const pathname of ["/dashboard/README.md", "/dashboard/model.test.js", "/package.json", "/dashboard/%2e%2e/package.json"]) {

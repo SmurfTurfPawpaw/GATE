@@ -1119,6 +1119,10 @@ test("token scope labels distinguish host sessions from base records", () => {
 
 test("case scan presentation exposes invalid and partial scan state", () => {
   assert.equal(
+    caseScanPresentation({ availability: "unavailable", complete: false, truncated: true }, 0),
+    "0 cases visible · scan unavailable · partial"
+  );
+  assert.equal(
     caseScanPresentation({
       discovered: 1024,
       scanned: 32,
@@ -1131,4 +1135,16 @@ test("case scan presentation exposes invalid and partial scan state", () => {
     "32 scanned / 1024+ discovered · 992+ omitted · 2 invalid · partial"
   );
   assert.equal(caseScanPresentation({}, 2), "2 scanned / 2 discovered · partial");
+  assert.equal(
+    caseScanPresentation({
+      availability: "available",
+      discovered: 0,
+      scanned: 1,
+      omitted: 0,
+      invalid: 0,
+      complete: true,
+      truncated: false
+    }, 0),
+    "1 scanned / 0 discovered · partial"
+  );
 });

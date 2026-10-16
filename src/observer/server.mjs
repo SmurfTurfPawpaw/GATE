@@ -51,6 +51,7 @@ const CASE_RUNTIME_HEALTH_REASONS = new Set(["invalid-case", "runtime-observatio
 const CASE_STATE_NAMESPACES = new Set(["isolated-directory"]);
 const CASE_PROCESS_BOUNDARIES = new Set(["shared-user"]);
 const CASE_NETWORK_BOUNDARIES = new Set(["adapter-dependent"]);
+const CASE_SCAN_AVAILABILITY = new Set(["available", "unavailable"]);
 const PROFILE_SETUP_STAGES = new Set(["questionnaire", "operator-review", "ready", "superseded"]);
 const PROFILE_SETUP_READINESS = new Set(["not-ready", "ready"]);
 const PROFILE_SETUP_NEXT_SECTIONS = new Set([
@@ -1320,25 +1321,71 @@ function summarizeCase(value, paths) {
   };
 }
 
-function summarizeCaseScan(value, visible) {
+function summarizeCaseScan(value, visible, projectionInvalid, overflow) {
   const scan = object(value) || {};
-  const discovered = nonNegativeInteger(scan.discovered);
-  const scanned = nonNegativeInteger(scan.scanned);
-  const omitted = nonNegativeInteger(scan.omitted);
-  const invalid = nonNegativeInteger(scan.invalid);
+  const hasScanObservation = ["discovered", "scanned", "omitted", "invalid", "complete", "truncated"]
+    .some((key) => Object.hasOwn(scan, key));
+  const availability = Object.hasOwn(scan, "availability")
+    ? safeEnum(scan.availability, CASE_SCAN_AVAILABILITY, "unavailable")
+    : scan.attempted === false
+      ? "unavailable"
+      : hasScanObservation || scan.attempted === true ? "available" : "unavailable";
+  if (availability === "unavailable") {
+    return {
+      availability,
+      discovered: null,
+      scanned: null,
+      omitted: null,
+      invalid: null,
+      discoveredAtLeast: false,
+      omittedAtLeast: false,
+      complete: false,
+      truncated: true
+    };
+  }
+  const rawDiscovered = nonNegativeInteger(scan.discovered);
+  const rawScanned = nonNegativeInteger(scan.scanned);
+  const rawOmitted = nonNegativeInteger(scan.omitted);
+  const rawInvalidValue = nonNegativeInteger(scan.invalid);
+  const rawInvalid = rawInvalidValue ?? 0;
+  const projectedScanned = visible + projectionInvalid;
+  const scanOverflow = Math.max(overflow, Math.max(0, (rawScanned ?? 0) - MAX_CASE_RECORDS));
+  const scanned = Math.min(
+    MAX_CASE_RECORDS,
+    Math.max(projectedScanned, Math.min(rawScanned ?? projectedScanned, MAX_CASE_RECORDS))
+  );
+  const omitted = Math.max(
+    rawOmitted ?? 0,
+    scanOverflow,
+    Math.max(0, (rawDiscovered ?? scanned) - scanned)
+  );
+  const discovered = Math.max(rawDiscovered ?? 0, scanned + omitted);
+  const invalid = Math.min(scanned, Math.max(rawInvalid, projectionInvalid));
   const discoveredAtLeast = typeof scan.discoveredAtLeast === "boolean" ? scan.discoveredAtLeast : false;
   const omittedAtLeast = typeof scan.omittedAtLeast === "boolean" ? scan.omittedAtLeast : false;
-  const complete = typeof scan.complete === "boolean" ? scan.complete : false;
-  const truncated = typeof scan.truncated === "boolean" ? scan.truncated : true;
+  const countersPresent = [rawDiscovered, rawScanned, rawOmitted, rawInvalidValue]
+    .every((item) => item !== null);
+  const counterInconsistent = !countersPresent ||
+    (rawScanned !== null && rawScanned < projectedScanned) ||
+    (rawDiscovered !== null && rawScanned !== null && rawDiscovered < rawScanned) ||
+    rawInvalid > scanned;
+  const projectionConsistent = projectedScanned === scanned;
+  const coverageConsistent = discovered === scanned + omitted;
+  const consistencyFailure = counterInconsistent || !projectionConsistent || !coverageConsistent;
+  const exactCoverage = invalid === 0 && omitted === 0 && projectionInvalid === 0 && scanOverflow === 0 &&
+    !discoveredAtLeast && !omittedAtLeast && !consistencyFailure;
+  const contradictoryCompleteClaim = scan.complete === true && (scan.truncated !== false || !exactCoverage);
   return {
+    availability,
     discovered: discovered ?? visible,
     scanned: scanned ?? visible,
     omitted: omitted ?? 0,
     invalid: invalid ?? 0,
     discoveredAtLeast,
     omittedAtLeast,
-    complete,
-    truncated
+    complete: scan.complete === true && scan.truncated === false && exactCoverage,
+    truncated: (typeof scan.truncated === "boolean" ? scan.truncated : true) || omitted > 0 ||
+      scanOverflow > 0 || discoveredAtLeast || omittedAtLeast || consistencyFailure || contradictoryCompleteClaim
   };
 }
 
@@ -1360,14 +1407,16 @@ function summarizeProfileSetup(value) {
     ? null
     : safeEnum(setup?.recommendationMode, PROFILE_SETUP_RECOMMENDATION_MODES, null);
   const updatedAt = timestamp(setup?.updatedAt);
-  const ready = stage === "ready" && readiness === "ready";
-  const nonReady = stage !== "ready" && readiness === "not-ready";
-  const completeProgress = answered !== null && total !== null && total > 0 && answered === total;
-  const pendingProgress = answered !== null && total !== null && total > 0 && answered < total;
-  const stateConsistent = ready
-    ? completeProgress && blockerCount === 0 && nextSection === null
-    : nonReady && blockerCount !== null && blockerCount > 0 &&
-      ((completeProgress && nextSection === null) || (pendingProgress && nextSection !== null));
+  const boundedProgress = answered !== null && total !== null && answered <= total;
+  const completeProgress = boundedProgress && total > 0 && answered === total;
+  const pendingProgress = boundedProgress && answered < total;
+  const stateConsistent = stage === "questionnaire"
+    ? readiness === "not-ready" && pendingProgress && blockerCount > 0 && nextSection !== null
+    : stage === "operator-review"
+      ? readiness === "not-ready" && completeProgress && blockerCount > 0 && nextSection === null
+      : stage === "ready"
+        ? readiness === "ready" && completeProgress && blockerCount === 0 && nextSection === null
+        : stage === "superseded" && readiness === "not-ready" && boundedProgress && nextSection === null;
   if (!privateId || !stage || !readiness || answered === null || total === null || answered > total ||
       blockerCount === null || updatedAt === null || !hasNextSection || !stateConsistent ||
       (rawNextSection !== null && nextSection === null) ||
@@ -1393,7 +1442,8 @@ function summarizeProfileSetupScan(value, visible, representedByCases, projectio
   const rawDiscovered = nonNegativeInteger(scan.discovered);
   const rawScanned = nonNegativeInteger(scan.scanned);
   const rawOmitted = nonNegativeInteger(scan.omitted);
-  const rawInvalid = nonNegativeInteger(scan.invalid) ?? 0;
+  const rawInvalidValue = nonNegativeInteger(scan.invalid);
+  const rawInvalid = rawInvalidValue ?? 0;
   const projectedValid = visible + representedByCases;
   const projectedScanned = projectedValid + projectionInvalid;
   const scanOverflow = Math.max(overflow, Math.max(0, (rawScanned ?? 0) - MAX_PROFILE_SETUP_RECORDS));
@@ -1403,7 +1453,9 @@ function summarizeProfileSetupScan(value, visible, representedByCases, projectio
   );
   const invalidCapacity = Math.max(0, scanned - projectedValid);
   const invalid = Math.min(invalidCapacity, projectionInvalid + rawInvalid);
-  const counterInconsistent =
+  const countersPresent = [rawDiscovered, rawScanned, rawOmitted, rawInvalidValue]
+    .every((item) => item !== null);
+  const counterInconsistent = !countersPresent ||
     (rawScanned !== null && rawScanned < projectedScanned) ||
     (rawDiscovered !== null && rawScanned !== null && rawDiscovered < rawScanned) ||
     projectionInvalid + rawInvalid > invalidCapacity;
@@ -1413,14 +1465,20 @@ function summarizeProfileSetupScan(value, visible, representedByCases, projectio
     Math.max(0, (rawDiscovered ?? scanned) - scanned)
   );
   const discovered = Math.max(rawDiscovered ?? 0, scanned + omitted);
+  const discoveredAtLeast = typeof scan.discoveredAtLeast === "boolean" ? scan.discoveredAtLeast : false;
+  const omittedAtLeast = typeof scan.omittedAtLeast === "boolean" ? scan.omittedAtLeast : false;
+  const accountingConsistent = projectedValid + invalid === scanned;
+  const coverageConsistent = discovered === scanned + omitted;
   const hasScanObservation = ["discovered", "scanned", "omitted", "invalid", "complete", "truncated"]
     .some((key) => Object.hasOwn(scan, key));
-  const availability = safeEnum(
-    scan.availability,
-    PROFILE_SETUP_SCAN_AVAILABILITY,
-    hasScanObservation ? "available" : "unavailable"
-  );
+  const availability = Object.hasOwn(scan, "availability")
+    ? safeEnum(scan.availability, PROFILE_SETUP_SCAN_AVAILABILITY, "unavailable")
+    : hasScanObservation ? "available" : "unavailable";
   const unavailable = availability === "unavailable";
+  const consistencyFailure = counterInconsistent || !accountingConsistent || !coverageConsistent;
+  const exactCoverage = projectionInvalid === 0 && invalid === 0 && omitted === 0 && scanOverflow === 0 &&
+    !discoveredAtLeast && !omittedAtLeast && !consistencyFailure;
+  const contradictoryCompleteClaim = scan.complete === true && (scan.truncated !== false || !exactCoverage);
   return {
     availability,
     discovered: unavailable ? null : discovered,
@@ -1429,12 +1487,12 @@ function summarizeProfileSetupScan(value, visible, representedByCases, projectio
     invalid: unavailable ? null : invalid,
     visible,
     representedByCases: unavailable ? null : representedByCases,
-    discoveredAtLeast: typeof scan.discoveredAtLeast === "boolean" ? scan.discoveredAtLeast : false,
-    omittedAtLeast: typeof scan.omittedAtLeast === "boolean" ? scan.omittedAtLeast : false,
-    complete: !unavailable && scan.complete === true && projectionInvalid === 0 && invalid === 0 &&
-      omitted === 0 && scanOverflow === 0 && !counterInconsistent,
+    discoveredAtLeast: unavailable ? false : discoveredAtLeast,
+    omittedAtLeast: unavailable ? false : omittedAtLeast,
+    complete: !unavailable && scan.complete === true && scan.truncated === false && exactCoverage,
     truncated: unavailable || (typeof scan.truncated === "boolean" ? scan.truncated : true) ||
-      omitted > 0 || scanOverflow > 0 || counterInconsistent
+      omitted > 0 || scanOverflow > 0 || discoveredAtLeast || omittedAtLeast || consistencyFailure ||
+      contradictoryCompleteClaim
   };
 }
 
@@ -1525,9 +1583,11 @@ export function projectSnapshot(rawStatus, paths) {
     agents: agents.length,
     tasks: tasks.length
   };
-  const cases = Array.isArray(raw.cases)
-    ? raw.cases.slice(0, MAX_CASE_RECORDS).map((value) => summarizeCase(value, paths)).filter(Boolean)
-    : [];
+  const rawCases = Array.isArray(raw.cases) ? raw.cases : [];
+  const boundedCases = rawCases.slice(0, MAX_CASE_RECORDS);
+  const cases = boundedCases.map((value) => summarizeCase(value, paths)).filter(Boolean);
+  const caseProjectionInvalid = boundedCases.length - cases.length;
+  const caseOverflow = Math.max(0, rawCases.length - boundedCases.length);
   const representedPrograms = new Set(cases
     .filter((item) => item.binding?.program?.current === true)
     .map((item) => item.binding.program.id));
@@ -1619,7 +1679,7 @@ export function projectSnapshot(rawStatus, paths) {
         displayName: sanitizeOperatorDisplayName(raw.operator?.displayName)
       },
       cases,
-      caseScan: summarizeCaseScan(raw.caseScan, cases.length),
+      caseScan: summarizeCaseScan(raw.caseScan, cases.length, caseProjectionInvalid, caseOverflow),
       profileSetups,
       profileSetupScan: summarizeProfileSetupScan(
         raw.profileSetupScan,

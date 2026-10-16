@@ -11,6 +11,7 @@ import {
 } from "../src/lib/bounty-profiles.mjs";
 import { runtimePaths } from "../src/lib/paths.mjs";
 import { projectSnapshot, startObserver } from "../src/observer/server.mjs";
+import { sanitizeStatusPayload } from "../dashboard/model.js";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const observedAt = "2026-10-16T08:00:00.000Z";
@@ -246,7 +247,7 @@ test("observer projects opaque intake aggregates, rejects malformed rows, and re
     discoveredAtLeast: false,
     omittedAtLeast: false,
     complete: false,
-    truncated: false
+    truncated: true
   });
 
   const serialized = JSON.stringify(status);
@@ -366,8 +367,20 @@ test("profile setup projection rejects contradictory lifecycle aggregates", () =
     rawSetup("contradiction-draft-next-missing", {
       nextSection: null
     }),
+    rawSetup("contradiction-draft-complete", {
+      progress: { answered: 66, total: 66 }, nextSection: null
+    }),
+    rawSetup("contradiction-review-incomplete", {
+      stage: "operator-review"
+    }),
     rawSetup("contradiction-review-next-present", {
       stage: "operator-review", progress: { answered: 66, total: 66 }, nextSection: "reporting-disclosure"
+    }),
+    rawSetup("contradiction-superseded-ready", {
+      stage: "superseded", readiness: "ready", blockerCount: 0, nextSection: null
+    }),
+    rawSetup("contradiction-superseded-next", {
+      stage: "superseded"
     })
   ];
   const status = projectSnapshot(rawStatus({
@@ -385,7 +398,49 @@ test("profile setup projection rejects contradictory lifecycle aggregates", () =
   assert.equal(status.profileSetups.length, 0);
   assert.equal(status.profileSetupScan.invalid, contradictions.length);
   assert.equal(status.profileSetupScan.complete, false);
-  assert.equal(status.profileSetupScan.truncated, false);
+  assert.equal(status.profileSetupScan.truncated, true);
+});
+
+test("profile setup stage and scan accounting remain fail-closed through browser sanitization", () => {
+  const accepted = [
+    rawSetup("matrix-questionnaire"),
+    rawSetup("matrix-review", {
+      stage: "operator-review", progress: { answered: 66, total: 66 }, nextSection: null
+    }),
+    rawSetup("matrix-ready", {
+      stage: "ready", readiness: "ready", progress: { answered: 66, total: 66 }, blockerCount: 0, nextSection: null
+    }),
+    rawSetup("matrix-superseded", {
+      stage: "superseded", progress: { answered: 10, total: 66 }, blockerCount: 0, nextSection: null
+    })
+  ];
+  const raw = rawStatus({
+    profileSetups: accepted,
+    profileSetupScan: {
+      availability: "available",
+      discovered: 5,
+      scanned: 5,
+      omitted: 0,
+      invalid: 0,
+      complete: true,
+      truncated: false
+    }
+  });
+
+  const serverStatus = projectSnapshot(raw, { repo }).status;
+  assert.equal(serverStatus.profileSetups.length, 4);
+  assert.equal(serverStatus.profileSetupScan.visible, 4);
+  assert.equal(serverStatus.profileSetupScan.scanned, 5);
+  assert.equal(serverStatus.profileSetupScan.invalid, 0);
+  assert.equal(serverStatus.profileSetupScan.complete, false);
+  assert.equal(serverStatus.profileSetupScan.truncated, true);
+
+  const browserStatus = sanitizeStatusPayload(serverStatus);
+  assert.equal(browserStatus.profileSetups.length, 4);
+  assert.equal(browserStatus.profileSetupScan.visible, 4);
+  assert.equal(browserStatus.profileSetupScan.complete, false);
+  assert.equal(browserStatus.profileSetupScan.truncated, true);
+  assert.equal(JSON.stringify(browserStatus).includes("matrix-"), false);
 });
 
 test("a cold profile scan failure preserves fresh status and reports unavailable setup coverage", async (t) => {
