@@ -66,7 +66,7 @@ test("adding a repeated item focuses the newly appended control", () => {
 });
 
 
-import { renderProfileControl } from "../profile-ui/app.js";
+import { renderProfileControl, selectProfileQuestionId } from "../profile-ui/app.js";
 import { loadProgramProfileQuestionnaire } from "../src/lib/program-profile-contract.mjs";
 
 class Element {
@@ -103,6 +103,23 @@ class Element {
 
 const questionnaire = loadProgramProfileQuestionnaire();
 const semantics = questionnaire.semantics;
+
+test("guided launch question wins over earlier unanswered questions", () => {
+  const questions = [
+    { id: "identity-program-name", answered: false },
+    { id: "authority-contacts", answered: false },
+    { id: "authority-operator-confirmed", answered: false }
+  ];
+  assert.equal(
+    selectProfileQuestionId(questions, "authority-contacts", null),
+    "authority-contacts"
+  );
+  assert.equal(
+    selectProfileQuestionId(questions, "not-a-question", null),
+    "identity-program-name"
+  );
+});
+
 function control(id, value) {
   globalThis.document = { createElement: (tag) => new Element(tag) };
   try {

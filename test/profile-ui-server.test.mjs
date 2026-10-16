@@ -94,6 +94,37 @@ test("profile UI binds only explicit loopback addresses", async (t) => {
   );
 });
 
+test("profile UI accepts only an applicable questionnaire question as its guided landing target", async (t) => {
+  const { paths, id } = fixture(t, "guided-landing-validation");
+  for (const initialQuestionId of ["not-a-question", "web-api-entry-points", 7]) {
+    await assert.rejects(
+      startProfileWizardServer({ profileId: id, paths, initialQuestionId }),
+      /initial question id must name an applicable questionnaire question/u
+    );
+  }
+});
+
+test("profile UI returns its validated guided landing question with initial state", async (t) => {
+  const { paths, id } = fixture(t, "guided-landing-state");
+  const started = await startProfileWizardServer({
+    profileId: id,
+    paths,
+    initialQuestionId: "authority-contacts"
+  });
+  t.after(() => started.close());
+  assert.equal(started.initialQuestionId, "authority-contacts");
+
+  const credentials = launchCredentials(started);
+  const response = await api(started, credentials, "/api/state");
+  const payload = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(payload.state.initialQuestionId, "authority-contacts");
+  const firstUnanswered = payload.state.sections
+    .flatMap((section) => section.questions)
+    .find((question) => question.applicable && !question.answered);
+  assert.notEqual(firstUnanswered.id, "authority-contacts");
+});
+
 test("profile UI canonicalizes the default HTTP port for browser Host headers", () => {
   assert.equal(profileUiServerInternals.expectedHost("127.0.0.1", 80), "127.0.0.1");
   assert.equal(profileUiServerInternals.expectedHost("::1", 80), "[::1]");

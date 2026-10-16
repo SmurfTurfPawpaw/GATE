@@ -1069,12 +1069,15 @@ function renderQuestion() {
   elements.nextQuestion.disabled = busy || index === questions.length - 1;
 }
 
+export function selectProfileQuestionId(questionList, requestedId = null, currentId = null) {
+  if (requestedId && questionList.some((question) => question.id === requestedId)) return requestedId;
+  if (currentId && questionList.some((question) => question.id === currentId)) return currentId;
+  return questionList.find((question) => !question.answered)?.id || questionList[0]?.id || null;
+}
+
 function render(nextQuestionId = null) {
   questions = applicableQuestions();
-  if (nextQuestionId && questions.some((question) => question.id === nextQuestionId)) currentQuestionId = nextQuestionId;
-  if (!currentQuestionId || !questions.some((question) => question.id === currentQuestionId)) {
-    currentQuestionId = questions.find((question) => !question.answered)?.id || questions[0]?.id;
-  }
+  currentQuestionId = selectProfileQuestionId(questions, nextQuestionId, currentQuestionId);
   renderHeader();
   renderSectionNav();
   renderQuestion();
@@ -1190,7 +1193,7 @@ async function bootstrap() {
   try {
     state = await api("/api/state");
     elements.saveState.textContent = "Ready · local";
-    render();
+    render(state.initialQuestionId || null);
   } catch (error) {
     elements.questionTitle.textContent = "GATE could not open this profile";
     elements.questionWhy.textContent = error.message;

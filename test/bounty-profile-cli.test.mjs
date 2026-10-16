@@ -36,6 +36,38 @@ function profileValueAt(profile, dottedPath) {
   return dottedPath.split(".").reduce((value, part) => value?.[part], profile);
 }
 
+async function runInteractiveQuestionnaire(t, options) {
+  const input = new PassThrough();
+  let transcript = "";
+  const terminalOutput = new Writable({
+    write(chunk, _encoding, callback) {
+      transcript += chunk.toString();
+      callback();
+    }
+  });
+  const timers = options.responses.map((response, index) =>
+    setTimeout(() => input.write(response), 40 * (index + 1))
+  );
+  t.after(() => {
+    for (const timer of timers) clearTimeout(timer);
+    input.destroy();
+  });
+  const result = await cliInternals.runProgramProfileQuestionnaire(
+    options.id,
+    options.mode || "resume",
+    {
+      paths: options.paths,
+      recommendations: options.recommendations || null,
+      input,
+      output: terminalOutput,
+      interactive: true,
+      terminal: false
+    }
+  );
+  input.end();
+  return { result, transcript };
+}
+
 test("help exposes the private bug-bounty profile workflow", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-bounty-help-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -219,7 +251,7 @@ test("interactive format guidance explains contract-backed structured answer sha
   assert.equal(result.outcome, "saved");
   assert.match(
     transcript,
-    /Commands: back, edit QUESTION_ID, why, format, recommended, apply recommended, save, quit\./u
+    /Commands: back, skip, edit QUESTION_ID, why, format, recommended, apply recommended, save, quit\./u
   );
   assert.match(transcript, /Accepted format: a JSON array matching the records requested by this prompt/u);
   assert.match(transcript, /"Technical vulnerability report"/u);
@@ -296,6 +328,261 @@ test("terminal fallback renders numbered choices and stores their canonical valu
   assert.equal(cliInternals.parseQuestionAnswer(attestation, "1"), true);
   assert.equal(cliInternals.parseQuestionAnswer(attestation, "2"), false);
   assert.equal(cliInternals.parseQuestionAnswer(attestation, "0"), false);
+});
+
+test("contact questions offer guided, defer, and explicit advanced paths while preserving reviewed recommendations", () => {
+  const contact = PROGRAM_PROFILE_QUESTIONS.find((question) => question.id === "authority-contacts");
+  const unavailable = cliInternals.questionChoicePrompt(contact, {
+    available: false,
+    reason: "proposal-required",
+    summary: "Observed source evidence is required."
+  });
+  assert.match(unavailable, /1\. Open guided local form \(Recommended next step\)/u);
+  assert.match(unavailable, /2\. Save and stop for now/u);
+  assert.match(unavailable, /A\. Advanced JSON/u);
+  assert.match(unavailable, /Press Enter to open the guided form/u);
+  assert.doesNotMatch(unavailable, /R\. Apply reviewed answer/u);
+
+  const available = cliInternals.questionChoicePrompt(contact, {
+    available: true,
+    summary: "A private local recommendation is available; its value remains hidden.",
+    basis: { claimState: "observed" }
+  });
+  assert.match(available, /R\. Apply reviewed answer \[evidence: observed\]/u);
+  assert.match(available, /1\. Open guided local form \(Recommended next step\)/u);
+
+  const advanced = cliInternals.questionChoicePrompt(contact, { available: false }, { advanced: true });
+  assert.match(advanced, /Advanced JSON entry is active for this question/u);
+});
+
+test("contact questions hand blank, 1, and open ui to the bounded guided browser outcome", { timeout: 10_000 }, async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-bounty-contact-handoff-"));
+  const paths = runtimePaths({ repo, home: path.join(root, "home") });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  for (const [suffix, response] of [["blank", "\n"], ["one", "1\n"], ["words", "open ui\n"]]) {
+    const id = `contact-handoff-${suffix}`;
+    createProgramProfile(id, {}, { paths, now: "2026-10-16T00:00:00.000Z" });
+    const { result, transcript } = await runInteractiveQuestionnaire(t, {
+      id,
+      paths,
+      responses: ["edit authority-contacts\n", response]
+    });
+    assert.equal(result.outcome, "guided-ui", transcript);
+    assert.equal(result.initialQuestionId, "authority-contacts");
+    assert.equal(result.nextCommand, `./bin/gate.mjs bounty profile ui ${id} --open`);
+    assert.ok(JSON.stringify(result).length < 1000);
+    assert.match(transcript, /Open guided local form \(Recommended next step\)/u);
+    assert.equal(
+      Object.hasOwn(resumeProgramProfile(id, { paths }).answers.answers, "authority-contacts"),
+      false
+    );
+  }
+});
+
+test("contact questions stop cleanly or accept JSON only after the explicit advanced choice", { timeout: 10_000 }, async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-bounty-contact-advanced-"));
+  const paths = runtimePaths({ repo, home: path.join(root, "home") });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const stopId = "contact-stop-profile";
+  createProgramProfile(stopId, {}, { paths, now: "2026-10-16T00:00:00.000Z" });
+  const stopped = await runInteractiveQuestionnaire(t, {
+    id: stopId,
+    paths,
+    responses: ["edit authority-contacts\n", "2\n"]
+  });
+  assert.equal(stopped.result.outcome, "saved", stopped.transcript);
+  assert.equal(Object.hasOwn(resumeProgramProfile(stopId, { paths }).answers.answers, "authority-contacts"), false);
+
+  const advancedId = "contact-advanced-profile";
+  createProgramProfile(advancedId, {}, { paths, now: "2026-10-16T00:00:00.000Z" });
+  const contact = [{
+    name: "Program security team",
+    role: "Escalation contact",
+    channel: "platform://program-inbox",
+    purpose: "Clarify authority and receive escalation.",
+    sourceRefs: []
+  }];
+  const advanced = await runInteractiveQuestionnaire(t, {
+    id: advancedId,
+    paths,
+    responses: [
+      "edit authority-contacts\n",
+      "a person\n",
+      "A\n",
+      `${JSON.stringify(contact)}\n`,
+      "quit\n"
+    ]
+  });
+  assert.equal(advanced.result.outcome, "saved", advanced.transcript);
+  assert.match(advanced.transcript, /Choose 1 to open the guided form/u);
+  assert.match(advanced.transcript, /Accepted format: a JSON array of contact records/u);
+  assert.match(advanced.transcript, /Advanced JSON entry is active for this question/u);
+  assert.doesNotMatch(advanced.transcript, /Unexpected token|enter valid JSON for this structured answer/u);
+  assert.deepEqual(
+    resumeProgramProfile(advancedId, { paths }).answers.answers["authority-contacts"],
+    contact
+  );
+});
+
+test("contact questions apply a validated private recommendation without printing its value", { timeout: 5000 }, async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-bounty-contact-recommendation-"));
+  const paths = runtimePaths({ repo, home: path.join(root, "home") });
+  const id = "contact-recommendation-profile";
+  const observedAt = "2026-10-15T10:00:00.000Z";
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  createProgramProfile(id, {}, { paths, now: observedAt });
+
+  let current = resumeProgramProfile(id, { paths });
+  const sourceAnswers = structuredClone(current.answers);
+  sourceAnswers.metadata.updatedAt = "2026-10-15T10:01:00.000Z";
+  sourceAnswers.answers["authority-sources"] = [{
+    id: "program-rules",
+    type: "program-rules",
+    title: "Published program rules",
+    reference: "https://program.example.test/rules",
+    contentSha256: "a".repeat(64),
+    observedAt,
+    claimState: "observed",
+    notes: "Reviewed local copy."
+  }];
+  applyProgramProfileAnswers(id, sourceAnswers, { paths, now: sourceAnswers.metadata.updatedAt });
+  current = resumeProgramProfile(id, { paths });
+
+  const privateChannel = "PRIVATE_CONTACT_CHANNEL_8c32";
+  const contact = [{
+    name: "Program security team",
+    role: "Authority and escalation contact",
+    channel: privateChannel,
+    purpose: "Clarify authority and receive escalation.",
+    sourceRefs: ["program-rules"]
+  }];
+  const questionnaire = programProfileQuestionnaireBinding({ repo });
+  const recommendations = {
+    $schema: "https://gate.local/schemas/bug-bounty-program-profile-recommendations.schema.json",
+    apiVersion: "gate.dev/program-profile-recommendations/v1",
+    kind: "BugBountyProgramProfileRecommendations",
+    metadata: {
+      programId: id,
+      createdAt: "2026-10-15T10:02:00.000Z",
+      questionnaireId: questionnaire.id,
+      questionnaireVersion: questionnaire.version,
+      questionnaireSha256: questionnaire.sha256,
+      baseRevision: current.summary.revision,
+      baseProfileSha256: current.summary.profileSha256
+    },
+    proposals: {
+      "authority-contacts": {
+        value: contact,
+        provenance: "source-derived",
+        basis: {
+          summary: "Use the published program contact.",
+          claimState: "observed",
+          sourceRefs: ["program-rules"]
+        }
+      }
+    }
+  };
+  const accepted = await runInteractiveQuestionnaire(t, {
+    id,
+    paths,
+    recommendations,
+    responses: ["edit authority-contacts\n", "recommended\n", "quit\n"]
+  });
+
+  assert.equal(accepted.result.outcome, "saved", accepted.transcript);
+  assert.match(accepted.transcript, /R\. Apply reviewed answer \[evidence: observed\]/u);
+  assert.match(accepted.transcript, /Saved authority-contacts from the source-derived recommendation\./u);
+  assert.doesNotMatch(accepted.transcript, new RegExp(privateChannel, "u"));
+  assert.deepEqual(resumeProgramProfile(id, { paths }).profile.authorization.contacts, contact);
+});
+
+test("skip advances without writing a required answer and leaves resume anchored to it", { timeout: 5000 }, async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-bounty-skip-"));
+  const paths = runtimePaths({ repo, home: path.join(root, "home") });
+  const id = "skip-profile";
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  createProgramProfile(id, {}, { paths, now: "2026-10-16T00:00:00.000Z" });
+
+  const { result, transcript } = await runInteractiveQuestionnaire(t, {
+    id,
+    paths,
+    responses: ["skip\n", "quit\n"]
+  });
+  assert.equal(result.outcome, "saved", transcript);
+  assert.match(transcript, /Left identity-program-name unresolved; resume will return to it\./u);
+  assert.match(transcript, /identity-objective/u);
+  assert.equal(Object.hasOwn(resumeProgramProfile(id, { paths }).answers.answers, "identity-program-name"), false);
+
+  const answeredId = "skip-answered-profile";
+  createProgramProfile(answeredId, {}, { paths, now: "2026-10-16T00:00:00.000Z" });
+  const current = resumeProgramProfile(answeredId, { paths });
+  const answered = structuredClone(current.answers);
+  answered.metadata.updatedAt = "2026-10-16T00:01:00.000Z";
+  answered.answers["identity-program-name"] = "Saved program name";
+  applyProgramProfileAnswers(answeredId, answered, { paths, now: answered.metadata.updatedAt });
+  const retained = await runInteractiveQuestionnaire(t, {
+    id: answeredId,
+    paths,
+    responses: ["edit identity-program-name\n", "skip\n", "quit\n"]
+  });
+  assert.match(retained.transcript, /Kept the saved answer for identity-program-name; moved to the next question\./u);
+  assert.doesNotMatch(retained.transcript, /Left identity-program-name unresolved/u);
+  assert.equal(
+    resumeProgramProfile(answeredId, { paths }).answers.answers["identity-program-name"],
+    "Saved program name"
+  );
+});
+
+test("profile wizard session reuses one loopback launch path for automatic guided handoff", async () => {
+  const paths = { marker: "private-paths" };
+  const recommendations = { marker: "private-recommendations" };
+  const started = {
+    profileId: "guided-profile",
+    host: "127.0.0.1",
+    port: 43123,
+    origin: "http://127.0.0.1:43123",
+    url: "http://127.0.0.1:43123/#private-session",
+    browserOpened: true,
+    initialQuestionId: "authority-contacts",
+    close: async () => {}
+  };
+  let launchOptions;
+  let waitedFor;
+  let transcript = "";
+  const terminalOutput = new Writable({
+    write(chunk, _encoding, callback) {
+      transcript += chunk.toString();
+      callback();
+    }
+  });
+  const summary = await cliInternals.runProfileWizardSession("guided-profile", {
+    paths,
+    recommendations,
+    initialQuestionId: "authority-contacts",
+    openBrowser: true,
+    output: terminalOutput,
+    startServer: async (options) => {
+      launchOptions = options;
+      return started;
+    },
+    waitForShutdown: async (value) => { waitedFor = value; }
+  });
+
+  assert.deepEqual(launchOptions, {
+    profileId: "guided-profile",
+    paths,
+    host: "127.0.0.1",
+    port: 0,
+    recommendations,
+    openBrowser: true,
+    initialQuestionId: "authority-contacts"
+  });
+  assert.equal(waitedFor, started);
+  assert.equal(summary.url, started.url);
+  assert.equal(summary.initialQuestionId, "authority-contacts");
+  assert.match(transcript, /GATE profile wizard: http:\/\/127\.0\.0\.1:43123\/#private-session/u);
 });
 
 test("interactive questions can accept the canonical recommendation without treating draft examples as recommendations", { timeout: 5000 }, async (t) => {
