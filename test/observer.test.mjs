@@ -1791,6 +1791,147 @@ test("dashboard routes use an exact allowlist and strict browser headers", async
   }
 });
 
+test("health and preloaded HTML expose one immutable startup build identity", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-observer-build-"));
+  const dashboardRoot = path.join(root, "dashboard");
+  fs.mkdirSync(dashboardRoot);
+  fs.writeFileSync(path.join(dashboardRoot, "index.html"), [
+    "__GATE_VERSION__",
+    "__GATE_VERSION_LABEL__",
+    "__GATE_COMMIT_SHORT__",
+    "__GATE_COMMIT_FULL__",
+    "__GATE_SOURCE_STATE__"
+  ].join("|"), "utf8");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const supplied = {
+    version: "2.3.4",
+    commit: "a".repeat(40),
+    state: "clean"
+  };
+  const { origin } = await listen(t, () => {
+    throw new Error("status is intentionally unavailable");
+  }, { dashboardRoot, buildIdentity: supplied });
+  supplied.version = "9.9.9";
+  supplied.commit = "b".repeat(40);
+  supplied.state = "modified";
+
+  const healthResponse = await fetch(`${origin}/healthz`);
+  assert.equal(healthResponse.status, 200);
+  assert.equal(healthResponse.headers.get("cache-control"), "no-store");
+  assert.match(healthResponse.headers.get("content-security-policy"), /default-src 'self'/u);
+  const health = await healthResponse.json();
+  assert.deepEqual(health.build, {
+    version: "2.3.4",
+    commit: "a".repeat(40),
+    commitShort: "a".repeat(12),
+    state: "clean"
+  });
+  assert.equal(health.ok, true);
+  assert.equal(health.service, "gate-observer");
+  assert.ok(Number.isFinite(Date.parse(health.at)));
+
+  const html = await (await fetch(`${origin}/`)).text();
+  assert.equal(html, `2.3.4|v2.3.4|${"a".repeat(12)}|${"a".repeat(40)}|clean`);
+  assert.doesNotMatch(html, /__GATE_/u);
+
+  const unavailableStatus = await fetch(`${origin}/api/status`);
+  assert.equal(unavailableStatus.status, 503);
+  const head = await fetch(`${origin}/healthz`, { method: "HEAD" });
+  assert.equal(head.status, 200);
+  assert.equal(await head.text(), "");
+  assert.ok(Number(head.headers.get("content-length")) > 0);
+});
+
+test("dashboard build identity degrades when source changes across static preload", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-observer-build-race-"));
+  const dashboardRoot = path.join(root, "dashboard");
+  fs.mkdirSync(dashboardRoot);
+  fs.writeFileSync(path.join(dashboardRoot, "index.html"), [
+    "__GATE_VERSION_LABEL__",
+    "__GATE_COMMIT_SHORT__",
+    "__GATE_SOURCE_STATE__"
+  ].join("|"), "utf8");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  let observations = 0;
+  const { origin } = await listen(t, () => {
+    throw new Error("status is intentionally unavailable");
+  }, {
+    dashboardRoot,
+    buildIdentityObserver() {
+      observations += 1;
+      return {
+        version: "2.3.4",
+        commit: "b".repeat(40),
+        state: observations === 1 ? "clean" : "modified"
+      };
+    }
+  });
+
+  assert.equal(observations, 2);
+  const health = await (await fetch(`${origin}/healthz`)).json();
+  assert.deepEqual(health.build, {
+    version: "2.3.4",
+    commit: "b".repeat(40),
+    commitShort: "b".repeat(12),
+    state: "modified"
+  });
+  assert.equal(
+    await (await fetch(`${origin}/`)).text(),
+    `v2.3.4|${"b".repeat(12)}|modified`
+  );
+});
+
+test("dashboard build identity withholds a commit changed during static preload", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-observer-build-checkout-"));
+  const dashboardRoot = path.join(root, "dashboard");
+  fs.mkdirSync(dashboardRoot);
+  fs.writeFileSync(path.join(dashboardRoot, "index.html"), [
+    "__GATE_VERSION_LABEL__",
+    "__GATE_COMMIT_SHORT__",
+    "__GATE_SOURCE_STATE__"
+  ].join("|"), "utf8");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  let observations = 0;
+  const { origin } = await listen(t, () => {
+    throw new Error("status is intentionally unavailable");
+  }, {
+    dashboardRoot,
+    buildIdentityObserver() {
+      observations += 1;
+      return {
+        version: "2.3.4",
+        commit: (observations === 1 ? "c" : "d").repeat(40),
+        state: "clean"
+      };
+    }
+  });
+
+  assert.equal(observations, 2);
+  const health = await (await fetch(`${origin}/healthz`)).json();
+  assert.deepEqual(health.build, {
+    version: "2.3.4",
+    commit: null,
+    commitShort: null,
+    state: "unavailable"
+  });
+  assert.equal(await (await fetch(`${origin}/`)).text(), "v2.3.4|unavailable|unavailable");
+});
+
+test("production dashboard renders explicit unavailable build copy without placeholders", async (t) => {
+  const { origin } = await listen(t, () => {
+    throw new Error("status is intentionally unavailable");
+  }, { buildIdentity: {} });
+
+  const html = await (await fetch(`${origin}/`)).text();
+  assert.match(html, /<span class="build-version">version unavailable<\/span>/u);
+  assert.match(html, /<span class="build-commit">build unavailable<\/span>/u);
+  assert.doesNotMatch(html, />vunavailable</u);
+  assert.doesNotMatch(html, /__GATE_/u);
+});
+
 test("dashboard assets remain the preloaded snapshot after path substitution", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-observer-static-"));
   const dashboardRoot = path.join(root, "dashboard");

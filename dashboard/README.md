@@ -2,6 +2,8 @@
 
 The observer is a dependency-free, read-only browser view of GATE's bounded case fleet plus base/unassigned event, supervised-execution, offline-analysis, engagement, and project metadata, with shared learning, upstream, managed-runtime, and host token metadata. Its default view is a compact campaign table. Selecting a row opens one dominant terminal-style live-activity panel; lower-level base and host diagnostics remain available under the collapsed **System health** disclosure. It reads the current `buildStatus` snapshot; it does not connect to a Codex app-server feed. Token availability depends on records that GATE can read from its private runtime state, and unknown measurements remain `null`.
 
+The top bar shows the package version, abbreviated Git commit, and the source state observed when the server started. Its accessible label and `/healthz` expose the full commit. `modified` means the checkout had tracked or untracked changes, or integrity-hiding index flags, while the dashboard was snapshotted; `unavailable` means GATE could not verify the corresponding value. Verification compares bounded raw file bytes without running Git content filters; filtered or normalized content may therefore appear modified. Submodules and exceeded verification limits produce an unavailable state. Restart the observer and reload the page after updating the checkout so the badge and snapshotted dashboard assets move to the new build together.
+
 Run it with:
 
 ```bash
@@ -29,7 +31,11 @@ All static and JSON responses use `Cache-Control: no-store`, a self-only content
 
 ## JSON API
 
-Every endpoint returns a server-side allowlisted `gate.observer/v1` projection. These responses are reduced views, rather than canonical event, learning, engagement, or usage records. `dashboard/model.js` applies a second allowlist before any value reaches the DOM.
+The `/api/*` endpoints return server-side allowlisted `gate.observer/v1` projections. These responses are reduced views, rather than canonical event, learning, engagement, or usage records. `dashboard/model.js` applies a second allowlist before any value reaches the DOM.
+
+### `GET /healthz`
+
+The health response contains `ok: true`, `service: "gate-observer"`, the response time `at`, and `build` with `version`, full `commit`, 12-character `commitShort`, and `state`. Unverified version or commit fields are `null`; `state` is `clean`, `modified`, or `unavailable`. This is the same immutable startup identity embedded in the snapshotted HTML, even if the checkout later changes or `/api/status` is unavailable. It does not certify operational readiness.
 
 ### `GET /api/status`
 

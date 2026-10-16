@@ -223,7 +223,7 @@ In v0.1, any process with write access to all of `GATE_HOME` can change case sco
 
 Operations that need Npcap, a debugger, a certificate store, USB, or another host capability are operator-run native operations today. Record their versions, exact commands, and bounded evidence manually. Narrow native capability providers and their event bridges are a target design; v0.1 does not supply them.
 
-The dashboard binds to `127.0.0.1:4173` by default. Open `http://127.0.0.1:4173` from Windows. WSL normally forwards the loopback port automatically. Do not bind the observer to a LAN address; it is a local view of private operational state. `gate up` rejects `--case`, `GATE_CASE`, and `--unassigned` because it builds the bounded fleet view. A snapshot projects at most 32 cases selected from a discovery window of 1,024; lower-bound and completeness fields expose omissions.
+The dashboard binds to `127.0.0.1:4173` by default. Open `http://127.0.0.1:4173` from Windows. WSL normally forwards the loopback port automatically. Do not bind the observer to a LAN address; it is a local view of private operational state. `gate up` rejects `--case`, `GATE_CASE`, and `--unassigned` because it builds the bounded fleet view. A snapshot projects at most 32 cases selected from a discovery window of 1,024; lower-bound and completeness fields expose omissions. See the [dashboard guide](../dashboard/README.md) for build badge verification and the required restart and reload after updates.
 
 The startup banner and browser case terminals use `operator.displayName` from the merged configuration. The tracked default is `Giovanni`. To use another local display name without changing the repository, place an overlay at `$HOME/.config/gate/config.json`:
 

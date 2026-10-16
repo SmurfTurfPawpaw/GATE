@@ -1,6 +1,6 @@
 {
   "name": "gate-agent-workflow",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "A personal, evidence-first control plane for agentic engineering and authorized security work.",
   "type": "module",
