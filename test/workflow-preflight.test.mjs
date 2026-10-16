@@ -50,12 +50,16 @@ function fixture(t) {
 }
 
 function invoke(args, paths) {
-  return spawnSync(process.execPath, [gate, ...args], {
+  const result = spawnSync(process.execPath, [gate, ...args], {
     cwd: repo,
     env: { ...process.env, GATE_HOME: paths.home },
     encoding: "utf8",
-    timeout: 10_000
+    // Journal replay can exceed ten seconds under concurrent integration load.
+    timeout: 60_000
   });
+  assert.ifError(result.error);
+  assert.equal(result.signal, null, `CLI terminated by ${result.signal}: ${result.stderr}`);
+  return result;
 }
 
 function writeJson(root, name, value) {
