@@ -24,6 +24,18 @@
 
 * { box-sizing: border-box; }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 html { min-width: 320px; background: var(--bg); scroll-behavior: smooth; }
 
 body {
@@ -203,6 +215,8 @@ input:focus, textarea:focus, select:focus { border-color: rgba(90, 183, 255, 0.7
 input::placeholder, textarea::placeholder { color: #5f6978; }
 
 .choice-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+fieldset.choice-grid { min-inline-size: 0; margin: 0; padding: 0; border: 0; }
+fieldset.choice-grid > legend.field-label { margin: 0 0 8px; padding: 0; }
 .choice-card { position: relative; }
 .choice-card input { position: absolute; opacity: 0; pointer-events: none; }
 .choice-card label {
@@ -220,6 +234,10 @@ input::placeholder, textarea::placeholder { color: #5f6978; }
 .choice-card label::before { content: ""; width: 14px; height: 14px; flex: 0 0 auto; border: 1px solid #657083; border-radius: 50%; }
 .choice-card input:checked + label { border-color: rgba(90, 183, 255, 0.65); color: var(--text); background: rgba(34, 107, 171, 0.13); }
 .choice-card input:checked + label::before { border: 4px solid var(--blue); background: #fff; }
+.choice-card input:focus-visible + label {
+  outline: 3px solid rgba(90, 183, 255, 0.72);
+  outline-offset: 2px;
+}
 .checkbox-grid .choice-card label::before { border-radius: 4px; }
 
 .structured-list { display: grid; gap: 12px; }
@@ -278,7 +296,7 @@ input::placeholder, textarea::placeholder { color: #5f6978; }
 .keyboard-help { margin: 14px 0 0; color: #687386; font-size: 0.67rem; text-align: center; }
 kbd, code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 kbd { padding: 1px 5px; border: 1px solid var(--line); border-radius: 5px; color: var(--muted); background: #10151d; }
-.answer-error { margin: 18px 0 0; padding: 12px 14px; border: 1px solid rgba(255, 124, 138, 0.34); border-radius: 11px; color: #ffd7dc; background: rgba(255, 77, 95, 0.08); font-size: 0.78rem; }
+.answer-error { margin: 18px 0 0; padding: 12px 14px; border: 1px solid rgba(255, 124, 138, 0.34); border-radius: 11px; color: #ffd7dc; background: rgba(255, 77, 95, 0.08); font-size: 0.78rem; white-space: pre-line; }
 
 .context-panel { display: grid; align-content: start; gap: 14px; padding-top: 59px; }
 .context-card { padding: 19px; border-radius: var(--radius-md); }

@@ -8,27 +8,45 @@ import { fileURLToPath } from "node:url";
 
 import { createProgramProfile, resumeProgramProfile } from "../src/lib/bounty-profiles.mjs";
 import { runtimePaths } from "../src/lib/paths.mjs";
+import { loadProgramProfileQuestionnaire } from "../src/lib/program-profile-contract.mjs";
+import { profileUiControllerInternals } from "../src/profile-ui/controller.mjs";
 import { startProfileWizardServer } from "../src/profile-ui/server.mjs";
+import { isoFromUtcInput, utcInputFromIso } from "../profile-ui/time.js";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const fixedAt = "2026-10-16T08:00:00.000Z";
 const privateCanary = "PRIVATE_PROFILE_NOTE_CANARY_83d75e";
 const secretCanary = "Bearer PROFILE_UI_SECRET_CANARY_74f92c";
 
-function fixture(t, id = "browser-profile") {
+function fixture(t, id = "browser-profile", options = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-profile-ui-"));
   const paths = runtimePaths({ repo, home: path.join(root, "home") });
   createProgramProfile(id, {
-    sources: [{
-      id: "program-rules",
-      type: "program-rules",
-      title: "Published program rules",
-      reference: "https://private-reference-canary.example.test/rules",
-      contentSha256: "a".repeat(64),
-      observedAt: fixedAt,
-      claimState: "observed",
-      notes: privateCanary
-    }]
+    authorization: {
+      sourceRefs: options.authorityRefs === undefined ? ["program-rules"] : options.authorityRefs
+    },
+    sources: [
+      {
+        id: "program-rules",
+        type: "program-rules",
+        title: "Published program rules",
+        reference: "https://private-reference-canary.example.test/rules",
+        contentSha256: "a".repeat(64),
+        observedAt: fixedAt,
+        claimState: options.authorityClaimState || "observed",
+        notes: privateCanary
+      },
+      {
+        id: "account-source",
+        type: "account-instructions",
+        title: "Research account instructions",
+        reference: "https://account-reference-canary.example.test/rules",
+        contentSha256: "b".repeat(64),
+        observedAt: fixedAt,
+        claimState: "observed",
+        notes: "Separate source outside the current authority basis."
+      }
+    ]
   }, { paths, now: fixedAt });
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return { paths, id };
@@ -109,19 +127,82 @@ test("profile state requires its unguessable in-memory session", async (t) => {
   const payload = await response.json();
   assert.equal(response.status, 200);
   assert.equal(payload.state.profile.id, id);
-  assert.deepEqual(payload.state.sources, [{
+  assert.equal(payload.state.sources.length, 2);
+  assert.deepEqual(payload.state.authorizationSources, [{
     id: "program-rules",
     title: "Published program rules",
     type: "program-rules",
     observedAt: fixedAt,
     claimState: "observed",
-    contentDigestRecorded: true
+    contentDigestRecorded: true,
+    resolved: true,
+    missing: false
   }]);
   assert.doesNotMatch(JSON.stringify(payload.state.sources), new RegExp(privateCanary, "u"));
   assert.doesNotMatch(JSON.stringify(payload.state.sources), /private-reference-canary/u);
   for (const question of payload.state.sections.flatMap((section) => section.questions)) {
     assert.equal(Object.hasOwn(question.recommendation, "value"), false);
   }
+});
+
+test("serialized recommendations expose bounded claim state but hide sensitive values and basis", (t) => {
+  const { paths, id } = fixture(t, "recommendation-privacy");
+  const valueCanary = "PRIVATE_RECOMMENDATION_VALUE_CANARY_29ad";
+  const basisCanary = "PRIVATE_RECOMMENDATION_BASIS_CANARY_f631";
+  const stateCanary = "PRIVATE_RECOMMENDATION_STATE_CANARY_3b90";
+  const questionnaire = loadProgramProfileQuestionnaire({ paths });
+  const resolveRecommendation = (question) => {
+    if (question.id === "authority-contacts") {
+      return {
+        available: true,
+        value: [{ name: valueCanary }],
+        provenance: "local-derived",
+        summary: basisCanary,
+        reason: basisCanary,
+        basis: { claimState: "inferred", sourceCount: 1, policy: basisCanary }
+      };
+    }
+    if (question.id === "identity-objective") {
+      return {
+        available: true,
+        value: "A bounded assessment objective.",
+        provenance: "source-derived",
+        summary: "A reviewed source supports this objective.",
+        basis: { claimState: "observed", sourceCount: 2 }
+      };
+    }
+    if (question.id === "identity-success-criteria") {
+      return {
+        available: true,
+        value: ["Produce a reproducible report."],
+        provenance: "source-derived",
+        summary: "A supported recommendation.",
+        basis: { claimState: stateCanary, sourceCount: 1 }
+      };
+    }
+    return { available: false, reason: "unavailable", summary: "No recommendation." };
+  };
+  const serialized = profileUiControllerInternals.serializeState(
+    id,
+    resumeProgramProfile(id, { paths }),
+    questionnaire,
+    resolveRecommendation
+  );
+  const questions = serialized.sections.flatMap((section) => section.questions);
+  const sensitive = questions.find((question) => question.id === "authority-contacts").recommendation;
+  assert.equal(sensitive.available, true);
+  assert.equal(sensitive.claimState, "inferred");
+  assert.equal(sensitive.basis, null);
+  assert.equal(sensitive.reason, null);
+  assert.equal(Object.hasOwn(sensitive, "value"), false);
+  assert.match(sensitive.summary, /supporting details remain hidden/u);
+  assert.doesNotMatch(JSON.stringify(serialized), new RegExp(`${valueCanary}|${basisCanary}|${stateCanary}`, "u"));
+
+  const nonsensitive = questions.find((question) => question.id === "identity-objective").recommendation;
+  assert.equal(nonsensitive.claimState, "observed");
+  assert.equal(nonsensitive.basis, "2 cited local sources");
+  const bounded = questions.find((question) => question.id === "identity-success-criteria").recommendation;
+  assert.equal(bounded.claimState, null);
 });
 
 test("profile UI resolves recommendations inside the local controller", async (t) => {
@@ -164,7 +245,13 @@ test("profile UI requires an explicit source-review acknowledgement before autho
   assert.equal((await blind.json()).error.code, "source-review-required");
 
   const reviewed = await api(started, credentials, "/api/answer", { body: { ...answer, reviewAcknowledged: true } });
-  assert.equal(reviewed.status, 200);
+  assert.equal(reviewed.status, 422);
+  const exactReview = await api(started, credentials, "/api/answer", { body: {
+    ...answer,
+    reviewAcknowledged: true,
+    reviewedSourceRefs: ["program-rules"]
+  } });
+  assert.equal(exactReview.status, 200);
   assert.equal(resumeProgramProfile(id, { paths }).answers.answers[answer.questionId], true);
 });
 
@@ -258,6 +345,27 @@ test("profile UI never reflects a rejected sensitive answer in its error", async
   const body = await rejected.text();
   assert.equal(rejected.status, 422);
   assert.doesNotMatch(body, new RegExp(secretCanary, "u"));
+
+  const structurallyRejected = await api(started, credentials, "/api/answer", { body: {
+    questionId: "authority-contacts",
+    value: [{
+      name: "Program security team",
+      role: "Authority contact",
+      channel: `${secretCanary}\n/authorization/PRIVATE_VALUE_CANARY`,
+      purpose: "Clarify authority and receive escalation.",
+      sourceRefs: ["program-rules"]
+    }],
+    baseRevision: current.profile.revision,
+    baseProfileSha256: current.profile.profileSha256
+  } });
+  const structuralBody = await structurallyRejected.text();
+  assert.equal(structurallyRejected.status, 422);
+  assert.doesNotMatch(structuralBody, new RegExp(secretCanary, "u"));
+  assert.doesNotMatch(structuralBody, /PRIVATE_VALUE_CANARY/u);
+  assert.deepEqual(JSON.parse(structuralBody).error.fields, [{
+    path: "authorization.contacts",
+    message: "This answer did not match its required structure."
+  }]);
 });
 
 test("profile UI rejects DNS-rebinding Host values", async (t) => {
@@ -302,4 +410,196 @@ test("profile UI can hand its private launch URL to an injected browser opener",
   assert.equal(started.browserOpened, true);
   assert.equal(openedUrl, started.url);
   assert.match(openedUrl, /#session=[A-Za-z0-9_-]+&csrf=[A-Za-z0-9_-]+$/u);
+});
+
+test("profile UI round-trips authority and attestation instants under Europe/Brussels without drift", async (t) => {
+  const previousTimezone = process.env.TZ;
+  process.env.TZ = "Europe/Brussels";
+  t.after(() => {
+    if (previousTimezone === undefined) delete process.env.TZ;
+    else process.env.TZ = previousTimezone;
+  });
+  const { paths, id } = fixture(t);
+  const started = await startProfileWizardServer({ profileId: id, paths });
+  t.after(() => started.close());
+  const credentials = launchCredentials(started);
+  const instant = "2026-07-19T10:27:45.123Z";
+  assert.equal(utcInputFromIso(instant), "2026-07-19T10:27:45.123");
+  assert.equal(utcInputFromIso("2026-07-19T12:27:45.123+02:00"), "2026-07-19T10:27:45.123");
+  assert.equal(utcInputFromIso("2026-07-19T10:27"), "");
+  assert.equal(isoFromUtcInput(utcInputFromIso(instant)), instant);
+
+  let response = await api(started, credentials, "/api/state");
+  let current = (await response.json()).state;
+  for (const questionId of ["authority-valid-from", "attestation-at"]) {
+    let browserValue = isoFromUtcInput(utcInputFromIso(instant));
+    for (let save = 0; save < 2; save += 1) {
+      response = await api(started, credentials, "/api/answer", { body: {
+        questionId,
+        value: browserValue,
+        baseRevision: current.profile.revision,
+        baseProfileSha256: current.profile.profileSha256
+      } });
+      assert.equal(response.status, 200);
+      current = (await response.json()).state;
+      assert.equal(
+        resumeProgramProfile(id, { paths }).answers.answers[questionId],
+        instant,
+        `${questionId} was not preserved in the private answer envelope after save ${save + 1}`
+      );
+      const saved = current.sections.flatMap((section) => section.questions)
+        .find((question) => question.id === questionId).value;
+      assert.equal(saved, instant, `${questionId} changed after save ${save + 1}`);
+      browserValue = isoFromUtcInput(utcInputFromIso(saved));
+    }
+  }
+  const answers = resumeProgramProfile(id, { paths }).answers.answers;
+  assert.equal(answers["authority-valid-from"], instant);
+  assert.equal(answers["attestation-at"], instant);
+});
+
+test("UTC date-time parser rejects calendar rollover instead of normalizing it", () => {
+  assert.throws(() => isoFromUtcInput("2026-02-30T12:00"), /valid UTC date and time/u);
+});
+
+test("authority confirmation rejects unresolved sources and reports a safe field path", async (t) => {
+  const { paths, id } = fixture(t, "unresolved-authority", { authorityClaimState: "unverified" });
+  const started = await startProfileWizardServer({ profileId: id, paths });
+  t.after(() => started.close());
+  const credentials = launchCredentials(started);
+  const stateResponse = await api(started, credentials, "/api/state");
+  const current = (await stateResponse.json()).state;
+  assert.equal(current.authorizationSources[0].resolved, false);
+  const response = await api(started, credentials, "/api/answer", { body: {
+    questionId: "authority-operator-confirmed",
+    value: true,
+    reviewAcknowledged: true,
+    reviewedSourceRefs: ["program-rules"],
+    baseRevision: current.profile.revision,
+    baseProfileSha256: current.profile.profileSha256
+  } });
+  const payload = await response.json();
+  assert.equal(response.status, 422);
+  assert.equal(payload.error.code, "source-review-required");
+  assert.deepEqual(payload.error.fields, [{
+    path: "authorization.sourceRefs",
+    message: "Every authority source must be observed before confirmation."
+  }]);
+  assert.doesNotMatch(JSON.stringify(payload.error), /PRIVATE_PROFILE|private-reference|account-reference/u);
+});
+
+test("authority confirmation rejects an empty current source basis", async (t) => {
+  const { paths, id } = fixture(t, "authority-without-sources", { authorityRefs: [] });
+  const started = await startProfileWizardServer({ profileId: id, paths });
+  t.after(() => started.close());
+  const credentials = launchCredentials(started);
+  const stateResponse = await api(started, credentials, "/api/state");
+  const current = (await stateResponse.json()).state;
+  assert.deepEqual(current.authorizationSources, []);
+
+  const response = await api(started, credentials, "/api/answer", { body: {
+    questionId: "authority-operator-confirmed",
+    value: true,
+    reviewAcknowledged: true,
+    reviewedSourceRefs: [],
+    baseRevision: current.profile.revision,
+    baseProfileSha256: current.profile.profileSha256
+  } });
+  const payload = await response.json();
+  assert.equal(response.status, 422);
+  assert.equal(payload.error.code, "source-review-required");
+  assert.deepEqual(payload.error.fields, [{
+    path: "authorization.sourceRefs",
+    message: "Add the sources that establish authority before confirming."
+  }]);
+});
+
+test("guided contact validation returns actionable paths without reflecting values", async (t) => {
+  const { paths, id } = fixture(t, "contact-validation");
+  const started = await startProfileWizardServer({ profileId: id, paths });
+  t.after(() => started.close());
+  const credentials = launchCredentials(started);
+  const stateResponse = await api(started, credentials, "/api/state");
+  const current = (await stateResponse.json()).state;
+  const response = await api(started, credentials, "/api/answer", { body: {
+    questionId: "authority-contacts",
+    value: [{
+      name: "",
+      role: "Program authority",
+      channel: secretCanary,
+      purpose: "Clarify authority and receive escalation.",
+      sourceRefs: ["program-rules"]
+    }],
+    baseRevision: current.profile.revision,
+    baseProfileSha256: current.profile.profileSha256
+  } });
+  const payload = await response.json();
+  assert.equal(response.status, 422);
+  assert.equal(payload.error.code, "required-fields-missing");
+  assert.deepEqual(payload.error.fields, [{
+    path: "authorization.contacts.0.name",
+    message: "Name is required."
+  }]);
+  assert.doesNotMatch(JSON.stringify(payload), new RegExp(secretCanary, "u"));
+});
+
+test("changing the current authority source set requires a fresh confirmation", async (t) => {
+  const { paths, id } = fixture(t, "authority-source-change");
+  const started = await startProfileWizardServer({ profileId: id, paths });
+  t.after(() => started.close());
+  const credentials = launchCredentials(started);
+  let response = await api(started, credentials, "/api/state");
+  let current = (await response.json()).state;
+  response = await api(started, credentials, "/api/answer", { body: {
+    questionId: "authority-operator-confirmed",
+    value: true,
+    reviewAcknowledged: true,
+    reviewedSourceRefs: ["program-rules"],
+    baseRevision: current.profile.revision,
+    baseProfileSha256: current.profile.profileSha256
+  } });
+  current = (await response.json()).state;
+  response = await api(started, credentials, "/api/answer", { body: {
+    questionId: "authority-source-refs",
+    value: ["account-source"],
+    baseRevision: current.profile.revision,
+    baseProfileSha256: current.profile.profileSha256
+  } });
+  assert.equal(response.status, 200);
+  current = (await response.json()).state;
+  const confirmation = current.sections.flatMap((section) => section.questions)
+    .find((question) => question.id === "authority-operator-confirmed");
+  assert.equal(confirmation.answered, false);
+  assert.deepEqual(current.authorizationSourceRefs, ["account-source"]);
+  assert.deepEqual(current.authorizationSources.map((source) => source.id), ["account-source"]);
+});
+
+test("clear answer is stale-base protected and removes the saved envelope value", async (t) => {
+  const { paths, id } = fixture(t, "clear-answer-profile");
+  const started = await startProfileWizardServer({ profileId: id, paths });
+  t.after(() => started.close());
+  const credentials = launchCredentials(started);
+  let response = await api(started, credentials, "/api/state");
+  const initial = (await response.json()).state;
+  response = await api(started, credentials, "/api/answer", { body: {
+    questionId: "identity-objective",
+    value: "A temporary assessment objective.",
+    baseRevision: initial.profile.revision,
+    baseProfileSha256: initial.profile.profileSha256
+  } });
+  const answered = (await response.json()).state;
+  const stale = await api(started, credentials, "/api/answer/clear", { body: {
+    questionId: "identity-objective",
+    baseRevision: initial.profile.revision,
+    baseProfileSha256: initial.profile.profileSha256
+  } });
+  assert.equal(stale.status, 409);
+
+  const cleared = await api(started, credentials, "/api/answer/clear", { body: {
+    questionId: "identity-objective",
+    baseRevision: answered.profile.revision,
+    baseProfileSha256: answered.profile.profileSha256
+  } });
+  assert.equal(cleared.status, 200);
+  assert.equal(Object.hasOwn(resumeProgramProfile(id, { paths }).answers.answers, "identity-objective"), false);
 });

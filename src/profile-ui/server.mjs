@@ -15,7 +15,8 @@ const STATIC_FILES = new Map([
   ["/", ["index.html", "text/html; charset=utf-8"]],
   ["/index.html", ["index.html", "text/html; charset=utf-8"]],
   ["/profile-ui/styles.css", ["styles.css", "text/css; charset=utf-8"]],
-  ["/profile-ui/app.js", ["app.js", "text/javascript; charset=utf-8"]]
+  ["/profile-ui/app.js", ["app.js", "text/javascript; charset=utf-8"]],
+  ["/profile-ui/time.js", ["time.js", "text/javascript; charset=utf-8"]]
 ]);
 const CSP = [
   "default-src 'none'",
@@ -92,7 +93,17 @@ async function readJson(req) {
 
 function publicError(error) {
   if (error instanceof ProfileUiError) {
-    return { status: error.status, body: { ok: false, error: { code: error.code, message: error.publicMessage } } };
+    return {
+      status: error.status,
+      body: {
+        ok: false,
+        error: {
+          code: error.code,
+          message: error.publicMessage,
+          fields: error.fields
+        }
+      }
+    };
   }
   return {
     status: 500,
@@ -206,6 +217,7 @@ export async function startProfileWizardServer(options = {}) {
       }
       if (req.method !== "POST" || ![
         "/api/answer",
+        "/api/answer/clear",
         "/api/recommendation",
         "/api/recommendations/apply"
       ].includes(pathname)) {
@@ -220,6 +232,8 @@ export async function startProfileWizardServer(options = {}) {
         const input = await readJson(req);
         const state = pathname === "/api/answer"
           ? controller.saveAnswer(input)
+          : pathname === "/api/answer/clear"
+            ? controller.clearAnswer(input)
           : pathname === "/api/recommendation"
             ? controller.applyRecommendation(input)
             : controller.applySupportedRecommendations(input);

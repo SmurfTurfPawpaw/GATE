@@ -16,12 +16,13 @@ const MANUAL_REVIEW_QUESTIONS = new Set([
 ]);
 
 export class ProfileUiError extends Error {
-  constructor(status, code, publicMessage) {
+  constructor(status, code, publicMessage, fields = []) {
     super(publicMessage);
     this.name = "ProfileUiError";
     this.status = status;
     this.code = code;
     this.publicMessage = publicMessage;
+    this.fields = fields;
   }
 }
 
@@ -138,24 +139,67 @@ function sourceReview(profile) {
   }));
 }
 
-function publicRecommendation(recommendation) {
-  const basis = typeof recommendation?.basis === "string"
-    ? recommendation.basis
-    : typeof recommendation?.basis?.policy === "string"
-      ? recommendation.basis.policy
-      : Number.isSafeInteger(recommendation?.basis?.sourceCount)
-        ? `${recommendation.basis.sourceCount} cited local source${recommendation.basis.sourceCount === 1 ? "" : "s"}`
-        : null;
+function authorizationSourceReview(profile) {
+  const sources = new Map((profile.sources || []).map((source) => [source.id, source]));
+  return (profile.authorization?.sourceRefs || []).map((sourceRef) => {
+    const source = sources.get(sourceRef);
+    if (!source) {
+      return {
+        id: sourceRef,
+        title: "Referenced source is missing",
+        type: null,
+        observedAt: null,
+        claimState: null,
+        contentDigestRecorded: false,
+        resolved: false,
+        missing: true
+      };
+    }
+    return {
+      id: source.id,
+      title: source.title,
+      type: source.type,
+      observedAt: source.observedAt,
+      claimState: source.claimState,
+      contentDigestRecorded: typeof source.contentSha256 === "string",
+      resolved: source.claimState === "observed",
+      missing: false
+    };
+  });
+}
+
+function publicRecommendation(recommendation, question) {
+  const sensitive = question?.sensitive === true;
+  const basis = sensitive
+    ? null
+    : typeof recommendation?.basis === "string"
+      ? recommendation.basis
+      : typeof recommendation?.basis?.policy === "string"
+        ? recommendation.basis.policy
+        : Number.isSafeInteger(recommendation?.basis?.sourceCount)
+          ? `${recommendation.basis.sourceCount} cited local source${recommendation.basis.sourceCount === 1 ? "" : "s"}`
+          : null;
+  const claimState = ["observed", "inferred"].includes(recommendation?.basis?.claimState)
+    ? recommendation.basis.claimState
+    : null;
+  const provenance = ["operator-preference", "source-derived", "local-derived"].includes(recommendation?.provenance)
+    ? recommendation.provenance
+    : null;
   return {
     available: recommendation?.available === true,
-    provenance: recommendation?.provenance || null,
-    summary: recommendation?.summary || "No supported recommendation is available.",
-    reason: recommendation?.reason || null,
-    basis
+    provenance,
+    summary: sensitive
+      ? recommendation?.available === true
+        ? "A private local recommendation is available; its value and supporting details remain hidden."
+        : "No supported private recommendation is available yet."
+      : recommendation?.summary || "No supported recommendation is available.",
+    reason: sensitive ? null : recommendation?.reason || null,
+    basis,
+    claimState
   };
 }
 
-function serializeState(profileId, resumed, questionnaire) {
+function serializeState(profileId, resumed, questionnaire, resolveRecommendation = recommendationFor) {
   const { profile, answers } = resumed;
   const answeredIds = new Set(Object.keys(answers.answers || {}));
   const selectedModules = new Set(profile.questionnaire?.applicableModules || []);
@@ -183,7 +227,7 @@ function serializeState(profileId, resumed, questionnaire) {
         // Exact recommendation values stay inside the trusted local
         // controller. The browser receives only display-safe metadata and
         // invokes a server-side resolution when the operator accepts one.
-        recommendation: publicRecommendation(recommendationFor(question, profile))
+        recommendation: publicRecommendation(resolveRecommendation(question, profile), question)
       };
     });
     const applicableQuestions = questions.filter((question) => question.applicable);
@@ -228,6 +272,7 @@ function serializeState(profileId, resumed, questionnaire) {
     },
     sources: sourceReview(profile),
     authorizationSourceRefs: [...(profile.authorization?.sourceRefs || [])],
+    authorizationSources: authorizationSourceReview(profile),
     sections
   };
 }
@@ -263,20 +308,105 @@ function typeLooksValid(question, value) {
   return Array.isArray(value);
 }
 
+function fieldIssue(path, message) {
+  return { path, message };
+}
+
+function validateRequiredFields(question, value, profile) {
+  const issues = [];
+  if (["text", "multiline", "datetime"].includes(question.type) && typeof value === "string" && !value.trim()) {
+    issues.push(fieldIssue(question.path, "Enter a value or leave this question unresolved."));
+  }
+  if (question.type === "contact-list" && Array.isArray(value)) {
+    if (value.length === 0) issues.push(fieldIssue(question.path, "Add at least one contact, or leave this question unresolved."));
+    const sourceIds = new Set((profile.sources || []).map((source) => source.id));
+    value.forEach((contact, index) => {
+      if (!contact || typeof contact !== "object" || Array.isArray(contact)) {
+        issues.push(fieldIssue(`${question.path}.${index}`, "Complete this contact with the guided fields."));
+        return;
+      }
+      for (const key of ["name", "role", "channel", "purpose"]) {
+        if (typeof contact[key] !== "string" || !contact[key].trim()) {
+          issues.push(fieldIssue(`${question.path}.${index}.${key}`, `${key === "channel" ? "Published channel" : titleForField(key)} is required.`));
+        }
+      }
+      if (!Array.isArray(contact.sourceRefs)) {
+        issues.push(fieldIssue(`${question.path}.${index}.sourceRefs`, "Choose supporting sources from the local source ledger."));
+      } else {
+        contact.sourceRefs.forEach((sourceRef) => {
+          if (!sourceIds.has(sourceRef)) {
+            issues.push(fieldIssue(`${question.path}.${index}.sourceRefs`, "A selected supporting source is no longer available."));
+          }
+        });
+      }
+    });
+  }
+  if (question.type === "source-list" && Array.isArray(value)) {
+    if (value.length === 0) issues.push(fieldIssue(question.path, "Add at least one source, or leave this question unresolved."));
+    value.forEach((source, index) => {
+      if (!source || typeof source !== "object" || Array.isArray(source)) {
+        issues.push(fieldIssue(`${question.path}.${index}`, "Complete this source with the guided fields."));
+        return;
+      }
+      for (const key of ["id", "type", "title", "reference", "observedAt", "claimState"]) {
+        if (typeof source[key] !== "string" || !source[key].trim()) {
+          issues.push(fieldIssue(`${question.path}.${index}.${key}`, `${titleForField(key)} is required.`));
+        }
+      }
+    });
+  }
+  return issues;
+}
+
+function titleForField(value) {
+  return String(value).replace(/([a-z])([A-Z])/gu, "$1 $2").replace(/^./u, (letter) => letter.toUpperCase());
+}
+
+function authorityReviewIssues(profile, request) {
+  const currentRefs = [...(profile.authorization?.sourceRefs || [])];
+  const reviewedRefs = Array.isArray(request.reviewedSourceRefs) ? request.reviewedSourceRefs : [];
+  const issues = [];
+  if (currentRefs.length === 0) {
+    issues.push(fieldIssue("authorization.sourceRefs", "Add the sources that establish authority before confirming."));
+    return issues;
+  }
+  if (new Set(reviewedRefs).size !== reviewedRefs.length || reviewedRefs.length !== currentRefs.length ||
+      currentRefs.some((sourceRef) => !reviewedRefs.includes(sourceRef))) {
+    issues.push(fieldIssue("authorization.sourceRefs", "Review the complete current authority source set before confirming."));
+  }
+  const sources = new Map((profile.sources || []).map((source) => [source.id, source]));
+  for (const sourceRef of currentRefs) {
+    const source = sources.get(sourceRef);
+    if (!source) {
+      issues.push(fieldIssue("authorization.sourceRefs", "A referenced authority source is missing from the local ledger."));
+    } else if (source.claimState !== "observed") {
+      issues.push(fieldIssue("authorization.sourceRefs", "Every authority source must be observed before confirmation."));
+    }
+  }
+  return issues;
+}
+
 function questionIndex(questionnaire) {
   return new Map(questionnaireLayout(questionnaire).flatMap((section) => section.questions)
     .map((question) => [question.id, question]));
 }
 
-function publicMutationFailure(error) {
+function publicMutationFailure(error, safeFieldPath = null) {
   if (error instanceof ProfileUiError) return error;
   if (/revision changed|digest changed|base profile|changed during/u.test(error?.message || "")) {
     return new ProfileUiError(409, "stale-profile", "This profile changed in another window. Reload it before saving.");
   }
+  // Library errors can contain rejected values. Never derive browser-visible
+  // field names from those strings; use only the questionnaire path already
+  // selected by this trusted controller.
+  const safeFields = typeof safeFieldPath === "string"
+    ? [fieldIssue(safeFieldPath, "This answer did not match its required structure.")]
+    : [];
   return new ProfileUiError(
     422,
     "answer-not-accepted",
-    "GATE could not save this answer. Review the fields and referenced IDs, then try again."
+    "GATE could not save this answer. Review the listed fields and try again.",
+    safeFields
   );
 }
 
@@ -309,20 +439,40 @@ export function createProfileWizardController(options = {}) {
       value = recommendation.value;
     }
     if (!typeLooksValid(question, value)) {
-      throw new ProfileUiError(422, "answer-shape-invalid", "Complete the visible fields using the expected answer format.");
+      throw new ProfileUiError(422, "answer-shape-invalid", "Complete the visible fields using the expected answer format.", [
+        fieldIssue(question.path, "Use the guided control or the documented advanced structure.")
+      ]);
     }
-    if (question.id === "authority-operator-confirmed" && value === true && request.reviewAcknowledged !== true) {
-      throw new ProfileUiError(422, "source-review-required", "Review the local source summary before confirming authority.");
+    const fieldIssues = validateRequiredFields(question, value, resumed.profile);
+    if (fieldIssues.length) {
+      throw new ProfileUiError(422, "required-fields-missing", "Complete the required fields before saving.", fieldIssues);
+    }
+    if (question.id === "authority-operator-confirmed" && value === true) {
+      const reviewIssues = authorityReviewIssues(resumed.profile, request);
+      if (request.reviewAcknowledged !== true || reviewIssues.length) {
+        throw new ProfileUiError(
+          422,
+          "source-review-required",
+          "Review the complete current authority source set before confirming authority.",
+          reviewIssues.length ? reviewIssues : [fieldIssue("authorization.sourceRefs", "Acknowledge the displayed current sources.")]
+        );
+      }
     }
 
     const envelope = structuredClone(resumed.answers);
     envelope.metadata.updatedAt = new Date(options.now?.() || Date.now()).toISOString();
     envelope.answers[question.id] = structuredClone(value);
     try {
-      bountyProfiles.applyProgramProfileAnswers(profileId, envelope, { paths });
+      const applyAnswers = question.id === "authority-operator-confirmed" && value === true
+        ? bountyProfiles.applyProgramProfileAuthorityConfirmation
+        : bountyProfiles.applyProgramProfileAnswers;
+      if (typeof applyAnswers !== "function") {
+        throw new ProfileUiError(501, "authority-confirmation-unavailable", "This GATE build cannot record a reviewed authority confirmation.");
+      }
+      applyAnswers(profileId, envelope, { paths });
       return state();
     } catch (error) {
-      throw publicMutationFailure(error);
+      throw publicMutationFailure(error, question.path);
     }
   };
 
@@ -331,6 +481,27 @@ export function createProfileWizardController(options = {}) {
     state,
     saveAnswer: (request) => saveAnswer(request, "answer"),
     applyRecommendation: (request) => saveAnswer(request, "recommendation"),
+    clearAnswer(request) {
+      const resumed = current();
+      assertMutationBase(request, resumed);
+      const question = questions.get(request?.questionId);
+      if (!question) throw new ProfileUiError(404, "question-not-found", "That profile question is no longer available.");
+      if (!Object.hasOwn(resumed.answers.answers || {}, question.id)) return state();
+      if (typeof bountyProfiles.clearProgramProfileAnswer !== "function") {
+        throw new ProfileUiError(501, "answer-clear-unavailable", "Clearing saved answers is not available in this GATE build.");
+      }
+      try {
+        bountyProfiles.clearProgramProfileAnswer(profileId, question.id, {
+          paths,
+          expectedRevision: resumed.profile.metadata.revision,
+          expectedProfileSha256: resumed.summary.profileSha256,
+          now: new Date(options.now?.() || Date.now()).toISOString()
+        });
+        return state();
+      } catch (error) {
+        throw publicMutationFailure(error, question.path);
+      }
+    },
     applySupportedRecommendations(request) {
       const resumed = current();
       assertMutationBase(request, resumed);

@@ -8,13 +8,14 @@ const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const html = fs.readFileSync(path.join(repo, "profile-ui", "index.html"), "utf8");
 const css = fs.readFileSync(path.join(repo, "profile-ui", "styles.css"), "utf8");
 const app = fs.readFileSync(path.join(repo, "profile-ui", "app.js"), "utf8");
+const time = fs.readFileSync(path.join(repo, "profile-ui", "time.js"), "utf8");
 
 test("profile UI is an external-asset-only local application", () => {
   assert.match(html, /src="\/profile-ui\/app\.js"/u);
   assert.match(html, /href="\/profile-ui\/styles\.css"/u);
   assert.doesNotMatch(html, /<script(?![^>]*src=)/u);
   assert.doesNotMatch(html, /style=/u);
-  assert.doesNotMatch(`${html}\n${css}\n${app}`, /https?:\/\//u);
+  assert.doesNotMatch(`${html}\n${css}\n${app}\n${time}`, /https?:\/\//u);
   assert.doesNotMatch(`${html}\n${css}\n${app}`, /telemetry|analytics|segment\.com|sentry|googleapis/u);
 });
 
@@ -31,6 +32,8 @@ test("profile UI exposes the required guided and native controls", () => {
   assert.match(html, /id="recommend-all"/u);
   assert.match(html, /id="source-review"/u);
   assert.match(app, /type = "datetime-local"/u);
+  assert.match(app, /UTC date and time/u);
+  assert.match(app, /Displayed and stored in UTC/u);
   assert.match(app, /type = "number"/u);
   assert.match(app, /type: multiple \? "checkbox" : "radio"/u);
   assert.match(app, /Add platform contact/u);
@@ -39,11 +42,17 @@ test("profile UI exposes the required guided and native controls", () => {
   assert.match(app, /data-contact/u);
   assert.match(app, /Advanced JSON fallback/u);
   assert.match(app, /I reviewed the applicable source material/u);
+  assert.match(app, /question\.answered \? "Clear answer" : "Skip for now"/u);
+  assert.match(app, /reviewedSourceRefs/u);
+  assert.match(app, /Evidence state:/u);
+  assert.match(app, /!question\.sensitive/u);
+  assert.match(css, /input:focus-visible \+ label/u);
+  assert.match(app, /node\("fieldset"/u);
 });
 
 test("profile UI communicates local privacy and unresolved authority", () => {
   assert.match(html, /Private · local only/u);
   assert.match(html, /never contacts the program or target/u);
   assert.match(html, /Authority and attestations always need your explicit answer/u);
-  assert.match(html, /Leave unresolved/u);
+  assert.match(html, /Skip for now/u);
 });

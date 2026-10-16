@@ -1,3 +1,5 @@
+import { isoFromUtcInput, utcInputFromIso } from "/profile-ui/time.js";
+
 const $ = (selector) => document.querySelector(selector);
 
 const elements = {
@@ -138,6 +140,7 @@ async function api(path, body) {
     const error = new Error(payload?.error?.message || "The local profile form could not complete that action.");
     error.code = payload?.error?.code;
     error.status = response.status;
+    error.fields = Array.isArray(payload?.error?.fields) ? payload.error.fields : [];
     throw error;
   }
   return payload.state;
@@ -161,8 +164,19 @@ function showToast(message, type = "success") {
   toastTimer = setTimeout(() => { elements.toast.hidden = true; }, 4200);
 }
 
-function showError(message) {
-  elements.answerError.textContent = message;
+function friendlyFieldPath(value) {
+  return String(value).replace(/^\//u, "").split(/[./]/u).filter(Boolean).map((part) => {
+    if (/^\d+$/u.test(part)) return `Item ${Number(part) + 1}`;
+    return titleCase(part.replace(/([a-z])([A-Z])/gu, "$1-$2"));
+  }).join(" › ");
+}
+
+function showError(message, fields = []) {
+  const details = fields
+    .filter((field) => typeof field?.path === "string" && typeof field?.message === "string")
+    .slice(0, 8)
+    .map((field) => `${friendlyFieldPath(field.path)}: ${field.message}`);
+  elements.answerError.textContent = [message, ...details].join("\n");
   elements.answerError.hidden = false;
   elements.answerError.focus?.();
 }
@@ -245,9 +259,17 @@ function flag(text, className = "") {
 
 function field(label, input, options = {}) {
   const wrapper = node("div", { className: `field${options.wide ? " wide" : ""}` });
-  const id = input.id || `field-${crypto.randomUUID()}`;
-  input.id = id;
-  wrapper.append(node("label", { text: label, attrs: { for: id } }), input);
+  if (input.tagName === "FIELDSET") {
+    const legend = input.querySelector("legend") || node("legend");
+    legend.textContent = label;
+    legend.className = "field-label";
+    if (!legend.parentElement) input.prepend(legend);
+    wrapper.append(input);
+  } else {
+    const id = input.id || `field-${crypto.randomUUID()}`;
+    input.id = id;
+    wrapper.append(node("label", { text: label, attrs: { for: id } }), input);
+  }
   if (options.help) wrapper.append(node("p", { className: "field-help", text: options.help }));
   return wrapper;
 }
@@ -265,8 +287,9 @@ function textInput(value = "", options = {}) {
   return input;
 }
 
-function choiceControl(name, choices, selected, multiple = false) {
-  const root = node("div", { className: `choice-grid${multiple ? " checkbox-grid" : ""}` });
+function choiceControl(name, choices, selected, multiple = false, legend = "Available choices") {
+  const root = node("fieldset", { className: `choice-grid${multiple ? " checkbox-grid" : ""}` });
+  root.append(node("legend", { className: "sr-only", text: legend }));
   for (const choice of choices) {
     const id = `${name}-${String(choice).replace(/[^a-z0-9]/giu, "-")}`;
     const input = node("input", {
@@ -317,7 +340,7 @@ function advancedFallback(root, initialValue, guidedReader) {
 function renderScalar(question) {
   const value = question.value;
   if (question.type === "boolean") {
-    const root = choiceControl(question.id, [true, false], value);
+    const root = choiceControl(question.id, [true, false], value, false, question.prompt);
     return { root, read: () => {
       const checked = root.querySelector("input:checked");
       if (!checked) throw new FormError("Choose Yes or No, or leave this question unresolved.");
@@ -325,7 +348,7 @@ function renderScalar(question) {
     } };
   }
   if (question.type === "enum") {
-    const root = choiceControl(question.id, question.choices, value);
+    const root = choiceControl(question.id, question.choices, value, false, question.prompt);
     return { root, read: () => {
       const checked = root.querySelector("input:checked");
       if (!checked) throw new FormError("Choose one of the available options.");
@@ -333,7 +356,7 @@ function renderScalar(question) {
     } };
   }
   if (question.type === "multi-enum") {
-    const root = choiceControl(question.id, question.choices, value || [], true);
+    const root = choiceControl(question.id, question.choices, value || [], true, question.prompt);
     return { root, read: () => [...root.querySelectorAll("input:checked")].map((input) => input.value) };
   }
   const isMultiline = question.type === "multiline";
@@ -342,7 +365,8 @@ function renderScalar(question) {
   let step;
   if (question.type === "datetime") {
     type = "datetime-local";
-    shown = typeof value === "string" ? value.replace(/Z$/u, "").slice(0, 16) : "";
+    step = "0.001";
+    shown = utcInputFromIso(value);
   } else if (question.type === "integer" || question.type === "number") {
     type = "number";
     step = question.type === "integer" ? "1" : "any";
@@ -352,9 +376,11 @@ function renderScalar(question) {
     const raw = input.value.trim();
     if (!raw) throw new FormError("Enter an answer, or leave this question unresolved.");
     if (question.type === "datetime") {
-      const parsed = new Date(input.value);
-      if (!Number.isFinite(parsed.getTime())) throw new FormError("Enter a valid date and time.");
-      return parsed.toISOString();
+      try {
+        return isoFromUtcInput(input.value);
+      } catch (error) {
+        throw new FormError(error.message);
+      }
     }
     if (question.type === "integer") {
       const parsed = Number(raw);
@@ -368,7 +394,14 @@ function renderScalar(question) {
     }
     return raw;
   });
-  return { root: field(question.type === "multiline" ? "Your answer" : "Answer", optional.root), read: optional.read };
+  return {
+    root: field(
+      question.type === "multiline" ? "Your answer" : question.type === "datetime" ? "UTC date and time" : "Answer",
+      optional.root,
+      question.type === "datetime" ? { help: "Displayed and stored in UTC. The value will not shift with your laptop timezone." } : {}
+    ),
+    read: optional.read
+  };
 }
 
 function lines(value) {
@@ -412,7 +445,8 @@ function contactCard(value, index, removeHandler, sources) {
   const role = textInput(value.role || "", { placeholder: "Authority and escalation contact" });
   const channel = textInput(value.channel || "", { placeholder: "Copy the exact published channel" });
   const purpose = textInput(value.purpose || "", { multiline: true, placeholder: "What this contact can clarify or stop" });
-  const sourceRefs = node("div", { className: "choice-grid checkbox-grid", attrs: { "data-key": "sourceRefs" } });
+  const sourceRefs = node("fieldset", { className: "choice-grid checkbox-grid", attrs: { "data-key": "sourceRefs" } });
+  sourceRefs.append(node("legend", { className: "sr-only", text: `Supporting sources for contact ${index + 1}` }));
   for (const source of sources) {
     const id = `contact-${index}-source-${source.id}`;
     const input = node("input", { attrs: { type: "checkbox", id, value: source.id, "data-source-ref": "true" } });
@@ -441,17 +475,28 @@ function renderContacts(question) {
   const root = node("div");
   const quick = node("div", { className: "quick-actions" });
   const list = node("div", { className: "structured-list" });
-  const readGuided = () => [...list.querySelectorAll("[data-contact]")].map((card) => ({
-    name: card.querySelector('[data-key="name"]').value.trim(),
-    role: card.querySelector('[data-key="role"]').value.trim(),
-    channel: card.querySelector('[data-key="channel"]').value.trim(),
-    purpose: card.querySelector('[data-key="purpose"]').value.trim(),
-    sourceRefs: [...card.querySelectorAll('[data-key="sourceRefs"] input:checked')].map((input) => input.value)
-  })).filter((contact) => Object.values(contact).some((value) => Array.isArray(value) ? value.length : value));
+  const collectContacts = (validate) => {
+    const contacts = [...list.querySelectorAll("[data-contact]")].map((card) => ({
+      name: card.querySelector('[data-key="name"]').value.trim(),
+      role: card.querySelector('[data-key="role"]').value.trim(),
+      channel: card.querySelector('[data-key="channel"]').value.trim(),
+      purpose: card.querySelector('[data-key="purpose"]').value.trim(),
+      sourceRefs: [...card.querySelectorAll('[data-key="sourceRefs"] input:checked')].map((input) => input.value)
+    })).filter((contact) => Object.values(contact).some((value) => Array.isArray(value) ? value.length : value));
+    if (!validate) return contacts;
+    if (!contacts.length) throw new FormError("Add at least one contact, or choose Skip for now.");
+    contacts.forEach((contact, index) => {
+      for (const key of ["name", "role", "channel", "purpose"]) {
+        if (!contact[key]) throw new FormError(`Contact ${index + 1}: ${key === "channel" ? "published channel" : titleCase(key)} is required.`);
+      }
+    });
+    return contacts;
+  };
+  const readGuided = () => collectContacts(true);
   const paint = () => replaceChildren(list, ...values.map((value, index) => contactCard(value, index, () => {
-    values = readGuided(); values.splice(index, 1); paint();
+    values = collectContacts(false); values.splice(index, 1); paint();
   }, state.sources)));
-  const addContact = (value = {}) => { values = readGuided(); values.push(value); paint(); };
+  const addContact = (value = {}) => { values = collectContacts(false); values.push(value); paint(); };
   const add = node("button", { className: "button button-secondary", text: "+ Add contact", attrs: { type: "button" } });
   add.addEventListener("click", () => addContact());
   const platform = node("button", { className: "button button-secondary", text: "Add platform contact", attrs: { type: "button" } });
@@ -471,7 +516,8 @@ function renderContacts(question) {
 function renderSourceRefs(question) {
   const selected = new Set(Array.isArray(question.value) ? question.value : []);
   const root = node("div");
-  const choices = node("div", { className: "choice-grid checkbox-grid" });
+  const choices = node("fieldset", { className: "choice-grid checkbox-grid" });
+  choices.append(node("legend", { className: "sr-only", text: "Supporting sources" }));
   for (const source of state.sources) {
     const id = `${question.id}-${source.id}`;
     const input = node("input", { attrs: { type: "checkbox", id, value: source.id } });
@@ -502,7 +548,7 @@ function renderSources(question) {
     title: card.querySelector('[data-key="title"]').value.trim(),
     reference: card.querySelector('[data-key="reference"]').value.trim(),
     contentSha256: card.querySelector('[data-key="contentSha256"]').value.trim() || null,
-    observedAt: new Date(card.querySelector('[data-key="observedAt"]').value).toISOString(),
+    observedAt: isoFromUtcInput(card.querySelector('[data-key="observedAt"]').value),
     claimState: card.querySelector('[data-key="claimState"]').value,
     notes: card.querySelector('[data-key="notes"]').value.trim() || null
   }));
@@ -517,8 +563,12 @@ function renderSources(question) {
       ["notes", "Short source note", "textarea"]
     ]) {
       let shown = value[key] || "";
-      if (type === "datetime-local") shown = shown.replace(/Z$/u, "").slice(0, 16);
-      controls[key] = textInput(shown, { multiline: type === "textarea", type: type === "textarea" ? "text" : type });
+      if (type === "datetime-local") shown = utcInputFromIso(shown);
+      controls[key] = textInput(shown, {
+        multiline: type === "textarea",
+        type: type === "textarea" ? "text" : type,
+        step: type === "datetime-local" ? "0.001" : undefined
+      });
       controls[key].dataset.key = key;
     }
     controls.type = node("select", { attrs: { "data-key": "type" } }, types.map((type) => node("option", { text: titleCase(type), attrs: { value: type } })));
@@ -529,7 +579,8 @@ function renderSources(question) {
       node("div", { className: "form-grid" }, [
         field("Source ID", controls.id), field("Source type", controls.type), field("Title", controls.title, { wide: true }),
         field("Canonical reference", controls.reference, { wide: true }), field("Content SHA-256", controls.contentSha256),
-        field("Observed at", controls.observedAt), field("Claim state", controls.claimState), field("Short source note", controls.notes, { wide: true })
+        field("Observed at (UTC)", controls.observedAt, { help: "This control always represents UTC." }),
+        field("Claim state", controls.claimState), field("Short source note", controls.notes, { wide: true })
       ]));
     return card;
   }));
@@ -633,7 +684,7 @@ function renderSchedule(question) {
     const card = node("div", { className: "repeat-card", attrs: { "data-window": "true" } });
     const remove = node("button", { className: "remove-item", text: "Remove", attrs: { type: "button" } });
     remove.addEventListener("click", () => { values = readGuided(); values.splice(index, 1); paint(); });
-    const dayControl = choiceControl(`days-${index}`, days, value.days || [], true);
+    const dayControl = choiceControl(`days-${index}`, days, value.days || [], true, `Days for window ${index + 1}`);
     const start = textInput(value.start || "09:00", { type: "time" }); start.dataset.key = "start";
     const end = textInput(value.end || "17:00", { type: "time" }); end.dataset.key = "end";
     card.append(node("div", { className: "repeat-card-header" }, [node("span", { className: "repeat-card-title", text: `Window ${index + 1}` }), remove]),
@@ -757,22 +808,34 @@ function renderSourceReview(question) {
   }
   elements.sourceReview.hidden = false;
   const list = node("div", { className: "source-list" });
-  if (state.sources.length) {
-    for (const source of state.sources) {
+  if (state.authorizationSources.length) {
+    for (const source of state.authorizationSources) {
       const freshness = source.observedAt ? `Observed ${new Date(source.observedAt).toLocaleString()}` : "Observation time unresolved";
       list.append(node("div", { className: "source-item", attrs: { tabindex: "-1" } }, [
         node("strong", { text: source.title }),
-        node("span", { text: `${titleCase(source.type)} · ${titleCase(source.claimState)} · ${freshness}${source.contentDigestRecorded ? " · digest recorded" : ""}` })
+        node("span", {
+          text: source.missing
+            ? `${source.id} · missing from the local source ledger`
+            : `${titleCase(source.type)} · ${titleCase(source.claimState)} · ${freshness}${source.contentDigestRecorded ? " · digest recorded" : ""}${source.resolved ? "" : " · unresolved"}`
+        })
       ]));
     }
   } else {
     list.append(node("div", { className: "source-item" }, [node("strong", { text: "No locally recorded sources" }), node("span", { text: "Leave authority unresolved until the source ledger is complete." })]));
   }
   const check = node("input", { attrs: { type: "checkbox", id: "source-review-ack" } });
+  const reviewReady = state.authorizationSources.length > 0 && state.authorizationSources.every((source) => source.resolved);
+  check.disabled = !reviewReady;
   const continueReview = node("button", { className: "button button-secondary", text: "Continue review", attrs: { type: "button" } });
-  continueReview.addEventListener("click", () => list.querySelector(".source-item")?.focus?.());
+  continueReview.addEventListener("click", () => {
+    if (questions.some((item) => item.id === "authority-sources")) {
+      goToQuestion("authority-sources");
+      return;
+    }
+    list.querySelector(".source-item")?.focus?.();
+  });
   const confirm = node("button", { className: "button button-primary", text: "I reviewed and confirm", attrs: { type: "button" } });
-  confirm.disabled = state.sources.length === 0;
+  confirm.disabled = !reviewReady;
   confirm.addEventListener("click", () => {
     check.checked = true;
     const yes = elements.answerControl.querySelector('input[value="true"]');
@@ -781,7 +844,7 @@ function renderSourceReview(question) {
   });
   replaceChildren(elements.sourceReview,
     node("h3", { text: "Review the authority source summary first" }),
-    node("p", { text: "These are locally stored titles, categories, and freshness indicators. GATE does not infer confirmation from them. Review the actual source material you control before answering Yes." }),
+    node("p", { text: "These are exactly the sources currently cited as the basis for authority. GATE does not infer confirmation from them. Review the actual source material you control before answering Yes." }),
     list,
     node("label", { className: "review-check", attrs: { for: "source-review-ack" } }, [check, node("span", { text: "I reviewed the applicable source material and am ready to answer this authority question." })]),
     node("div", { className: "quick-actions" }, [continueReview, confirm])
@@ -809,7 +872,17 @@ function renderRecommendation(question) {
   elements.recommendationSummary.textContent = recommendation.summary;
   elements.recommendationValue.textContent = "Ready to apply locally";
   elements.recommendationValue.hidden = false;
-  elements.recommendationBasis.textContent = recommendation.basis || (recommendation.provenance ? `Basis: ${titleCase(recommendation.provenance)}` : "Reviewed GATE policy");
+  const evidenceState = recommendation.claimState
+    ? `Evidence state: ${titleCase(recommendation.claimState)}`
+    : null;
+  const basis = recommendation.basis
+    ? `Basis: ${recommendation.basis}`
+    : !question.sensitive && recommendation.provenance
+      ? `Basis: ${titleCase(recommendation.provenance)}`
+      : !question.sensitive
+        ? "Reviewed GATE policy"
+        : null;
+  elements.recommendationBasis.textContent = [evidenceState, basis].filter(Boolean).join(" · ");
 }
 
 function renderQuestion() {
@@ -832,6 +905,7 @@ function renderQuestion() {
   activeCollector = rendered.read;
   replaceChildren(elements.answerControl, rendered.root);
   elements.answerState.textContent = question.answered ? `Saved in revision ${state.profile.revision}` : "Not answered yet";
+  elements.leaveUnresolved.textContent = question.answered ? "Clear answer" : "Skip for now";
   renderRecommendation(question);
   elements.previousQuestion.disabled = busy || index === 0;
   elements.backButton.disabled = busy || index === 0;
@@ -868,9 +942,12 @@ async function saveCurrent(event) {
     const reviewAcknowledged = question.id === "authority-operator-confirmed"
       ? $("#source-review-ack")?.checked === true
       : undefined;
+    const reviewedSourceRefs = question.id === "authority-operator-confirmed" && reviewAcknowledged
+      ? [...state.authorizationSourceRefs]
+      : undefined;
     setBusy(true);
     const previousIndex = questions.findIndex((item) => item.id === question.id);
-    state = await api("/api/answer", { ...baseMutation(question), value, reviewAcknowledged });
+    state = await api("/api/answer", { ...baseMutation(question), value, reviewAcknowledged, reviewedSourceRefs });
     const nextQuestions = state.sections.flatMap((section) => section.questions.filter((item) => item.applicable));
     const next = nextQuestions[Math.min(previousIndex + 1, nextQuestions.length - 1)]?.id || question.id;
     currentQuestionId = question.id;
@@ -879,7 +956,7 @@ async function saveCurrent(event) {
     showToast("Answer saved locally.");
   } catch (error) {
     setBusy(false, "Not saved");
-    showError(error instanceof FormError ? error.message : error.message);
+    showError(error.message, error.fields);
     if (error.code === "stale-profile") showToast("The profile changed. Reload this page before continuing.", "error");
   }
 }
@@ -898,7 +975,27 @@ async function applyRecommendation() {
     showToast("Reviewed recommendation applied.");
   } catch (error) {
     setBusy(false, "Not saved");
-    showError(error.message);
+    showError(error.message, error.fields);
+  }
+}
+
+async function skipOrClearCurrent() {
+  if (busy) return;
+  const question = currentQuestion();
+  if (!question.answered) {
+    moveQuestion(1);
+    return;
+  }
+  try {
+    clearError();
+    setBusy(true, "Clearing answer…");
+    state = await api("/api/answer/clear", baseMutation(question));
+    setBusy(false);
+    render(question.id);
+    showToast("Answer cleared. Dependent confirmations were reset when required.");
+  } catch (error) {
+    setBusy(false, "Not cleared");
+    showError(error.message, error.fields);
   }
 }
 
@@ -945,7 +1042,7 @@ elements.answerForm.addEventListener("submit", saveCurrent);
 elements.previousQuestion.addEventListener("click", () => moveQuestion(-1));
 elements.backButton.addEventListener("click", () => moveQuestion(-1));
 elements.nextQuestion.addEventListener("click", () => moveQuestion(1));
-elements.leaveUnresolved.addEventListener("click", () => moveQuestion(1));
+elements.leaveUnresolved.addEventListener("click", skipOrClearCurrent);
 elements.useRecommendation.addEventListener("click", applyRecommendation);
 elements.recommendAll.addEventListener("click", applyAllRecommendations);
 window.addEventListener("keydown", (event) => {
