@@ -8,7 +8,10 @@ import { fileURLToPath } from "node:url";
 
 import { createProgramProfile, resumeProgramProfile } from "../src/lib/bounty-profiles.mjs";
 import { runtimePaths } from "../src/lib/paths.mjs";
-import { loadProgramProfileQuestionnaire } from "../src/lib/program-profile-contract.mjs";
+import {
+  loadProgramProfileQuestionnaire,
+  programProfileQuestionnaireBinding
+} from "../src/lib/program-profile-contract.mjs";
 import { profileUiControllerInternals } from "../src/profile-ui/controller.mjs";
 import { profileUiServerInternals, startProfileWizardServer } from "../src/profile-ui/server.mjs";
 import { isoFromUtcInput, utcDisplayFromIso, utcInputFromIso } from "../profile-ui/time.js";
@@ -238,6 +241,58 @@ test("profile UI resolves recommendations inside the local controller", async (t
   } });
   assert.equal(response.status, 200);
   assert.equal(resumeProgramProfile(id, { paths }).answers.answers[depth.id], "thorough");
+});
+
+test("profile UI resolves and applies one base-bound evidence proposal", async (t) => {
+  const { paths, id } = fixture(t, "browser-evidence-recommendation");
+  const current = resumeProgramProfile(id, { paths });
+  const questionnaire = programProfileQuestionnaireBinding({ repo });
+  const recommendations = {
+    $schema: "https://gate.local/schemas/bug-bounty-program-profile-recommendations.schema.json",
+    apiVersion: "gate.dev/program-profile-recommendations/v1",
+    kind: "BugBountyProgramProfileRecommendations",
+    metadata: {
+      programId: id,
+      createdAt: fixedAt,
+      questionnaireId: questionnaire.id,
+      questionnaireVersion: questionnaire.version,
+      questionnaireSha256: questionnaire.sha256,
+      baseRevision: current.summary.revision,
+      baseProfileSha256: current.summary.profileSha256
+    },
+    proposals: {
+      "authority-basis": {
+        value: "public-bug-bounty-program",
+        provenance: "source-derived",
+        basis: {
+          summary: "Use the basis established by the captured program rules.",
+          claimState: "observed",
+          sourceRefs: ["program-rules"]
+        }
+      }
+    }
+  };
+  const started = await startProfileWizardServer({ profileId: id, paths, recommendations });
+  t.after(() => started.close());
+  const credentials = launchCredentials(started);
+  const stateResponse = await api(started, credentials, "/api/state");
+  const state = (await stateResponse.json()).state;
+  const question = state.sections.flatMap((section) => section.questions)
+    .find((item) => item.id === "authority-basis");
+  assert.equal(question.recommendation.available, true);
+  assert.equal(question.recommendation.claimState, "observed");
+  assert.equal(Object.hasOwn(question.recommendation, "value"), false);
+
+  const response = await api(started, credentials, "/api/recommendation", { body: {
+    questionId: question.id,
+    baseRevision: state.profile.revision,
+    baseProfileSha256: state.profile.profileSha256
+  } });
+  assert.equal(response.status, 200, await response.text());
+  assert.equal(
+    resumeProgramProfile(id, { paths }).profile.authorization.basis,
+    "public-bug-bounty-program"
+  );
 });
 
 test("profile UI requires an explicit source-review acknowledgement before authority confirmation", async (t) => {

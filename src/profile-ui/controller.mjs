@@ -87,7 +87,7 @@ function questionnaireLayout(questionnaire) {
   ];
 }
 
-function recommendationFor(question, profile) {
+function recommendationFor(question, profile, recommendations = null, now = undefined) {
   if (MANUAL_REVIEW_QUESTIONS.has(question.id) || question.recommendationPolicy?.class === "manual-only") {
     return {
       available: false,
@@ -96,7 +96,7 @@ function recommendationFor(question, profile) {
     };
   }
   if (typeof bountyProfiles.programProfileRecommendation === "function") {
-    const result = bountyProfiles.programProfileRecommendation(question.id, { profile });
+    const result = bountyProfiles.programProfileRecommendation(question.id, { profile, recommendations, now });
     return result?.available
       ? {
           available: true,
@@ -438,6 +438,7 @@ export function createProfileWizardController(options = {}) {
   if (typeof profileId !== "string") throw new Error("profile wizard requires one selected profile id");
   const questionnaire = loadProgramProfileQuestionnaire({ paths });
   const questions = questionIndex(questionnaire);
+  const recommendations = options.recommendations || null;
 
   const decisionTime = () => {
     const supplied = typeof options.now === "function" ? options.now() : options.now ?? Date.now();
@@ -447,7 +448,25 @@ export function createProfileWizardController(options = {}) {
   };
 
   const current = () => bountyProfiles.resumeProgramProfile(profileId, { paths });
-  const stateAt = (at) => serializeState(profileId, current(), questionnaire, recommendationFor, at.milliseconds);
+  const boundRecommendations = (resumed) => {
+    if (!recommendations) return null;
+    return recommendations.metadata?.programId === profileId &&
+      recommendations.metadata?.baseRevision === resumed.profile.metadata.revision &&
+      recommendations.metadata?.baseProfileSha256 === resumed.summary.profileSha256
+      ? recommendations
+      : null;
+  };
+  const stateAt = (at) => {
+    const resumed = current();
+    const activeRecommendations = boundRecommendations(resumed);
+    return serializeState(
+      profileId,
+      resumed,
+      questionnaire,
+      (question, profile) => recommendationFor(question, profile, activeRecommendations, at.iso),
+      at.milliseconds
+    );
+  };
   const state = () => stateAt(decisionTime());
 
   const saveAnswer = (request, mode = "answer") => {
@@ -464,7 +483,12 @@ export function createProfileWizardController(options = {}) {
 
     let value = request.value;
     if (mode === "recommendation") {
-      const recommendation = recommendationFor(question, resumed.profile);
+      const recommendation = recommendationFor(
+        question,
+        resumed.profile,
+        boundRecommendations(resumed),
+        at.iso
+      );
       if (!recommendation.available || question.recommendationPolicy?.class === "manual-only") {
         throw new ProfileUiError(409, "recommendation-unavailable", "This question needs your answer or source evidence.");
       }
@@ -493,6 +517,23 @@ export function createProfileWizardController(options = {}) {
           "Review the complete current authority source set before confirming authority.",
           reviewIssues.length ? reviewIssues : [fieldIssue("authorization.sourceRefs", "Acknowledge the displayed current sources.")]
         );
+      }
+    }
+
+    if (mode === "recommendation") {
+      if (typeof bountyProfiles.applyProgramProfileRecommendation !== "function") {
+        throw new ProfileUiError(501, "recommendation-unavailable", "This GATE build cannot apply one reviewed recommendation.");
+      }
+      try {
+        bountyProfiles.applyProgramProfileRecommendation(profileId, question.id, recommendations, {
+          paths,
+          expectedRevision: resumed.profile.metadata.revision,
+          expectedProfileSha256: resumed.summary.profileSha256,
+          now: at.iso
+        });
+        return stateAt(at);
+      } catch (error) {
+        throw publicMutationFailure(error, question.path);
       }
     }
 
@@ -548,7 +589,7 @@ export function createProfileWizardController(options = {}) {
         throw new ProfileUiError(501, "bulk-recommendations-unavailable", "Bulk recommendations are not available in this GATE build.");
       }
       try {
-        bountyProfiles.applyProgramProfileRecommendations(profileId, null, {
+        bountyProfiles.applyProgramProfileRecommendations(profileId, recommendations, {
           paths,
           expectedRevision: resumed.profile.metadata.revision,
           expectedProfileSha256: resumed.summary.profileSha256,

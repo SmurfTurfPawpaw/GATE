@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/bug-bounty-program-profile-recommendations.schema.json",
+  "title": "GATE bug bounty Program Profile recommendation proposals",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "apiVersion", "kind", "metadata", "proposals"],
+  "properties": {
+    "$schema": {
+      "const": "https://gate.local/schemas/bug-bounty-program-profile-recommendations.schema.json"
+    },
+    "apiVersion": { "const": "gate.dev/program-profile-recommendations/v1" },
+    "kind": { "const": "BugBountyProgramProfileRecommendations" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "programId",
+        "createdAt",
+        "questionnaireId",
+        "questionnaireVersion",
+        "questionnaireSha256",
+        "baseRevision",
+        "baseProfileSha256"
+      ],
+      "properties": {
+        "programId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "questionnaireId": { "const": "bug-bounty-program-profile" },
+        "questionnaireVersion": { "type": "integer", "minimum": 1 },
+        "questionnaireSha256": { "$ref": "#/$defs/sha256" },
+        "baseRevision": {
+          "oneOf": [
+            { "type": "integer", "minimum": 1 },
+            { "type": "null" }
+          ]
+        },
+        "baseProfileSha256": {
+          "oneOf": [
+            { "$ref": "#/$defs/sha256" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "proposals": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[a-z][a-z0-9-]{1,95}$" },
+      "additionalProperties": { "$ref": "#/$defs/proposal" }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "oneLine": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "pattern": "^[^\\r\\n]+$"
+    },
+    "sourceRefs": {
+      "type": "array",
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[a-z][a-z0-9-]{1,127}$"
+      }
+    },
+    "basis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary", "claimState", "sourceRefs"],
+      "properties": {
+        "summary": { "$ref": "#/$defs/oneLine" },
+        "claimState": { "enum": ["observed", "inferred", "unverified"] },
+        "sourceRefs": { "$ref": "#/$defs/sourceRefs" }
+      }
+    },
+    "proposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "provenance", "basis"],
+      "properties": {
+        "value": true,
+        "provenance": { "enum": ["source-derived", "local-derived"] },
+        "basis": { "$ref": "#/$defs/basis" }
+      }
+    }
+  }
+}

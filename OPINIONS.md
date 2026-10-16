@@ -192,6 +192,8 @@ For work performed on the operator's machine, make the exact command or planned 
 
 When an interactive workflow needs operator input, especially while creating a Program Profile, use a concise interview with clear, clickable answer choices. Recommend a sensible option when the evidence supports one. Import, derive, or prefill exact values locally first, then ask the operator to type only a short unresolved value when the available choices cannot capture a material detail. Avoid broad prompts, repeated manual entry, and long open-ended answers.
 
+The operator should be able to accept a reviewed recommendation question by question or apply every currently supported unanswered recommendation in one action. Recommendations must distinguish durable operator preferences from source- or local-evidence proposals and direct human confirmations. Explicit answers take precedence, unsupported questions stay visible, and authorization confirmation and final attestation remain direct operator acts.
+
 ## Knowledge and synchronization
 
 ### OP-KNO-001 — Knowledge must not live only in an agent's context

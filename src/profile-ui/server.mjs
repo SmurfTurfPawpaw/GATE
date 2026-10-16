@@ -167,7 +167,12 @@ export async function startProfileWizardServer(options = {}) {
     home: options.gateHome || options.home,
     env: options.env
   });
-  const controller = createProfileWizardController({ profileId: options.profileId, paths, now: options.now });
+  const controller = createProfileWizardController({
+    profileId: options.profileId,
+    paths,
+    now: options.now,
+    recommendations: options.recommendations || null
+  });
   // Validate the selected profile before opening a listener. A process owns
   // exactly this profile for its lifetime.
   controller.state();

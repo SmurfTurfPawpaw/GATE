@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import { isIP } from "node:net";
 import path from "node:path";
@@ -118,7 +119,59 @@ export const PROGRAM_PROFILE_MODULE_IDS = Object.freeze([
   "embedded-iot-ot"
 ]);
 
+export const PROGRAM_PROFILE_RECOMMENDATION_POLICY_CLASSES = Object.freeze([
+  "operator-preference",
+  "evidence-proposal",
+  "manual-only"
+]);
+
+export const PROGRAM_PROFILE_RECOMMENDATION_PROVENANCE = Object.freeze([
+  "source-derived",
+  "local-derived"
+]);
+
+export const PROGRAM_PROFILE_MANUAL_ONLY_QUESTION_IDS = Object.freeze([
+  "authority-operator-confirmed",
+  "attestation-operator",
+  "attestation-answers-complete",
+  "attestation-sources-reviewed",
+  "attestation-scope-reviewed",
+  "attestation-at"
+]);
+
+const SOURCE_REQUIRED_LIMIT_QUESTION_IDS = new Set([
+  "limits-windows",
+  "limits-max-minutes",
+  "limits-max-requests",
+  "limits-max-parallel",
+  "limits-max-rate",
+  "limits-source-refs"
+]);
+
+export function programProfileRecommendationRequiresObservedSource(question) {
+  const questionId = String(question?.id || "");
+  if (question?.recommendationPolicy?.class === "manual-only") return false;
+  if (question?.recommendationPolicy?.proposalBasis === "source-required") return true;
+  return (questionId.startsWith("authority-") && questionId !== "authority-operator-confirmed") ||
+    questionId.startsWith("actions-") ||
+    questionId.startsWith("scope-") ||
+    questionId.startsWith("coverage-") ||
+    questionId === "execution-phase-policies" ||
+    SOURCE_REQUIRED_LIMIT_QUESTION_IDS.has(questionId) ||
+    Boolean(question?.module) ||
+    PROGRAM_PROFILE_MODULE_IDS.some((moduleId) => questionId.startsWith(`${moduleId}-`));
+}
+
 const QUESTIONNAIRE_MAXIMUM_BYTES = 1024 * 1024;
+const PROGRAM_PROFILE_CORE_QUESTION_COUNT = 66;
+const PROGRAM_PROFILE_MODULE_QUESTION_COUNT = 36;
+// This digest pins the ordered id/path/type/parent projection independently
+// from the questionnaire being validated. Without an independent contract, a
+// deleted or renamed question can redefine the validator's own expectations.
+const PROGRAM_PROFILE_CORE_QUESTION_CONTRACT_SHA256 =
+  "7f2ef3e392f91d98b00057175bd45f14ee5a35dd71512d63ab9be49d769a90b2";
+const PROGRAM_PROFILE_MODULE_QUESTION_CONTRACT_SHA256 =
+  "97d12e3da7994d2ee111038b792b8890ab8171983775274f5a7fcf3779f8a944";
 
 function deepFreeze(value) {
   if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
@@ -140,9 +193,196 @@ function duplicateValues(values) {
   return [...duplicates].sort();
 }
 
+function stableValue(value) {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stableValue(value[key])]));
+}
+
+function canonicalSha256(value) {
+  return crypto.createHash("sha256").update(JSON.stringify(stableValue(value))).digest("hex");
+}
+
+const PROGRAM_PROFILE_NONEMPTY_REQUIRED_LIST_PATHS = new Set([
+  "sources",
+  "identity.deliverables",
+  "identity.successCriteria",
+  "authorization.sourceRefs",
+  "authorization.contacts",
+  "scope.assets",
+  "executionPolicy.requestedAssistanceModes",
+  "executionPolicy.phases",
+  "limits.windows",
+  "limits.sourceRefs",
+  "architecture.sourceRefs",
+  "dataEvidence.redactionRules",
+  "dataEvidence.sourceRefs",
+  "stops.escalationContacts",
+  "stops.cleanup.steps",
+  "stops.cleanup.sourceRefs",
+  "reporting.requiredSections",
+  "reporting.sourceRefs"
+]);
+
+function exactRecordKeys(value, expected) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return sameList(Object.keys(value).sort(), [...expected].sort());
+}
+
+function recommendationSourceRefErrors(value, label) {
+  if (!Array.isArray(value)) return [`${label} sourceRefs must be an array`];
+  const invalid = value.some((sourceRef) =>
+    typeof sourceRef !== "string" || !/^[a-z][a-z0-9-]{1,62}$/u.test(sourceRef)
+  );
+  if (invalid) return [`${label} sourceRefs must contain only canonical source ids`];
+  if (new Set(value).size !== value.length) return [`${label} sourceRefs must be unique`];
+  return [];
+}
+
+function recommendationDecisionErrors(value, label, { moduleAssessment = false } = {}) {
+  const errors = [];
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return [`${label} recommendation must be a decision object`];
+  }
+  const required = ["disposition", "claimState", "sourceRefs", "rationale", "conditions",
+    ...(moduleAssessment ? ["answers"] : [])];
+  if (!exactRecordKeys(value, required)) {
+    errors.push(`${label} recommendation decision must contain exactly the canonical decision keys`);
+  }
+  if (!PROGRAM_PROFILE_DISPOSITIONS.includes(value.disposition)) {
+    errors.push(`${label} recommendation decision has an unsupported disposition`);
+  }
+  if (!PROGRAM_PROFILE_CLAIM_STATES.includes(value.claimState)) {
+    errors.push(`${label} recommendation decision has an unsupported claim state`);
+  }
+  errors.push(...recommendationSourceRefErrors(value.sourceRefs, `${label} recommendation decision`));
+  if (value.rationale !== null && (typeof value.rationale !== "string" || !meaningfulText(value.rationale))) {
+    errors.push(`${label} recommendation decision rationale must be null or non-empty text`);
+  }
+  if (!Array.isArray(value.conditions) ||
+      value.conditions.some((condition) => typeof condition !== "string" || !meaningfulText(condition))) {
+    errors.push(`${label} recommendation decision conditions must contain only non-empty text`);
+  } else if (new Set(value.conditions).size !== value.conditions.length) {
+    errors.push(`${label} recommendation decision conditions must be unique`);
+  } else if (value.disposition === "conditional" && value.conditions.length === 0) {
+    errors.push(`${label} conditional recommendation decision requires a condition`);
+  }
+  if (value.disposition === "unknown" && value.claimState !== "unverified") {
+    errors.push(`${label} unknown recommendation decision must remain unverified`);
+  }
+  if (moduleAssessment && (!value.answers || typeof value.answers !== "object" || Array.isArray(value.answers))) {
+    errors.push(`${label} recommendation module answers must be an object`);
+  }
+  return errors;
+}
+
+function recommendationMatrixErrors(value, expectedKeys, label, validateEntry = recommendationDecisionErrors) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return [`${label} recommendation must be an object`];
+  }
+  if (!exactRecordKeys(value, expectedKeys)) {
+    return [`${label} recommendation must contain exactly the canonical decision keys`];
+  }
+  return expectedKeys.flatMap((key) => validateEntry(value[key], `${label}.${key}`));
+}
+
+function recommendationStopErrors(value, label) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return [`${label} recommendation must be a stop response object`];
+  }
+  const required = ["enabled", "response", "claimState", "sourceRefs"];
+  const errors = exactRecordKeys(value, required)
+    ? []
+    : [`${label} recommendation stop response must contain exactly the canonical stop-response keys`];
+  if (value.enabled !== true) errors.push(`${label} recommendation stop response must remain enabled`);
+  if (typeof value.response !== "string" || !meaningfulText(value.response)) {
+    errors.push(`${label} recommendation stop response requires non-empty text`);
+  }
+  if (!PROGRAM_PROFILE_CLAIM_STATES.includes(value.claimState)) {
+    errors.push(`${label} recommendation stop response has an unsupported claim state`);
+  }
+  errors.push(...recommendationSourceRefErrors(value.sourceRefs, `${label} recommendation stop response`));
+  return errors;
+}
+
+function recommendationValueErrors(question, value, label = `question ${question?.id || "unknown"}`) {
+  const errors = [];
+  if (value === null) {
+    if (question?.allowNull !== true) errors.push(`${label} recommendation cannot be null`);
+    return errors;
+  }
+  const type = question?.type;
+  if (["text", "multiline", "datetime"].includes(type)) {
+    if (typeof value !== "string" || !value.trim()) errors.push(`${label} recommendation must be non-empty text`);
+    if (type === "datetime" && typeof value === "string" && !Number.isFinite(Date.parse(value))) {
+      errors.push(`${label} recommendation must be an ISO 8601 date-time`);
+    }
+    return errors;
+  }
+  if (type === "boolean") {
+    if (typeof value !== "boolean") errors.push(`${label} recommendation must be boolean`);
+    return errors;
+  }
+  if (type === "integer") {
+    if (!Number.isSafeInteger(value)) errors.push(`${label} recommendation must be a safe integer`);
+    return errors;
+  }
+  if (type === "number") {
+    if (typeof value !== "number" || !Number.isFinite(value)) errors.push(`${label} recommendation must be finite`);
+    return errors;
+  }
+  if (type === "enum") {
+    if (!question.choices?.includes(value)) errors.push(`${label} recommendation must be one of the question choices`);
+    return errors;
+  }
+  if (type === "multi-enum") {
+    if (!Array.isArray(value) || value.some((entry) => !question.choices?.includes(entry)) ||
+        new Set(value).size !== value.length) {
+      errors.push(`${label} recommendation must contain unique supported choices`);
+    }
+    return errors;
+  }
+  if ([
+    "source-list",
+    "selector-decisions",
+    "contact-list",
+    "schedule-windows",
+    "secret-ref-list",
+    "structured-list"
+  ].includes(type)) {
+    if (!Array.isArray(value)) {
+      errors.push(`${label} recommendation must be an array`);
+      return errors;
+    }
+    const requiresItems = PROGRAM_PROFILE_NONEMPTY_REQUIRED_LIST_PATHS.has(question?.path) ||
+      (Boolean(question?.module) && type === "structured-list");
+    if (requiresItems && value.length === 0) {
+      errors.push(`${label} recommendation must contain at least one meaningful item`);
+    }
+    if (type === "secret-ref-list") {
+      if (value.some((entry) => typeof entry !== "string" || !meaningfulText(entry))) {
+        errors.push(`${label} recommendation must contain only non-empty secret references`);
+      }
+    } else if (value.some((entry) => !meaningfulStructuredListItem(entry))) {
+      errors.push(`${label} recommendation contains an empty or meaningless item`);
+    }
+    return errors;
+  }
+  if (type === "decision") {
+    return recommendationDecisionErrors(value, label, { moduleAssessment: Boolean(question?.module) });
+  }
+  if (type === "action-decisions") return recommendationMatrixErrors(value, PROGRAM_PROFILE_ACTIONS, label);
+  if (type === "coverage-decisions") return recommendationMatrixErrors(value, PROGRAM_PROFILE_COVERAGE_DOMAINS, label);
+  if (type === "stop-responses") {
+    return recommendationMatrixErrors(value, PROGRAM_PROFILE_STOP_CONDITIONS, label, recommendationStopErrors);
+  }
+  errors.push(`${label} has an unsupported recommendation type ${String(type)}`);
+  return errors;
+}
+
 function semanticQuestionnaireErrors(value) {
   const errors = [];
-  if (value.apiVersion === "gate.dev/program-profile-questionnaire/v2" && !value.interaction) {
+  if (!value.interaction) {
     errors.push("questionnaire v2 requires choice-first interaction metadata");
   }
   const expectedSemantics = [
@@ -176,6 +416,26 @@ function semanticQuestionnaireErrors(value) {
     (module.questions || []).map((question) => ({ ...question, module: module.id }))
   );
   const questions = [...baseQuestions, ...moduleQuestions];
+  const coreContract = baseQuestions.map(({ id, path: questionPath, type, section }) => ({
+    id,
+    path: questionPath,
+    type,
+    section
+  }));
+  const moduleContract = moduleQuestions.map(({ id, path: questionPath, type, module }) => ({
+    id,
+    path: questionPath,
+    type,
+    module
+  }));
+  if (baseQuestions.length !== PROGRAM_PROFILE_CORE_QUESTION_COUNT ||
+      canonicalSha256(coreContract) !== PROGRAM_PROFILE_CORE_QUESTION_CONTRACT_SHA256) {
+    errors.push("questionnaire core questions must exactly match the canonical 66-question id/path/type/section contract");
+  }
+  if (moduleQuestions.length !== PROGRAM_PROFILE_MODULE_QUESTION_COUNT ||
+      canonicalSha256(moduleContract) !== PROGRAM_PROFILE_MODULE_QUESTION_CONTRACT_SHA256) {
+    errors.push("questionnaire module questions must exactly match the canonical 36-question id/path/type/module contract");
+  }
   for (const duplicate of duplicateValues(questions.map((question) => question.id))) {
     errors.push(`questionnaire question id is duplicated: ${duplicate}`);
   }
@@ -193,6 +453,34 @@ function semanticQuestionnaireErrors(value) {
       const modes = [Object.hasOwn(question.condition, "includes"), Object.hasOwn(question.condition, "equals")]
         .filter(Boolean).length;
       if (modes !== 1) errors.push(`questionnaire question ${question.id} must use exactly one condition operator`);
+    }
+    const recommendationClass = question.recommendationPolicy?.class;
+    if (!PROGRAM_PROFILE_RECOMMENDATION_POLICY_CLASSES.includes(recommendationClass)) {
+      errors.push(`questionnaire question ${question.id} requires a supported recommendation policy class`);
+    }
+    if (recommendationClass === "operator-preference") {
+      errors.push(...recommendationValueErrors(
+        question,
+        question.recommendationPolicy.value,
+        `questionnaire question ${question.id}`
+      ));
+    }
+    if (programProfileRecommendationRequiresObservedSource(question) &&
+        (recommendationClass !== "evidence-proposal" ||
+          question.recommendationPolicy?.proposalBasis !== "source-required")) {
+      errors.push(
+        `questionnaire question ${question.id} must require an observed source-derived recommendation proposal`
+      );
+    }
+  }
+  const manualOnly = new Set(PROGRAM_PROFILE_MANUAL_ONLY_QUESTION_IDS);
+  for (const question of questions) {
+    const isManual = question.recommendationPolicy?.class === "manual-only";
+    if (manualOnly.has(question.id) && !isManual) {
+      errors.push(`questionnaire question ${question.id} must be manual-only and cannot be recommended`);
+    }
+    if (!manualOnly.has(question.id) && isManual) {
+      errors.push(`questionnaire question ${question.id} cannot use the manual-only recommendation policy`);
     }
   }
   const questionsById = new Map(questions.map((question) => [question.id, question]));
@@ -285,6 +573,15 @@ export function loadProgramProfileQuestionnaire(options = {}) {
     throw new Error(`program profile questionnaire validation failed: ${validation.errors.join("; ")}`);
   }
   return value;
+}
+
+export function programProfileQuestionnaireBinding(options = {}) {
+  const questionnaire = loadProgramProfileQuestionnaire(options);
+  return {
+    id: questionnaire.metadata.id,
+    version: questionnaire.metadata.version,
+    sha256: canonicalSha256(questionnaire)
+  };
 }
 
 function baseQuestions(questionnaire) {
@@ -836,6 +1133,9 @@ export function programProfileQuestionAnswerIsComplete(question, value) {
   if (value === undefined) return false;
   if (value === null) return question?.allowNull === true;
   if (typeof value === "string") return meaningfulText(value);
+  if (PROGRAM_PROFILE_NONEMPTY_REQUIRED_LIST_PATHS.has(question?.path)) {
+    return Array.isArray(value) && value.length > 0 && value.every(meaningfulStructuredListItem);
+  }
   if (!question?.module) return true;
   if (question?.type === "structured-list") {
     return Array.isArray(value) && value.length > 0 && value.every(meaningfulStructuredListItem);
@@ -928,6 +1228,55 @@ export function validateProgramProfileAnswers(value, options = {}) {
       errors.push(...moduleAnswerErrors(question.module, { [question.path.slice(prefix.length)]: answer }));
     } else if (answer?.answers && typeof answer.answers === "object" && !Array.isArray(answer.answers)) {
       errors.push(...moduleAnswerErrors(question.module, answer.answers));
+    }
+  }
+  return { ok: errors.length === 0, errors };
+}
+
+export function validateProgramProfileRecommendations(value, options = {}) {
+  const paths = options.paths || runtimePaths(options);
+  const structural = validateDocument(value, "bug-bounty-program-profile-recommendations.schema.json", { paths });
+  if (!structural.ok) return structural;
+
+  const errors = unsafeTextErrors(value);
+  const questionnaire = loadProgramProfileQuestionnaire({ paths });
+  const binding = {
+    id: questionnaire.metadata.id,
+    version: questionnaire.metadata.version,
+    sha256: canonicalSha256(questionnaire)
+  };
+  if (value.metadata.questionnaireId !== binding.id ||
+      value.metadata.questionnaireVersion !== binding.version ||
+      value.metadata.questionnaireSha256 !== binding.sha256) {
+    errors.push("recommendations questionnaire binding does not match the current reviewed questionnaire");
+  }
+  const hasBaseRevision = value.metadata.baseRevision !== null;
+  const hasBaseSha256 = value.metadata.baseProfileSha256 !== null;
+  if (hasBaseRevision !== hasBaseSha256) {
+    errors.push("recommendations baseRevision and baseProfileSha256 must both be null or both identify a base profile");
+  }
+
+  const questions = new Map([
+    ...baseQuestions(questionnaire),
+    ...moduleQuestions(questionnaire)
+  ].map((question) => [question.id, question]));
+  for (const [questionId, proposal] of Object.entries(value.proposals)) {
+    const question = questions.get(questionId);
+    if (!question) {
+      errors.push(`recommendations contains unknown question id: ${questionId}`);
+      continue;
+    }
+    if (question.recommendationPolicy.class === "manual-only") {
+      errors.push(`question ${questionId} is manual-only and cannot have a recommendation proposal`);
+      continue;
+    }
+    if (question.recommendationPolicy.class !== "evidence-proposal") {
+      errors.push(`question ${questionId} uses a fixed operator preference and cannot have a recommendation proposal`);
+      continue;
+    }
+    errors.push(...recommendationValueErrors(question, proposal.value, `question ${questionId}`));
+    if (proposal.provenance === "source-derived" && proposal.basis.sourceRefs.length === 0) {
+      errors.push(`question ${questionId} source-derived proposal requires at least one basis source reference`);
     }
   }
   return { ok: errors.length === 0, errors };
