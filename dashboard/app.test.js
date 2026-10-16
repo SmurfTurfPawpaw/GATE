@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  activateLiveDetailShortcut,
   captureCaseRenderContinuity,
   captureLiveDetailContinuity,
   caseFleetRowPresentation,
@@ -11,12 +12,14 @@ import {
   engagementScanPresentation,
   executionPresentation,
   executionRunPresentation,
+  fleetSummaryPresentation,
   observerShortcutAllowed,
   offlineAnalysisPresentation,
   offlineAnalysisRunPresentation,
   profileSetupPresentation,
   profileSetupScanPresentation,
   reconcileRefreshResults,
+  revealDisclosureAndFocus,
   restoreCaseRenderContinuity,
   restoreLiveDetailContinuity,
   toolRuntimeItemPresentation,
@@ -636,6 +639,106 @@ test("compact campaign rows distinguish unavailable runtime state from observed 
   assert.equal(idle.findingsLabel, "Unavailable");
 });
 
+test("offline telemetry is critical while stale and unknown telemetry require attention", () => {
+  const base = {
+    id: `case_${"e".repeat(16)}`,
+    displayName: "Telemetry truth",
+    status: "ready",
+    runtimeHealth: { status: "available", reason: null },
+    state: "idle",
+    counts: { queued: 0, running: 0, waiting: 0, blocked: 0, failed: 0 },
+    usage: { availability: "unavailable" },
+    workflows: { counts: { active: 0, degraded: 0 }, instances: [] },
+    execution: { queuedCount: 0, runningCount: 0, stoppingCount: 0 },
+    offlineAnalysis: { counts: { queued: 0, running: 0 } },
+    engagementScan: { availability: "not-loaded" },
+    learningCount: 0
+  };
+  const offline = caseFleetRowPresentation({ ...base, telemetry: { state: "offline", lastActivityAt: at } });
+  const stale = caseFleetRowPresentation({ ...base, telemetry: { state: "stale", lastActivityAt: at } });
+  const unknown = caseFleetRowPresentation({ ...base, telemetry: { state: "unknown", lastActivityAt: null } });
+  assert.equal(offline.attentionLabel, "Telemetry offline");
+  assert.equal(offline.attentionTone, "critical");
+  assert.equal(stale.attentionLabel, "Telemetry stale");
+  assert.equal(stale.attentionTone, "warning");
+  assert.equal(unknown.attentionLabel, "Telemetry unknown");
+  assert.equal(unknown.attentionTone, "warning");
+
+  const exactScan = { availability: "available", discovered: 1, scanned: 1, complete: true, truncated: false, omitted: 0, invalid: 0 };
+  const fleet = fleetSummaryPresentation({
+    observedAt: at,
+    cases: [{ ...base, telemetry: { state: "offline", lastActivityAt: at } }],
+    profileSetups: [],
+    caseScan: exactScan,
+    profileSetupScan: { ...exactScan, discovered: 0, scanned: 0 }
+  });
+  assert.equal(fleet.availability, "exact");
+  assert.equal(fleet.attentionLabel, "1");
+});
+
+test("fleet summary cards distinguish unavailable, lower-bound, and exact coverage", () => {
+  const initial = fleetSummaryPresentation({});
+  assert.equal(initial.availability, "unavailable");
+  assert.equal(initial.activeLabel, "—");
+  assert.equal(initial.waitingLabel, "—");
+  assert.equal(initial.attentionLabel, "—");
+  assert.equal(
+    fleetSummaryPresentation({ observedAt: at, caseScan: null, profileSetupScan: null }).availability,
+    "lower-bound"
+  );
+
+  const visibleCase = {
+    id: `case_${"f".repeat(16)}`,
+    displayName: "Visible campaign",
+    status: "ready",
+    runtimeHealth: { status: "available", reason: null },
+    state: "running",
+    counts: { queued: 0, running: 1, waiting: 0, blocked: 0, failed: 0 },
+    telemetry: { state: "live", lastActivityAt: at },
+    usage: { availability: "unavailable" },
+    workflows: { counts: { active: 0, degraded: 0 }, instances: [] },
+    execution: { queuedCount: 0, runningCount: 0, stoppingCount: 0 },
+    offlineAnalysis: { counts: { queued: 0, running: 0 } },
+    engagementScan: { availability: "not-loaded" },
+    learningCount: 0
+  };
+  const partial = fleetSummaryPresentation({
+    observedAt: at,
+    cases: [visibleCase],
+    profileSetups: [],
+    caseScan: { complete: false, truncated: true, omitted: 1, invalid: 1 },
+    profileSetupScan: { discovered: 0, scanned: 0, complete: true, truncated: false, omitted: 0, invalid: 0 }
+  });
+  assert.equal(partial.availability, "lower-bound");
+  assert.equal(partial.activeLabel, "1+");
+  assert.equal(partial.waitingLabel, "0+");
+  assert.equal(partial.attentionLabel, "0+");
+  assert.match(partial.detail, /Lower bound/u);
+
+  const unavailable = fleetSummaryPresentation({
+    observedAt: at,
+    cases: [visibleCase],
+    profileSetups: [],
+    caseScan: { availability: "unavailable", discovered: 1, scanned: 1, complete: true, truncated: false, omitted: 0, invalid: 0 },
+    profileSetupScan: { availability: "available", discovered: 0, scanned: 0, complete: true, truncated: false, omitted: 0, invalid: 0 }
+  });
+  assert.equal(unavailable.availability, "lower-bound", "an unavailable scan cannot claim an exact visible subset");
+  assert.equal(unavailable.activeLabel, "1+");
+
+  const exactScan = { availability: "available", discovered: 1, scanned: 1, complete: true, truncated: false, omitted: 0, invalid: 0 };
+  const exact = fleetSummaryPresentation({
+    observedAt: at,
+    cases: [visibleCase],
+    profileSetups: [],
+    caseScan: exactScan,
+    profileSetupScan: { ...exactScan, discovered: 0, scanned: 0 }
+  });
+  assert.equal(exact.availability, "exact");
+  assert.equal(exact.activeLabel, "1");
+  assert.equal(exact.waitingLabel, "0");
+  assert.equal(exact.attentionLabel, "0");
+});
+
 test("private profile setup rows show guided progress without inventing a target identity", () => {
   const display = profileSetupPresentation({
     id: `program_${"c".repeat(16)}`,
@@ -787,7 +890,8 @@ test("case render continuity restores focused cards and independent terminal scr
 });
 
 test("selected live activity preserves terminal scroll and focus across polling renders", () => {
-  const focusedChild = {};
+  const childFocusCalls = [];
+  const focusedChild = { focus: (options) => childFocusCalls.push(options) };
   const terminal = { scrollTop: 100, scrollLeft: 5, scrollHeight: 300, clientHeight: 200 };
   const detail = {
     dataset: { caseId: `case_${"1".repeat(16)}` },
@@ -798,24 +902,46 @@ test("selected live activity preserves terminal scroll and focus across polling 
   assert.deepEqual(snapshot, {
     caseId: detail.dataset.caseId,
     position: { top: 100, left: 5, atBottom: true },
-    focused: true
+    focusTarget: focusedChild,
+    detailFocused: false
   });
 
   const restoredTerminal = { scrollTop: 0, scrollLeft: 0, scrollHeight: 420, clientHeight: 200 };
-  const focusCalls = [];
+  const detailFocusCalls = [];
   const restored = {
     dataset: { ...detail.dataset },
     querySelector: () => restoredTerminal,
-    focus: (options) => focusCalls.push(options)
+    contains: (candidate) => candidate === focusedChild,
+    focus: (options) => detailFocusCalls.push(options)
   };
   restoreLiveDetailContinuity(restored, snapshot);
   assert.equal(restoredTerminal.scrollTop, 220);
   assert.equal(restoredTerminal.scrollLeft, 5);
-  assert.deepEqual(focusCalls, [{ preventScroll: true }]);
+  assert.deepEqual(childFocusCalls, [{ preventScroll: true }], "polling keeps focus on the persistent collapse control");
+  assert.deepEqual(detailFocusCalls, [], "polling must not transfer descendant focus to the detail container");
 
   restoredTerminal.scrollTop = 17;
   restoreLiveDetailContinuity(restored, { ...snapshot, caseId: `case_${"2".repeat(16)}` });
   assert.equal(restoredTerminal.scrollTop, 17, "a different selected case must not receive another terminal's scroll position");
+});
+
+test("a zero-overflow terminal remains bottom-anchored when polling adds overflow", () => {
+  const terminal = { scrollTop: 0, scrollLeft: 0, scrollHeight: 200, clientHeight: 200 };
+  const detail = {
+    dataset: { caseId: `case_${"3".repeat(16)}` },
+    querySelector: () => terminal,
+    contains: () => false
+  };
+  const snapshot = captureLiveDetailContinuity(detail, null);
+  assert.equal(snapshot.position.atBottom, true);
+
+  const grown = { scrollTop: 0, scrollLeft: 0, scrollHeight: 340, clientHeight: 200 };
+  restoreLiveDetailContinuity({
+    dataset: { ...detail.dataset },
+    querySelector: () => grown,
+    contains: () => false
+  }, snapshot);
+  assert.equal(grown.scrollTop, 140);
 });
 
 test("observer shortcuts ignore browser modifiers and an open shortcuts dialog", () => {
@@ -827,6 +953,50 @@ test("observer shortcuts ignore browser modifiers and an open shortcuts dialog",
   assert.equal(observerShortcutAllowed({ key: "r", isComposing: true }), false);
   assert.equal(observerShortcutAllowed({ key: "?", shiftKey: true }), true);
   assert.equal(observerShortcutAllowed({ key: "r" }, true), false);
+});
+
+test("shortcut 1 reopens and focuses the selected live detail", () => {
+  const order = [];
+  let collapsed = true;
+  const detail = {
+    closest: () => null,
+    focus: (options) => order.push(["focus", options]),
+    scrollIntoView: (options) => order.push(["scroll", options])
+  };
+  const activated = activateLiveDetailShortcut({
+    selectedId: "case_selected",
+    availableIds: ["case_selected"],
+    setCollapsed(value) { collapsed = value; order.push(["collapse", value]); },
+    render() { order.push(["render", collapsed]); },
+    detail,
+    announce() { order.push(["announce"]); }
+  });
+  assert.equal(activated, true);
+  assert.equal(collapsed, false);
+  assert.deepEqual(order, [
+    ["collapse", false],
+    ["render", false],
+    ["focus", { preventScroll: true }],
+    ["scroll", { block: "nearest", inline: "nearest" }],
+    ["announce"]
+  ]);
+  assert.equal(activateLiveDetailShortcut({ selectedId: null, availableIds: [] }), false);
+});
+
+test("shortcut 2 opens System health and focuses and scrolls its summary", () => {
+  const disclosure = { open: false };
+  const calls = [];
+  const summary = {
+    closest: (selector) => selector === "details" ? disclosure : null,
+    focus: (options) => calls.push(["focus", options]),
+    scrollIntoView: (options) => calls.push(["scroll", options])
+  };
+  assert.equal(revealDisclosureAndFocus(summary), true);
+  assert.equal(disclosure.open, true);
+  assert.deepEqual(calls, [
+    ["focus", { preventScroll: true }],
+    ["scroll", { block: "nearest", inline: "nearest" }]
+  ]);
 });
 
 test("token scope labels distinguish host sessions from base records", () => {

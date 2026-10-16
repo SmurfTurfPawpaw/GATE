@@ -57,12 +57,12 @@
       <article class="metric-card accent-amber">
         <span class="metric-label">Waiting</span>
         <strong class="metric-value" id="metric-waiting">—</strong>
-        <span class="metric-detail">Operator input or queued decision</span>
+        <span class="metric-detail" id="metric-waiting-detail">Operator input or queued decision</span>
       </article>
       <article class="metric-card accent-red">
         <span class="metric-label">Needs attention</span>
         <strong class="metric-value" id="metric-attention">—</strong>
-        <span class="metric-detail">Projected case signals</span>
+        <span class="metric-detail" id="metric-attention-detail">Projected case signals</span>
       </article>
       <article class="metric-card accent-green">
         <span class="metric-label">Telemetry</span>
@@ -123,7 +123,7 @@
     </main>
 
     <details class="system-health" id="system-health">
-      <summary>
+      <summary id="system-health-summary">
         <span>
           <strong>System health</strong>
           <small>Base runtime, offline analysis, managed tools, shared activity, tokens, and learning</small>

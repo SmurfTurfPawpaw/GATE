@@ -41,6 +41,7 @@ const view = {
   caseDetailBody: select("#case-detail-body"),
   caseDetailClose: select("#case-detail-close"),
   systemHealth: select("#system-health"),
+  systemHealthSummary: select("#system-health-summary"),
   executionLane: select("#execution-lane"),
   executionMode: select("#execution-mode"),
   executionRunning: select("#execution-running"),
@@ -100,7 +101,9 @@ const view = {
   metricRunning: select("#metric-running"),
   metricRunningDetail: select("#metric-running-detail"),
   metricWaiting: select("#metric-waiting"),
+  metricWaitingDetail: select("#metric-waiting-detail"),
   metricAttention: select("#metric-attention"),
+  metricAttentionDetail: select("#metric-attention-detail"),
   metricTokens: select("#metric-tokens"),
   metricTokensDetail: select("#metric-tokens-detail"),
   metricContext: select("#metric-context"),
@@ -352,6 +355,10 @@ export function caseFleetRowPresentation(caseView = {}, now = Date.now()) {
   if (caseView.status === "invalid") attention.push("Invalid case");
   else if (caseView.status === "stale") attention.push("Stale binding");
   if (!runtimeAvailable) attention.push("Runtime unavailable");
+  const telemetryState = caseView.telemetry?.state || "unknown";
+  if (telemetryState === "offline") attention.push("Telemetry offline");
+  else if (telemetryState === "stale") attention.push("Telemetry stale");
+  else if (telemetryState === "unknown") attention.push("Telemetry unknown");
   if (caseView.state === "blocked") attention.push("Blocked");
   else if (caseView.state === "failed") attention.push("Failed");
   if (Number(caseView.counts?.blocked || 0) > 0) attention.push(countedLabel(caseView.counts.blocked, "blocked item"));
@@ -365,7 +372,6 @@ export function caseFleetRowPresentation(caseView = {}, now = Date.now()) {
   }
 
   const uniqueAttention = [...new Set(attention)];
-  const telemetryState = caseView.telemetry?.state || "unknown";
   const signalAt = caseView.telemetry?.lastActivityAt || null;
   const usage = caseView.usage || {};
   const learningCount = Number.isFinite(caseView.learningCount) ? caseView.learningCount : null;
@@ -381,7 +387,7 @@ export function caseFleetRowPresentation(caseView = {}, now = Date.now()) {
     lastSignalLabel: `${readableCapability(telemetryState)} · ${relativeTimeAt(signalAt, now)}`,
     activeWorkLabel,
     attentionLabel: uniqueAttention.length ? uniqueAttention.join(" · ") : "None observed",
-    attentionTone: uniqueAttention.some((item) => /invalid|unavailable|blocked|failed/i.test(item))
+    attentionTone: uniqueAttention.some((item) => /invalid|unavailable|offline|blocked|failed/i.test(item))
       ? "critical"
       : uniqueAttention.length
         ? "warning"
@@ -469,6 +475,51 @@ function fleetEntries(statusView = {}) {
     ...cases.map((value) => ({ id: value.id, kind: "case", value })),
     ...setups.map((value) => ({ id: value.id, kind: "profile-setup", value }))
   ];
+}
+
+function fleetScanIsExact(scan = {}) {
+  if (!scan || typeof scan !== "object" || Array.isArray(scan)) return false;
+  const sourceAvailable = !Object.hasOwn(scan, "availability") || scan.availability === "available";
+  return sourceAvailable && scan.complete === true && scan.truncated === false && scan.discoveredAtLeast !== true &&
+    scan.omittedAtLeast !== true && Number.isFinite(scan.discovered) && Number.isFinite(scan.scanned) &&
+    scan.scanned >= scan.discovered && Number.isFinite(scan.omitted) && scan.omitted === 0 &&
+    Number.isFinite(scan.invalid) && scan.invalid === 0;
+}
+
+/** Summary cards must describe fleet coverage, not present a scanned subset as exact. */
+export function fleetSummaryPresentation(statusView = {}) {
+  const cases = Array.isArray(statusView.cases) ? statusView.cases : [];
+  const setups = Array.isArray(statusView.profileSetups) ? statusView.profileSetups : [];
+  const caseRows = cases.map((caseView) => ({
+    row: caseFleetRowPresentation(caseView),
+    live: casePresentation(caseView, statusView.operator)
+  }));
+  const setupRows = setups.map((setup) => profileSetupPresentation(setup));
+  const counts = {
+    active: caseRows.filter(({ live }) => live.active).length,
+    waiting: caseRows.filter(({ row }) => row.state === "waiting").length +
+      setupRows.filter((row) => row.readiness !== "ready" && row.stage !== "superseded").length,
+    attention: caseRows.filter(({ row }) => row.attentionTone !== "clear").length +
+      setupRows.filter((row) => row.attentionTone !== "clear").length,
+    visible: cases.length + setups.length
+  };
+  const observed = typeof statusView.observedAt === "string" && Number.isFinite(Date.parse(statusView.observedAt));
+  const exact = observed && fleetScanIsExact(statusView.caseScan) && fleetScanIsExact(statusView.profileSetupScan);
+  const availability = !observed ? "unavailable" : exact ? "exact" : "lower-bound";
+  const label = (value) => availability === "unavailable" ? "—" : availability === "lower-bound" ? `${value}+` : String(value);
+  const detail = availability === "unavailable"
+    ? "Fleet status unavailable"
+    : availability === "lower-bound"
+      ? `Lower bound from ${counts.visible} visible campaign${counts.visible === 1 ? "" : "s"}`
+      : `${counts.visible} campaign${counts.visible === 1 ? "" : "s"} observed · ${setups.length} in setup`;
+  return {
+    availability,
+    counts,
+    activeLabel: label(counts.active),
+    waitingLabel: label(counts.waiting),
+    attentionLabel: label(counts.attention),
+    detail
+  };
 }
 
 export function usageScopeLabel(usage = {}) {
@@ -631,7 +682,7 @@ export function captureCaseRenderContinuity(caseGrid, activeElement) {
       scrollPositions.set(caseId, {
         top: Number.isFinite(terminal.scrollTop) ? Math.max(0, terminal.scrollTop) : 0,
         left: Number.isFinite(terminal.scrollLeft) ? Math.max(0, terminal.scrollLeft) : 0,
-        atBottom: maximumTop !== null && maximumTop > 0 && terminal.scrollTop >= maximumTop - 1
+        atBottom: maximumTop !== null && terminal.scrollTop >= maximumTop - 1
       });
     }
     if (card === activeElement || card.contains?.(activeElement)) focusedCaseId = caseId;
@@ -1084,18 +1135,19 @@ function applyCaseSelection({ focus = false } = {}) {
 export function captureLiveDetailContinuity(detail, activeElement) {
   const caseId = detail?.dataset?.caseId || null;
   const terminal = detail?.querySelector?.(".case-terminal") || null;
-  if (!caseId || !terminal) return { caseId, position: null, focused: false };
-  const maximumTop = Number.isFinite(terminal.scrollHeight) && Number.isFinite(terminal.clientHeight)
+  const maximumTop = terminal && Number.isFinite(terminal.scrollHeight) && Number.isFinite(terminal.clientHeight)
     ? Math.max(0, terminal.scrollHeight - terminal.clientHeight)
     : null;
+  const focusWithin = detail === activeElement || detail?.contains?.(activeElement) === true;
   return {
     caseId,
-    position: {
+    position: caseId && terminal ? {
       top: Number.isFinite(terminal.scrollTop) ? Math.max(0, terminal.scrollTop) : 0,
       left: Number.isFinite(terminal.scrollLeft) ? Math.max(0, terminal.scrollLeft) : 0,
-      atBottom: maximumTop !== null && maximumTop > 0 && terminal.scrollTop >= maximumTop - 1
-    },
-    focused: detail === activeElement || detail.contains?.(activeElement) === true
+      atBottom: maximumTop !== null && terminal.scrollTop >= maximumTop - 1
+    } : null,
+    focusTarget: focusWithin && activeElement !== detail ? activeElement : null,
+    detailFocused: focusWithin && activeElement === detail
   };
 }
 
@@ -1109,11 +1161,15 @@ export function restoreLiveDetailContinuity(detail, snapshot = {}) {
       : position.top;
     terminal.scrollLeft = position.left;
   }
-  if (snapshot.focused && detail.focus) {
+  const persistentTarget = snapshot.focusTarget && detail.contains?.(snapshot.focusTarget) === true
+    ? snapshot.focusTarget
+    : null;
+  const focusTarget = persistentTarget || (snapshot.detailFocused ? detail : null);
+  if (focusTarget?.focus) {
     try {
-      detail.focus({ preventScroll: true });
+      focusTarget.focus({ preventScroll: true });
     } catch {
-      detail.focus();
+      focusTarget.focus();
     }
   }
 }
@@ -1385,7 +1441,8 @@ function renderCases() {
   restoreLiveDetailContinuity(view.caseDetail, {
     caseId: state.selectedCaseId,
     position: state.caseDetailScrollPositions.get(state.selectedCaseId) || null,
-    focused: detailContinuity.focused && detailContinuity.caseId === state.selectedCaseId
+    focusTarget: detailContinuity.caseId === state.selectedCaseId ? detailContinuity.focusTarget : null,
+    detailFocused: detailContinuity.caseId === state.selectedCaseId && detailContinuity.detailFocused
   });
   restoreCaseRenderContinuity(view.caseGrid, continuity);
 }
@@ -1710,25 +1767,16 @@ function renderConnection() {
 }
 
 function renderMetrics() {
-  const cases = Array.isArray(state.status.cases) ? state.status.cases : [];
-  const setups = Array.isArray(state.status.profileSetups) ? state.status.profileSetups : [];
-  const rows = cases.map((caseView) => ({
-    row: caseFleetRowPresentation(caseView),
-    live: casePresentation(caseView, state.status.operator)
-  }));
-  const setupRows = setups.map((setup) => profileSetupPresentation(setup));
-  const active = rows.filter(({ live }) => live.active).length;
-  const waiting = rows.filter(({ row }) => row.state === "waiting").length +
-    setupRows.filter((row) => row.readiness !== "ready" && row.stage !== "superseded").length;
-  const attention = rows.filter(({ row }) => row.attentionTone !== "clear").length +
-    setupRows.filter((row) => row.attentionTone !== "clear").length;
-  setText(view.metricRunning, String(active));
-  setText(
-    view.metricRunningDetail,
-    `${cases.length + setups.length} campaign${cases.length + setups.length === 1 ? "" : "s"} observed · ${setups.length} in setup`
-  );
-  setText(view.metricWaiting, String(waiting));
-  setText(view.metricAttention, String(attention));
+  const summary = fleetSummaryPresentation(state.status);
+  setText(view.metricRunning, summary.activeLabel);
+  setText(view.metricRunningDetail, summary.detail);
+  setText(view.metricWaiting, summary.waitingLabel);
+  setText(view.metricWaitingDetail, summary.detail);
+  setText(view.metricAttention, summary.attentionLabel);
+  setText(view.metricAttentionDetail, summary.detail);
+  for (const node of [view.metricRunning, view.metricWaiting, view.metricAttention]) {
+    node.dataset.availability = summary.availability;
+  }
   renderUsage();
   renderConnection();
 }
@@ -1895,11 +1943,32 @@ function cycleCaseFocus(direction) {
   setText(view.screenReaderStatus, `Opened campaign detail for ${label}.`);
 }
 
-function revealAndFocus(selector) {
-  const target = document.querySelector(selector);
+export function revealDisclosureAndFocus(target) {
   const disclosure = target?.closest?.("details");
   if (disclosure) disclosure.open = true;
-  target?.focus();
+  if (target?.focus) {
+    try {
+      target.focus({ preventScroll: true });
+    } catch {
+      target.focus();
+    }
+  }
+  target?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  return Boolean(target);
+}
+
+function revealAndFocus(selector) {
+  return revealDisclosureAndFocus(document.querySelector(selector));
+}
+
+export function activateLiveDetailShortcut(options = {}) {
+  const availableIds = Array.isArray(options.availableIds) ? options.availableIds : [];
+  if (!options.selectedId || !availableIds.includes(options.selectedId)) return false;
+  options.setCollapsed?.(false);
+  options.render?.();
+  revealDisclosureAndFocus(options.detail);
+  options.announce?.();
+  return true;
 }
 
 function handleKeyboard(event) {
@@ -1910,14 +1979,30 @@ function handleKeyboard(event) {
 
   const focusTargets = {
     "0": "#case-panel",
-    "1": "#case-detail",
-    "2": "#system-health",
+    "2": "#system-health-summary",
     "3": "#execution-panel",
     "4": "#telemetry-panel",
     "5": "#learning-panel",
     "6": "#offline-analysis-panel",
     "7": "#tool-runtime-panel"
   };
+  if (event.key === "1") {
+    event.preventDefault();
+    const entries = fleetEntries(state.status);
+    const opened = activateLiveDetailShortcut({
+      selectedId: state.selectedCaseId,
+      availableIds: entries.map((entry) => entry.id),
+      setCollapsed(value) { state.caseDetailCollapsed = value; },
+      render: renderCases,
+      detail: view.caseDetail,
+      announce() { setText(view.screenReaderStatus, "Selected campaign detail opened."); }
+    });
+    if (!opened) {
+      view.casePanel?.focus();
+      setText(view.screenReaderStatus, "No campaign detail is available.");
+    }
+    return;
+  }
   if (focusTargets[event.key]) {
     event.preventDefault();
     revealAndFocus(focusTargets[event.key]);
