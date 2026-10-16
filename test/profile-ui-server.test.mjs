@@ -105,6 +105,11 @@ test("profile UI serves a no-telemetry shell with strict browser policy", async 
   assert.doesNotMatch(html, new RegExp(privateCanary, "u"));
   assert.doesNotMatch(html, /private-reference-canary/u);
   assert.doesNotMatch(html, /session=|csrf=/u);
+
+  const accessibilityModule = await fetch(`${started.origin}/profile-ui/accessibility.js`);
+  assert.equal(accessibilityModule.status, 200);
+  assert.match(accessibilityModule.headers.get("content-type"), /text\/javascript/u);
+  assert.match(await accessibilityModule.text(), /bindFieldLabel/u);
 });
 
 test("profile state requires its unguessable in-memory session", async (t) => {

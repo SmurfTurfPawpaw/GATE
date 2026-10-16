@@ -16,6 +16,7 @@ const STATIC_FILES = new Map([
   ["/index.html", ["index.html", "text/html; charset=utf-8"]],
   ["/profile-ui/styles.css", ["styles.css", "text/css; charset=utf-8"]],
   ["/profile-ui/app.js", ["app.js", "text/javascript; charset=utf-8"]],
+  ["/profile-ui/accessibility.js", ["accessibility.js", "text/javascript; charset=utf-8"]],
   ["/profile-ui/time.js", ["time.js", "text/javascript; charset=utf-8"]]
 ]);
 const CSP = [

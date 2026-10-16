@@ -4,10 +4,13 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { bindFieldLabel } from "../profile-ui/accessibility.js";
+
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const html = fs.readFileSync(path.join(repo, "profile-ui", "index.html"), "utf8");
 const css = fs.readFileSync(path.join(repo, "profile-ui", "styles.css"), "utf8");
 const app = fs.readFileSync(path.join(repo, "profile-ui", "app.js"), "utf8");
+const accessibility = fs.readFileSync(path.join(repo, "profile-ui", "accessibility.js"), "utf8");
 const time = fs.readFileSync(path.join(repo, "profile-ui", "time.js"), "utf8");
 
 test("profile UI is an external-asset-only local application", () => {
@@ -15,8 +18,26 @@ test("profile UI is an external-asset-only local application", () => {
   assert.match(html, /href="\/profile-ui\/styles\.css"/u);
   assert.doesNotMatch(html, /<script(?![^>]*src=)/u);
   assert.doesNotMatch(html, /style=/u);
-  assert.doesNotMatch(`${html}\n${css}\n${app}\n${time}`, /https?:\/\//u);
+  assert.doesNotMatch(`${html}\n${css}\n${app}\n${accessibility}\n${time}`, /https?:\/\//u);
   assert.doesNotMatch(`${html}\n${css}\n${app}`, /telemetry|analytics|segment\.com|sentry|googleapis/u);
+});
+
+test("field labels bind to the inner input of an optional scalar control", () => {
+  const attributes = new Map();
+  const label = { setAttribute: (name, value) => attributes.set(name, value) };
+  const innerInput = { tagName: "INPUT", id: "" };
+  const optionalWrapper = {
+    tagName: "DIV",
+    querySelector(selector) {
+      assert.equal(selector, '[data-field-control="primary"]');
+      return innerInput;
+    }
+  };
+
+  const bound = bindFieldLabel(label, optionalWrapper, () => "optional-scalar");
+  assert.equal(bound, innerInput);
+  assert.equal(innerInput.id, "field-optional-scalar");
+  assert.equal(attributes.get("for"), innerInput.id);
 });
 
 test("profile UI uses safe DOM construction without HTML injection sinks", () => {

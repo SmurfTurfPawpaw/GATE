@@ -1,4 +1,5 @@
 import { isoFromUtcInput, utcInputFromIso } from "/profile-ui/time.js";
+import { bindFieldLabel } from "/profile-ui/accessibility.js";
 
 const $ = (selector) => document.querySelector(selector);
 
@@ -266,9 +267,9 @@ function field(label, input, options = {}) {
     if (!legend.parentElement) input.prepend(legend);
     wrapper.append(input);
   } else {
-    const id = input.id || `field-${crypto.randomUUID()}`;
-    input.id = id;
-    wrapper.append(node("label", { text: label, attrs: { for: id } }), input);
+    const labelNode = node("label", { text: label });
+    if (!bindFieldLabel(labelNode, input)) throw new Error("field requires a labelable control");
+    wrapper.append(labelNode, input);
   }
   if (options.help) wrapper.append(node("p", { className: "field-help", text: options.help }));
   return wrapper;
@@ -309,6 +310,7 @@ function choiceControl(name, choices, selected, multiple = false, legend = "Avai
 function optionalControl(question, input, reader) {
   if (!question.allowNull) return { root: input, read: reader };
   const wrapper = node("div");
+  input.dataset.fieldControl = "primary";
   const nullId = `null-${question.id}`;
   const toggle = node("input", { attrs: { type: "checkbox", id: nullId } });
   toggle.checked = question.value === null;
