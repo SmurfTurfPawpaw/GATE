@@ -480,13 +480,24 @@ function fleetEntries(statusView = {}) {
   ];
 }
 
-function fleetScanIsExact(scan = {}) {
+function scanCoverageIsExact(scan = {}) {
   if (!scan || typeof scan !== "object" || Array.isArray(scan)) return false;
   const sourceAvailable = !Object.hasOwn(scan, "availability") || scan.availability === "available";
   return sourceAvailable && scan.complete === true && scan.truncated === false && scan.discoveredAtLeast !== true &&
     scan.omittedAtLeast !== true && Number.isFinite(scan.discovered) && Number.isFinite(scan.scanned) &&
-    scan.scanned >= scan.discovered && Number.isFinite(scan.omitted) && scan.omitted === 0 &&
+    scan.scanned === scan.discovered && Number.isFinite(scan.omitted) && scan.omitted === 0 &&
     Number.isFinite(scan.invalid) && scan.invalid === 0;
+}
+
+function caseScanIsExact(scan, visibleCases) {
+  return scanCoverageIsExact(scan) && scan.scanned === visibleCases;
+}
+
+function profileSetupScanIsExact(scan, visibleSetups, visibleCases) {
+  if (!scanCoverageIsExact(scan) || !Number.isFinite(scan.visible) ||
+      !Number.isFinite(scan.representedByCases)) return false;
+  return scan.visible === visibleSetups && scan.representedByCases <= visibleCases &&
+    scan.scanned === scan.visible + scan.representedByCases;
 }
 
 /** Summary cards must describe fleet coverage, not present a scanned subset as exact. */
@@ -507,7 +518,8 @@ export function fleetSummaryPresentation(statusView = {}) {
     visible: cases.length + setups.length
   };
   const observed = typeof statusView.observedAt === "string" && Number.isFinite(Date.parse(statusView.observedAt));
-  const exact = observed && fleetScanIsExact(statusView.caseScan) && fleetScanIsExact(statusView.profileSetupScan);
+  const exact = observed && caseScanIsExact(statusView.caseScan, cases.length) &&
+    profileSetupScanIsExact(statusView.profileSetupScan, setups.length, cases.length);
   const availability = !observed ? "unavailable" : exact ? "exact" : "lower-bound";
   const label = (value) => availability === "unavailable" ? "—" : availability === "lower-bound" ? `${value}+` : String(value);
   const detail = availability === "unavailable"

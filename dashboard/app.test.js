@@ -671,7 +671,7 @@ test("offline telemetry is critical while stale and unknown telemetry require at
     cases: [{ ...base, telemetry: { state: "offline", lastActivityAt: at } }],
     profileSetups: [],
     caseScan: exactScan,
-    profileSetupScan: { ...exactScan, discovered: 0, scanned: 0 }
+    profileSetupScan: { ...exactScan, discovered: 0, scanned: 0, visible: 0, representedByCases: 0 }
   });
   assert.equal(fleet.availability, "exact");
   assert.equal(fleet.attentionLabel, "1");
@@ -732,7 +732,7 @@ test("fleet summary cards distinguish unavailable, lower-bound, and exact covera
     cases: [visibleCase],
     profileSetups: [],
     caseScan: exactScan,
-    profileSetupScan: { ...exactScan, discovered: 0, scanned: 0 }
+    profileSetupScan: { ...exactScan, discovered: 0, scanned: 0, visible: 0, representedByCases: 0 }
   });
   assert.equal(exact.availability, "exact");
   assert.equal(exact.activeLabel, "1");
@@ -772,6 +772,79 @@ test("sanitized unavailable scan states cannot become exact fleet zeroes", () =>
   assert.equal(profileUnavailable.profileSetupScan.complete, false);
   assert.equal(fleetSummaryPresentation(profileUnavailable).availability, "lower-bound");
   assert.equal(fleetSummaryPresentation(profileUnavailable).attentionLabel, "0+");
+});
+
+test("sanitized contradictory available scan counts remain lower bounds", () => {
+  const exactZero = {
+    availability: "available",
+    discovered: 0,
+    scanned: 0,
+    omitted: 0,
+    invalid: 0,
+    complete: true,
+    truncated: false
+  };
+  const contradictoryCaseScan = sanitizeStatusPayload({
+    at,
+    cases: [],
+    profileSetups: [],
+    caseScan: { ...exactZero, discovered: 0, scanned: 1 },
+    profileSetupScan: { ...exactZero, visible: 0, representedByCases: 0 }
+  });
+  assert.equal(contradictoryCaseScan.caseScan.availability, "available");
+  assert.equal(contradictoryCaseScan.caseScan.scanned, 1);
+  assert.equal(contradictoryCaseScan.caseScan.discovered, 0);
+  assert.equal(fleetSummaryPresentation(contradictoryCaseScan).availability, "lower-bound");
+
+  const contradictoryProfileScan = sanitizeStatusPayload({
+    at,
+    cases: [],
+    profileSetups: [],
+    caseScan: exactZero,
+    profileSetupScan: {
+      ...exactZero,
+      discovered: 0,
+      scanned: 1,
+      visible: 0,
+      representedByCases: 0
+    }
+  });
+  assert.equal(contradictoryProfileScan.profileSetupScan.availability, "available");
+  assert.equal(contradictoryProfileScan.profileSetupScan.scanned, 1);
+  assert.equal(contradictoryProfileScan.profileSetupScan.discovered, 0);
+  assert.equal(fleetSummaryPresentation(contradictoryProfileScan).availability, "lower-bound");
+
+  const missingRows = sanitizeStatusPayload({
+    at,
+    cases: [],
+    profileSetups: [],
+    caseScan: { ...exactZero, discovered: 1, scanned: 1 },
+    profileSetupScan: { ...exactZero, visible: 0, representedByCases: 0 }
+  });
+  assert.equal(
+    fleetSummaryPresentation(missingRows).availability,
+    "lower-bound",
+    "exact scan counters cannot make an incomplete row projection exact"
+  );
+
+  const missingProfileRows = sanitizeStatusPayload({
+    at,
+    cases: [],
+    profileSetups: [],
+    caseScan: exactZero,
+    profileSetupScan: {
+      ...exactZero,
+      discovered: 1,
+      scanned: 1,
+      visible: 1,
+      representedByCases: 0
+    }
+  });
+  assert.equal(
+    fleetSummaryPresentation(missingProfileRows).availability,
+    "lower-bound",
+    "profile scan counters must agree with the sanitized setup rows"
+  );
 });
 
 test("private profile setup rows show guided progress without inventing a target identity", () => {
