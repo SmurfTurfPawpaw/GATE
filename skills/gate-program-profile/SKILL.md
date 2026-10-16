@@ -90,7 +90,7 @@ After the non-attestation answers are complete:
 
 ## Fallbacks
 
-If native choice controls are unavailable, have the operator or reviewed local controller run the terminal wizard with `bounty profile create` or `resume` outside model context. Its enum, boolean, and multi-enum prompts accept numbered text selections; the terminal remains a typed interface and is not clickable. It is also the preferred capture path for exact private values because they remain outside model context. Structured terminal fields may still require typed JSON; a local-only interface may prepare and apply the private envelope without exposing it to the model. Return only manually sanitized categorical outcomes to the model.
+If native choice controls are unavailable, have the operator or reviewed local controller run the terminal wizard with `bounty profile create` or `resume` outside model context. Its enum, boolean, and multi-enum prompts accept numbered text selections; the terminal remains a typed interface and is not clickable. At contact questions, its recommended navigation action opens the existing guided loopback form for the same saved profile directly at the active contact question; the operator can instead save and stop, defer the question, or explicitly choose advanced JSON. This navigation does not create an answer or weaken readiness checks. Exact private values remain outside model context. Return only manually sanitized categorical outcomes to the model.
 
 For automation, CI, or another headless session, have local automation invoke `--answers PRIVATE_ANSWERS_FILE` outside model context and retain its raw output locally. This is the machine-facing fallback, not a request for the operator to compose JSON or for the model to read the completed envelope.
 

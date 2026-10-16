@@ -175,7 +175,16 @@ export async function startProfileWizardServer(options = {}) {
   });
   // Validate the selected profile before opening a listener. A process owns
   // exactly this profile for its lifetime.
-  controller.state();
+  const initialState = controller.state();
+  const applicableQuestionIds = new Set(initialState.sections
+    .flatMap((section) => section.questions)
+    .filter((question) => question.applicable)
+    .map((question) => question.id));
+  const initialQuestionId = options.initialQuestionId ?? null;
+  if (initialQuestionId !== null &&
+      (typeof initialQuestionId !== "string" || !applicableQuestionIds.has(initialQuestionId))) {
+    throw new Error("profile wizard initial question id must name an applicable questionnaire question");
+  }
   const sessionToken = token();
   const csrfToken = token();
   let requestCount = 0;
@@ -215,7 +224,13 @@ export async function startProfileWizardServer(options = {}) {
       }
       if (req.method === "GET" && pathname === "/api/state") {
         try {
-          json(res, 200, { ok: true, state: controller.state() });
+          json(res, 200, {
+            ok: true,
+            state: {
+              ...controller.state(),
+              ...(initialQuestionId ? { initialQuestionId } : {})
+            }
+          });
         } catch (error) {
           const failure = publicError(error);
           json(res, failure.status, failure.body);
@@ -282,6 +297,7 @@ export async function startProfileWizardServer(options = {}) {
     url,
     browserOpened,
     profileId: controller.profileId,
+    ...(initialQuestionId ? { initialQuestionId } : {}),
     close: () => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
   });
 }

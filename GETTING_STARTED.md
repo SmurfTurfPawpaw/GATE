@@ -104,6 +104,8 @@ If you prefer the numbered terminal fallback, or want to resume without the brow
 ./bin/gate.mjs bounty profile verify example-program --json
 ```
 
+For contact entry choices, deferral, and recovery from an older running terminal, see the [browser wizard and terminal fallback](docs/bug-bounty-program-profile.md#browser-wizard-and-terminal-fallback).
+
 Follow the [Program Profile intake](docs/bug-bounty-program-profile.md) for the browser form, preferred Codex-native choice skill, terminal fallback, and headless answer and recommendation envelopes. The profile must be current and ready before case creation.
 
 Create an immutable case for that exact profile. Add `--project my-project` only when a registered managed project is already available and this case needs its provenance for offline analysis:

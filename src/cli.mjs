@@ -449,7 +449,7 @@ function resolveChoiceToken(raw, choices) {
   return token;
 }
 
-function questionChoicePrompt(question, recommendation = programProfileRecommendation(question.id)) {
+function questionChoicePrompt(question, recommendation = programProfileRecommendation(question.id), options = {}) {
   const choices = selectableQuestionChoices(question);
   const lines = [];
   if (choices.length) {
@@ -458,11 +458,25 @@ function questionChoicePrompt(question, recommendation = programProfileRecommend
       ? "Choose one or more by number or value; separate selections with commas."
       : "Choose one by number or value.");
   }
+  if (question.type === "contact-list") {
+    lines.push(
+      "  1. Open guided local form (Recommended next step)",
+      "  2. Save and stop for now",
+      "  A. Advanced JSON"
+    );
+    if (options.advanced === true) {
+      lines.push("Advanced JSON entry is active for this question.");
+    } else {
+      lines.push("Press Enter to open the guided form, or choose an option.");
+    }
+  }
   if (recommendation.available) {
     const claimState = new Set(["observed", "inferred"]).has(recommendation.basis?.claimState)
       ? ` [evidence: ${recommendation.basis.claimState}]`
       : "";
-    lines.push(`  R. Use recommended${claimState} — ${recommendation.summary}`);
+    lines.push(question.type === "contact-list"
+      ? `  R. Apply reviewed answer${claimState} — ${recommendation.summary}`
+      : `  R. Use recommended${claimState} — ${recommendation.summary}`);
   } else if (recommendation.reason === "manual-only") {
     lines.push("Recommendation unavailable — direct local operator review is required.");
   } else {
@@ -887,10 +901,14 @@ function applicableQuestionProgress(questions, profile, index) {
   return { position: position === -1 ? 0 : position + 1, total: applicable.length };
 }
 
-function questionnaireResult(status, outcome) {
+function questionnaireResult(status, outcome, options = {}) {
   const blockerCount = Array.isArray(status.blockers)
     ? status.blockers.length
     : status.profile?.blockerCount || 0;
+  const initialQuestionId = outcome === "guided-ui" &&
+    PROGRAM_PROFILE_QUESTIONS.some((question) => question.id === options.initialQuestionId)
+    ? options.initialQuestionId
+    : null;
   return {
     saved: true,
     outcome,
@@ -902,9 +920,12 @@ function questionnaireResult(status, outcome) {
     warningCount: Array.isArray(status.warnings) ? status.warnings.length : 0,
     profileRef: status.profile?.profileRef || null,
     profileSha256: status.profileSha256 || status.profile?.profileSha256 || null,
-    nextCommand: status.ready
-      ? `./bin/gate.mjs bounty profile verify ${status.id}`
-      : `./bin/gate.mjs bounty profile resume ${status.id}`
+    ...(initialQuestionId ? { initialQuestionId } : {}),
+    nextCommand: outcome === "guided-ui"
+      ? `./bin/gate.mjs bounty profile ui ${status.id} --open`
+      : status.ready
+        ? `./bin/gate.mjs bounty profile verify ${status.id}`
+        : `./bin/gate.mjs bounty profile resume ${status.id}`
   };
 }
 
@@ -961,8 +982,10 @@ async function runProgramProfileQuestionnaire(id, mode, options = {}) {
   }
   const terminal = createInterface({ input, output: terminalOutput, terminal: options.terminal ?? true });
   const notices = new Set();
+  const advancedQuestions = new Set();
+  let deferred = false;
   terminalOutput.write(
-    "Commands: back, edit QUESTION_ID, why, format, recommended, apply recommended, save, quit. " +
+    "Commands: back, skip, edit QUESTION_ID, why, format, recommended, apply recommended, save, quit. " +
     "Choice questions accept numbers; format shows advanced typed shapes.\n"
   );
 
@@ -984,7 +1007,9 @@ async function runProgramProfileQuestionnaire(id, mode, options = {}) {
       const activeRecommendations = recommendations?.metadata?.baseRevision === profile.metadata.revision &&
         recommendations?.metadata?.baseProfileSha256 === resumed.summary.profileSha256 ? recommendations : null;
       const recommendation = programProfileRecommendation(question.id, { profile, recommendations: activeRecommendations });
-      const choiceHint = questionChoicePrompt(question, recommendation);
+      const choiceHint = questionChoicePrompt(question, recommendation, {
+        advanced: advancedQuestions.has(question.id)
+      });
       const requiredHint = question.required ? " [required]" : "";
       const multilineHint = question.type === "multiline" ? " [multiline; finish with . on its own line]" : "";
       const progress = applicableQuestionProgress(questions, profile, index);
@@ -1002,17 +1027,23 @@ async function runProgramProfileQuestionnaire(id, mode, options = {}) {
         );
         notices.add(question.id);
       }
-      if (!notices.has(question.id) && question.type === "contact-list") {
-        terminalOutput.write(
-          `For normal field-by-field contact entry, quit and run ./bin/gate.mjs bounty profile ui ${id}. ` +
-          "The terminal prompt remains a typed JSON fallback.\n"
-        );
-        notices.add(question.id);
-      }
       const raw = await terminal.question(
         `\n${section.title} · ${progress.position}/${progress.total} applicable · ${question.id}\n${question.prompt}${requiredHint}${multilineHint}${currentHint}${choiceHint}\n> `
       );
       const command = raw.trim();
+      if (question.type === "contact-list" && /^(?:a)$/iu.test(command)) {
+        advancedQuestions.add(question.id);
+        terminalOutput.write(`${questionFormatGuidance(question)}\n`);
+        continue;
+      }
+      if (question.type === "contact-list" && (!command || /^(?:1|open ui)$/iu.test(command))) {
+        return questionnaireResult(programProfileStatus(id, { paths }), "guided-ui", {
+          initialQuestionId: question.id
+        });
+      }
+      if (question.type === "contact-list" && command === "2") {
+        return questionnaireResult(programProfileStatus(id, { paths }), "saved");
+      }
       if (command === "why") {
         terminalOutput.write(`${question.why || "This answer is required to produce an exact, bounded assessment profile."}\n`);
         continue;
@@ -1027,6 +1058,18 @@ async function runProgramProfileQuestionnaire(id, mode, options = {}) {
       }
       if (command === "quit") {
         return questionnaireResult(programProfileStatus(id, { paths }), "saved");
+      }
+      if (command === "skip") {
+        if (questionHasAnswer(question, profile, answers)) {
+          terminalOutput.write(`Kept the saved answer for ${question.id}; moved to the next question.\n`);
+        } else {
+          deferred = true;
+          terminalOutput.write(question.required
+            ? `Left ${question.id} unresolved; resume will return to it.\n`
+            : `Left ${question.id} unset; revisit it with edit ${question.id}.\n`);
+        }
+        index += 1;
+        continue;
       }
       if (command === "apply recommended") {
         try {
@@ -1080,6 +1123,8 @@ async function runProgramProfileQuestionnaire(id, mode, options = {}) {
           }
           answer = structuredClone(recommendation.value);
           usedRecommendation = true;
+        } else if (question.type === "contact-list" && !advancedQuestions.has(question.id)) {
+          throw new Error("Choose 1 to open the guided form, 2 to save and stop, A for advanced JSON, or R when a reviewed recommendation is available.");
         } else {
           const answerInput = question.type === "multiline"
             ? await readMultilineAnswer(terminal, raw, terminalOutput)
@@ -1128,7 +1173,60 @@ async function runProgramProfileQuestionnaire(id, mode, options = {}) {
   } finally {
     terminal.close();
   }
-  return questionnaireResult(programProfileStatus(id, { paths }), "questions-complete");
+  return questionnaireResult(programProfileStatus(id, { paths }), deferred ? "saved" : "questions-complete");
+}
+
+function waitForProfileWizardShutdown(started) {
+  return new Promise((resolve, reject) => {
+    let stopping = false;
+    const stop = (signal) => {
+      if (stopping) return;
+      stopping = true;
+      process.off("SIGINT", onSigint);
+      process.off("SIGTERM", onSigterm);
+      process.exitCode = signal === "SIGINT" ? 130 : 143;
+      started.close().then(resolve, reject);
+    };
+    const onSigint = () => stop("SIGINT");
+    const onSigterm = () => stop("SIGTERM");
+    process.once("SIGINT", onSigint);
+    process.once("SIGTERM", onSigterm);
+  });
+}
+
+async function runProfileWizardSession(id, options = {}) {
+  const startServer = options.startServer || (await import("./profile-ui/server.mjs")).startProfileWizardServer;
+  const started = await startServer({
+    profileId: id,
+    paths: options.paths,
+    host: options.host || "127.0.0.1",
+    port: options.port ?? 0,
+    recommendations: options.recommendations || null,
+    openBrowser: options.openBrowser === true,
+    ...(options.initialQuestionId ? { initialQuestionId: options.initialQuestionId } : {})
+  });
+  const summary = {
+    started: true,
+    profileId: started.profileId,
+    host: started.host,
+    port: started.port,
+    origin: started.origin,
+    url: started.url,
+    browserOpened: started.browserOpened,
+    ...(started.initialQuestionId ? { initialQuestionId: started.initialQuestionId } : {})
+  };
+  const terminalOutput = options.output || process.stdout;
+  if (options.json === true) {
+    terminalOutput.write(`${JSON.stringify(summary, null, 2)}\n`);
+  } else {
+    terminalOutput.write(`GATE profile wizard: ${started.url}\n`);
+    terminalOutput.write(`Private loopback session for ${started.profileId}. Press Ctrl+C to stop.\n`);
+    if (options.openBrowser === true && !started.browserOpened) {
+      terminalOutput.write("Automatic browser launch was unavailable; open the private URL above.\n");
+    }
+  }
+  await (options.waitForShutdown || waitForProfileWizardShutdown)(started);
+  return summary;
 }
 
 export const cliInternals = Object.freeze({
@@ -1141,6 +1239,7 @@ export const cliInternals = Object.freeze({
   questionFormatGuidance,
   questionnaireResult,
   questionHasAnswer,
+  runProfileWizardSession,
   runProgramProfileQuestionnaire,
   verificationQuestionIndex
 });
@@ -1634,7 +1733,18 @@ export async function main(argv) {
       const recommendations = recommendationsFile
         ? loadProgramProfileRecommendations(recommendationsFile, { paths })
         : null;
-      return output(await runProgramProfileQuestionnaire(id, action, { paths, recommendations }), json);
+      const questionnaire = await runProgramProfileQuestionnaire(id, action, { paths, recommendations });
+      output(questionnaire, json);
+      if (questionnaire.outcome === "guided-ui") {
+        await runProfileWizardSession(id, {
+          paths,
+          recommendations,
+          initialQuestionId: questionnaire.initialQuestionId,
+          openBrowser: true,
+          output: json ? process.stderr : process.stdout
+        });
+      }
+      return;
     }
 
     if (action === "ui") {
@@ -1653,46 +1763,13 @@ export async function main(argv) {
       const recommendations = recommendationsFile
         ? loadProgramProfileRecommendations(recommendationsFile, { paths })
         : null;
-      const { startProfileWizardServer } = await import("./profile-ui/server.mjs");
-      const started = await startProfileWizardServer({
-        profileId: id,
+      await runProfileWizardSession(id, {
         paths,
         host,
         port,
         recommendations,
-        openBrowser: parsed.flags.open === true
-      });
-      const summary = {
-        started: true,
-        profileId: started.profileId,
-        host: started.host,
-        port: started.port,
-        origin: started.origin,
-        url: started.url,
-        browserOpened: started.browserOpened
-      };
-      if (json) output(summary, true);
-      else {
-        process.stdout.write(`GATE profile wizard: ${started.url}\n`);
-        process.stdout.write(`Private loopback session for ${started.profileId}. Press Ctrl+C to stop.\n`);
-        if (parsed.flags.open === true && !started.browserOpened) {
-          process.stdout.write("Automatic browser launch was unavailable; open the private URL above.\n");
-        }
-      }
-      await new Promise((resolve, reject) => {
-        let stopping = false;
-        const stop = (signal) => {
-          if (stopping) return;
-          stopping = true;
-          process.off("SIGINT", onSigint);
-          process.off("SIGTERM", onSigterm);
-          process.exitCode = signal === "SIGINT" ? 130 : 143;
-          started.close().then(resolve, reject);
-        };
-        const onSigint = () => stop("SIGINT");
-        const onSigterm = () => stop("SIGTERM");
-        process.once("SIGINT", onSigint);
-        process.once("SIGTERM", onSigterm);
+        openBrowser: parsed.flags.open === true,
+        json
       });
       return;
     }
