@@ -1,6 +1,6 @@
 # GATE architecture
 
-GATE is a personal, single-operator control plane for software delivery and evidence-led security work. It composes pinned upstream tools and adds only the coordination that those tools do not provide: a shared policy model, a private project registry, immutable per-program cases, a reviewed managed-tool runtime, a project-bound offline-analysis lane, a verified Treehouse lease bridge, an aggregate read-only cockpit, a publication authority, an active-security authority, and durable learning. This document describes the target architecture; [README.md](../README.md#current-limits) identifies which v0.1 paths are wired today.
+GATE is a personal, single-operator control plane for software delivery and evidence-led security work. It composes pinned upstream tools and adds only the coordination that those tools do not provide: a shared policy model, a private project registry, immutable per-program cases, a reviewed managed-tool runtime, a project-bound offline-analysis lane, a verified Treehouse lease bridge, a read-only observer, a local interactive cockpit, a static public preview, a publication authority, an active-security authority, and durable learning. This document describes the target architecture; [README.md](../README.md#current-limits) identifies which v0.1 paths are wired today.
 
 The version-controlled repository contains the reusable distribution. Live sessions, target details, raw evidence, credential references, and private learning stay outside Git under `GATE_HOME`. Credential values should remain in an OS secret store or narrowly permissioned file outside broad agent-writable roots.
 
@@ -38,6 +38,9 @@ flowchart TD
     N --> E
     A --> E
     E --> V[Read-only observer]
+    V --> K[Private loopback cockpit]
+    O --> K
+    K --> D[Dedicated Codex thread]
     E --> L[Learning candidates]
     L --> N
 ```
@@ -52,8 +55,9 @@ flowchart LR
     J2[Optional managed project B] -.-> C2
     C1 --> S1[Private state directory A]
     C2 --> S2[Private state directory B]
-    S1 --> V[Aggregate read-only cockpit]
+    S1 --> V[Aggregate read-only observer]
     S2 --> V
+    V --> C[Private loopback cockpit]
 ```
 
 Security work begins with separate offline and active-authority paths:
@@ -100,6 +104,8 @@ The offline branch is bound to a project contract and local snapshot rather than
 | Lavish | A local interactive plan or decision artifact | Continuous operations monitoring |
 | Program Profile browser wizard | One private profile's typed, choice-first intake, source review, and reviewed recommendation application over an ephemeral loopback session | Target contact, authority inference, attestation inference, or aggregate fleet monitoring |
 | Observer | Read-only compact campaign fleet, one selected structured detail, setup progress, GATE activity, derived agent/task, learning, status, and token views | Execution, Program Profile editing, or an interactive terminal session |
+| Local cockpit companion | One capability-protected loopback operator surface, one dedicated Codex app-server thread, bounded user-visible conversation and questions, categorical activity, and a separate observer fleet projection | Hidden reasoning, raw commands or output, target authority, Program Profile private capture, public serving, or attachment to an arbitrary existing Codex thread |
+| Public cockpit | One static Pages preview assembled from an explicit file allowlist and opaque checked-in sample data | Local observer access, interaction, session capabilities, live campaign claims, or private runtime data |
 | Learning pipeline | Correction capture and validated memory changes | Expanding authorization or releasing data |
 
 No Mistakes deliberately stops when a PR is ready. In v0.1, the publication authority can only inspect PR state, exact head, mergeability, and the complete bounded set of checks observed on that head. Branch protection is not required. A future mutation adapter must verify a No Mistakes attestation bound to that head before it can merge, deploy, or publish. GATE never reports that upstream No Mistakes performed those actions.
@@ -111,7 +117,7 @@ Tracked repository content:
 - schemas, policies, templates, and configuration defaults;
 - reviewed project-scoped skills and exact upstream and managed-tool dependency locks;
 - sanitized repository-wide lessons;
-- documentation and adapters.
+- documentation, adapters, and the public-safe cockpit source and preview fixture.
 
 Private runtime content under `GATE_HOME`:
 
@@ -255,6 +261,10 @@ Target output, webpages, binaries, captures, and tool responses are untrusted da
 
 GATE commands append normalized events and the observer only reads state. `gate up` runs without a runtime selector, scans the bounded case and Program Profile registries, and builds one aggregate snapshot. The compact fleet table combines up to 32 valid or attention-worthy cases selected from at most 1,024 discovered case entries with up to 32 current profile setups that are not represented in the current bounded case projection. When that scan is partial, a setup row may coexist with an off-projection current case. Profile setup rows cross the browser boundary only as process-local pseudonyms, questionnaire stage and answered/total progress, blocker count, next section, readiness, update time, and fresh/stale state. Recommendation mode is nullable and crosses that boundary only when a reviewed producer supplies it. Learning counts are derived from case-backed state and remain unavailable for setup-only rows. Program names, answers, source records, contacts, targets, blocker prose, file paths, and profile digests remain private in that setup projection. The separate case projection deliberately emits the operator-controlled case display name; it otherwise omits exact target selectors and the same raw private material, so operators should not embed sensitive selectors in a case name.
 
+The local cockpit companion runs on its own ephemeral loopback origin. Its server preloads the checked-in shell, injects a local browser client, creates independent session and CSRF capabilities, and owns one dedicated Codex app-server thread. It fetches the observer's exact loopback `/api/status` endpoint server-side and exposes a second bounded `gate.local-fleet/v1` projection only through the authenticated local session. Fleet state never becomes a Codex prompt. Operator messages and final Codex replies are bounded and filtered separately; categorical activity deliberately omits hidden reasoning, commands, arguments, output, paths, tool names, targets, evidence, credentials, thread IDs, and raw errors. Dedicated-thread notifications project exact token counters. A matching `account/usage/read` result may add an estimated USD or credit amount; only amount micros and unit cross the browser boundary. The companion has no execution-authority role and does not replace the Program Profile wizard's private capture path.
+
+The public cockpit is a separate static artifact. `cockpit/scripts/build-site.mjs` recreates `cockpit/_site` from the exact reviewed file allowlist and never copies `cockpit/companion`. The checked-in snapshot uses opaque sample aliases and `mode: "preview"`; the UI labels it `PREVIEW · NOT LIVE` and disables all writes. A future observed-snapshot producer must pass the exact public schema, expiry, and release review before it can claim live metrics. GitHub Pages cannot reach the loopback observer or companion and conveys no session capability.
+
 Selecting a row opens one structured case-activity or profile-setup detail panel; polling preserves the selection and detail state. The summary cards are exact only after an observed snapshot, when both bounded scans are available, complete, untruncated, and free of invalid entries, and every visible case has available runtime observation. With current observations, partial, truncated, or invalid coverage, or an unavailable per-case runtime, yields visible-row lower bounds with a `+` suffix. Missing or unavailable scan coverage, stale setup observations, or a failed status refresh makes the summary unavailable (`—`), rather than treating cached rows as current lower bounds. Cached rows remain visible for inspection. A failed setup scan does not reject an otherwise fresh observer snapshot; its previously projected bounded setup list may remain visible as stale while its scan metadata is unavailable and incomplete. The [parallel campaign acceptance contract](campaign-acceptance.md) defines the observable isolation, recovery, and reusable-learning checks for this view.
 
 The activity, derived agent/task, supervised-execution, offline-analysis, engagement, and project projections inside the collapsed System health area describe base/unassigned state. Effect classes, learning, freshness, managed-runtime counts and privacy-filtered constraints, upstream state, and available host token data are shared or host-level views. The managed runtime projection exposes tool IDs, states, reason categories, and the bounded kind, timestamp, age, and current-check flags from verification evidence while omitting private paths, hashes, raw receipts, and raw verifier errors; its unresolved count spans all 126 catalog entries rather than only failed installs. Offline analysis emits manifest-created, queued, started, and completed events; generic execution emits queued, started, completed, and stop-requested events; Treehouse workspace state is available on demand through `gate workspace status`. Firstmate, Treehouse, GNHF, No Mistakes, ordinary Codex turns, broader reviewed tool adapters, and records beyond the scan bounds still prevent this from being a complete fleet view.
@@ -269,7 +279,7 @@ Recent-run projections are bounded, but safety-critical execution and offline-an
 
 Token records state whether values are `exact`, `estimated`, or `unavailable`, and identify the source and whether a value is a delta or cumulative counter. Status prefers valid canonical token-log records, deduplicated by record ID in last-occurrence order, and scans host Codex session roots only when none remain; it never adds the two feeds together. Compact and observer totals group canonical records by run, task, agent, provider, and model, summing deltas when present or selecting the latest cumulative record by timestamp otherwise. Equal timestamps select the last appended record, including interleaved updates to a repeated ID. A byte- or record-truncated or malformed canonical log marks available records estimated.
 
-Case status deliberately disables the host-session fallback. Codex session files do not provide a trustworthy case binding, so an aggregate host total cannot be divided among cases. A case reports token attribution as unavailable until a reviewed producer appends canonical token records inside that case's state directory. The aggregate observer may still show the separately labelled host total.
+Case status deliberately disables the host-session fallback. Codex session files do not provide a trustworthy case binding, so aggregate host counters cannot be divided among cases. The companion projects only host input, cached input, output, total, provenance, and unavailable cost state; it never forwards session IDs, paths, models, prompts, or raw log records. A case reports `Awaiting attribution` until a reviewed producer appends canonical token records inside that case's state directory. The aggregate observer may still show the separately labelled host counters.
 
 The fallback scanner reads bounded local Codex session JSONL tails and parses only lines carrying recognized usage markers, selecting the latest parseable event in file order even when counters decrease. Its bounded in-process cache reuses unchanged file identity, size, modification time, and change time with zero payload bytes read. Changed exact files are rescanned. Already truncated files may use a witnessed append only when it contains a complete newer usage event; otherwise the current tail is rescanned without seeding it from stale usage. Truncated or concurrently changed reads remain estimated, and scan metadata exposes bytes read, cache hits, incremental reads, and partial coverage. Prompt-bearing bytes can pass through the scanner, but prompt bodies are never returned by the observer. A direct harness adapter is the target design. Missing telemetry remains `unavailable` with null totals, never zero.
 

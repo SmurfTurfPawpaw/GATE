@@ -367,6 +367,7 @@ test("session scans return canonical validated usage records", async (t) => {
   const projected = projectUsage(result);
   assert.equal(projected.totalTokens, 15);
   assert.equal(projected.cachedInputTokens, null);
+  assert.equal(projected.source, "codex-session-jsonl");
   assert.equal(projected.sessions[0].contextWindow, 200000);
 });
 

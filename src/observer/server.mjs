@@ -226,7 +226,11 @@ const ENGAGEMENT_STATUSES = new Set(["draft", "proposed", "approved", "active", 
 const TECHNICAL_REVIEW_STATUSES = new Set(["pending", "passed", "failed"]);
 const OPERATOR_RECEIPT_STATUSES = new Set(["pending", "approved", "revoked"]);
 const OBSERVER_API_VERSION = "gate.observer/v1";
-const PUBLIC_USAGE_SOURCES = new Set(["codex-session-jsonl", "gate-token-log"]);
+const PUBLIC_USAGE_SOURCES = new Map([
+  ["codex-session-jsonl", "codex-session-jsonl"],
+  ["codex-session-jsonl:host-session-roots", "codex-session-jsonl"],
+  ["gate-token-log", "gate-token-log"]
+]);
 const MAX_STATIC_ASSET_BYTES = 1_048_576;
 // Pseudonyms only need to be stable for one observer process. A random HMAC
 // key prevents low-entropy private names from being recovered with an offline
@@ -308,7 +312,7 @@ function publicModelName(value) {
 }
 
 function publicUsageSource(value) {
-  return PUBLIC_USAGE_SOURCES.has(value) ? value : null;
+  return PUBLIC_USAGE_SOURCES.get(value) || null;
 }
 
 function localDisplayName(value, maximum = 60) {

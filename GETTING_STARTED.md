@@ -1,6 +1,6 @@
 # Getting started
 
-GATE is a private, single-operator control plane for agentic engineering and authorized security work. This guide installs the managed core tools, opens the aggregate local cockpit, and starts a map-first assessment in its own bug-program case.
+GATE is a local-first, single-operator control plane for agentic engineering and authorized security work. Its reusable source is public; private plans, target details, authorization records, evidence, credentials, and runtime state stay outside Git under `GATE_HOME`. This guide installs the managed core tools, opens the aggregate local cockpit, and starts a map-first assessment in its own bug-program case.
 
 Run the control plane on Linux or on Windows 11 through WSL2. Keep Windows-native tools such as Wireshark, Burp Suite, debuggers, and hardware utilities on Windows. See [Laptop and cloud setup](docs/setup.md) for the complete host setup.
 
@@ -51,16 +51,28 @@ Installation proves exact runtime identity. Target authority and workflow admiss
 ## 2. Open the cockpit
 
 ```bash
-# Keep GATE_CASE unset in this terminal: the observer builds the bounded fleet view.
+# Terminal 1: keep GATE_CASE unset so the observer builds the bounded fleet view.
 unset GATE_CASE
+# If Codex runs on Windows and GATE runs in WSL, point the observer at that
+# existing Codex state. Replace WINDOWS_USER; do not commit the local path.
+# export CODEX_HOME="/mnt/c/Users/WINDOWS_USER/.codex"
 npm run dashboard
+
+# Terminal 2, from the same GATE checkout:
+unset GATE_CASE
+codex login status >/dev/null 2>&1 || codex login
+npm run cockpit
 ```
 
-Open <http://127.0.0.1:4173> and keep the terminal running. The startup terminal and selected case detail greet the operator using `operator.displayName` from the merged configuration. The tracked default is `Giovanni`.
+Keep both terminals running. The companion prints and normally opens a private capability-bearing URL on an ephemeral loopback port. It provides the progress-first cockpit, one dedicated Codex thread, bounded operator and final Codex messages, native one-to-three-choice questions, categorical activity, exact companion input/cached-input/output/total counters, estimated thread cost when Codex supplies it, and the observer's separate bounded fleet projection. Keep its URL fragment private. The companion does not attach to the current Codex cloud chat, show hidden reasoning or raw command output, or grant execution authority. See [Local cockpit companion](docs/local-companion.md).
 
-The cockpit uses a compact table for concurrent campaigns. It shows at most 32 case rows from a discovery window of 1,024 entries, plus a separately bounded set of current Program Profile setup rows that are not represented in the current bounded case projection. When the case scan is partial, an off-projection current case may still exist. Select a row to open the single live-activity or setup-detail panel. Setup rows expose only pseudonymous progress, blocker, next-section, readiness, and freshness metadata. Recommendation mode is nullable and appears only when a reviewed producer supplies it; learning count remains unavailable on a setup-only row because learning attribution is case-backed. Case rows and details include the operator-controlled case display name, so keep sensitive selectors out of that name. The remaining content is allowlisted lifecycle data. Apart from that display name, neither view is an interactive PTY or shows raw stdout or stderr, argv, commands, exact target selectors, answers, sources, evidence, or private paths.
+The observer remains available directly at <http://127.0.0.1:4173> for detailed read-only diagnostics. The startup terminal and selected case detail greet the operator using `operator.displayName` from the merged configuration. The tracked default is `Giovanni`.
+
+The observer dashboard uses a compact table for concurrent campaigns. It shows at most 32 case rows from a discovery window of 1,024 entries, plus a separately bounded set of current Program Profile setup rows that are not represented in the current bounded case projection. When the case scan is partial, an off-projection current case may still exist. Select a row to open the single live-activity or setup-detail panel. Setup rows expose only pseudonymous progress, blocker, next-section, readiness, and freshness metadata. Recommendation mode is nullable and appears only when a reviewed producer supplies it; learning count remains unavailable on a setup-only row because learning attribution is case-backed. Case rows and details include the operator-controlled case display name, so keep sensitive selectors out of that name. The remaining content is allowlisted lifecycle data. Apart from that display name, neither view is an interactive PTY or shows raw stdout or stderr, argv, commands, exact target selectors, answers, sources, evidence, or private paths.
 
 Fleet summary cards distinguish exact counts, lower bounds (`+`), and unavailable observations (`—`); see the [count precision and cached-state rules](docs/architecture.md#observation-and-token-accounting). Scan text keeps omissions, invalid entries, partial coverage, and a failed setup scan visible. Active fresh work uses an indeterminate animation because GATE has no defensible percentage unless a producer supplies actual completed and total counts. Retrieve a known omitted case with `gate case show ID --json` or `gate --case ID status --summary --json`; removing `--summary` does not bypass fleet or recent-history bounds. Press `0` to focus the fleet, `1` to open the selected detail, `2` to open System health, arrow keys or `[` and `]` to change campaigns, `?` for all shortcuts, `R` to refresh, and `P` to pause or resume polling. Stop the observer with `Ctrl+C`.
+
+The public Pages site is a separate, non-interactive design preview. Its checked-in data is explicitly labeled `PREVIEW · NOT LIVE`; the build excludes the local companion, observer responses, capabilities, prompts, targets, and private state.
 
 Use the bounded agent-readable views in terminals and Codex sessions:
 
@@ -69,7 +81,7 @@ Use the bounded agent-readable views in terminals and Codex sessions:
 ./bin/gate.mjs tool list --summary --limit 10 --cursor 0 --json
 ```
 
-Token data is labelled `exact`, `estimated`, or `unavailable`. Missing telemetry is never reported as zero. Host-wide Codex session telemetry has no trustworthy case identity, so a case reports token attribution as unavailable until a reviewed producer writes canonical token records into that case.
+The sticky token rail keeps the active session or host input, cached input, output, total, provenance, and available estimated cost visible. Host-wide Codex session telemetry has no trustworthy case identity, so it stays separate from canonical case totals. Missing telemetry and missing case attribution are shown as `unavailable` and `Awaiting attribution`, never as zero.
 
 ## 3. Route a new objective
 

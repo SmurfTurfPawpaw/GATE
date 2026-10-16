@@ -6,7 +6,7 @@
 
 GATE is host-first. It is designed to run on a Windows 11 laptop through WSL2 with Codex CLI as the primary harness. Native tools remain appropriate when a GUI, the Windows certificate store, packet capture, USB, a GPU, or radio hardware needs direct host access. Containers can organize conflicting dependencies, but GATE does not treat a container, WSL2, or a Git worktree as a security boundary.
 
-> **Status: v0.1 foundation.** The checked-in policy, schemas, CLI, categorical objective router, private project registry, source-backed bug bounty Program Profile intake, immutable per-program cases, aggregate campaign cockpit, project-bound zero-network PE-resource analysis, verified Treehouse lease bridge, engagement receipts, one-shot supervised generic execution, two narrow managed active adapters, observer, token reader, upstream pins, 126-tool security catalog, seven-tool managed core runtime, and journaled end-to-end penetration-testing workflow work today. Complete objective persistence and dispatch, Firstmate, GNHF, and No Mistakes orchestration, broader reviewed adapters and runtime locks, deployment, and lab lifecycle remain integration work. See [Current limits](#current-limits).
+> **Status: v0.1 foundation.** The checked-in policy, schemas, CLI, categorical objective router, private project registry, source-backed bug bounty Program Profile intake, immutable per-program cases, local interactive cockpit, static public cockpit preview, project-bound zero-network PE-resource analysis, verified Treehouse lease bridge, engagement receipts, one-shot supervised generic execution, two narrow managed active adapters, observer, token reader, upstream pins, 126-tool security catalog, seven-tool managed core runtime, and journaled end-to-end penetration-testing workflow work today. Complete objective persistence and dispatch, Firstmate, GNHF, and No Mistakes orchestration, broader reviewed adapters and runtime locks, application deployment, and lab lifecycle remain integration work. See [Current limits](#current-limits).
 
 ## Start on Windows 11 with WSL2
 
@@ -25,12 +25,11 @@ export GH_TOKEN="$(gh auth token)"
 unset GATE_CASE
 ./scripts/bootstrap.sh --check-only
 ./scripts/bootstrap.sh
-npm run dashboard
 ```
 
 The bootstrap script does not install system packages or broad security suites. It installs the exact npm lock with lifecycle scripts disabled, creates private runtime directories, validates contracts and pins, runs the tests and doctor, and smoke-checks status and the default catalog profile. After the base preflight, `./scripts/bootstrap.sh --install-core-tools` installs the seven reviewed release runtimes and requires a nonempty installed and byte-verified core result from the smoke suite.
 
-Open <http://127.0.0.1:4173> from Windows. `gate up` stays in the foreground in v0.1, so keep that terminal open or run it in a session manager such as `tmux`. Stop it with `Ctrl+C`. The server rejects non-loopback bind addresses.
+After bootstrap, keep two terminals open in the checkout. Start the read-only observer backend with `npm run dashboard`, then start the private interactive surface with `npm run cockpit`. The companion prints and normally opens a capability-bearing loopback URL on an ephemeral port; keep that URL private. The observer remains available directly at <http://127.0.0.1:4173> for detailed diagnostics. Both services reject non-loopback bind addresses and stop with `Ctrl+C`. See [Local cockpit companion](docs/local-companion.md).
 
 The CLI works directly from the checkout:
 
@@ -79,6 +78,8 @@ GATE composes upstream projects at exact commits rather than merging their sourc
 | **AXI** | Agent-facing command and output conventions |
 | **Skills CLI** | Distribution of reviewed project-scoped skills |
 | **Observer** | Read-only compact campaign fleet, one selected live-activity view, setup progress, shared health, learning, upstream, and token views |
+| **Local cockpit companion** | Private loopback operator conversation, native Codex choices, categorical activity, and the observer's bounded fleet projection |
+| **Public cockpit** | Static, non-interactive Pages preview built from an explicit public allowlist |
 
 The full ownership and recovery model is in [docs/architecture.md](docs/architecture.md) and [docs/operating-model.md](docs/operating-model.md). Exact upstream commits, versions, and artifact integrity values live in [locks/upstreams.lock.json](locks/upstreams.lock.json); committed npm dependency trees live under [locks/npm](locks/npm).
 
@@ -343,9 +344,13 @@ For managed REA, cheap inventory can report a matching install receipt as `manag
 
 OWASP ZAP and mitmproxy are the open-source web interception defaults. Burp Suite is an optional, proprietary, operator-supplied integration. If a Kali profile is added, it must remain an optional compatibility toolbox with a pinned package subset, image digest, and SBOM rather than becoming GATE's source of truth. See [docs/security-tooling.md](docs/security-tooling.md).
 
-## Observer and token visibility
+## Cockpit, observer, and token visibility
 
-`gate up` serves a dependency-free, read-only aggregate cockpit on loopback. Its compact fleet table shows up to 32 valid or attention-worthy cases from the bounded case scan and up to 32 current Program Profile setups that are not represented in that bounded case projection. A setup row is not proof that no off-projection current case exists when the case scan is incomplete. Case rows show allowlisted campaign identity, state, current phase or tool, last signal, active work, attention, case-attributed token availability, and a case-backed learning count. Setup rows use a process-local pseudonym and show only questionnaire stage and progress, blocker count, next section, update freshness, and readiness. Recommendation mode is nullable and appears only when a reviewed producer supplies it. Learning count is unavailable on setup-only rows because only case rows carry case-backed learning attribution. Setup rows do not expose the program name, answers, sources, contacts, or target details.
+Run `npm run dashboard` and `npm run cockpit` in separate terminals. The first command serves the dependency-free, read-only observer at `127.0.0.1:4173`; the second serves the interactive cockpit on an ephemeral loopback port and connects one dedicated Codex app-server thread. The companion can show the operator's bounded messages, final Codex replies, native one-to-three-choice questions, categorical activity, exact companion-thread token counters, an estimated thread cost when Codex supplies one, and a separately bounded projection fetched from the observer. It does not show hidden reasoning, commands, arguments, stdout or stderr, tool names, target selectors, evidence, credentials, or private paths. It does not connect to the current cloud chat or grant execution authority. See the [local companion boundary](docs/local-companion.md).
+
+The static Pages build is different from the local companion. It copies exactly eight allowlisted files: `.nojekyll`, `index.html`, `robots.txt`, four named browser assets, and `data/status.json`. The checked-in snapshot is visibly labeled `PREVIEW · NOT LIVE`, disables interaction, and contains only opaque example campaigns. Companion modules, session capabilities, observer code and responses, prompts, target data, and `GATE_HOME` never enter that artifact.
+
+The observer's compact fleet table shows up to 32 valid or attention-worthy cases from the bounded case scan and up to 32 current Program Profile setups that are not represented in that bounded case projection. A setup row is not proof that no off-projection current case exists when the case scan is incomplete. Case rows show allowlisted campaign identity, state, current phase or tool, last signal, active work, attention, case-attributed token availability, and a case-backed learning count. Setup rows use a process-local pseudonym and show only questionnaire stage and progress, blocker count, next section, update freshness, and readiness. Recommendation mode is nullable and appears only when a reviewed producer supplies it. Learning count is unavailable on setup-only rows because only case rows carry case-backed learning attribution. Setup rows do not expose the program name, answers, sources, contacts, or target details.
 
 Selecting a table row opens one detail panel. A case detail contains its bounded structured lifecycle feed; a setup detail contains its guided intake state. These are presentation views, not PTYs. Apart from the operator-controlled case display name, they never expose raw stdout or stderr, argv, commands, target selectors, evidence contents, or private paths. An active case uses a spinner and indeterminate bar while fresh lifecycle events show work in progress. GATE does not invent a completion percentage: determinate progress requires a source that supplies an actual completed and total count. Motion is disabled when the browser requests reduced motion. The welcome line uses `operator.displayName` from the merged GATE configuration; the tracked default is `Giovanni`.
 
@@ -370,7 +375,7 @@ Agents should use `gate status --summary --json` and `gate tool list --summary -
 | `P` | Pause or resume polling |
 | `?` | Open shortcut help |
 
-GATE streams local Codex session JSONL files under `CODEX_HOME/sessions` or `~/.codex/sessions` and parses only token-count/usage records. Provider counters are labeled `exact`; a missing value is `unavailable`, never zero. Host session files do not carry a trustworthy case binding, so their totals may appear only in the aggregate view. A case row and its selected detail report token attribution as unavailable until a reviewed producer writes canonical token records inside that case's state directory. The scanner necessarily reads session-file bytes, but it never returns prompt bodies. Apart from the operator-controlled case display name, the observer's browser API omits prompts, responses, commands, tool output, target selectors, absolute paths, and evidence contents.
+GATE streams local Codex session JSONL files under `CODEX_HOME/sessions` or `~/.codex/sessions` and parses only token-count/usage records. When WSL should use Windows-hosted Codex sessions, set a local symbolic override such as `CODEX_HOME=/mnt/c/Users/WINDOWS_USER/.codex`; do not commit the resolved path. Provider counters are labeled `exact`; a missing value is `unavailable`, never zero. The cockpit keeps the selected dedicated-thread or host input, cached input, output, total, cost availability, and provenance visible in its sticky token rail. Host session files do not carry a trustworthy case binding, so their totals stay separate from case totals. A case row reports `Awaiting attribution` until a reviewed producer writes canonical token records inside that case's state directory. The scanner necessarily reads session-file bytes, but it never returns prompt bodies, paths, IDs, or raw records. Apart from the operator-controlled case display name, the observer's browser API omits prompts, responses, commands, tool output, target selectors, absolute paths, and evidence contents.
 
 ## Learn and adapt
 
@@ -466,6 +471,7 @@ The v0.1 boundary is intentionally explicit:
 - Workflow test plans and reviews are private journal feedback. They do not launch, reserve, admit, stop, or authorize execution; the existing engagement broker and execution adapters remain separate.
 - Structured learning promotion binds validation and change references, the exact candidate digest, and a No Mistakes attestation to a full Git head. It does not invoke No Mistakes or cryptographically verify the external attestation's authenticity in v0.1. Consultation reads only bounded public, sanitized active records; private candidates remain outside the projection.
 - Repository configuration and policy files are schema-validated contracts. The project registry, Treehouse bridge, broker, publication adapter, observer, learning path, and upstream manager enforce only the fields they explicitly load; v0.1 has no general policy engine that applies every declared provider, limit, data, or lifecycle rule at runtime.
+- The local cockpit companion owns one dedicated Codex app-server thread and consumes only the observer's bounded loopback projection. It does not attach to the current cloud chat, expose raw operation details, or replace the separate Program Profile capture surface. GitHub Pages deploys only a checked-in static preview; no reviewed producer publishes live campaign state in v0.1.
 - `gate up` is a foreground loopback server; service installation and boot-time startup are pending.
 - Aggregate token totals depend on fields present in local Codex session logs. The v0.1 scanner must read those file bytes even though it parses only usage records and never returns prompt bodies; those host records cannot be attributed to a case without a separate case-bound producer. A direct harness telemetry adapter is future work. Account quota and billing data are outside this reader.
 - WSL2 cannot provide every native capture, monitor-mode, packet-injection, USB-radio, GPU, or GUI path. `gate doctor` reports host facts; native Linux or Windows tooling may still be required.
@@ -485,10 +491,11 @@ Commands that are unavailable must be reported as unavailable. GATE never treats
 | `templates/` | Engagement, learning, project, and report starting points |
 | `skills/` | Project-scoped operating skills |
 | `src/`, `bin/` | CLI, broker, observer, and supporting libraries |
-| `dashboard/` | Read-only local cockpit |
+| `dashboard/` | Read-only observer dashboard and bounded browser projection |
+| `cockpit/` | Public static shell, local-only companion, allowlisted Pages build, and boundary tests |
 | `memory/` | Sanitized, reviewed repository learning |
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) before changing contracts or adding tools. Follow the interim private-contact process in [SECURITY.md](SECURITY.md) when reporting a vulnerability.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before changing contracts or adding tools. Follow the private reporting process in [SECURITY.md](SECURITY.md) when reporting a vulnerability.
 
 ## License
 

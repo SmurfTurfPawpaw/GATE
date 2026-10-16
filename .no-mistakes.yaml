@@ -21,6 +21,11 @@ review:
     - path: "src/observer/**"
       instructions: |
         Reject private-data disclosure and preserve loopback-only, read-only behavior.
+    - path: "cockpit/**"
+      instructions: |
+        Preserve the explicit Pages artifact allowlist. Keep the interactive companion
+        loopback-only and prevent session capabilities, observer internals, prompts,
+        target data, or other private runtime state from entering the public build.
 
 protected_paths:
   - ".no-mistakes.yaml"

@@ -2,9 +2,7 @@
 
 ## Report a vulnerability
 
-GATE is currently a private repository. People without repository access cannot use its issues or Security tab. Collaborators should contact the repository owner through an existing private channel, confirm the recipient and channel, and only then share technical details. Do not open a public issue or put vulnerability details in any public channel.
-
-If the repository is made public, its owner should enable **Settings → Code security and analysis → Private vulnerability reporting** before inviting outside reports, provided GitHub makes that control available for the repository's visibility and plan. Once the repository's **Report a vulnerability** form is visible under the Security tab, use that form. Until either that form or another explicit private contact is available, unaffiliated reporters have no supported submission channel; they should not disclose details publicly to request one.
+GATE is a public repository. If **Report a vulnerability** is visible on the repository's Security tab, use that private form. If the form is unavailable, contact the repository owner through an existing private channel, confirm the recipient and channel, and only then share technical details. Do not open a public issue or disclose vulnerability details merely to request a private contact.
 
 Include, when available:
 
@@ -30,6 +28,7 @@ Useful reports include vulnerabilities in GATE's:
 - command construction and process execution;
 - secret and private-data handling;
 - observer loopback, origin, projection, or browser protections;
+- local cockpit companion session, origin, projection, or Pages-publication protections;
 - schema or policy validation;
 - upstream integrity and update handling;
 - evidence provenance, redaction, or learning promotion;
@@ -51,7 +50,7 @@ Live sessions, targets, reports, receipts, execution manifests and claims, captu
 
 In v0.1, `GATE_HOME` is a single local trust domain for engagement authority, execution provenance, and private evidence. Engagement receipts are digest-checked but unsigned and stored beside operator-writable manifests, claims, runs, stops, and evidence, so a process that can modify the whole root can forge or erase local consistency. Exclusive files and hashes coordinate trusted processes; they are not protection from that same-user writer. Managed-upstream receipts are metadata rather than trust anchors: npm trees are reconstructed from the committed dependency lock and integrity-addressed cache, while release archives and executables are checked against SHA-256 values in the reviewed repository lock. A writer limited to `GATE_HOME` cannot re-anchor modified upstream bytes.
 
-The observer is designed for loopback use. Do not expose it through a public bind, port forward, or unauthenticated reverse proxy. The v0.1 token scanner streams local Codex session JSONL bytes and parses only usage records; it never returns prompt bodies, but direct harness telemetry that avoids session-file access is not yet available. Missing telemetry is `unavailable`; it must not be interpreted as zero activity.
+The observer and interactive cockpit companion are designed for loopback use. Do not expose either through a public bind, port forward, tunnel, or unauthenticated reverse proxy. The GitHub Pages artifact is a separate static preview built from an explicit allowlist; it must never contain companion modules, session capabilities, observer responses, prompts, target data, or private runtime state. The v0.1 token scanner streams local Codex session JSONL bytes and parses only usage records; it never returns prompt bodies, but direct harness telemetry that avoids session-file access is not yet available. Missing telemetry is `unavailable`; it must not be interpreted as zero activity.
 
 ## Known v0.1 security limitations
 
