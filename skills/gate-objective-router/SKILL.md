@@ -22,7 +22,7 @@ Do not route with keyword rules. The same word can describe a software task, inc
 
 Construct a `gate.dev/objective-routing-proposal/v1` envelope outside the repository. Bind `metadata.routeCatalogSha256` to `objectiveCanonicalSha256(catalog)`. Include only:
 
-- the opaque objective handle and creation time;
+- a cryptographically random opaque objective handle and creation time; never encode a target, account, URL, path, or other source value into the handle;
 - the five categorical dimensions;
 - registered categorical signals;
 - explicit choices already stated by the operator;
@@ -40,7 +40,7 @@ Write the categorical envelope to a private file outside the repository, with ex
 gate objective recommend --proposal PRIVATE_FILE --json
 ```
 
-The command rejects a symlink, hard-linked or non-regular file, a permissive POSIX mode, and input over 64 KiB. It validates the exact checked-in route and tool catalogs and prints only the sanitized recommendation. It does not persist the proposal or grant execution authority. For an in-process integration, use `resolveObjectiveRecommendation` from `src/lib/objective-router.mjs` with those same catalogs and tool IDs. Do not hand-select a different route after resolution. If the result is surprising, correct the categorical facts or surface the ambiguity rather than bypassing the catalog.
+The command rejects a symlink, hard-linked or non-regular file, a permissive POSIX mode, and input over 64 KiB. It validates the exact checked-in route and tool catalogs and prints only the sanitized recommendation. The output replaces the caller-controlled handle with a deterministic domain-separated projection and normalizes the timestamp to UTC milliseconds. It does not persist the proposal or grant execution authority. For an in-process integration, use `resolveObjectiveRecommendation` from `src/lib/objective-router.mjs` with those same catalogs and tool IDs. Do not hand-select a different route after resolution. If the result is surprising, correct the categorical facts or surface the ambiguity rather than bypassing the catalog.
 
 Present the result in this order:
 

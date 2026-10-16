@@ -70,7 +70,23 @@ function invoke(root, args) {
 test("objective recommend emits only a deterministic sanitized incident recommendation", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-objective-cli-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const proposalFile = writePrivateJson(root, "proposal.json", incidentProposal());
+  const privateTarget = "pokerstars.com";
+  const callerHandle = `obj_${Buffer.from(privateTarget, "utf8").toString("hex")}`;
+  const callerSourceRef = `src_${Buffer.from(privateTarget, "utf8").toString("hex")}`;
+  const privateFraction = "314159265358979323846264338327950288419716939937510";
+  const callerCreatedAt = `2026-10-16T08:00:00.${privateFraction}Z`;
+  const proposalFile = writePrivateJson(root, "proposal.json", incidentProposal({
+    metadata: { objectiveHandle: callerHandle, createdAt: callerCreatedAt },
+    signals: [{
+      id: "account",
+      basis: {
+        provenance: "source-derived",
+        claimState: "inferred",
+        code: "source-classification",
+        sourceRefs: [callerSourceRef]
+      }
+    }]
+  }));
 
   const result = invoke(root, ["objective", "recommend", "--proposal", proposalFile, "--json"]);
   assert.equal(result.status, 0, result.stderr);
@@ -79,10 +95,16 @@ test("objective recommend emits only a deterministic sanitized incident recommen
   assert.equal(recommendation.route.id, "security-incident-investigation");
   assert.equal(recommendation.route.handler.state, "planning-only");
   assert.equal(recommendation.executionAuthority, false);
+  assert.match(recommendation.metadata.objectiveHandle, /^obj_[a-f0-9]{64}$/u);
+  assert.notEqual(recommendation.metadata.objectiveHandle, callerHandle);
+  assert.equal(recommendation.metadata.createdAt, "2026-10-16T08:00:00.314Z");
   assert.ok(recommendation.capabilities.flatMap((entry) => entry.tools).every((tool) =>
     tool.state === "route-listed" && tool.suitable === "unknown"
   ));
-  assert.doesNotMatch(result.stdout, /raw objective|sourceRefs|basis summary|private path/iu);
+  assert.doesNotMatch(result.stdout, /raw objective|sourceRefs|basis summary|private path|pokerstars\.com/iu);
+  assert.doesNotMatch(result.stdout, new RegExp(callerHandle, "u"));
+  assert.doesNotMatch(result.stdout, new RegExp(callerSourceRef, "u"));
+  assert.doesNotMatch(result.stdout, new RegExp(privateFraction, "u"));
   assert.equal(fs.existsSync(path.join(root, "gate-home")), false);
 });
 

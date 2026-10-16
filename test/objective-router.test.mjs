@@ -91,6 +91,9 @@ test("an account/payment/order abuse objective receives an incident plan without
   assert.equal(first.route.id, "security-incident-investigation");
   assert.equal(first.route.handler.id, "incident-investigation-plan");
   assert.equal(first.route.handler.state, "planning-only");
+  assert.equal(first.metadata.objectiveHandle, objectiveRouterInternals.publicObjectiveHandle(input.metadata.objectiveHandle));
+  assert.notEqual(first.metadata.objectiveHandle, input.metadata.objectiveHandle);
+  assert.equal(first.metadata.proposalSha256, objectiveCanonicalSha256(input));
   assert.equal(first.executionAuthority, false);
   assert.equal(first.planStatus, "ready-to-plan");
   assert.deepEqual(first.unresolvedQuestionIds, [
@@ -112,6 +115,41 @@ test("an account/payment/order abuse objective receives an incident plan without
   assert.doesNotMatch(JSON.stringify(first), /meal-delivery|uber|objective concerns account activity/iu);
   assert.equal(validateDocument(first, "objective-recommendation.schema.json", { paths }).ok, true);
   assert.equal(first.metadata.recommendationSha256, objectiveRouterInternals.recommendationDigest(first));
+});
+
+test("recommendations project caller handles instead of echoing encoded private text", () => {
+  const encodedTarget = "pokerstars.com";
+  const callerHandle = `obj_${Buffer.from(encodedTarget, "utf8").toString("hex")}`;
+  const callerSourceRef = `src_${Buffer.from(encodedTarget, "utf8").toString("hex")}`;
+  const privateFraction = "314159265358979323846264338327950288419716939937510";
+  const callerCreatedAt = `2026-10-16T08:00:00.${privateFraction}Z`;
+  const input = proposal({
+    metadata: { objectiveHandle: callerHandle, createdAt: callerCreatedAt },
+    signals: [{
+      id: "account",
+      basis: {
+        provenance: "source-derived",
+        claimState: "inferred",
+        code: "source-classification",
+        sourceRefs: [callerSourceRef]
+      }
+    }]
+  });
+  const first = resolveObjectiveRecommendation(catalog, input, { paths });
+  const second = resolveObjectiveRecommendation(catalog, structuredClone(input), { paths });
+  const serialized = JSON.stringify(first);
+
+  assert.deepEqual(second, first);
+  assert.match(first.metadata.objectiveHandle, /^obj_[a-f0-9]{64}$/u);
+  assert.equal(first.metadata.objectiveHandle, objectiveRouterInternals.publicObjectiveHandle(callerHandle));
+  assert.notEqual(first.metadata.objectiveHandle, callerHandle);
+  assert.equal(first.metadata.createdAt, "2026-10-16T08:00:00.314Z");
+  assert.equal(first.metadata.createdAt, objectiveRouterInternals.canonicalRecommendationCreatedAt(callerCreatedAt));
+  assert.doesNotMatch(serialized, new RegExp(callerHandle, "u"));
+  assert.doesNotMatch(serialized, new RegExp(callerSourceRef, "u"));
+  assert.doesNotMatch(serialized, new RegExp(privateFraction, "u"));
+  assert.doesNotMatch(serialized, new RegExp(encodedTarget.replace(".", "\\."), "u"));
+  assert.equal(validateDocument(first, "objective-recommendation.schema.json", { paths }).ok, true);
 });
 
 test("bug bounty and generic security assessments use different handlers", () => {

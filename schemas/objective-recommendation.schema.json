@@ -35,8 +35,17 @@
         "recommendationSha256"
       ],
       "properties": {
-        "objectiveHandle": { "type": "string", "pattern": "^obj_[a-f0-9]{16,64}$" },
-        "createdAt": { "type": "string", "format": "date-time" },
+        "objectiveHandle": {
+          "type": "string",
+          "pattern": "^obj_[a-f0-9]{64}$",
+          "description": "A domain-separated SHA-256 projection of the private proposal handle; never the caller token."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$",
+          "description": "The proposal timestamp normalized to canonical UTC millisecond form."
+        },
         "routeCatalogSha256": { "$ref": "#/$defs/sha256" },
         "proposalSha256": { "$ref": "#/$defs/sha256" },
         "recommendationSha256": { "$ref": "#/$defs/sha256" }

@@ -323,6 +323,9 @@ export function objectiveRoutingProposalSemanticErrors(catalog, proposal, option
   if (proposal.metadata.routeCatalogSha256 !== catalogSha256) {
     errors.push("objective routing proposal is not bound to the current route catalog digest");
   }
+  if (!Number.isFinite(Date.parse(proposal.metadata.createdAt))) {
+    errors.push("objective routing proposal timestamp cannot be normalized to UTC milliseconds");
+  }
 
   const basisCodes = new Map(catalog.basisCodes.map((entry) => [entry.id, entry]));
   for (const [proposalField, catalogField] of DIMENSION_FIELDS) {
@@ -485,6 +488,18 @@ function recommendationDigest(value) {
   return objectiveCanonicalSha256(copy);
 }
 
+function publicObjectiveHandle(value) {
+  const digest = crypto.createHash("sha256")
+    .update("gate.dev/objective-recommendation-handle/v1\0", "utf8")
+    .update(value, "utf8")
+    .digest("hex");
+  return `obj_${digest}`;
+}
+
+function canonicalRecommendationCreatedAt(value) {
+  return new Date(value).toISOString();
+}
+
 export function resolveObjectiveRecommendation(catalog, proposal, options = {}) {
   const errors = objectiveRoutingProposalSemanticErrors(catalog, proposal, options);
   if (errors.length > 0) throw new Error(`objective routing proposal rejected: ${errors.join("; ")}`);
@@ -532,8 +547,8 @@ export function resolveObjectiveRecommendation(catalog, proposal, options = {}) 
     apiVersion: "gate.dev/objective-recommendation/v1",
     kind: "ObjectiveRecommendation",
     metadata: {
-      objectiveHandle: proposal.metadata.objectiveHandle,
-      createdAt: proposal.metadata.createdAt,
+      objectiveHandle: publicObjectiveHandle(proposal.metadata.objectiveHandle),
+      createdAt: canonicalRecommendationCreatedAt(proposal.metadata.createdAt),
       routeCatalogSha256: proposal.metadata.routeCatalogSha256,
       proposalSha256: objectiveCanonicalSha256(proposal),
       recommendationSha256: "0".repeat(64)
@@ -578,6 +593,8 @@ export const objectiveRouterInternals = Object.freeze({
   EFFECT_ORDER,
   MAX_ROUTE_CATALOG_BYTES,
   MAX_ROUTING_PROPOSAL_BYTES,
+  canonicalRecommendationCreatedAt,
+  publicObjectiveHandle,
   recommendationDigest,
   routeMatches,
   selectRoute

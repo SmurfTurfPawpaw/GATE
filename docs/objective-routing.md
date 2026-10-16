@@ -33,7 +33,7 @@ If the objective spans independently actionable outcomes, classify its domain as
 
 `ObjectiveRoutingProposal/v1` is a categorical, maximum-64-KiB envelope. It contains:
 
-- a random opaque objective handle;
+- a random opaque objective handle with at least 128 bits of entropy, never a hex-encoded target or identifier;
 - the exact route-catalog SHA-256 digest;
 - the five dimensions and bounded signals;
 - provenance, claim state, a registered categorical basis code, and opaque source references;
@@ -41,7 +41,7 @@ If the objective spans independently actionable outcomes, classify its domain as
 
 The proposal has no free-text field and no field for the raw objective. JSON Schema rejects extra fields, including a free-text basis summary. The statement, target, account, contact, authorization text, source body, private path, URL, credential, command, and tool arguments therefore cannot be represented in this envelope. Keep the original statement in the current conversation only when its data classification permits that provider, or in a future private objective record under `GATE_HOME`. Secret values remain outside model input and belong in the existing secret-reference path.
 
-The proposal is bound to `objectiveCanonicalSha256(catalog)`. A catalog change makes an older proposal stale. The resolver also returns a digest of the exact proposal and a digest of its recommendation.
+The proposal is bound to `objectiveCanonicalSha256(catalog)`. A catalog change makes an older proposal stale. The resolver also returns a digest of the exact proposal and a digest of its recommendation. The recommendation never echoes the proposal's caller-controlled objective handle. It carries a full-length, domain-separated SHA-256 projection instead, while the proposal digest preserves deterministic internal binding. The proposal timestamp is normalized to fixed UTC millisecond form before output, so extra fractional digits cannot become an output channel.
 
 Provenance has five values:
 
@@ -114,7 +114,7 @@ The bounded local CLI entry point is:
 gate objective recommend --proposal PRIVATE_FILE --json
 ```
 
-It reads the exact checked-in route and security-tool catalogs, validates their schemas and semantic references, then resolves the proposal without creating `GATE_HOME` state. The proposal must be a stable, single-link regular file no larger than 64 KiB. The leaf path must not be a symbolic link. On POSIX the file must be owned by the current effective user with exact mode `0600`; the command reports a permissions error and does not change the mode. The command requires `--json` and writes only the sanitized `ObjectiveRecommendation` to stdout. It does not echo the private path, proposal body, structural details, raw objective, source references, or private values on proposal-validation failures.
+It reads the exact checked-in route and security-tool catalogs, validates their schemas and semantic references, then resolves the proposal without creating `GATE_HOME` state. The proposal must be a stable, single-link regular file no larger than 64 KiB. The leaf path must not be a symbolic link. On POSIX the file must be owned by the current effective user with exact mode `0600`; the command reports a permissions error and does not change the mode. The command requires `--json` and writes only the sanitized `ObjectiveRecommendation` to stdout. It does not echo the private path, proposal body, caller-controlled objective handle, extra timestamp precision, structural details, raw objective, source references, or private values on proposal-validation failures.
 
 This CLI is a read-only recommendation boundary. It does not persist the proposal or output, accept a raw natural-language objective, grant execution authority, dispatch the selected handler, or establish tool readiness.
 
