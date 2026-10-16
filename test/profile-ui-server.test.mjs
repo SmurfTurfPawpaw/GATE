@@ -10,8 +10,8 @@ import { createProgramProfile, resumeProgramProfile } from "../src/lib/bounty-pr
 import { runtimePaths } from "../src/lib/paths.mjs";
 import { loadProgramProfileQuestionnaire } from "../src/lib/program-profile-contract.mjs";
 import { profileUiControllerInternals } from "../src/profile-ui/controller.mjs";
-import { startProfileWizardServer } from "../src/profile-ui/server.mjs";
-import { isoFromUtcInput, utcInputFromIso } from "../profile-ui/time.js";
+import { profileUiServerInternals, startProfileWizardServer } from "../src/profile-ui/server.mjs";
+import { isoFromUtcInput, utcDisplayFromIso, utcInputFromIso } from "../profile-ui/time.js";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const fixedAt = "2026-10-16T08:00:00.000Z";
@@ -21,18 +21,21 @@ const secretCanary = "Bearer PROFILE_UI_SECRET_CANARY_74f92c";
 function fixture(t, id = "browser-profile", options = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-profile-ui-"));
   const paths = runtimePaths({ repo, home: path.join(root, "home") });
+  const additionalAnswers = structuredClone(options.answers || {});
   createProgramProfile(id, {
+    ...additionalAnswers,
     authorization: {
-      sourceRefs: options.authorityRefs === undefined ? ["program-rules"] : options.authorityRefs
+      sourceRefs: options.authorityRefs === undefined ? ["program-rules"] : options.authorityRefs,
+      ...(additionalAnswers.authorization || {})
     },
-    sources: [
+    sources: additionalAnswers.sources || [
       {
         id: "program-rules",
         type: "program-rules",
         title: "Published program rules",
         reference: "https://private-reference-canary.example.test/rules",
         contentSha256: "a".repeat(64),
-        observedAt: fixedAt,
+        observedAt: options.authorityObservedAt || fixedAt,
         claimState: options.authorityClaimState || "observed",
         notes: privateCanary
       },
@@ -86,6 +89,12 @@ test("profile UI binds only explicit loopback addresses", async (t) => {
     startProfileWizardServer({ profileId: id, paths, host: "localhost" }),
     /explicit loopback/u
   );
+});
+
+test("profile UI canonicalizes the default HTTP port for browser Host headers", () => {
+  assert.equal(profileUiServerInternals.expectedHost("127.0.0.1", 80), "127.0.0.1");
+  assert.equal(profileUiServerInternals.expectedHost("::1", 80), "[::1]");
+  assert.equal(profileUiServerInternals.expectedHost("127.0.0.1", 4173), "127.0.0.1:4173");
 });
 
 test("profile UI serves a no-telemetry shell with strict browser policy", async (t) => {
@@ -260,6 +269,38 @@ test("profile UI requires an explicit source-review acknowledgement before autho
   assert.equal(resumeProgramProfile(id, { paths }).answers.answers[answer.questionId], true);
 });
 
+test("future-dated observed authority sources remain unresolved and cannot be confirmed", async (t) => {
+  const decisionAt = "2026-10-16T08:30:00.000Z";
+  const { paths, id } = fixture(t, "future-authority-source", {
+    authorityObservedAt: "2026-10-16T09:00:00.000Z"
+  });
+  const started = await startProfileWizardServer({ profileId: id, paths, now: () => decisionAt });
+  t.after(() => started.close());
+  const credentials = launchCredentials(started);
+  const stateResponse = await api(started, credentials, "/api/state");
+  const current = (await stateResponse.json()).state;
+  assert.equal(current.authorizationSources[0].claimState, "observed");
+  assert.equal(current.authorizationSources[0].resolved, false);
+
+  const response = await api(started, credentials, "/api/answer", { body: {
+    questionId: "authority-operator-confirmed",
+    value: true,
+    reviewAcknowledged: true,
+    reviewedSourceRefs: ["program-rules"],
+    baseRevision: current.profile.revision,
+    baseProfileSha256: current.profile.profileSha256
+  } });
+  const payload = await response.json();
+  assert.equal(response.status, 422);
+  assert.equal(payload.error.code, "source-review-required");
+  assert.deepEqual(payload.error.fields, [{
+    path: "authorization.sourceRefs",
+    message: "Every authority source must have a valid observation time at or before this review."
+  }]);
+  assert.equal(resumeProgramProfile(id, { paths }).profile.metadata.revision, current.profile.revision);
+  assert.equal(resumeProgramProfile(id, { paths }).profile.authorization.operatorConfirmed, false);
+});
+
 test("profile mutations require exact origin and CSRF headers", async (t) => {
   const { paths, id } = fixture(t);
   const started = await startProfileWizardServer({ profileId: id, paths });
@@ -432,6 +473,7 @@ test("profile UI round-trips authority and attestation instants under Europe/Bru
   assert.equal(utcInputFromIso(instant), "2026-07-19T10:27:45.123");
   assert.equal(utcInputFromIso("2026-07-19T12:27:45.123+02:00"), "2026-07-19T10:27:45.123");
   assert.equal(utcInputFromIso("2026-07-19T10:27"), "");
+  assert.equal(utcDisplayFromIso("2026-07-19T12:27:45.123+02:00"), "2026-07-19 10:27:45.123 UTC");
   assert.equal(isoFromUtcInput(utcInputFromIso(instant)), instant);
 
   let response = await api(started, credentials, "/api/state");
@@ -461,6 +503,122 @@ test("profile UI round-trips authority and attestation instants under Europe/Bru
   const answers = resumeProgramProfile(id, { paths }).answers.answers;
   assert.equal(answers["authority-valid-from"], instant);
   assert.equal(answers["attestation-at"], instant);
+});
+
+test("required module lists remain incomplete when a stored or submitted answer is empty", async (t) => {
+  const { paths, id } = fixture(t, "empty-required-module-answer", {
+    answers: {
+      questionnaire: { applicableModules: ["web-api"] },
+      modules: { "web-api": { answers: { entryPoints: [] } } },
+      authorization: { programUrl: null }
+    }
+  });
+  const questionnaire = loadProgramProfileQuestionnaire({ paths });
+  const recommendationState = profileUiControllerInternals.serializeState(
+    id,
+    resumeProgramProfile(id, { paths }),
+    questionnaire,
+    (question) => question.id === "web-api-entry-points"
+      ? { available: true, value: ["https://example.test/api"], summary: "Reviewed entry point." }
+      : { available: false, summary: "No recommendation." }
+  );
+  const recommendedEntryPoints = recommendationState.sections.flatMap((section) => section.questions)
+    .find((question) => question.id === "web-api-entry-points");
+  assert.equal(recommendedEntryPoints.answered, false);
+  assert.equal(recommendedEntryPoints.answerPresent, true);
+  assert.equal(recommendedEntryPoints.recommendation.available, true);
+  assert.equal(recommendationState.recommendationCount, 0, "a saved incomplete value remains an explicit answer");
+
+  const started = await startProfileWizardServer({ profileId: id, paths });
+  t.after(() => started.close());
+  const credentials = launchCredentials(started);
+  const stateResponse = await api(started, credentials, "/api/state");
+  const current = (await stateResponse.json()).state;
+  const questions = current.sections.flatMap((section) => section.questions);
+  const entryPoints = questions.find((question) => question.id === "web-api-entry-points");
+  assert.equal(entryPoints.applicable, true);
+  assert.deepEqual(entryPoints.value, []);
+  assert.equal(entryPoints.answered, false);
+  assert.equal(entryPoints.answerPresent, true);
+  assert.equal(
+    current.progress.requiredRemaining,
+    questions.filter((question) => question.applicable && question.required && !question.answered).length
+  );
+  assert.equal(
+    current.recommendationCount,
+    questions.filter((question) =>
+      question.applicable && !question.answerPresent && question.recommendation.available && !question.manualOnly).length
+  );
+  const optionalProgramUrl = questions.find((question) => question.id === "authority-program-url");
+  assert.equal(optionalProgramUrl.required, false);
+  assert.equal(optionalProgramUrl.answered, true);
+  assert.equal(optionalProgramUrl.answerPresent, true);
+
+  const response = await api(started, credentials, "/api/answer", { body: {
+    questionId: "web-api-entry-points",
+    value: [],
+    baseRevision: current.profile.revision,
+    baseProfileSha256: current.profile.profileSha256
+  } });
+  const payload = await response.json();
+  assert.equal(response.status, 422);
+  assert.equal(payload.error.code, "answer-incomplete");
+  assert.deepEqual(payload.error.fields, [{
+    path: "modules.web-api.answers.entryPoints",
+    message: "Add at least one meaningful item or leave this question unresolved for now."
+  }]);
+  assert.equal(resumeProgramProfile(id, { paths }).profile.metadata.revision, current.profile.revision);
+
+  const clearedResponse = await api(started, credentials, "/api/answer/clear", { body: {
+    questionId: "web-api-entry-points",
+    baseRevision: current.profile.revision,
+    baseProfileSha256: current.profile.profileSha256
+  } });
+  const cleared = (await clearedResponse.json()).state;
+  assert.equal(clearedResponse.status, 200);
+  assert.equal(Object.hasOwn(resumeProgramProfile(id, { paths }).answers.answers, "web-api-entry-points"), false);
+  const clearedEntryPoints = cleared.sections.flatMap((section) => section.questions)
+    .find((question) => question.id === "web-api-entry-points");
+  assert.equal(clearedEntryPoints.answerPresent, false);
+  assert.equal(clearedEntryPoints.answered, false);
+});
+
+test("required core lists use semantic completeness while an empty module selection remains valid", async (t) => {
+  const { paths, id } = fixture(t, "empty-required-core-answer", {
+    answers: {
+      identity: { deliverables: [] },
+      questionnaire: { applicableModules: [] }
+    }
+  });
+  const started = await startProfileWizardServer({ profileId: id, paths });
+  t.after(() => started.close());
+  const credentials = launchCredentials(started);
+  const stateResponse = await api(started, credentials, "/api/state");
+  const current = (await stateResponse.json()).state;
+  const questions = current.sections.flatMap((section) => section.questions);
+  const deliverables = questions.find((question) => question.id === "identity-deliverables");
+  assert.deepEqual(deliverables.value, []);
+  assert.equal(deliverables.answerPresent, true);
+  assert.equal(deliverables.answered, false);
+  const modules = questions.find((question) => question.id === "coverage-applicable-modules");
+  assert.deepEqual(modules.value, []);
+  assert.equal(modules.answerPresent, true);
+  assert.equal(modules.answered, true);
+
+  const response = await api(started, credentials, "/api/answer", { body: {
+    questionId: "identity-deliverables",
+    value: [],
+    baseRevision: current.profile.revision,
+    baseProfileSha256: current.profile.profileSha256
+  } });
+  const payload = await response.json();
+  assert.equal(response.status, 422);
+  assert.equal(payload.error.code, "answer-incomplete");
+  assert.deepEqual(payload.error.fields, [{
+    path: "identity.deliverables",
+    message: "Add at least one meaningful item or leave this question unresolved for now."
+  }]);
+  assert.equal(resumeProgramProfile(id, { paths }).profile.metadata.revision, current.profile.revision);
 });
 
 test("UTC date-time parser rejects calendar rollover instead of normalizing it", () => {

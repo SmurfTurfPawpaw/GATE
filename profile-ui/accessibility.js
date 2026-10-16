@@ -10,4 +10,28 @@ export function bindFieldLabel(label, root, createId = () => crypto.randomUUID()
   return control;
 }
 
+export function renderQuestionAndFocus(render, questionId, heading) {
+  render(questionId);
+  heading?.focus?.();
+}
+
+export function focusAfterRepeatedItemRemoval(container, removedIndex, fallback) {
+  const items = [...(container?.children || [])];
+  const nextItem = items[Math.min(removedIndex, Math.max(items.length - 1, 0))];
+  const target = nextItem?.querySelector?.(
+    'input:not([disabled]), textarea:not([disabled]), select:not([disabled]), button:not([disabled])'
+  ) || fallback || null;
+  target?.focus?.();
+  return target;
+}
+
+export function focusLastRepeatedControl(container) {
+  const items = [...(container?.children || [])];
+  const target = items.at(-1)?.querySelector?.(
+    'input:not([disabled]), textarea:not([disabled]), select:not([disabled]), button:not([disabled])'
+  ) || null;
+  target?.focus?.();
+  return target;
+}
+
 export const profileUiAccessibilityInternals = Object.freeze({ LABELABLE_TAGS });

@@ -3,6 +3,7 @@ import {
   loadProgramProfileQuestionnaire,
   PROGRAM_PROFILE_ACTIONS,
   PROGRAM_PROFILE_COVERAGE_DOMAINS,
+  programProfileQuestionAnswerIsComplete,
   PROGRAM_PROFILE_STOP_CONDITIONS
 } from "../lib/program-profile-contract.mjs";
 
@@ -66,6 +67,7 @@ function questionnaireLayout(questionnaire) {
       moduleId: module.id,
       questions: module.questions.map((question) => ({
         ...question,
+        module: module.id,
         sectionId: null,
         moduleId: module.id,
         condition: question.condition || module.activation
@@ -139,7 +141,12 @@ function sourceReview(profile) {
   }));
 }
 
-function authorizationSourceReview(profile) {
+function authorizationSourceResolved(source, decisionTimeMs) {
+  const observedAtMs = Date.parse(source?.observedAt);
+  return source?.claimState === "observed" && Number.isFinite(observedAtMs) && observedAtMs <= decisionTimeMs;
+}
+
+function authorizationSourceReview(profile, decisionTimeMs) {
   const sources = new Map((profile.sources || []).map((source) => [source.id, source]));
   return (profile.authorization?.sourceRefs || []).map((sourceRef) => {
     const source = sources.get(sourceRef);
@@ -162,7 +169,7 @@ function authorizationSourceReview(profile) {
       observedAt: source.observedAt,
       claimState: source.claimState,
       contentDigestRecorded: typeof source.contentSha256 === "string",
-      resolved: source.claimState === "observed",
+      resolved: authorizationSourceResolved(source, decisionTimeMs),
       missing: false
     };
   });
@@ -199,7 +206,13 @@ function publicRecommendation(recommendation, question) {
   };
 }
 
-function serializeState(profileId, resumed, questionnaire, resolveRecommendation = recommendationFor) {
+function serializeState(
+  profileId,
+  resumed,
+  questionnaire,
+  resolveRecommendation = recommendationFor,
+  decisionTimeMs = Date.now()
+) {
   const { profile, answers } = resumed;
   const answeredIds = new Set(Object.keys(answers.answers || {}));
   const selectedModules = new Set(profile.questionnaire?.applicableModules || []);
@@ -207,6 +220,10 @@ function serializeState(profileId, resumed, questionnaire, resolveRecommendation
     const sectionApplicable = section.kind !== "module" || selectedModules.has(section.moduleId);
     const questions = section.questions.map((question) => {
       const applicable = sectionApplicable && conditionMatches(question.condition, profile);
+      const present = answeredIds.has(question.id);
+      const value = present ? answers.answers[question.id] : undefined;
+      const answered = present && (!applicable || !question.required ||
+        programProfileQuestionAnswerIsComplete(question, value));
       return {
         id: question.id,
         path: question.path,
@@ -220,8 +237,9 @@ function serializeState(profileId, resumed, questionnaire, resolveRecommendation
         sectionId: question.sectionId,
         moduleId: question.moduleId,
         applicable,
-        answered: answeredIds.has(question.id),
-        value: answeredIds.has(question.id) ? structuredClone(answers.answers[question.id]) : undefined,
+        answered,
+        answerPresent: present,
+        value: present ? structuredClone(value) : undefined,
         manualOnly: MANUAL_REVIEW_QUESTIONS.has(question.id) ||
           question.recommendationPolicy?.class === "manual-only",
         // Exact recommendation values stay inside the trusted local
@@ -246,7 +264,7 @@ function serializeState(profileId, resumed, questionnaire, resolveRecommendation
   });
   const applicableQuestions = sections.flatMap((section) => section.questions).filter((question) => question.applicable);
   const recommendationCount = applicableQuestions.filter((question) =>
-    !question.answered && question.recommendation.available && !question.manualOnly).length;
+    !question.answerPresent && question.recommendation.available && !question.manualOnly).length;
   return {
     apiVersion: "gate.dev/profile-ui-state/v1",
     profile: {
@@ -272,7 +290,7 @@ function serializeState(profileId, resumed, questionnaire, resolveRecommendation
     },
     sources: sourceReview(profile),
     authorizationSourceRefs: [...(profile.authorization?.sourceRefs || [])],
-    authorizationSources: authorizationSourceReview(profile),
+    authorizationSources: authorizationSourceReview(profile, decisionTimeMs),
     sections
   };
 }
@@ -362,7 +380,7 @@ function titleForField(value) {
   return String(value).replace(/([a-z])([A-Z])/gu, "$1 $2").replace(/^./u, (letter) => letter.toUpperCase());
 }
 
-function authorityReviewIssues(profile, request) {
+function authorityReviewIssues(profile, request, decisionTimeMs) {
   const currentRefs = [...(profile.authorization?.sourceRefs || [])];
   const reviewedRefs = Array.isArray(request.reviewedSourceRefs) ? request.reviewedSourceRefs : [];
   const issues = [];
@@ -381,6 +399,11 @@ function authorityReviewIssues(profile, request) {
       issues.push(fieldIssue("authorization.sourceRefs", "A referenced authority source is missing from the local ledger."));
     } else if (source.claimState !== "observed") {
       issues.push(fieldIssue("authorization.sourceRefs", "Every authority source must be observed before confirmation."));
+    } else if (!authorizationSourceResolved(source, decisionTimeMs)) {
+      issues.push(fieldIssue(
+        "authorization.sourceRefs",
+        "Every authority source must have a valid observation time at or before this review."
+      ));
     }
   }
   return issues;
@@ -416,10 +439,19 @@ export function createProfileWizardController(options = {}) {
   const questionnaire = loadProgramProfileQuestionnaire({ paths });
   const questions = questionIndex(questionnaire);
 
+  const decisionTime = () => {
+    const supplied = typeof options.now === "function" ? options.now() : options.now ?? Date.now();
+    const milliseconds = new Date(supplied).getTime();
+    if (!Number.isFinite(milliseconds)) throw new Error("profile wizard decision time is invalid");
+    return { milliseconds, iso: new Date(milliseconds).toISOString() };
+  };
+
   const current = () => bountyProfiles.resumeProgramProfile(profileId, { paths });
-  const state = () => serializeState(profileId, current(), questionnaire);
+  const stateAt = (at) => serializeState(profileId, current(), questionnaire, recommendationFor, at.milliseconds);
+  const state = () => stateAt(decisionTime());
 
   const saveAnswer = (request, mode = "answer") => {
+    const at = decisionTime();
     const resumed = current();
     assertMutationBase(request, resumed);
     const question = questions.get(request?.questionId);
@@ -443,12 +475,17 @@ export function createProfileWizardController(options = {}) {
         fieldIssue(question.path, "Use the guided control or the documented advanced structure.")
       ]);
     }
+    if (question.required && !programProfileQuestionAnswerIsComplete(question, value)) {
+      throw new ProfileUiError(422, "answer-incomplete", "Complete this required answer before saving.", [
+        fieldIssue(question.path, "Add at least one meaningful item or leave this question unresolved for now.")
+      ]);
+    }
     const fieldIssues = validateRequiredFields(question, value, resumed.profile);
     if (fieldIssues.length) {
       throw new ProfileUiError(422, "required-fields-missing", "Complete the required fields before saving.", fieldIssues);
     }
     if (question.id === "authority-operator-confirmed" && value === true) {
-      const reviewIssues = authorityReviewIssues(resumed.profile, request);
+      const reviewIssues = authorityReviewIssues(resumed.profile, request, at.milliseconds);
       if (request.reviewAcknowledged !== true || reviewIssues.length) {
         throw new ProfileUiError(
           422,
@@ -460,7 +497,7 @@ export function createProfileWizardController(options = {}) {
     }
 
     const envelope = structuredClone(resumed.answers);
-    envelope.metadata.updatedAt = new Date(options.now?.() || Date.now()).toISOString();
+    envelope.metadata.updatedAt = at.iso;
     envelope.answers[question.id] = structuredClone(value);
     try {
       const applyAnswers = question.id === "authority-operator-confirmed" && value === true
@@ -469,8 +506,8 @@ export function createProfileWizardController(options = {}) {
       if (typeof applyAnswers !== "function") {
         throw new ProfileUiError(501, "authority-confirmation-unavailable", "This GATE build cannot record a reviewed authority confirmation.");
       }
-      applyAnswers(profileId, envelope, { paths });
-      return state();
+      applyAnswers(profileId, envelope, { paths, now: at.iso });
+      return stateAt(at);
     } catch (error) {
       throw publicMutationFailure(error, question.path);
     }
@@ -482,11 +519,12 @@ export function createProfileWizardController(options = {}) {
     saveAnswer: (request) => saveAnswer(request, "answer"),
     applyRecommendation: (request) => saveAnswer(request, "recommendation"),
     clearAnswer(request) {
+      const at = decisionTime();
       const resumed = current();
       assertMutationBase(request, resumed);
       const question = questions.get(request?.questionId);
       if (!question) throw new ProfileUiError(404, "question-not-found", "That profile question is no longer available.");
-      if (!Object.hasOwn(resumed.answers.answers || {}, question.id)) return state();
+      if (!Object.hasOwn(resumed.answers.answers || {}, question.id)) return stateAt(at);
       if (typeof bountyProfiles.clearProgramProfileAnswer !== "function") {
         throw new ProfileUiError(501, "answer-clear-unavailable", "Clearing saved answers is not available in this GATE build.");
       }
@@ -495,14 +533,15 @@ export function createProfileWizardController(options = {}) {
           paths,
           expectedRevision: resumed.profile.metadata.revision,
           expectedProfileSha256: resumed.summary.profileSha256,
-          now: new Date(options.now?.() || Date.now()).toISOString()
+          now: at.iso
         });
-        return state();
+        return stateAt(at);
       } catch (error) {
         throw publicMutationFailure(error, question.path);
       }
     },
     applySupportedRecommendations(request) {
+      const at = decisionTime();
       const resumed = current();
       assertMutationBase(request, resumed);
       if (typeof bountyProfiles.applyProgramProfileRecommendations !== "function") {
@@ -512,9 +551,10 @@ export function createProfileWizardController(options = {}) {
         bountyProfiles.applyProgramProfileRecommendations(profileId, null, {
           paths,
           expectedRevision: resumed.profile.metadata.revision,
-          expectedProfileSha256: resumed.summary.profileSha256
+          expectedProfileSha256: resumed.summary.profileSha256,
+          now: at.iso
         });
-        return state();
+        return stateAt(at);
       } catch (error) {
         throw publicMutationFailure(error);
       }

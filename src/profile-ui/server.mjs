@@ -113,7 +113,8 @@ function publicError(error) {
 }
 
 function expectedHost(host, port) {
-  return host === "::1" ? `[::1]:${port}` : `${host}:${port}`;
+  const canonicalHost = host === "::1" ? "[::1]" : host;
+  return port === 80 ? canonicalHost : `${canonicalHost}:${port}`;
 }
 
 function browserCommand(url, options = {}) {
@@ -286,6 +287,7 @@ export const profileUiServerInternals = Object.freeze({
   MAX_BODY_BYTES,
   STATIC_FILES,
   isLoopback,
+  expectedHost,
   browserCommand,
   openLocalBrowser,
   publicError

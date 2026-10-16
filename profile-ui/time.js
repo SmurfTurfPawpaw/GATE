@@ -6,6 +6,11 @@ export function utcInputFromIso(value) {
   return new Date(value).toISOString().slice(0, -1);
 }
 
+export function utcDisplayFromIso(value) {
+  if (typeof value !== "string" || !OFFSET_INSTANT.test(value) || !Number.isFinite(Date.parse(value))) return "";
+  return new Date(value).toISOString().replace("T", " ").replace("Z", " UTC");
+}
+
 export function isoFromUtcInput(value) {
   const normalized = String(value || "").trim();
   if (!UTC_DATE_TIME.test(normalized)) throw new Error("Enter a valid UTC date and time.");

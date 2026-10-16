@@ -4,7 +4,12 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { bindFieldLabel } from "../profile-ui/accessibility.js";
+import {
+  bindFieldLabel,
+  focusAfterRepeatedItemRemoval,
+  focusLastRepeatedControl,
+  renderQuestionAndFocus
+} from "../profile-ui/accessibility.js";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const html = fs.readFileSync(path.join(repo, "profile-ui", "index.html"), "utf8");
@@ -40,6 +45,52 @@ test("field labels bind to the inner input of an optional scalar control", () =>
   assert.equal(attributes.get("for"), innerInput.id);
 });
 
+test("successful question changes render before moving focus to the heading", () => {
+  const events = [];
+  const heading = { focus: () => events.push("focus") };
+  renderQuestionAndFocus((id) => events.push(`render:${id}`), "next-question", heading);
+  assert.deepEqual(events, ["render:next-question", "focus"]);
+});
+
+test("removing a repeated item restores focus to the next item or the add button", () => {
+  const events = [];
+  const firstControl = { focus: () => events.push("first") };
+  const secondControl = { focus: () => events.push("second") };
+  const container = {
+    children: [
+      { querySelector: () => firstControl },
+      { querySelector: () => secondControl }
+    ]
+  };
+  assert.equal(focusAfterRepeatedItemRemoval(container, 1), secondControl);
+  assert.deepEqual(events, ["second"]);
+
+  const add = { focus: () => events.push("add") };
+  assert.equal(focusAfterRepeatedItemRemoval({ children: [] }, 0, add), add);
+  assert.deepEqual(events, ["second", "add"]);
+});
+
+test("adding a repeated item focuses the newly appended control", () => {
+  const events = [];
+  const firstControl = { focus: () => events.push("first") };
+  const lastControl = { focus: () => events.push("last") };
+  const container = {
+    children: [
+      { querySelector: () => firstControl },
+      { querySelector: () => lastControl }
+    ]
+  };
+  assert.equal(focusLastRepeatedControl(container), lastControl);
+  assert.deepEqual(events, ["last"]);
+});
+
+test("source-list management preserves unfinished UTC drafts without validating them", () => {
+  assert.match(app, /const collectSources = \(validate\)/u);
+  assert.match(app, /observedAt: validate \? isoFromUtcInput\(observedAt\) : observedAt/u);
+  assert.equal(app.match(/values = collectSources\(false\)/gu)?.length, 2);
+  assert.match(app, /utcInputFromIso\(shown\) \|\| shown/u);
+});
+
 test("profile UI uses safe DOM construction without HTML injection sinks", () => {
   assert.doesNotMatch(app, /\.innerHTML\s*=|insertAdjacentHTML|document\.write|\beval\s*\(|new Function/u);
   assert.match(app, /textContent/u);
@@ -62,11 +113,15 @@ test("profile UI exposes the required guided and native controls", () => {
   assert.doesNotMatch(app, /platform:\/\/program-inbox/u);
   assert.match(app, /data-contact/u);
   assert.match(app, /Advanced JSON fallback/u);
+  assert.match(app, /field\("Advanced JSON value", textarea\)/u);
+  assert.match(app, /attrs: \{ for: input\.id \}/u);
   assert.match(app, /I reviewed the applicable source material/u);
-  assert.match(app, /question\.answered \? "Clear answer" : "Skip for now"/u);
+  assert.match(app, /question\.answerPresent \? "Clear answer" : "Skip for now"/u);
   assert.match(app, /reviewedSourceRefs/u);
   assert.match(app, /Evidence state:/u);
   assert.match(app, /!question\.sensitive/u);
+  assert.match(app, /utcDisplayFromIso/u);
+  assert.doesNotMatch(app, /toLocaleString/u);
   assert.match(css, /input:focus-visible \+ label/u);
   assert.match(app, /node\("fieldset"/u);
 });

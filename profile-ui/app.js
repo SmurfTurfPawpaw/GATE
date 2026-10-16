@@ -1,5 +1,10 @@
-import { isoFromUtcInput, utcInputFromIso } from "/profile-ui/time.js";
-import { bindFieldLabel } from "/profile-ui/accessibility.js";
+import { isoFromUtcInput, utcDisplayFromIso, utcInputFromIso } from "/profile-ui/time.js";
+import {
+  bindFieldLabel,
+  focusAfterRepeatedItemRemoval,
+  focusLastRepeatedControl,
+  renderQuestionAndFocus
+} from "/profile-ui/accessibility.js";
 
 const $ = (selector) => document.querySelector(selector);
 
@@ -329,7 +334,7 @@ function advancedFallback(root, initialValue, guidedReader) {
   details.append(
     node("summary", { text: "Advanced JSON fallback" }),
     node("p", { className: "field-help", text: "Use only when the guided fields cannot represent a program-specific structure." }),
-    textarea,
+    field("Advanced JSON value", textarea),
     node("label", { className: "advanced-toggle", attrs: { for: checkbox.id } }, [checkbox, node("span", { text: "Use this advanced JSON value" })])
   );
   root.append(details);
@@ -424,17 +429,31 @@ function renderStringList(question) {
     replaceChildren(list, ...values.map((value, index) => {
       const input = textInput(value, { placeholder: "Add one clear item" });
       input.dataset.listItem = "true";
+      input.id = `list-${question.id}-${index}`;
       const remove = node("button", { className: "remove-item", text: "Remove", attrs: { type: "button" } });
-      remove.addEventListener("click", () => { values = readGuided(); values.splice(index, 1); paint(); });
+      remove.addEventListener("click", () => {
+        values = readGuided();
+        values.splice(index, 1);
+        paint();
+        focusAfterRepeatedItemRemoval(list, index, add);
+      });
       return node("div", { className: "repeat-card" }, [
-        node("div", { className: "repeat-card-header" }, [node("span", { className: "repeat-card-title", text: `Item ${index + 1}` }), remove]),
+        node("div", { className: "repeat-card-header" }, [
+          node("label", { className: "repeat-card-title", text: `Item ${index + 1}`, attrs: { for: input.id } }),
+          remove
+        ]),
         input
       ]);
     }));
   };
   paint();
   const add = node("button", { className: "button button-secondary add-item", text: "+ Add item", attrs: { type: "button" } });
-  add.addEventListener("click", () => { values = readGuided(); values.push(""); paint(); list.querySelector("input:last-of-type")?.focus(); });
+  add.addEventListener("click", () => {
+    values = readGuided();
+    values.push("");
+    paint();
+    focusLastRepeatedControl(list);
+  });
   root.append(list, add);
   return { root, read: advancedFallback(root, question.value || [], readGuided) };
 }
@@ -496,9 +515,17 @@ function renderContacts(question) {
   };
   const readGuided = () => collectContacts(true);
   const paint = () => replaceChildren(list, ...values.map((value, index) => contactCard(value, index, () => {
-    values = collectContacts(false); values.splice(index, 1); paint();
+    values = collectContacts(false);
+    values.splice(index, 1);
+    paint();
+    focusAfterRepeatedItemRemoval(list, index, add);
   }, state.sources)));
-  const addContact = (value = {}) => { values = collectContacts(false); values.push(value); paint(); };
+  const addContact = (value = {}) => {
+    values = collectContacts(false);
+    values.push(value);
+    paint();
+    focusLastRepeatedControl(list);
+  };
   const add = node("button", { className: "button button-secondary", text: "+ Add contact", attrs: { type: "button" } });
   add.addEventListener("click", () => addContact());
   const platform = node("button", { className: "button button-secondary", text: "Add platform contact", attrs: { type: "button" } });
@@ -544,20 +571,29 @@ function renderSources(question) {
   const list = node("div", { className: "structured-list" });
   const types = ["operator-statement", "program-rules", "safe-harbor", "scope-list", "contract", "platform-page", "architecture", "account-instructions", "other"];
   const claims = state.semantics.claimStates;
-  const readGuided = () => [...list.querySelectorAll("[data-source]")].map((card) => ({
-    id: card.querySelector('[data-key="id"]').value.trim(),
-    type: card.querySelector('[data-key="type"]').value,
-    title: card.querySelector('[data-key="title"]').value.trim(),
-    reference: card.querySelector('[data-key="reference"]').value.trim(),
-    contentSha256: card.querySelector('[data-key="contentSha256"]').value.trim() || null,
-    observedAt: isoFromUtcInput(card.querySelector('[data-key="observedAt"]').value),
-    claimState: card.querySelector('[data-key="claimState"]').value,
-    notes: card.querySelector('[data-key="notes"]').value.trim() || null
-  }));
+  const collectSources = (validate) => [...list.querySelectorAll("[data-source]")].map((card) => {
+    const observedAt = card.querySelector('[data-key="observedAt"]').value;
+    return {
+      id: card.querySelector('[data-key="id"]').value.trim(),
+      type: card.querySelector('[data-key="type"]').value,
+      title: card.querySelector('[data-key="title"]').value.trim(),
+      reference: card.querySelector('[data-key="reference"]').value.trim(),
+      contentSha256: card.querySelector('[data-key="contentSha256"]').value.trim() || null,
+      observedAt: validate ? isoFromUtcInput(observedAt) : observedAt,
+      claimState: card.querySelector('[data-key="claimState"]').value,
+      notes: card.querySelector('[data-key="notes"]').value.trim() || null
+    };
+  });
+  const readGuided = () => collectSources(true);
   const paint = () => replaceChildren(list, ...values.map((value, index) => {
     const card = node("div", { className: "repeat-card", attrs: { "data-source": "true" } });
     const remove = node("button", { className: "remove-item", text: "Remove", attrs: { type: "button" } });
-    remove.addEventListener("click", () => { values = readGuided(); values.splice(index, 1); paint(); });
+    remove.addEventListener("click", () => {
+      values = collectSources(false);
+      values.splice(index, 1);
+      paint();
+      focusAfterRepeatedItemRemoval(list, index, add);
+    });
     const controls = {};
     for (const [key, label, type] of [
       ["id", "Source ID", "text"], ["title", "Title", "text"], ["reference", "Canonical reference", "text"],
@@ -565,7 +601,7 @@ function renderSources(question) {
       ["notes", "Short source note", "textarea"]
     ]) {
       let shown = value[key] || "";
-      if (type === "datetime-local") shown = utcInputFromIso(shown);
+      if (type === "datetime-local") shown = utcInputFromIso(shown) || shown;
       controls[key] = textInput(shown, {
         multiline: type === "textarea",
         type: type === "textarea" ? "text" : type,
@@ -588,7 +624,12 @@ function renderSources(question) {
   }));
   paint();
   const add = node("button", { className: "button button-secondary add-item", text: "+ Add source", attrs: { type: "button" } });
-  add.addEventListener("click", () => { values = readGuided(); values.push({ type: "program-rules", claimState: "unverified", observedAt: new Date().toISOString() }); paint(); });
+  add.addEventListener("click", () => {
+    values = collectSources(false);
+    values.push({ type: "program-rules", claimState: "unverified", observedAt: new Date().toISOString() });
+    paint();
+    focusLastRepeatedControl(list);
+  });
   root.append(list, add);
   return { root, read: advancedFallback(root, question.value || [], readGuided) };
 }
@@ -685,7 +726,12 @@ function renderSchedule(question) {
   const paint = () => replaceChildren(list, ...values.map((value, index) => {
     const card = node("div", { className: "repeat-card", attrs: { "data-window": "true" } });
     const remove = node("button", { className: "remove-item", text: "Remove", attrs: { type: "button" } });
-    remove.addEventListener("click", () => { values = readGuided(); values.splice(index, 1); paint(); });
+    remove.addEventListener("click", () => {
+      values = readGuided();
+      values.splice(index, 1);
+      paint();
+      focusAfterRepeatedItemRemoval(list, index, add);
+    });
     const dayControl = choiceControl(`days-${index}`, days, value.days || [], true, `Days for window ${index + 1}`);
     const start = textInput(value.start || "09:00", { type: "time" }); start.dataset.key = "start";
     const end = textInput(value.end || "17:00", { type: "time" }); end.dataset.key = "end";
@@ -696,7 +742,12 @@ function renderSchedule(question) {
   }));
   paint();
   const add = node("button", { className: "button button-secondary add-item", text: "+ Add testing window", attrs: { type: "button" } });
-  add.addEventListener("click", () => { values = readGuided(); values.push({ days: ["monday", "tuesday", "wednesday", "thursday", "friday"], start: "09:00", end: "17:00" }); paint(); });
+  add.addEventListener("click", () => {
+    values = readGuided();
+    values.push({ days: ["monday", "tuesday", "wednesday", "thursday", "friday"], start: "09:00", end: "17:00" });
+    paint();
+    focusLastRepeatedControl(list);
+  });
   root.append(list, add);
   return { root, read: advancedFallback(root, question.value || [], readGuided) };
 }
@@ -748,7 +799,12 @@ function renderObjectList(question, shape) {
       card.dataset.limitOverrides = JSON.stringify(value.limitOverrides || {});
     }
     const remove = node("button", { className: "remove-item", text: "Remove", attrs: { type: "button" } });
-    remove.addEventListener("click", () => { values = readGuided(); values.splice(index, 1); paint(); });
+    remove.addEventListener("click", () => {
+      values = readGuided();
+      values.splice(index, 1);
+      paint();
+      focusAfterRepeatedItemRemoval(list, index, add);
+    });
     const grid = node("div", { className: "form-grid" });
     for (const [fieldPath, label, type, wide] of shape) {
       const choices = choicesFor(type);
@@ -767,7 +823,12 @@ function renderObjectList(question, shape) {
   }));
   paint();
   const add = node("button", { className: "button button-secondary add-item", text: "+ Add item", attrs: { type: "button" } });
-  add.addEventListener("click", () => { values = readGuided(); values.push({}); paint(); });
+  add.addEventListener("click", () => {
+    values = readGuided();
+    values.push({});
+    paint();
+    focusLastRepeatedControl(list);
+  });
   root.append(list, add);
   return { root, read: advancedFallback(root, question.value || [], readGuided) };
 }
@@ -812,7 +873,8 @@ function renderSourceReview(question) {
   const list = node("div", { className: "source-list" });
   if (state.authorizationSources.length) {
     for (const source of state.authorizationSources) {
-      const freshness = source.observedAt ? `Observed ${new Date(source.observedAt).toLocaleString()}` : "Observation time unresolved";
+      const observedAt = utcDisplayFromIso(source.observedAt);
+      const freshness = observedAt ? `Observed ${observedAt}` : "Observation time unresolved";
       list.append(node("div", { className: "source-item", attrs: { tabindex: "-1" } }, [
         node("strong", { text: source.title }),
         node("span", {
@@ -899,15 +961,19 @@ function renderQuestion() {
   replaceChildren(elements.questionFlags,
     question.required ? flag("Required", "required") : flag("Optional"),
     question.sensitive ? flag("Sensitive · stays local", "sensitive") : null,
-    question.answered ? flag("Answered", "answered") : flag("Unresolved")
+    question.answered ? flag("Answered", "answered") : question.answerPresent ? flag("Incomplete") : flag("Unresolved")
   );
   clearError();
   renderSourceReview(question);
   const rendered = renderControl(question);
   activeCollector = rendered.read;
   replaceChildren(elements.answerControl, rendered.root);
-  elements.answerState.textContent = question.answered ? `Saved in revision ${state.profile.revision}` : "Not answered yet";
-  elements.leaveUnresolved.textContent = question.answered ? "Clear answer" : "Skip for now";
+  elements.answerState.textContent = question.answered
+    ? `Saved in revision ${state.profile.revision}`
+    : question.answerPresent
+      ? `Saved but incomplete in revision ${state.profile.revision}`
+      : "Not answered yet";
+  elements.leaveUnresolved.textContent = question.answerPresent ? "Clear answer" : "Skip for now";
   renderRecommendation(question);
   elements.previousQuestion.disabled = busy || index === 0;
   elements.backButton.disabled = busy || index === 0;
@@ -954,7 +1020,7 @@ async function saveCurrent(event) {
     const next = nextQuestions[Math.min(previousIndex + 1, nextQuestions.length - 1)]?.id || question.id;
     currentQuestionId = question.id;
     setBusy(false);
-    render(next);
+    renderQuestionAndFocus(render, next, elements.questionTitle);
     showToast("Answer saved locally.");
   } catch (error) {
     setBusy(false, "Not saved");
@@ -973,7 +1039,11 @@ async function applyRecommendation() {
     state = await api("/api/recommendation", baseMutation(question));
     const nextQuestions = state.sections.flatMap((section) => section.questions.filter((item) => item.applicable));
     setBusy(false);
-    render(nextQuestions[Math.min(previousIndex + 1, nextQuestions.length - 1)]?.id);
+    renderQuestionAndFocus(
+      render,
+      nextQuestions[Math.min(previousIndex + 1, nextQuestions.length - 1)]?.id,
+      elements.questionTitle
+    );
     showToast("Reviewed recommendation applied.");
   } catch (error) {
     setBusy(false, "Not saved");
@@ -984,7 +1054,7 @@ async function applyRecommendation() {
 async function skipOrClearCurrent() {
   if (busy) return;
   const question = currentQuestion();
-  if (!question.answered) {
+  if (!question.answerPresent) {
     moveQuestion(1);
     return;
   }
@@ -1011,7 +1081,7 @@ async function applyAllRecommendations() {
     });
     setBusy(false);
     currentQuestionId = null;
-    render();
+    renderQuestionAndFocus(render, undefined, elements.questionTitle);
     showToast("Supported recommendations applied. Source facts and confirmations remain for you.");
   } catch (error) {
     setBusy(false, "Not saved");
