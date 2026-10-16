@@ -1,12 +1,12 @@
-import { isoFromUtcInput, utcDisplayFromIso, utcInputFromIso } from "/profile-ui/time.js";
+import { isoFromUtcInput, utcDisplayFromIso, utcInputFromIso } from "./time.js";
 import {
   bindFieldLabel,
   focusAfterRepeatedItemRemoval,
   focusLastRepeatedControl,
   renderQuestionAndFocus
-} from "/profile-ui/accessibility.js";
+} from "./accessibility.js";
 
-const $ = (selector) => document.querySelector(selector);
+const $ = (selector) => globalThis.document?.querySelector(selector);
 
 const elements = {
   profileTitle: $("#profile-title"),
@@ -763,6 +763,80 @@ function setAt(object, path, value) {
   cursor[parts.at(-1)] = value;
 }
 
+function renderLimits(value) {
+  const root = node("fieldset", { className: "form-grid" });
+  const readers = ["maxMinutes", "maxRequests", "maxParallel", "maxRatePerSecond", "maxTokens", "maxSpendUsd"].map((key) => {
+    const input = textInput(value[key] ?? "", { type: "number", step: ["maxRatePerSecond", "maxSpendUsd"].includes(key) ? "any" : "1" });
+    const noCeiling = node("input", { attrs: { type: "checkbox" } });
+    noCeiling.checked = value[key] === null;
+    root.append(field(key, input));
+    if (key === "maxSpendUsd") root.append(field("No monetary ceiling supplied", noCeiling));
+    return [key, () => {
+      if (key === "maxSpendUsd" && noCeiling.checked) return null;
+      if (!input.value.trim()) return undefined;
+      const parsed = Number(input.value);
+      if (!Number.isFinite(parsed)) throw new FormError(`Enter a valid ${key}.`);
+      return parsed;
+    }];
+  });
+  return { root, read: () => Object.fromEntries(readers.map(([key, read]) => [key, read()]).filter(([, value]) => value !== undefined)) };
+}
+
+function renderTypedValue(initial, allowedTypes = ["string", "number", "boolean", "null", "object", "array"], childTypes = allowedTypes) {
+  const root = node("fieldset", { className: "structured-list" });
+  const type = node("select", {}, allowedTypes.map((value) => node("option", { text: titleCase(value), attrs: { value } })));
+  type.value = initial === null ? "null" : Array.isArray(initial) ? "array" : typeof initial;
+  const body = node("div", { className: "structured-list" });
+  let read;
+  const paint = (value) => {
+    replaceChildren(body);
+    if (["object", "array"].includes(type.value)) {
+      const isArray = type.value === "array";
+      const entries = node("div", { className: "structured-list" });
+      const rows = [];
+      const addRow = (key, item) => {
+        const row = node("div", { className: "repeat-card" });
+        const name = textInput(key);
+        const editor = renderTypedValue(item, childTypes);
+        const remove = node("button", { text: "Remove", attrs: { type: "button" } });
+        const record = { row, name, editor };
+        rows.push(record);
+        remove.addEventListener("click", () => { rows.splice(rows.indexOf(record), 1); row.remove(); });
+        if (!isArray) row.append(field("Parameter or field name", name));
+        row.append(editor.root, remove);
+        entries.append(row);
+      };
+      for (const [key, item] of Object.entries(value || {})) addRow(key, item);
+      const add = node("button", { text: isArray ? "+ Add item" : "+ Add field", attrs: { type: "button" } });
+      add.addEventListener("click", () => addRow("", ""));
+      body.append(entries, add);
+      read = () => {
+        if (isArray) return rows.map(({ editor }) => editor.read());
+        const keys = rows.map(({ name }) => name.value.trim());
+        if (keys.some((key) => !key) || new Set(keys).size !== keys.length) throw new FormError("Use unique nonempty field names.");
+        return Object.fromEntries(rows.map(({ editor }, index) => [keys[index], editor.read()]));
+      };
+    } else {
+      const input = textInput(value ?? "", { type: type.value === "number" ? "number" : "text", step: "any" });
+      if (type.value === "boolean") { input.type = "checkbox"; input.checked = value === true; }
+      if (type.value !== "null") body.append(field("Value", input));
+      read = () => {
+        if (type.value === "null") return null;
+        if (type.value === "boolean") return input.checked;
+        if (type.value === "number") {
+          if (!input.value.trim() || !Number.isFinite(Number(input.value))) throw new FormError("Enter a valid number.");
+          return Number(input.value);
+        }
+        return input.value;
+      };
+    }
+  };
+  type.addEventListener("change", () => paint(type.value === "object" ? {} : type.value === "array" ? [] : ""));
+  root.append(field("Value type", type), body);
+  paint(initial);
+  return { root, read: () => read() };
+}
+
 function renderObjectList(question, shape) {
   let values = Array.isArray(question.value) ? structuredClone(question.value) : [];
   const root = node("div");
@@ -776,28 +850,19 @@ function renderObjectList(question, shape) {
     ,selectorType: ["domain", "ip", "cidr", "url", "application", "account", "repository", "device", "path"]
   }[type]);
   const readGuided = () => [...list.querySelectorAll("[data-object-item]")].map((card) => {
-    const result = {};
+    const result = structuredClone(values[[...list.children].indexOf(card)] || {});
     for (const [path, , type] of shape) {
       const control = card.querySelector(`[data-field-path="${path}"]`);
       let parsed = type === "lines" ? readLines(control.value) : control.value.trim();
       if (["rationale", "resolution"].includes(path) && parsed === "") parsed = null;
       setAt(result, path, parsed);
     }
-    if (question.id === "actions-techniques") result.parameters = {};
-    if (question.id === "execution-phase-policies") result.limits = {};
-    if (question.id === "scope-assets") {
-      result.actionOverrides = JSON.parse(card.dataset.actionOverrides || "{}");
-      result.limitOverrides = JSON.parse(card.dataset.limitOverrides || "{}");
-    }
+    for (const [key, reader] of card.structuredReaders || []) result[key] = reader();
     if (question.id === "ambiguities-items") result.resolution ||= null;
     return result;
   });
   const paint = () => replaceChildren(list, ...values.map((value, index) => {
     const card = node("div", { className: "repeat-card", attrs: { "data-object-item": "true" } });
-    if (question.id === "scope-assets") {
-      card.dataset.actionOverrides = JSON.stringify(value.actionOverrides || {});
-      card.dataset.limitOverrides = JSON.stringify(value.limitOverrides || {});
-    }
     const remove = node("button", { className: "remove-item", text: "Remove", attrs: { type: "button" } });
     remove.addEventListener("click", () => {
       values = readGuided();
@@ -818,6 +883,25 @@ function renderObjectList(question, shape) {
       control.dataset.fieldPath = fieldPath;
       grid.append(field(label, control, { wide }));
     }
+    card.structuredReaders = new Map();
+    const attach = (key, label, editor) => {
+      grid.append(field(label, editor.root, { wide: true }));
+      card.structuredReaders.set(key, editor.read);
+    };
+    if (question.id === "actions-techniques") attach("parameters", "Technique parameters", renderTypedValue(value.parameters || {}, ["object"], ["string", "number", "boolean", "null"]));
+    if (question.id === "execution-phase-policies") attach("limits", "Phase limits", renderLimits(value.limits || {}));
+    if (question.id === "scope-assets") {
+      attach("limitOverrides", "Asset limits", renderLimits(value.limitOverrides || {}));
+      const root = node("fieldset");
+      const readers = state.semantics.actions.map((action) => {
+        const enabled = node("input", { attrs: { type: "checkbox" } });
+        enabled.checked = Object.hasOwn(value.actionOverrides || {}, action);
+        const decision = decisionFields(value.actionOverrides?.[action]);
+        root.append(field(`Override ${action}`, enabled), decision.root);
+        return [action, () => enabled.checked ? decision.read() : undefined];
+      });
+      attach("actionOverrides", "Asset action overrides", { root, read: () => Object.fromEntries(readers.map(([key, read]) => [key, read()]).filter(([, value]) => value !== undefined)) });
+    }
     card.append(node("div", { className: "repeat-card-header" }, [node("span", { className: "repeat-card-title", text: `Item ${index + 1}` }), remove]), grid);
     return card;
   }));
@@ -835,7 +919,11 @@ function renderObjectList(question, shape) {
 
 function renderGenericList(question) {
   if (SOURCE_REF_QUESTIONS.has(question.id)) return renderSourceRefs(question);
-  if (STRING_LIST_QUESTIONS.has(question.id) || question.moduleId) return renderStringList(question);
+  if (STRING_LIST_QUESTIONS.has(question.id)) return renderStringList(question);
+  if (question.moduleId) {
+    const editor = renderTypedValue(question.value || []);
+    return { root: editor.root, read: advancedFallback(editor.root, question.value || [], editor.read) };
+  }
   const shape = OBJECT_LIST_SHAPES[question.id];
   if (shape) return renderObjectList(question, shape);
   const root = node("div", {}, [node("p", { className: "field-help", text: "This program-specific structure uses the advanced editor. GATE validates it before saving." })]);
@@ -1110,6 +1198,12 @@ async function bootstrap() {
   }
 }
 
+export function renderProfileControl(question, semantics) {
+  state = { semantics };
+  return renderControl(question);
+}
+
+if (globalThis.document) {
 elements.answerForm.addEventListener("submit", saveCurrent);
 elements.previousQuestion.addEventListener("click", () => moveQuestion(-1));
 elements.backButton.addEventListener("click", () => moveQuestion(-1));
@@ -1124,3 +1218,4 @@ window.addEventListener("keydown", (event) => {
 });
 
 bootstrap();
+}

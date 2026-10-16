@@ -525,7 +525,7 @@ export function createProfileWizardController(options = {}) {
         throw new ProfileUiError(501, "recommendation-unavailable", "This GATE build cannot apply one reviewed recommendation.");
       }
       try {
-        bountyProfiles.applyProgramProfileRecommendation(profileId, question.id, recommendations, {
+        bountyProfiles.applyProgramProfileRecommendation(profileId, question.id, question.recommendationPolicy?.class === "operator-preference" ? boundRecommendations(resumed) : recommendations, {
           paths,
           expectedRevision: resumed.profile.metadata.revision,
           expectedProfileSha256: resumed.summary.profileSha256,
@@ -589,7 +589,7 @@ export function createProfileWizardController(options = {}) {
         throw new ProfileUiError(501, "bulk-recommendations-unavailable", "Bulk recommendations are not available in this GATE build.");
       }
       try {
-        bountyProfiles.applyProgramProfileRecommendations(profileId, recommendations, {
+        bountyProfiles.applyProgramProfileRecommendations(profileId, boundRecommendations(resumed), {
           paths,
           expectedRevision: resumed.profile.metadata.revision,
           expectedProfileSha256: resumed.summary.profileSha256,

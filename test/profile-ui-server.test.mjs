@@ -293,6 +293,22 @@ test("profile UI resolves and applies one base-bound evidence proposal", async (
     resumeProgramProfile(id, { paths }).profile.authorization.basis,
     "public-bug-bounty-program"
   );
+  const refreshed = (await (await api(started, credentials, "/api/state")).json()).state;
+  const policyQuestion = refreshed.sections.flatMap((section) => section.questions).find((item) =>
+    item.applicable && !item.answerPresent && item.recommendation.available && !item.manualOnly);
+  assert.ok(policyQuestion);
+  const applied = await api(started, credentials, "/api/recommendation", { body: {
+    questionId: policyQuestion.id,
+    baseRevision: refreshed.profile.revision,
+    baseProfileSha256: refreshed.profile.profileSha256
+  } });
+  assert.equal(applied.status, 200, await applied.text());
+  const afterSingle = (await (await api(started, credentials, "/api/state")).json()).state;
+  const bulk = await api(started, credentials, "/api/recommendations/apply", { body: {
+    baseRevision: afterSingle.profile.revision,
+    baseProfileSha256: afterSingle.profile.profileSha256
+  } });
+  assert.equal(bulk.status, 200, await bulk.text());
 });
 
 test("profile UI requires an explicit source-review acknowledgement before authority confirmation", async (t) => {

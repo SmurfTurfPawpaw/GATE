@@ -981,7 +981,9 @@ async function runProgramProfileQuestionnaire(id, mode, options = {}) {
         : recorded
           ? ` [current: ${boundedTerminalValue(current)}]`
           : ` [unconfirmed draft: ${boundedTerminalValue(current)}; enter explicitly to confirm]`;
-      const recommendation = programProfileRecommendation(question.id, { profile, recommendations });
+      const activeRecommendations = recommendations?.metadata?.baseRevision === profile.metadata.revision &&
+        recommendations?.metadata?.baseProfileSha256 === resumed.summary.profileSha256 ? recommendations : null;
+      const recommendation = programProfileRecommendation(question.id, { profile, recommendations: activeRecommendations });
       const choiceHint = questionChoicePrompt(question, recommendation);
       const requiredHint = question.required ? " [required]" : "";
       const multilineHint = question.type === "multiline" ? " [multiline; finish with . on its own line]" : "";
@@ -1028,7 +1030,7 @@ async function runProgramProfileQuestionnaire(id, mode, options = {}) {
       }
       if (command === "apply recommended") {
         try {
-          const result = applyProgramProfileRecommendations(id, recommendations, {
+          const result = applyProgramProfileRecommendations(id, activeRecommendations, {
             paths,
             expectedRevision: profile.metadata.revision,
             expectedProfileSha256: resumed.summary.profileSha256
@@ -1097,7 +1099,7 @@ async function runProgramProfileQuestionnaire(id, mode, options = {}) {
       updatedAnswers.answers[question.id] = answer;
       try {
         if (usedRecommendation) {
-          applyProgramProfileRecommendation(id, question.id, recommendations, {
+          applyProgramProfileRecommendation(id, question.id, question.recommendationPolicy?.class === "operator-preference" ? activeRecommendations : recommendations, {
             paths,
             expectedRevision: profile.metadata.revision,
             expectedProfileSha256: resumed.summary.profileSha256,

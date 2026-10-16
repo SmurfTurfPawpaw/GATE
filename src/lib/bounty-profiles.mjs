@@ -2415,10 +2415,10 @@ function programProfileSetupProgress(profile, envelope, options = {}) {
   );
   const answers = envelope?.answers || {};
   const answered = applicable.reduce(
-    (total, question) => total + (Object.hasOwn(answers, question.id) ? 1 : 0),
+    (total, question) => total + (Object.hasOwn(answers, question.id) && programProfileQuestionAnswerIsComplete(question, answers[question.id]) ? 1 : 0),
     0
   );
-  const next = applicable.find((question) => !Object.hasOwn(answers, question.id));
+  const next = applicable.find((question) => !Object.hasOwn(answers, question.id) || !programProfileQuestionAnswerIsComplete(question, answers[question.id]));
   return {
     answered,
     total: applicable.length,

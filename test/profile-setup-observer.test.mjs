@@ -559,3 +559,12 @@ test("observer API reads the bounded private fleet and marks cached setup state 
   assert.equal(fallback.profileSetupScan.truncated, true);
   assert.equal(JSON.stringify(fallback).includes("HTTP_STATUS_FAILURE_PRIVATE_CANARY"), false);
 });
+
+test("fleet progress excludes explicitly saved empty required lists", (t) => {
+  const { paths } = fixture(t);
+  createProgramProfile("empty-list-draft", { identity: { deliverables: [] } }, { paths, now: observedAt });
+  const fleet = programProfileSetupFleetStatus({ paths, now: observedAt });
+  assert.equal(fleet.profiles[0].progress.answered, 0);
+  assert.equal(fleet.profiles[0].nextSection, "identity-objectives");
+  assert.equal(fleet.profiles[0].stage, "questionnaire");
+});
