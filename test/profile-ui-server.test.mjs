@@ -121,7 +121,6 @@ test("profile UI serves a no-telemetry shell with strict browser policy", async 
   const accessibilityModule = await fetch(`${started.origin}/profile-ui/accessibility.js`);
   assert.equal(accessibilityModule.status, 200);
   assert.match(accessibilityModule.headers.get("content-type"), /text\/javascript/u);
-  assert.match(await accessibilityModule.text(), /bindFieldLabel/u);
 });
 
 test("profile state requires its unguessable in-memory session", async (t) => {

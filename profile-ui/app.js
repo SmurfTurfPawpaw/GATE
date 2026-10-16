@@ -424,7 +424,7 @@ function renderStringList(question) {
   const root = node("div", { className: "structured-list" });
   const list = node("div", { className: "structured-list" });
   const readGuided = () => [...list.querySelectorAll("input[data-list-item]")]
-    .map((input) => input.value.trim()).filter(Boolean);
+    .map((input) => input.value.trim());
   const paint = () => {
     replaceChildren(list, ...values.map((value, index) => {
       const input = textInput(value, { placeholder: "Add one clear item" });
@@ -455,7 +455,7 @@ function renderStringList(question) {
     focusLastRepeatedControl(list);
   });
   root.append(list, add);
-  return { root, read: advancedFallback(root, question.value || [], readGuided) };
+  return { root, read: advancedFallback(root, question.value || [], () => readGuided().filter(Boolean)) };
 }
 
 function contactCard(value, index, removeHandler, sources) {
@@ -497,14 +497,15 @@ function renderContacts(question) {
   const quick = node("div", { className: "quick-actions" });
   const list = node("div", { className: "structured-list" });
   const collectContacts = (validate) => {
-    const contacts = [...list.querySelectorAll("[data-contact]")].map((card) => ({
+    let contacts = [...list.querySelectorAll("[data-contact]")].map((card) => ({
       name: card.querySelector('[data-key="name"]').value.trim(),
       role: card.querySelector('[data-key="role"]').value.trim(),
       channel: card.querySelector('[data-key="channel"]').value.trim(),
       purpose: card.querySelector('[data-key="purpose"]').value.trim(),
       sourceRefs: [...card.querySelectorAll('[data-key="sourceRefs"] input:checked')].map((input) => input.value)
-    })).filter((contact) => Object.values(contact).some((value) => Array.isArray(value) ? value.length : value));
+    }));
     if (!validate) return contacts;
+    contacts = contacts.filter((contact) => Object.values(contact).some((value) => Array.isArray(value) ? value.length : value));
     if (!contacts.length) throw new FormError("Add at least one contact, or choose Skip for now.");
     contacts.forEach((contact, index) => {
       for (const key of ["name", "role", "channel", "purpose"]) {
@@ -1198,8 +1199,8 @@ async function bootstrap() {
   }
 }
 
-export function renderProfileControl(question, semantics) {
-  state = { semantics };
+export function renderProfileControl(question, semantics, sources = []) {
+  state = { semantics, sources };
   return renderControl(question);
 }
 

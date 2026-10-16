@@ -532,8 +532,8 @@ test("unavailable case scans stay unavailable through projection, sanitization, 
     assert.equal(dashboard.caseScan.complete, false);
     assert.equal(dashboard.caseScan.truncated, true);
     const summary = fleetSummaryPresentation(dashboard);
-    assert.equal(summary.availability, "lower-bound");
-    assert.equal(summary.activeLabel, "0+");
+    assert.equal(summary.availability, "unavailable");
+    assert.equal(summary.activeLabel, "—");
     assert.equal(caseScanPresentation(dashboard.caseScan, dashboard.cases.length),
       "0 cases visible · scan unavailable · partial");
     assert.equal(JSON.stringify(dashboard).includes("CASE_SCAN_UNAVAILABLE_PRIVATE_CANARY"), false);
@@ -1897,6 +1897,7 @@ test("warm cached fallback marks rows stale and fleet scans unavailable", async 
   assert.equal(first.cases[0].telemetry.freshness, "fresh");
   assert.equal(first.caseScan.availability, "available");
   assert.equal(fleetSummaryPresentation(sanitizeStatusPayload(first)).availability, "exact");
+  assert.equal(fleetSummaryPresentation(sanitizeStatusPayload(first)).activeLabel, "1");
   await new Promise((resolve) => setTimeout(resolve, 275));
   const fallbackResponse = await fetch(`${origin}/api/status`);
   const fallback = await fallbackResponse.json();
@@ -1917,7 +1918,9 @@ test("warm cached fallback marks rows stale and fleet scans unavailable", async 
   const dashboard = sanitizeStatusPayload(fallback);
   assert.ok(dashboard.cases.every((item) => item.telemetry.state === "stale"));
   assert.equal(dashboard.caseScan.availability, "unavailable");
-  assert.equal(fleetSummaryPresentation(dashboard).availability, "lower-bound");
+  assert.equal(fleetSummaryPresentation(dashboard).availability, "unavailable");
+  assert.equal(fleetSummaryPresentation(dashboard).activeLabel, "—");
+  assert.equal(fleetSummaryPresentation(dashboard).counts.active, 0);
   assert.equal(JSON.stringify(fallback).includes("PRIVATE_CACHED_BUILDER_FAILURE"), false);
 });
 

@@ -504,23 +504,29 @@ function profileSetupScanIsExact(scan, visibleSetups, visibleCases) {
 export function fleetSummaryPresentation(statusView = {}) {
   const cases = Array.isArray(statusView.cases) ? statusView.cases : [];
   const setups = Array.isArray(statusView.profileSetups) ? statusView.profileSetups : [];
-  const caseRows = cases.map((caseView) => ({
+  const currentCases = statusView.caseScan && statusView.caseScan.availability !== "unavailable" ? cases : [];
+  const currentSetups = statusView.profileSetupScan && statusView.profileSetupScan.availability !== "unavailable"
+    ? setups.filter((item) => item.freshness !== "stale") : [];
+  const caseRows = currentCases.map((caseView) => ({
     row: caseFleetRowPresentation(caseView),
     live: casePresentation(caseView, statusView.operator)
   }));
-  const setupRows = setups.map((setup) => profileSetupPresentation(setup));
+  const setupRows = currentSetups.map((setup) => profileSetupPresentation(setup));
   const counts = {
     active: caseRows.filter(({ live }) => live.active).length,
     waiting: caseRows.filter(({ row }) => row.state === "waiting").length +
       setupRows.filter((row) => row.readiness !== "ready" && row.stage !== "superseded").length,
     attention: caseRows.filter(({ row }) => row.attentionTone !== "clear").length +
       setupRows.filter((row) => row.attentionTone !== "clear").length,
-    visible: cases.length + setups.length
+    visible: currentCases.length + currentSetups.length
   };
   const observed = typeof statusView.observedAt === "string" && Number.isFinite(Date.parse(statusView.observedAt));
   const exact = observed && caseScanIsExact(statusView.caseScan, cases.length) &&
     profileSetupScanIsExact(statusView.profileSetupScan, setups.length, cases.length);
-  const availability = !observed ? "unavailable" : exact ? "exact" : "lower-bound";
+  const available = observed && statusView.caseScan && statusView.profileSetupScan &&
+    statusView.caseScan.availability !== "unavailable" && statusView.profileSetupScan.availability !== "unavailable" &&
+    currentCases.length === cases.length && currentSetups.length === setups.length;
+  const availability = !available ? "unavailable" : exact ? "exact" : "lower-bound";
   const label = (value) => availability === "unavailable" ? "—" : availability === "lower-bound" ? `${value}+` : String(value);
   const detail = availability === "unavailable"
     ? "Fleet status unavailable"
@@ -1900,6 +1906,14 @@ export function reconcileRefreshResults(current, results, now = Date.now()) {
     networkSucceeded = true;
   } else {
     failedEndpoints.add(observerContract.status);
+    status = {
+      ...status,
+      telemetry: { ...status?.telemetry, state: "stale" },
+      cases: (status?.cases || []).map((item) => ({ ...item, telemetry: { ...item.telemetry, state: "stale" } })),
+      profileSetups: (status?.profileSetups || []).map((item) => ({ ...item, freshness: "stale" })),
+      caseScan: { ...status?.caseScan, availability: "unavailable", complete: false, truncated: true },
+      profileSetupScan: { ...status?.profileSetupScan, availability: "unavailable", complete: false, truncated: true }
+    };
   }
 
   if (results.events.status === "fulfilled" && validCollectionPayload(results.events.value, "events")) {

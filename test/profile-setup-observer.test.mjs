@@ -12,6 +12,7 @@ import {
 import { runtimePaths } from "../src/lib/paths.mjs";
 import { projectSnapshot, startObserver } from "../src/observer/server.mjs";
 import { sanitizeStatusPayload } from "../dashboard/model.js";
+import { fleetSummaryPresentation } from "../dashboard/app.js";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const observedAt = "2026-10-16T08:00:00.000Z";
@@ -523,6 +524,10 @@ test("a warm profile scan failure advances status while retaining stale setup ro
   assert.equal(second.profileSetupScan.complete, false);
   assert.equal(second.profileSetupScan.truncated, true);
   assert.equal(second.profileSetupScan.visible, 1);
+  const summary = fleetSummaryPresentation(sanitizeStatusPayload(second));
+  assert.equal(summary.availability, "unavailable");
+  assert.equal(summary.waitingLabel, "—");
+  assert.equal(summary.counts.waiting, 0);
   assert.equal(JSON.stringify(second).includes("WARM_PROFILE_SCAN_FAILURE_PRIVATE_CANARY"), false);
 });
 

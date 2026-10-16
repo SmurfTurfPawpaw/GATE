@@ -93,7 +93,9 @@ test("malformed successful status envelopes preserve the last valid status and r
       events: rejected(),
       learnings: rejected()
     }, 250);
-    assert.strictEqual(next.status, current.status);
+    assert.equal(next.status.observedAt, current.status.observedAt);
+    assert.equal(next.status.telemetry.state, "stale");
+    assert.equal(fleetSummaryPresentation(next.status).availability, "unavailable");
     assert.equal(next.failedEndpoints.has("/api/status"), true);
     assert.equal(next.lastNetworkSuccess, current.lastNetworkSuccess);
   }
@@ -121,7 +123,9 @@ test("a total refresh failure keeps the previous network-success timestamp", () 
     learnings: rejected()
   }, 400);
 
-  assert.strictEqual(next.status, current.status);
+  assert.equal(next.status.observedAt, current.status.observedAt);
+  assert.equal(next.status.telemetry.state, "stale");
+  assert.equal(fleetSummaryPresentation(next.status).availability, "unavailable");
   assert.strictEqual(next.events, current.events);
   assert.strictEqual(next.learnings, current.learnings);
   assert.equal(next.lastNetworkSuccess, 100);
@@ -686,7 +690,7 @@ test("fleet summary cards distinguish unavailable, lower-bound, and exact covera
   assert.equal(initial.attentionLabel, "—");
   assert.equal(
     fleetSummaryPresentation({ observedAt: at, caseScan: null, profileSetupScan: null }).availability,
-    "lower-bound"
+    "unavailable"
   );
 
   const visibleCase = {
@@ -724,8 +728,8 @@ test("fleet summary cards distinguish unavailable, lower-bound, and exact covera
     caseScan: { availability: "unavailable", discovered: 1, scanned: 1, complete: true, truncated: false, omitted: 0, invalid: 0 },
     profileSetupScan: { availability: "available", discovered: 0, scanned: 0, complete: true, truncated: false, omitted: 0, invalid: 0 }
   });
-  assert.equal(unavailable.availability, "lower-bound", "an unavailable scan cannot claim an exact visible subset");
-  assert.equal(unavailable.activeLabel, "1+");
+  assert.equal(unavailable.availability, "unavailable", "an unavailable scan cannot establish current fleet counts");
+  assert.equal(unavailable.activeLabel, "—");
 
   const exactScan = { availability: "available", discovered: 1, scanned: 1, complete: true, truncated: false, omitted: 0, invalid: 0 };
   const exact = fleetSummaryPresentation({
@@ -739,6 +743,21 @@ test("fleet summary cards distinguish unavailable, lower-bound, and exact covera
   assert.equal(exact.activeLabel, "1");
   assert.equal(exact.waitingLabel, "0");
   assert.equal(exact.attentionLabel, "0");
+  const observed = {
+    observedAt: at, cases: [visibleCase], profileSetups: [], caseScan: exactScan,
+    profileSetupScan: { ...exactScan, discovered: 0, scanned: 0, visible: 0, representedByCases: 0 }
+  };
+  const refresh = reconcileRefreshResults({ ...currentState(), status: observed }, {
+    status: rejected(), events: fulfilled({ apiVersion: "gate.observer/v1", at, events: [] }), learnings: rejected()
+  }, 500);
+  assert.equal(refresh.status.cases.length, 1);
+  assert.equal(refresh.status.cases[0].state, "running");
+  assert.equal(refresh.status.cases[0].telemetry.state, "stale");
+  const cached = fleetSummaryPresentation(refresh.status);
+  assert.equal(cached.availability, "unavailable");
+  assert.equal(cached.activeLabel, "—");
+  assert.equal(cached.counts.active, 0);
+  assert.equal(fleetSummaryPresentation(observed).activeLabel, "1");
 });
 
 test("sanitized unavailable scan states cannot become exact fleet zeroes", () => {
@@ -759,8 +778,8 @@ test("sanitized unavailable scan states cannot become exact fleet zeroes", () =>
   });
   assert.equal(caseUnavailable.caseScan.availability, "unavailable");
   assert.equal(caseUnavailable.caseScan.complete, false);
-  assert.equal(fleetSummaryPresentation(caseUnavailable).availability, "lower-bound");
-  assert.equal(fleetSummaryPresentation(caseUnavailable).activeLabel, "0+");
+  assert.equal(fleetSummaryPresentation(caseUnavailable).availability, "unavailable");
+  assert.equal(fleetSummaryPresentation(caseUnavailable).activeLabel, "—");
 
   const profileUnavailable = sanitizeStatusPayload({
     at,
@@ -771,8 +790,8 @@ test("sanitized unavailable scan states cannot become exact fleet zeroes", () =>
   });
   assert.equal(profileUnavailable.profileSetupScan.availability, "unavailable");
   assert.equal(profileUnavailable.profileSetupScan.complete, false);
-  assert.equal(fleetSummaryPresentation(profileUnavailable).availability, "lower-bound");
-  assert.equal(fleetSummaryPresentation(profileUnavailable).attentionLabel, "0+");
+  assert.equal(fleetSummaryPresentation(profileUnavailable).availability, "unavailable");
+  assert.equal(fleetSummaryPresentation(profileUnavailable).attentionLabel, "—");
 });
 
 test("sanitized contradictory available scan counts remain lower bounds", () => {

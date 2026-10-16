@@ -165,3 +165,41 @@ test("source add and remove preserve an unfinished UTC draft", () => {
   withDom(() => editor.root.querySelectorAll("button").filter((button) => button.textContent === "Remove")[1].click());
   assert.equal(editor.root.querySelector('input[type="datetime-local"]').value, "2026-10");
 });
+
+test("removing a cleared deliverable preserves every neighboring answer", () => {
+  for (const index of [0, 1, 2]) {
+    const editor = control("identity-deliverables", ["A", "B", "C"]);
+    editor.root.querySelectorAll("input[data-list-item]")[index].value = "";
+    withDom(() => editor.root.querySelectorAll("button").filter((button) => button.textContent === "Remove")[index].click());
+    assert.deepEqual(editor.read(), ["A", "B", "C"].filter((_, position) => position !== index));
+  }
+});
+
+test("adding deliverables preserves blank row positions until final serialization", () => {
+  const editor = control("identity-deliverables", ["A", "B", "C"]);
+  editor.root.querySelectorAll("input[data-list-item]")[0].value = "";
+  withDom(() => editor.root.querySelectorAll("button").find((button) => button.textContent === "+ Add item").click());
+  assert.deepEqual(editor.root.querySelectorAll("input[data-list-item]").map((input) => input.value), ["", "B", "C", ""]);
+  assert.deepEqual(editor.read(), ["B", "C"]);
+});
+
+test("contact add and remove preserve empty row indices and neighboring contacts", () => {
+  const contacts = ["A", "B", "C"].map((name) => ({ name, role: "Security", channel: "Local channel", purpose: "Escalation", sourceRefs: [] }));
+  for (const question of ["authority-contacts", "stops-escalation-contacts"]) {
+    for (const index of [0, 1, 2]) {
+      const editor = control(question, contacts);
+      const row = editor.root.querySelectorAll("[data-contact]")[index];
+      for (const input of row.querySelectorAll("input, textarea")) input.value = "";
+      withDom(() => editor.root.querySelectorAll("button").filter((button) => button.textContent === "Remove")[index].click());
+      assert.deepEqual(editor.read(), contacts.filter((_, position) => position !== index));
+    }
+    for (const action of ["+ Add contact", "Add platform contact"]) {
+      const editor = control(question, contacts);
+      for (const input of editor.root.querySelectorAll("[data-contact]")[0].querySelectorAll("input, textarea")) input.value = "";
+      withDom(() => editor.root.querySelectorAll("button").find((button) => button.textContent === action).click());
+      assert.equal(editor.root.querySelectorAll("[data-contact]").length, 4);
+      withDom(() => editor.root.querySelectorAll("button").filter((button) => button.textContent === "Remove")[3].click());
+      assert.deepEqual(editor.read(), contacts.slice(1));
+    }
+  }
+});
