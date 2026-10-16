@@ -18,21 +18,25 @@ const paths = { repo };
 const catalog = JSON.parse(fs.readFileSync(path.join(repo, "config", "objective-routes.json"), "utf8"));
 const toolCatalog = JSON.parse(fs.readFileSync(path.join(repo, "catalog", "security-tools.json"), "utf8"));
 
-function inferred(summary) {
-  return { provenance: "model-derived", claimState: "inferred", summary, sourceRefs: [] };
+function inferred(code = "objective-classification") {
+  return { provenance: "model-derived", claimState: "inferred", code, sourceRefs: [] };
 }
 
-function stated(summary) {
-  return { provenance: "operator-stated", claimState: "observed", summary, sourceRefs: [] };
+function stated() {
+  return { provenance: "operator-stated", claimState: "observed", code: "operator-explicit", sourceRefs: [] };
+}
+
+function unknownBasis() {
+  return { provenance: "model-derived", claimState: "unverified", code: "insufficient-evidence", sourceRefs: [] };
 }
 
 function proposal(overrides = {}) {
   const dimensions = {
-    domain: { value: "security-incident", basis: inferred("A reported account and payment event needs investigation.") },
-    deliverable: { value: "investigation-report", basis: inferred("The requested result is an explanation.") },
-    relationship: { value: "unknown", basis: inferred("The relationship to the affected records is not stated.") },
-    highestEffect: { value: "local-write", basis: inferred("The initial plan uses private local analysis.") },
-    dataClass: { value: "sensitive", basis: inferred("Account and payment records are sensitive.") },
+    domain: { value: "security-incident", basis: inferred() },
+    deliverable: { value: "investigation-report", basis: inferred() },
+    relationship: { value: "unknown", basis: inferred() },
+    highestEffect: { value: "local-write", basis: inferred() },
+    dataClass: { value: "sensitive", basis: inferred() },
     ...(overrides.dimensions || {})
   };
   const value = {
@@ -48,25 +52,33 @@ function proposal(overrides = {}) {
     dimensions,
     signals: overrides.signals || ["account", "payment", "order"].map((id) => ({
       id,
-      basis: inferred(`The objective concerns ${id} activity.`)
+      basis: inferred()
     })),
     answers: overrides.answers || {
       "immediate-goal": {
         choiceId: "explain",
         mode: "recommendation",
-        basis: inferred("The requested result is an explanation.")
+        basis: inferred()
       }
     }
   };
   return value;
 }
 
-test("objective route catalog is schema-valid, internally closed, and uses catalogued tool ids", () => {
+test("objective route catalog is schema-valid, internally closed, and uses registered security-tool ids", () => {
   assert.deepEqual(validateDocument(catalog, "objective-route-catalog.schema.json", { paths }).errors, []);
   assert.deepEqual(objectiveRouteCatalogSemanticErrors(catalog, {
     paths,
     toolIds: toolCatalog.tools.map((tool) => tool.id)
   }), []);
+
+  const widenedBasis = structuredClone(catalog);
+  widenedBasis.basisCodes.find((entry) => entry.id === "operator-explicit")
+    .allowedProvenance.push("model-derived");
+  assert.match(
+    objectiveRouteCatalogSemanticErrors(widenedBasis, { paths }).join("; "),
+    /must use its exact allowed provenance/u
+  );
 });
 
 test("an account/payment/order abuse objective receives an incident plan without becoming a Program Profile", () => {
@@ -95,7 +107,7 @@ test("an account/payment/order abuse objective receives an incident plan without
   assert.ok(first.evidencePlan.some((step) => step.id === "competing-hypotheses"));
   assert.ok(first.capabilities.some((capability) => capability.id === "timeline-correlation"));
   assert.ok(first.capabilities.flatMap((capability) => capability.tools).every((tool) =>
-    tool.state === "catalogued" && tool.suitable === "unknown"
+    tool.state === "route-listed" && tool.suitable === "unknown"
   ));
   assert.doesNotMatch(JSON.stringify(first), /meal-delivery|uber|objective concerns account activity/iu);
   assert.equal(validateDocument(first, "objective-recommendation.schema.json", { paths }).ok, true);
@@ -104,15 +116,15 @@ test("an account/payment/order abuse objective receives an incident plan without
 
 test("bug bounty and generic security assessments use different handlers", () => {
   const securityDimensions = {
-    domain: { value: "security-assessment", basis: inferred("The objective is a security assessment.") },
-    deliverable: { value: "investigation-report", basis: inferred("The requested result is an assessment report.") },
-    relationship: { value: "unknown", basis: inferred("The relationship is not established in routing input.") },
-    highestEffect: { value: "target-contact", basis: inferred("The eventual assessment may include target contact.") },
-    dataClass: { value: "sensitive", basis: inferred("Assessment scope information is sensitive.") }
+    domain: { value: "security-assessment", basis: inferred() },
+    deliverable: { value: "investigation-report", basis: inferred() },
+    relationship: { value: "unknown", basis: inferred() },
+    highestEffect: { value: "target-contact", basis: inferred() },
+    dataClass: { value: "sensitive", basis: inferred() }
   };
   const bounty = proposal({
     dimensions: securityDimensions,
-    signals: [{ id: "bounty-program", basis: inferred("The objective explicitly names a bounty program.") }],
+    signals: [{ id: "bounty-program", basis: inferred() }],
     answers: {}
   });
   const generic = proposal({ dimensions: securityDimensions, signals: [], answers: {} });
@@ -128,30 +140,30 @@ test("bug bounty and generic security assessments use different handlers", () =>
 
 test("software change and investigation proposals route to distinct Firstmate handoffs", () => {
   const shared = {
-    relationship: { value: "owned", basis: stated("The operator stated that this is their project.") },
-    highestEffect: { value: "local-write", basis: inferred("The work changes a local project copy.") },
-    dataClass: { value: "internal", basis: inferred("Repository work is internal by default.") }
+    relationship: { value: "owned", basis: stated() },
+    highestEffect: { value: "local-write", basis: inferred() },
+    dataClass: { value: "internal", basis: inferred() }
   };
   const answer = {
     "project-binding": {
       choiceId: "registered-project",
       mode: "explicit",
-      basis: stated("The operator selected the registered project context.")
+      basis: stated()
     }
   };
   const change = proposal({
     dimensions: {
-      domain: { value: "software", basis: inferred("The objective requests software work.") },
-      deliverable: { value: "change", basis: inferred("The requested result is a change.") },
+      domain: { value: "software", basis: inferred() },
+      deliverable: { value: "change", basis: inferred() },
       ...shared
     },
-    signals: [{ id: "repository", basis: inferred("The objective refers to a repository.") }],
+    signals: [{ id: "repository", basis: inferred() }],
     answers: answer
   });
   const investigation = structuredClone(change);
   investigation.dimensions.deliverable = {
     value: "investigation-report",
-    basis: inferred("The requested result is a separate investigation report.")
+    basis: inferred()
   };
 
   assert.equal(resolveObjectiveRecommendation(catalog, change, { paths }).route.handler.id, "firstmate-ship");
@@ -164,7 +176,7 @@ test("manual facts cannot be recommendations or model-inferred relationship clai
       "data-access-basis": {
         choiceId: "own-records",
         mode: "recommendation",
-        basis: inferred("The model guessed that the records are accessible.")
+        basis: inferred()
       }
     }
   });
@@ -175,7 +187,7 @@ test("manual facts cannot be recommendations or model-inferred relationship clai
 
   const inferredOwnership = proposal({
     dimensions: {
-      relationship: { value: "owned", basis: inferred("The model guessed ownership.") }
+      relationship: { value: "owned", basis: inferred() }
     }
   });
   assert.match(
@@ -185,18 +197,18 @@ test("manual facts cannot be recommendations or model-inferred relationship clai
 
   const explicitAccess = proposal({
     dimensions: {
-      relationship: { value: "owned", basis: stated("The operator directly stated ownership.") }
+      relationship: { value: "owned", basis: stated() }
     },
     answers: {
       "data-access-basis": {
         choiceId: "own-records",
         mode: "explicit",
-        basis: stated("The operator selected access to their own records.")
+        basis: stated()
       },
       "immediate-goal": {
         choiceId: "explain",
         mode: "recommendation",
-        basis: inferred("The requested result is an explanation.")
+        basis: inferred()
       }
     }
   });
@@ -207,7 +219,117 @@ test("manual facts cannot be recommendations or model-inferred relationship clai
   assert.equal(access.recommendedChoiceId, null);
 });
 
-test("stale, unverified, structurally expanded, and false-observation proposals are rejected", () => {
+test("resolved manual choices gate access-dependent actions by allowed choice", () => {
+  const reportOnly = proposal({
+    dimensions: {
+      relationship: { value: "owned", basis: stated() }
+    },
+    answers: {
+      "subject-relationship": { choiceId: "owned", mode: "explicit", basis: stated() },
+      "data-access-basis": { choiceId: "report-only", mode: "explicit", basis: stated() },
+      "immediate-goal": { choiceId: "explain", mode: "explicit", basis: stated() }
+    }
+  });
+  const reportOnlyResult = resolveObjectiveRecommendation(catalog, reportOnly, { paths });
+  assert.equal(reportOnlyResult.nextActions.find((action) => action.id === "outline-incident-evidence").state, "ready-to-plan");
+  for (const actionId of ["preserve-accessible-records", "build-incident-timeline", "test-leading-explanations"]) {
+    const action = reportOnlyResult.nextActions.find((entry) => entry.id === actionId);
+    assert.equal(action.state, "blocked");
+    assert.ok(action.reasonIds.includes("choice-precondition-not-met:data-access-basis"));
+  }
+
+  const accessible = structuredClone(reportOnly);
+  accessible.answers["data-access-basis"].choiceId = "own-records";
+  const accessibleResult = resolveObjectiveRecommendation(catalog, accessible, { paths });
+  assert.ok(accessibleResult.nextActions
+    .filter((action) => action.id !== "outline-incident-evidence")
+    .every((action) => action.state === "ready-to-plan"));
+
+  const unknownArtifact = proposal({
+    dimensions: {
+      domain: { value: "data-analysis", basis: inferred() },
+      deliverable: { value: "investigation-report", basis: inferred() },
+      highestEffect: { value: "local-read", basis: inferred() }
+    },
+    signals: [{ id: "artifact", basis: inferred("signal-classification") }],
+    answers: {
+      "artifact-possession": { choiceId: "unknown", mode: "explicit", basis: stated() }
+    }
+  });
+  const artifactResult = resolveObjectiveRecommendation(catalog, unknownArtifact, { paths });
+  assert.equal(artifactResult.route.id, "local-artifact-analysis");
+  assert.ok(artifactResult.nextActions.every((action) =>
+    action.state === "blocked" && action.reasonIds.includes("choice-precondition-not-met:artifact-possession")
+  ));
+
+  const unknownSystem = proposal({
+    dimensions: {
+      domain: { value: "system-operations", basis: inferred() },
+      deliverable: { value: "operation", basis: inferred() },
+      highestEffect: { value: "local-read", basis: inferred() },
+      dataClass: { value: "internal", basis: inferred() }
+    },
+    signals: [],
+    answers: {
+      "operation-scope": { choiceId: "unknown-system", mode: "explicit", basis: stated() }
+    }
+  });
+  const systemResult = resolveObjectiveRecommendation(catalog, unknownSystem, { paths });
+  assert.equal(systemResult.route.id, "system-operation");
+  assert.equal(systemResult.nextActions[0].state, "blocked");
+  assert.ok(systemResult.nextActions[0].reasonIds.includes("choice-precondition-not-met:operation-scope"));
+});
+
+test("unknown and mixed objectives surface a bounded clarification and decomposition route", () => {
+  const unknown = proposal({
+    dimensions: {
+      domain: { value: "unknown", basis: unknownBasis() },
+      deliverable: { value: "unknown", basis: unknownBasis() },
+      relationship: { value: "unknown", basis: unknownBasis() },
+      highestEffect: { value: "unknown", basis: unknownBasis() },
+      dataClass: { value: "unknown", basis: unknownBasis() }
+    },
+    signals: [],
+    answers: {}
+  });
+  const unknownResult = resolveObjectiveRecommendation(catalog, unknown, { paths });
+  assert.equal(unknownResult.route.id, "objective-clarification");
+  assert.equal(unknownResult.route.handler.id, "objective-decomposition-plan");
+  assert.equal(unknownResult.route.handler.state, "planning-only");
+  assert.equal(unknownResult.route.claimState, "unverified");
+  assert.deepEqual(unknownResult.unresolvedQuestionIds, ["primary-workstream", "decomposition-mode"]);
+  assert.ok(unknownResult.questions.length >= 1 && unknownResult.questions.length <= 3);
+  assert.equal(unknownResult.executionAuthority, false);
+
+  const mixed = proposal({
+    dimensions: {
+      domain: { value: "mixed", basis: inferred("mixed-workstreams") },
+      deliverable: { value: "unknown", basis: unknownBasis() }
+    },
+    signals: [],
+    answers: {}
+  });
+  assert.equal(resolveObjectiveRecommendation(catalog, mixed, { paths }).route.id, "objective-clarification");
+
+  const bountyAndIncident = proposal({
+    dimensions: {
+      domain: { value: "security-assessment", basis: inferred() },
+      deliverable: { value: "investigation-report", basis: inferred() },
+      highestEffect: { value: "target-contact", basis: inferred() }
+    },
+    signals: ["bounty-program", "account", "payment"].map((id) => ({
+      id,
+      basis: inferred("signal-classification")
+    })),
+    answers: {}
+  });
+  const mixedResult = resolveObjectiveRecommendation(catalog, bountyAndIncident, { paths });
+  assert.equal(mixedResult.route.id, "mixed-bounty-incident-decomposition");
+  assert.notEqual(mixedResult.route.handler.id, "program-profile-intake");
+  assert.deepEqual(mixedResult.unresolvedQuestionIds, ["primary-workstream", "decomposition-mode"]);
+});
+
+test("stale, non-categorical, structurally expanded, and false-observation proposals are rejected", () => {
   const stale = proposal({ metadata: { routeCatalogSha256: "0".repeat(64) } });
   assert.match(
     objectiveRoutingProposalSemanticErrors(catalog, stale, { paths }).join("; "),
@@ -218,20 +340,20 @@ test("stale, unverified, structurally expanded, and false-observation proposals 
     dimensions: {
       domain: {
         value: "security-incident",
-        basis: { provenance: "model-derived", claimState: "unverified", summary: "The domain is uncertain.", sourceRefs: [] }
+        basis: { provenance: "model-derived", claimState: "unverified", code: "insufficient-evidence", sourceRefs: [] }
       }
     }
   });
   assert.match(
     objectiveRoutingProposalSemanticErrors(catalog, unverified, { paths }).join("; "),
-    /cannot route from unverified evidence/u
+    /may be unverified only when its value is unknown/u
   );
 
   const falseObservation = proposal({
     dimensions: {
       domain: {
         value: "security-incident",
-        basis: { provenance: "model-derived", claimState: "observed", summary: "The model labeled the domain.", sourceRefs: [] }
+        basis: { provenance: "model-derived", claimState: "observed", code: "objective-classification", sourceRefs: [] }
       }
     }
   });
@@ -243,10 +365,16 @@ test("stale, unverified, structurally expanded, and false-observation proposals 
   const expanded = { ...proposal(), objective: "raw objective text must not enter this envelope" };
   assert.equal(validateDocument(expanded, "objective-routing-proposal.schema.json", { paths }).ok, false);
 
-  const oversized = proposal();
-  oversized.dimensions.domain.basis.summary = "x".repeat(65 * 1024);
-  const oversizedErrors = objectiveRoutingProposalSemanticErrors(catalog, oversized, { paths });
-  assert.ok(oversizedErrors.some((error) => /must NOT have more than 240 characters|64 KiB limit/u.test(error)));
+  const freeTextBasis = proposal();
+  freeTextBasis.dimensions.domain.basis.summary = "https://private.example/a/local/path";
+  assert.equal(validateDocument(freeTextBasis, "objective-routing-proposal.schema.json", { paths }).ok, false);
+
+  const unregisteredCode = proposal();
+  unregisteredCode.dimensions.domain.basis.code = "target-specific-explanation";
+  assert.match(
+    objectiveRoutingProposalSemanticErrors(catalog, unregisteredCode, { paths }).join("; "),
+    /unregistered basis code/u
+  );
 });
 
 test("handler availability and objective effect bounds remain visible", () => {
@@ -262,7 +390,7 @@ test("handler availability and objective effect bounds remain visible", () => {
 
   const readOnly = proposal({
     dimensions: {
-      highestEffect: { value: "local-read", basis: inferred("The objective is bounded to local reads.") }
+      highestEffect: { value: "local-read", basis: inferred() }
     }
   });
   const bounded = resolveObjectiveRecommendation(catalog, readOnly, { paths });
@@ -275,7 +403,7 @@ test("handler availability and objective effect bounds remain visible", () => {
 
   const unknownEffect = proposal({
     dimensions: {
-      highestEffect: { value: "unknown", basis: inferred("The eventual effect is not established.") }
+      highestEffect: { value: "unknown", basis: inferred() }
     }
   });
   const unknown = resolveObjectiveRecommendation(catalog, unknownEffect, { paths });

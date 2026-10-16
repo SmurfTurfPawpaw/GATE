@@ -49,7 +49,7 @@
       "properties": {
         "id": { "$ref": "#/$defs/id" },
         "rationale": { "$ref": "#/$defs/oneLine" },
-        "claimState": { "enum": ["observed", "inferred"] },
+        "claimState": { "enum": ["observed", "inferred", "unverified"] },
         "handler": {
           "type": "object",
           "additionalProperties": false,
@@ -104,7 +104,7 @@
               "required": ["toolId", "state", "suitable"],
               "properties": {
                 "toolId": { "$ref": "#/$defs/id" },
-                "state": { "const": "catalogued" },
+                "state": { "const": "route-listed" },
                 "suitable": { "const": "unknown" }
               }
             }
@@ -205,7 +205,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["field", "provenance", "claimState", "sourceCount"],
+        "required": ["field", "provenance", "claimState", "basisCode", "sourceCount"],
         "properties": {
           "field": {
             "type": "string",
@@ -214,7 +214,8 @@
           "provenance": {
             "enum": ["reviewed-policy", "operator-stated", "source-derived", "model-derived", "local-derived"]
           },
-          "claimState": { "enum": ["observed", "inferred"] },
+          "claimState": { "enum": ["observed", "inferred", "unverified"] },
+          "basisCode": { "$ref": "#/$defs/id" },
           "sourceCount": { "type": "integer", "minimum": 0, "maximum": 32 }
         }
       }
@@ -242,12 +243,13 @@
     "publicBasis": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["provenance", "claimState", "sourceCount"],
+      "required": ["provenance", "claimState", "basisCode", "sourceCount"],
       "properties": {
         "provenance": {
           "enum": ["reviewed-policy", "operator-stated", "source-derived", "model-derived", "local-derived"]
         },
-        "claimState": { "enum": ["observed", "inferred"] },
+        "claimState": { "enum": ["observed", "inferred", "unverified"] },
+        "basisCode": { "$ref": "#/$defs/id" },
         "sourceCount": { "type": "integer", "minimum": 0, "maximum": 32 }
       }
     }

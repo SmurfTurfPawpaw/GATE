@@ -63,23 +63,17 @@
   "$defs": {
     "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,95}$" },
     "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-    "summary": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 240,
-      "pattern": "^[^\\u0000\\r\\n]+$"
-    },
     "sourceRef": { "type": "string", "pattern": "^src_[a-f0-9]{16,64}$" },
     "basis": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["provenance", "claimState", "summary", "sourceRefs"],
+      "required": ["provenance", "claimState", "code", "sourceRefs"],
       "properties": {
         "provenance": {
           "enum": ["reviewed-policy", "operator-stated", "source-derived", "model-derived", "local-derived"]
         },
         "claimState": { "enum": ["observed", "inferred", "unverified"] },
-        "summary": { "$ref": "#/$defs/summary" },
+        "code": { "$ref": "#/$defs/id" },
         "sourceRefs": {
           "type": "array",
           "maxItems": 32,
@@ -103,7 +97,9 @@
             "system-operations",
             "communication",
             "personal-administration",
-            "other"
+            "other",
+            "mixed",
+            "unknown"
           ]
         },
         "basis": { "$ref": "#/$defs/basis" }
@@ -115,7 +111,7 @@
       "required": ["value", "basis"],
       "properties": {
         "value": {
-          "enum": ["change", "answer", "investigation-report", "decision", "operation", "monitor", "communication"]
+          "enum": ["change", "answer", "investigation-report", "decision", "operation", "monitor", "communication", "unknown"]
         },
         "basis": { "$ref": "#/$defs/basis" }
       }
@@ -145,7 +141,7 @@
       "additionalProperties": false,
       "required": ["value", "basis"],
       "properties": {
-        "value": { "enum": ["public", "internal", "sensitive", "secret"] },
+        "value": { "enum": ["public", "internal", "sensitive", "secret", "unknown"] },
         "basis": { "$ref": "#/$defs/basis" }
       }
     }

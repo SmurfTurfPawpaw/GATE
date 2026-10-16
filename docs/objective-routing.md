@@ -8,15 +8,15 @@ The v0.1 core is deliberately small. A reviewed skill derives a categorical prop
 
 The router does not scan raw prose for trigger words. The local agent or controller first classifies the objective on five independent dimensions:
 
-- **domain:** software, security assessment, security incident, research, data analysis, system operations, communication, personal administration, or other;
-- **deliverable:** change, answer, investigation report, decision, operation, monitor, or communication;
+- **domain:** software, security assessment, security incident, research, data analysis, system operations, communication, personal administration, other, mixed, or unknown;
+- **deliverable:** change, answer, investigation report, decision, operation, monitor, communication, or unknown;
 - **relationship:** operator-owned, authorized, public, third party, or unknown;
 - **highest effect:** none, local read, local write, external read, external write, target contact, high impact, or unknown;
-- **data class:** the existing public, internal, sensitive, or secret vocabulary.
+- **data class:** public, internal, sensitive, secret, or the routing-only `unknown` sentinel.
 
 Bounded signals such as `repository`, `bounty-program`, `account`, `payment`, `order`, `artifact`, or `application` refine a route. They never contain a target, account, person, URL, path, or source body.
 
-The model may infer the domain, deliverable, effect, data class, and signals. It labels those facts `inferred`. A non-unknown relationship must be directly operator-stated and `observed`; the resolver rejects model-inferred ownership or authorization. Unverified dimensions and signals cannot select a route.
+The model may infer the domain, deliverable, effect, data class, and signals. It labels those facts `inferred`. A non-unknown relationship must be directly operator-stated and `observed`; the resolver rejects model-inferred ownership or authorization. An unverified dimension is accepted only with its `unknown` value. An unknown or mixed domain routes to clarification; other unknown dimensions remain visible to the selected route. Signals and proposed answers cannot be unverified.
 
 [`config/objective-routes.json`](../config/objective-routes.json) contains the reviewed routes. Each route names its current handler and one honest state:
 
@@ -27,17 +27,19 @@ The model may infer the domain, deliverable, effect, data class, and signals. It
 
 The unconditional general route ensures an unfamiliar objective still receives an evidence-led plan. A unique priority makes route selection independent of catalog order.
 
-## Private proposal
+If the objective spans independently actionable outcomes, classify its domain as `mixed`. A higher-priority route also detects the categorical combination of a bounty-program signal with account, payment, order, identity, or device incident signals. Both cases route to clarification and decomposition before either Program Profile or incident intake. The route returns two registered choice questions: which workstream should own the first result, and whether to split, choose one first, keep a combined planning-only view, or gather more evidence.
+
+## Private categorical proposal
 
 `ObjectiveRoutingProposal/v1` is a categorical, maximum-64-KiB envelope. It contains:
 
 - a random opaque objective handle;
 - the exact route-catalog SHA-256 digest;
 - the five dimensions and bounded signals;
-- provenance, claim state, a short sanitized basis, and opaque source references;
+- provenance, claim state, a registered categorical basis code, and opaque source references;
 - explicit answers or answer recommendations for registered choice questions.
 
-It has no field for the raw objective. JSON Schema rejects extra fields, so the statement, target, account, contact, authorization text, source body, private path, credential, command, and tool arguments cannot be added to this envelope. Keep the original statement in the current conversation only when its data classification permits that provider, or in a future private objective record under `GATE_HOME`. Secret values remain outside model input and belong in the existing secret-reference path.
+The proposal has no free-text field and no field for the raw objective. JSON Schema rejects extra fields, including a free-text basis summary. The statement, target, account, contact, authorization text, source body, private path, URL, credential, command, and tool arguments therefore cannot be represented in this envelope. Keep the original statement in the current conversation only when its data classification permits that provider, or in a future private objective record under `GATE_HOME`. Secret values remain outside model input and belong in the existing secret-reference path.
 
 The proposal is bound to `objectiveCanonicalSha256(catalog)`. A catalog change makes an older proposal stale. The resolver also returns a digest of the exact proposal and a digest of its recommendation.
 
@@ -48,6 +50,8 @@ Provenance has five values:
 - `source-derived` for a proposal tied to opaque local source references;
 - `model-derived` for an AI inference, which can never be labeled observed;
 - `local-derived` for a categorical result obtained by a local controller.
+
+Every basis also names one code from the catalog's exact ordered vocabulary. The catalog binds each code to allowed provenance, so an `operator-explicit` basis cannot be relabeled model-derived and a `source-classification` requires source-derived provenance plus at least one opaque reference. Codes cover reviewed defaults, explicit selections, objective and source classification, local observation, insufficient evidence, mixed workstreams, requested outcomes, effect estimates, data classification, and signal classification. Arbitrary explanatory prose belongs outside the proposal and is omitted from the recommendation.
 
 The core validates the shape of opaque source references but has no source registry and cannot prove that a referenced source exists. A future persisted controller must resolve and bind those references before accepting a source-derived proposal.
 
@@ -60,6 +64,8 @@ Each registered question declares one policy class:
 - `manual-only` accepts only an explicit, observed, operator-stated choice.
 
 Relationship, data access, project binding, artifact possession, system scope, and external-action intent are manual-only. The resolver rejects recommendations for them. A recommendation stays unresolved until the operator accepts it; it is never silently converted into an explicit answer.
+
+Actions declare both the question they depend on and the exact choices that satisfy that dependency. An unresolved question leaves the action at `needs-input`. A resolved but disallowed choice blocks it with a categorical reason. For example, `report-only` does not unlock record preservation or timeline construction, unknown artifact possession does not unlock artifact inspection, unknown system scope does not unlock a system-state read, and `no-project-yet` does not unlock a project handoff.
 
 The output carries every route question as structured choices. A native chat or local browser surface should present at most one to three unresolved questions at a time, put a supported recommendation first, and avoid a prose questionnaire.
 
@@ -75,15 +81,15 @@ The output carries every route question as structured choices. A native chat or 
 - a sanitized provenance projection containing counts rather than source references or basis text;
 - `executionAuthority: false`.
 
-Candidate tools are labeled only `catalogued` with suitability `unknown`. The objective router does not claim that a candidate is installed, verified, admitted, or suitable. A domain handoff must use the existing tool runtime and workflow checks to establish those states.
+Candidate tools are labeled only `route-listed` with suitability `unknown`. Repository validation can compare the checked-in route catalog with an exact supplied security-tool ID set, but the recommendation is not bound to a runtime inventory. The objective router therefore does not call a tool catalogued, installed, verified, admitted, executable, or suitable. A domain handoff must use the existing tool runtime and workflow checks to establish those states.
 
-An action is `ready-to-plan`, `needs-input`, or `blocked`. `ready-to-plan` means only that the next planning step is coherent. It does not mean ready to execute. An unresolved effect boundary, a missing required manual answer, an action above the proposed effect ceiling, or an unavailable handler remains visible in the result.
+An action is `ready-to-plan`, `needs-input`, or `blocked`. `ready-to-plan` means only that the next planning step is coherent. It does not mean ready to execute. An unresolved effect boundary or question yields `needs-input`; a disallowed accepted choice, an action above the proposed effect ceiling, or an unavailable handler yields `blocked`. Every reason remains visible in the result.
 
 ## Example: account and payment abuse
 
 An objective about unexplained meal-delivery orders paid without the reported person's own funds is categorized as a security incident with account, payment, and order signals. It routes to `security-incident-investigation`, not to a bug bounty Program Profile.
 
-The route first recommends a category-only evidence checklist. After the operator states which records are accessible, it can preserve those records locally, correlate order, payment, account-change, session, device, notification, and destination timestamps, compare competing explanations, and identify the smallest missing observation. It asks whose records are involved, which records can be accessed, and whether the first result should explain the event, stop ongoing loss, or prepare a report.
+The route first recommends a category-only evidence checklist. After the operator explicitly selects both a supported relationship and accessible-record basis, it can plan to preserve those records locally, correlate order, payment, account-change, session, device, notification, and destination timestamps, compare competing explanations, and identify the smallest missing observation. A `report-only` or third-party/unknown selection keeps record-dependent actions blocked. It asks whose records are involved, which records can be accessed, and whether the first result should explain the event, stop ongoing loss, or prepare a report.
 
 The route is `planning-only` in v0.1. It does not infer access to another person's records, contact the delivery platform, test its application, or turn an allegation into target authority. If a separate authorized bug bounty objective emerges, that new objective can route into Program Profile intake.
 

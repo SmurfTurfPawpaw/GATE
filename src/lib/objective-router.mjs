@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 
 import { validateDocument } from "./schema.mjs";
-import { assertNoLikelySecret, assertNoUnsafeText } from "./text.mjs";
 
 export const OBJECTIVE_DOMAINS = Object.freeze([
   "software",
@@ -12,7 +11,9 @@ export const OBJECTIVE_DOMAINS = Object.freeze([
   "system-operations",
   "communication",
   "personal-administration",
-  "other"
+  "other",
+  "mixed",
+  "unknown"
 ]);
 
 export const OBJECTIVE_DELIVERABLES = Object.freeze([
@@ -22,7 +23,8 @@ export const OBJECTIVE_DELIVERABLES = Object.freeze([
   "decision",
   "operation",
   "monitor",
-  "communication"
+  "communication",
+  "unknown"
 ]);
 
 export const OBJECTIVE_RELATIONSHIPS = Object.freeze([
@@ -48,7 +50,36 @@ export const OBJECTIVE_DATA_CLASSES = Object.freeze([
   "public",
   "internal",
   "sensitive",
-  "secret"
+  "secret",
+  "unknown"
+]);
+
+export const OBJECTIVE_BASIS_CODES = Object.freeze([
+  "operator-explicit",
+  "reviewed-default",
+  "objective-classification",
+  "source-classification",
+  "local-observation",
+  "insufficient-evidence",
+  "mixed-workstreams",
+  "requested-outcome",
+  "effect-estimate",
+  "data-classification",
+  "signal-classification"
+]);
+
+const BASIS_CODE_PROVENANCE = new Map([
+  ["operator-explicit", ["operator-stated"]],
+  ["reviewed-default", ["reviewed-policy"]],
+  ["objective-classification", ["model-derived", "local-derived"]],
+  ["source-classification", ["source-derived"]],
+  ["local-observation", ["local-derived"]],
+  ["insufficient-evidence", ["model-derived", "local-derived"]],
+  ["mixed-workstreams", ["model-derived", "local-derived"]],
+  ["requested-outcome", ["model-derived", "local-derived"]],
+  ["effect-estimate", ["model-derived", "local-derived"]],
+  ["data-classification", ["model-derived", "local-derived"]],
+  ["signal-classification", ["model-derived", "local-derived"]]
 ]);
 
 export const OBJECTIVE_SIGNALS = Object.freeze([
@@ -115,13 +146,13 @@ function referencesUnknown(values, known) {
   return (values || []).filter((value) => !known.has(value));
 }
 
-function basisErrors(basis, label) {
+function basisErrors(basis, label, basisCodes) {
   const errors = [];
-  try {
-    assertNoUnsafeText(basis.summary, `${label} summary`);
-    assertNoLikelySecret(basis.summary, `${label} summary`);
-  } catch (error) {
-    errors.push(error.message);
+  const registration = basisCodes.get(basis.code);
+  if (!registration) {
+    errors.push(`${label} uses unregistered basis code ${basis.code}`);
+  } else if (!registration.allowedProvenance.includes(basis.provenance)) {
+    errors.push(`${label} basis code ${basis.code} does not allow ${basis.provenance} provenance`);
   }
   if (basis.provenance === "model-derived" && basis.claimState === "observed") {
     errors.push(`${label} model-derived evidence cannot be observed`);
@@ -153,6 +184,7 @@ export function objectiveRouteCatalogSemanticErrors(catalog, options = {}) {
   }
 
   const collections = [
+    ["basis code", catalog.basisCodes],
     ["question", catalog.questions],
     ["evidence step", catalog.evidenceSteps],
     ["data request category", catalog.dataRequestCategories],
@@ -164,6 +196,16 @@ export function objectiveRouteCatalogSemanticErrors(catalog, options = {}) {
   }
 
   const questions = new Map(catalog.questions.map((question) => [question.id, question]));
+  const basisCodeIds = catalog.basisCodes.map((entry) => entry.id);
+  if (!sameList(basisCodeIds, OBJECTIVE_BASIS_CODES)) {
+    errors.push("objective route catalog basisCodes must match the exact GATE vocabulary");
+  }
+  for (const entry of catalog.basisCodes) {
+    const expected = BASIS_CODE_PROVENANCE.get(entry.id);
+    if (expected && !sameList(entry.allowedProvenance, expected)) {
+      errors.push(`objective route catalog basis code ${entry.id} must use its exact allowed provenance`);
+    }
+  }
   const evidenceSteps = new Set(catalog.evidenceSteps.map((entry) => entry.id));
   const dataRequests = new Set(catalog.dataRequestCategories.map((entry) => entry.id));
   const capabilities = new Set(catalog.capabilities.map((entry) => entry.id));
@@ -232,9 +274,21 @@ export function objectiveRouteCatalogSemanticErrors(catalog, options = {}) {
       errors.push(`objective route ${route.id} has duplicate next-action ids`);
     }
     for (const action of route.plan.nextActions) {
-      for (const questionId of action.requiresQuestionIds) {
-        if (!routeQuestions.has(questionId)) {
-          errors.push(`objective route ${route.id} action ${action.id} requires an unlisted question ${questionId}`);
+      const preconditionQuestionIds = action.questionPreconditions.map((entry) => entry.questionId);
+      if (new Set(preconditionQuestionIds).size !== preconditionQuestionIds.length) {
+        errors.push(`objective route ${route.id} action ${action.id} has duplicate question preconditions`);
+      }
+      for (const precondition of action.questionPreconditions) {
+        const question = questions.get(precondition.questionId);
+        if (!routeQuestions.has(precondition.questionId)) {
+          errors.push(`objective route ${route.id} action ${action.id} requires an unlisted question ${precondition.questionId}`);
+          continue;
+        }
+        const choiceIds = new Set(question.choices.map((choice) => choice.id));
+        for (const choiceId of precondition.allowedChoiceIds) {
+          if (!choiceIds.has(choiceId)) {
+            errors.push(`objective route ${route.id} action ${action.id} allows unknown choice ${choiceId} for ${precondition.questionId}`);
+          }
         }
       }
     }
@@ -263,14 +317,15 @@ export function objectiveRoutingProposalSemanticErrors(catalog, proposal, option
     errors.push("objective routing proposal is not bound to the current route catalog digest");
   }
 
+  const basisCodes = new Map(catalog.basisCodes.map((entry) => [entry.id, entry]));
   for (const [proposalField, catalogField] of DIMENSION_FIELDS) {
     const fact = proposal.dimensions[proposalField];
     if (!catalog.dimensions[catalogField].includes(fact.value)) {
       errors.push(`objective dimension ${proposalField} uses an unknown value ${fact.value}`);
     }
-    errors.push(...basisErrors(fact.basis, `objective dimension ${proposalField}`));
-    if (fact.basis.claimState === "unverified") {
-      errors.push(`objective dimension ${proposalField} cannot route from unverified evidence`);
+    errors.push(...basisErrors(fact.basis, `objective dimension ${proposalField}`, basisCodes));
+    if (fact.basis.claimState === "unverified" && fact.value !== "unknown") {
+      errors.push(`objective dimension ${proposalField} may be unverified only when its value is unknown`);
     }
   }
 
@@ -287,7 +342,7 @@ export function objectiveRoutingProposalSemanticErrors(catalog, proposal, option
     if (!catalog.dimensions.signals.includes(signal.id)) {
       errors.push(`objective signal is not registered: ${signal.id}`);
     }
-    errors.push(...basisErrors(signal.basis, `objective signal ${signal.id}`));
+    errors.push(...basisErrors(signal.basis, `objective signal ${signal.id}`, basisCodes));
     if (signal.basis.claimState === "unverified") {
       errors.push(`objective signal ${signal.id} cannot route from unverified evidence`);
     }
@@ -303,7 +358,7 @@ export function objectiveRoutingProposalSemanticErrors(catalog, proposal, option
     if (!question.choices.some((choice) => choice.id === answer.choiceId)) {
       errors.push(`objective proposal question ${questionId} uses unknown choice ${answer.choiceId}`);
     }
-    errors.push(...basisErrors(answer.basis, `objective answer ${questionId}`));
+    errors.push(...basisErrors(answer.basis, `objective answer ${questionId}`, basisCodes));
     if (answer.basis.claimState === "unverified") {
       errors.push(`objective answer ${questionId} cannot use unverified evidence`);
     }
@@ -345,6 +400,7 @@ function publicBasis(basis) {
   return {
     provenance: basis.provenance,
     claimState: basis.claimState,
+    basisCode: basis.code,
     sourceCount: basis.sourceRefs.length
   };
 }
@@ -361,6 +417,7 @@ function questionProjection(question, answer) {
     recommendationBasis = {
       provenance: "reviewed-policy",
       claimState: "observed",
+      basisCode: "reviewed-default",
       sourceCount: 0
     };
   }
@@ -376,10 +433,15 @@ function questionProjection(question, answer) {
   };
 }
 
-function actionProjection(action, proposal, resolvedQuestionIds, handlerState) {
+function actionProjection(action, proposal, resolvedAnswers, handlerState) {
   const reasonIds = [];
-  for (const questionId of action.requiresQuestionIds) {
-    if (!resolvedQuestionIds.has(questionId)) reasonIds.push(`unresolved-question:${questionId}`);
+  for (const precondition of action.questionPreconditions) {
+    const selectedChoiceId = resolvedAnswers.get(precondition.questionId);
+    if (!selectedChoiceId) {
+      reasonIds.push(`unresolved-question:${precondition.questionId}`);
+    } else if (!precondition.allowedChoiceIds.includes(selectedChoiceId)) {
+      reasonIds.push(`choice-precondition-not-met:${precondition.questionId}`);
+    }
   }
   const maximumEffect = proposal.dimensions.highestEffect.value;
   if (maximumEffect === "unknown" && action.effect !== "none") {
@@ -388,7 +450,9 @@ function actionProjection(action, proposal, resolvedQuestionIds, handlerState) {
     reasonIds.push("effect-exceeds-objective-boundary");
   }
   if (handlerState === "unavailable") reasonIds.push("handler-unavailable");
-  const blocked = reasonIds.includes("handler-unavailable") || reasonIds.includes("effect-exceeds-objective-boundary");
+  const blocked = reasonIds.includes("handler-unavailable") ||
+    reasonIds.includes("effect-exceeds-objective-boundary") ||
+    reasonIds.some((reasonId) => reasonId.startsWith("choice-precondition-not-met:"));
   return {
     id: action.id,
     description: action.description,
@@ -422,13 +486,15 @@ export function resolveObjectiveRecommendation(catalog, proposal, options = {}) 
     questionProjection(questionsById.get(questionId), proposal.answers[questionId])
   );
   const unresolvedQuestionIds = questions.filter((question) => !question.resolved).map((question) => question.id);
-  const resolvedQuestionIds = new Set(questions.filter((question) => question.resolved).map((question) => question.id));
+  const resolvedAnswers = new Map(questions
+    .filter((question) => question.resolved)
+    .map((question) => [question.id, question.selectedChoiceId]));
 
   const evidenceById = new Map(catalog.evidenceSteps.map((entry) => [entry.id, entry]));
   const dataById = new Map(catalog.dataRequestCategories.map((entry) => [entry.id, entry]));
   const capabilitiesById = new Map(catalog.capabilities.map((entry) => [entry.id, entry]));
   const nextActions = route.plan.nextActions.map((action) =>
-    actionProjection(action, proposal, resolvedQuestionIds, route.handler.state)
+    actionProjection(action, proposal, resolvedAnswers, route.handler.state)
   );
   const planStatus = route.handler.state === "unavailable"
     ? "unsupported"
@@ -440,9 +506,11 @@ export function resolveObjectiveRecommendation(catalog, proposal, options = {}) 
     ...Object.entries(proposal.dimensions).map(([field, fact]) => ({ field: `dimension:${field}`, basis: fact.basis })),
     ...proposal.signals.map((signal) => ({ field: `signal:${signal.id}`, basis: signal.basis }))
   ];
-  const routeClaimState = routeInputs.some((entry) => entry.basis.claimState === "inferred")
-    ? "inferred"
-    : "observed";
+  const routeClaimState = routeInputs.some((entry) => entry.basis.claimState === "unverified")
+    ? "unverified"
+    : routeInputs.some((entry) => entry.basis.claimState === "inferred")
+      ? "inferred"
+      : "observed";
 
   const recommendation = {
     $schema: "https://gate.local/schemas/objective-recommendation.schema.json",
@@ -472,7 +540,7 @@ export function resolveObjectiveRecommendation(catalog, proposal, options = {}) 
         state: "required",
         tools: capability.toolCandidates.map((toolId) => ({
           toolId,
-          state: "catalogued",
+          state: "route-listed",
           suitable: "unknown"
         }))
       };
