@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/objective-routing-proposal.schema.json",
+  "title": "GATE categorical objective routing proposal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "apiVersion", "kind", "metadata", "dimensions", "signals", "answers"],
+  "properties": {
+    "$schema": { "const": "https://gate.local/schemas/objective-routing-proposal.schema.json" },
+    "apiVersion": { "const": "gate.dev/objective-routing-proposal/v1" },
+    "kind": { "const": "ObjectiveRoutingProposal" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objectiveHandle", "createdAt", "routeCatalogSha256"],
+      "properties": {
+        "objectiveHandle": { "type": "string", "pattern": "^obj_[a-f0-9]{16,64}$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "routeCatalogSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "dimensions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["domain", "deliverable", "relationship", "highestEffect", "dataClass"],
+      "properties": {
+        "domain": { "$ref": "#/$defs/domainFact" },
+        "deliverable": { "$ref": "#/$defs/deliverableFact" },
+        "relationship": { "$ref": "#/$defs/relationshipFact" },
+        "highestEffect": { "$ref": "#/$defs/effectFact" },
+        "dataClass": { "$ref": "#/$defs/dataClassFact" }
+      }
+    },
+    "signals": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "basis"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "basis": { "$ref": "#/$defs/basis" }
+        }
+      }
+    },
+    "answers": {
+      "type": "object",
+      "maxProperties": 64,
+      "propertyNames": { "$ref": "#/$defs/id" },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["choiceId", "mode", "basis"],
+        "properties": {
+          "choiceId": { "$ref": "#/$defs/id" },
+          "mode": { "enum": ["explicit", "recommendation"] },
+          "basis": { "$ref": "#/$defs/basis" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,95}$" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240,
+      "pattern": "^[^\\u0000\\r\\n]+$"
+    },
+    "sourceRef": { "type": "string", "pattern": "^src_[a-f0-9]{16,64}$" },
+    "basis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provenance", "claimState", "summary", "sourceRefs"],
+      "properties": {
+        "provenance": {
+          "enum": ["reviewed-policy", "operator-stated", "source-derived", "model-derived", "local-derived"]
+        },
+        "claimState": { "enum": ["observed", "inferred", "unverified"] },
+        "summary": { "$ref": "#/$defs/summary" },
+        "sourceRefs": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/sourceRef" }
+        }
+      }
+    },
+    "domainFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "basis"],
+      "properties": {
+        "value": {
+          "enum": [
+            "software",
+            "security-assessment",
+            "security-incident",
+            "research",
+            "data-analysis",
+            "system-operations",
+            "communication",
+            "personal-administration",
+            "other"
+          ]
+        },
+        "basis": { "$ref": "#/$defs/basis" }
+      }
+    },
+    "deliverableFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "basis"],
+      "properties": {
+        "value": {
+          "enum": ["change", "answer", "investigation-report", "decision", "operation", "monitor", "communication"]
+        },
+        "basis": { "$ref": "#/$defs/basis" }
+      }
+    },
+    "relationshipFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "basis"],
+      "properties": {
+        "value": { "enum": ["owned", "authorized", "public", "third-party", "unknown"] },
+        "basis": { "$ref": "#/$defs/basis" }
+      }
+    },
+    "effectFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "basis"],
+      "properties": {
+        "value": {
+          "enum": ["none", "local-read", "local-write", "external-read", "external-write", "target-contact", "high-impact", "unknown"]
+        },
+        "basis": { "$ref": "#/$defs/basis" }
+      }
+    },
+    "dataClassFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "basis"],
+      "properties": {
+        "value": { "enum": ["public", "internal", "sensitive", "secret"] },
+        "basis": { "$ref": "#/$defs/basis" }
+      }
+    }
+  }
+}

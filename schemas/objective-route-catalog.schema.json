@@ -1,0 +1,324 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/objective-route-catalog.schema.json",
+  "title": "GATE objective route catalog",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "apiVersion",
+    "kind",
+    "metadata",
+    "dimensions",
+    "questions",
+    "evidenceSteps",
+    "dataRequestCategories",
+    "capabilities",
+    "routes"
+  ],
+  "properties": {
+    "$schema": { "const": "https://gate.local/schemas/objective-route-catalog.schema.json" },
+    "apiVersion": { "const": "gate.dev/objective-route-catalog/v1" },
+    "kind": { "const": "ObjectiveRouteCatalog" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "updatedAt"],
+      "properties": {
+        "name": { "$ref": "#/$defs/id" },
+        "version": { "type": "integer", "minimum": 1 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "dimensions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["domains", "deliverables", "relationships", "effects", "dataClasses", "signals"],
+      "properties": {
+        "domains": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "deliverables": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "relationships": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "effects": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "dataClasses": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["public", "internal", "sensitive", "secret"] }
+        },
+        "signals": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        }
+      }
+    },
+    "questions": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/question" }
+    },
+    "evidenceSteps": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/namedItem" }
+    },
+    "dataRequestCategories": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "description", "classification"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "description": { "$ref": "#/$defs/oneLine" },
+          "classification": { "enum": ["public", "internal", "sensitive", "secret"] }
+        }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "description", "toolCandidates"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "description": { "$ref": "#/$defs/oneLine" },
+          "toolCandidates": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "$ref": "#/$defs/id" }
+          }
+        }
+      }
+    },
+    "routes": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/route" }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,95}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "oneLine": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "pattern": "^[^\\u0000\\r\\n]+$"
+    },
+    "namedItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "description"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "description": { "$ref": "#/$defs/oneLine" }
+      }
+    },
+    "choice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "description"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "label": { "$ref": "#/$defs/oneLine" },
+        "description": { "$ref": "#/$defs/oneLine" }
+      }
+    },
+    "questionPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["class", "summary"],
+      "properties": {
+        "class": { "enum": ["operator-preference", "evidence-proposal", "manual-only"] },
+        "summary": { "$ref": "#/$defs/oneLine" },
+        "defaultChoiceId": { "$ref": "#/$defs/id" }
+      }
+    },
+    "question": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "prompt", "choices", "policy"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "prompt": { "$ref": "#/$defs/oneLine" },
+        "choices": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 6,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/choice" }
+        },
+        "policy": { "$ref": "#/$defs/questionPolicy" }
+      }
+    },
+    "match": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "domains": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "deliverables": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "relationships": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "highestEffects": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "dataClasses": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["public", "internal", "sensitive", "secret"] }
+        },
+        "signalsAny": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "signalsAll": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        }
+      }
+    },
+    "handler": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "owner", "state", "reason", "requirements"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "owner": { "$ref": "#/$defs/id" },
+        "state": { "enum": ["ready", "handoff-only", "planning-only", "unavailable"] },
+        "reason": { "$ref": "#/$defs/oneLine" },
+        "requirements": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        }
+      }
+    },
+    "nextAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "description", "effect", "maxMinutes", "maxItems", "requiresQuestionIds"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "description": { "$ref": "#/$defs/oneLine" },
+        "effect": {
+          "enum": ["none", "local-read", "local-write", "external-read", "external-write", "target-contact", "high-impact"]
+        },
+        "maxMinutes": { "type": "integer", "minimum": 1, "maximum": 10080 },
+        "maxItems": { "type": "integer", "minimum": 1, "maximum": 100000 },
+        "requiresQuestionIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        }
+      }
+    },
+    "routePlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidenceStepIds",
+        "dataRequestCategoryIds",
+        "capabilityIds",
+        "questionIds",
+        "nextActions"
+      ],
+      "properties": {
+        "evidenceStepIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "dataRequestCategoryIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "capabilityIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "questionIds": {
+          "type": "array",
+          "maxItems": 12,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "nextActions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/nextAction" }
+        }
+      }
+    },
+    "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "priority", "rationale", "match", "handler", "plan"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "priority": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "rationale": { "$ref": "#/$defs/oneLine" },
+        "match": { "$ref": "#/$defs/match" },
+        "handler": { "$ref": "#/$defs/handler" },
+        "plan": { "$ref": "#/$defs/routePlan" }
+      }
+    }
+  }
+}

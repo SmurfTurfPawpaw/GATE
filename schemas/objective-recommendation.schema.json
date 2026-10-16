@@ -1,0 +1,255 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/objective-recommendation.schema.json",
+  "title": "GATE objective routing recommendation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "apiVersion",
+    "kind",
+    "metadata",
+    "route",
+    "planStatus",
+    "evidencePlan",
+    "dataRequests",
+    "capabilities",
+    "nextActions",
+    "questions",
+    "unresolvedQuestionIds",
+    "provenance",
+    "executionAuthority"
+  ],
+  "properties": {
+    "$schema": { "const": "https://gate.local/schemas/objective-recommendation.schema.json" },
+    "apiVersion": { "const": "gate.dev/objective-recommendation/v1" },
+    "kind": { "const": "ObjectiveRecommendation" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "objectiveHandle",
+        "createdAt",
+        "routeCatalogSha256",
+        "proposalSha256",
+        "recommendationSha256"
+      ],
+      "properties": {
+        "objectiveHandle": { "type": "string", "pattern": "^obj_[a-f0-9]{16,64}$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "routeCatalogSha256": { "$ref": "#/$defs/sha256" },
+        "proposalSha256": { "$ref": "#/$defs/sha256" },
+        "recommendationSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "rationale", "claimState", "handler"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "rationale": { "$ref": "#/$defs/oneLine" },
+        "claimState": { "enum": ["observed", "inferred"] },
+        "handler": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "owner", "state", "reason", "requirements"],
+          "properties": {
+            "id": { "$ref": "#/$defs/id" },
+            "owner": { "$ref": "#/$defs/id" },
+            "state": { "enum": ["ready", "handoff-only", "planning-only", "unavailable"] },
+            "reason": { "$ref": "#/$defs/oneLine" },
+            "requirements": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/id" }
+            }
+          }
+        }
+      }
+    },
+    "planStatus": { "enum": ["ready-to-plan", "needs-input", "unsupported"] },
+    "evidencePlan": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/namedItem" }
+    },
+    "dataRequests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "description", "classification"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "description": { "$ref": "#/$defs/oneLine" },
+          "classification": { "enum": ["public", "internal", "sensitive", "secret"] }
+        }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "description", "state", "tools"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "description": { "$ref": "#/$defs/oneLine" },
+          "state": { "const": "required" },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["toolId", "state", "suitable"],
+              "properties": {
+                "toolId": { "$ref": "#/$defs/id" },
+                "state": { "const": "catalogued" },
+                "suitable": { "const": "unknown" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "nextActions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "description",
+          "effect",
+          "maxMinutes",
+          "maxItems",
+          "state",
+          "reasonIds"
+        ],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "description": { "$ref": "#/$defs/oneLine" },
+          "effect": {
+            "enum": ["none", "local-read", "local-write", "external-read", "external-write", "target-contact", "high-impact"]
+          },
+          "maxMinutes": { "type": "integer", "minimum": 1, "maximum": 10080 },
+          "maxItems": { "type": "integer", "minimum": 1, "maximum": 100000 },
+          "state": { "enum": ["ready-to-plan", "needs-input", "blocked"] },
+          "reasonIds": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9:-]{1,159}$"
+            }
+          }
+        }
+      }
+    },
+    "questions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "prompt",
+          "choices",
+          "policyClass",
+          "resolved",
+          "selectedChoiceId",
+          "recommendedChoiceId",
+          "recommendationBasis"
+        ],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "prompt": { "$ref": "#/$defs/oneLine" },
+          "choices": {
+            "type": "array",
+            "minItems": 2,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "label", "description"],
+              "properties": {
+                "id": { "$ref": "#/$defs/id" },
+                "label": { "$ref": "#/$defs/oneLine" },
+                "description": { "$ref": "#/$defs/oneLine" }
+              }
+            }
+          },
+          "policyClass": { "enum": ["operator-preference", "evidence-proposal", "manual-only"] },
+          "resolved": { "type": "boolean" },
+          "selectedChoiceId": {
+            "oneOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }]
+          },
+          "recommendedChoiceId": {
+            "oneOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }]
+          },
+          "recommendationBasis": {
+            "oneOf": [{ "$ref": "#/$defs/publicBasis" }, { "type": "null" }]
+          }
+        }
+      }
+    },
+    "unresolvedQuestionIds": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/id" }
+    },
+    "provenance": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 37,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["field", "provenance", "claimState", "sourceCount"],
+        "properties": {
+          "field": {
+            "type": "string",
+            "pattern": "^(dimension|signal):[a-z][a-zA-Z0-9-]{1,95}$"
+          },
+          "provenance": {
+            "enum": ["reviewed-policy", "operator-stated", "source-derived", "model-derived", "local-derived"]
+          },
+          "claimState": { "enum": ["observed", "inferred"] },
+          "sourceCount": { "type": "integer", "minimum": 0, "maximum": 32 }
+        }
+      }
+    },
+    "executionAuthority": { "const": false }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,95}$" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "oneLine": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "pattern": "^[^\\u0000\\r\\n]+$"
+    },
+    "namedItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "description"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "description": { "$ref": "#/$defs/oneLine" }
+      }
+    },
+    "publicBasis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provenance", "claimState", "sourceCount"],
+      "properties": {
+        "provenance": {
+          "enum": ["reviewed-policy", "operator-stated", "source-derived", "model-derived", "local-derived"]
+        },
+        "claimState": { "enum": ["observed", "inferred"] },
+        "sourceCount": { "type": "integer", "minimum": 0, "maximum": 32 }
+      }
+    }
+  }
+}

@@ -1,0 +1,874 @@
+{
+  "$schema": "https://gate.local/schemas/objective-route-catalog.schema.json",
+  "apiVersion": "gate.dev/objective-route-catalog/v1",
+  "kind": "ObjectiveRouteCatalog",
+  "metadata": {
+    "name": "gate-objective-routes",
+    "version": 1,
+    "updatedAt": "2026-10-16T00:00:00.000Z"
+  },
+  "dimensions": {
+    "domains": [
+      "software",
+      "security-assessment",
+      "security-incident",
+      "research",
+      "data-analysis",
+      "system-operations",
+      "communication",
+      "personal-administration",
+      "other"
+    ],
+    "deliverables": [
+      "change",
+      "answer",
+      "investigation-report",
+      "decision",
+      "operation",
+      "monitor",
+      "communication"
+    ],
+    "relationships": ["owned", "authorized", "public", "third-party", "unknown"],
+    "effects": [
+      "none",
+      "local-read",
+      "local-write",
+      "external-read",
+      "external-write",
+      "target-contact",
+      "high-impact",
+      "unknown"
+    ],
+    "dataClasses": ["public", "internal", "sensitive", "secret"],
+    "signals": [
+      "repository",
+      "bounty-program",
+      "account",
+      "payment",
+      "order",
+      "identity",
+      "device",
+      "network",
+      "artifact",
+      "application",
+      "public-source",
+      "external-recipient",
+      "unknown"
+    ]
+  },
+  "questions": [
+    {
+      "id": "subject-relationship",
+      "prompt": "What is your relationship to the system, account, or records involved?",
+      "choices": [
+        {
+          "id": "owned",
+          "label": "I own or control it",
+          "description": "Treat the subject as operator-controlled while later action-specific checks still apply."
+        },
+        {
+          "id": "authorized",
+          "label": "I have authorization",
+          "description": "Record that another party granted access and preserve the separate authority source."
+        },
+        {
+          "id": "public-only",
+          "label": "Public information only",
+          "description": "Limit the route to information intentionally available to the public."
+        },
+        {
+          "id": "third-party-or-unknown",
+          "label": "Third party or unknown",
+          "description": "Keep the investigation at planning and accessible-evidence steps until clarified."
+        }
+      ],
+      "policy": {
+        "class": "manual-only",
+        "summary": "Only the operator can state the relationship to the subject."
+      }
+    },
+    {
+      "id": "data-access-basis",
+      "prompt": "Which underlying records can you access for this objective?",
+      "choices": [
+        {
+          "id": "own-records",
+          "label": "My own records",
+          "description": "Use records from accounts, devices, or files the operator controls."
+        },
+        {
+          "id": "delegated-records",
+          "label": "Delegated records",
+          "description": "Use records another person or organization authorized the operator to inspect."
+        },
+        {
+          "id": "public-records",
+          "label": "Public records",
+          "description": "Use public sources and avoid private account or device data."
+        },
+        {
+          "id": "report-only",
+          "label": "Only the report",
+          "description": "Start with hypotheses and a missing-evidence list without claiming access."
+        }
+      ],
+      "policy": {
+        "class": "manual-only",
+        "summary": "Data access is a direct operator fact and is never inferred or bulk-applied."
+      }
+    },
+    {
+      "id": "immediate-goal",
+      "prompt": "What should the first useful result accomplish?",
+      "choices": [
+        {
+          "id": "explain",
+          "label": "Explain what happened",
+          "description": "Prioritize a tested timeline and the strongest supported explanation."
+        },
+        {
+          "id": "stop-loss",
+          "label": "Stop ongoing loss",
+          "description": "Prioritize containment options and time-sensitive evidence."
+        },
+        {
+          "id": "prepare-report",
+          "label": "Prepare a report",
+          "description": "Prioritize a reviewable evidence package for a provider or responsible party."
+        }
+      ],
+      "policy": {
+        "class": "evidence-proposal",
+        "summary": "The stated outcome may support a recommendation, but the operator still accepts it."
+      }
+    },
+    {
+      "id": "project-binding",
+      "prompt": "Which project context should own this work?",
+      "choices": [
+        {
+          "id": "registered-project",
+          "label": "Registered project",
+          "description": "Use an existing private GATE project contract."
+        },
+        {
+          "id": "new-project",
+          "label": "New project",
+          "description": "Prepare project registration before dispatch."
+        },
+        {
+          "id": "no-project-yet",
+          "label": "No project yet",
+          "description": "Keep the result as a plan until a project exists."
+        }
+      ],
+      "policy": {
+        "class": "manual-only",
+        "summary": "The router does not choose or create a project implicitly."
+      }
+    },
+    {
+      "id": "artifact-possession",
+      "prompt": "What is the basis for possessing and inspecting the local artifact?",
+      "choices": [
+        {
+          "id": "operator-owned",
+          "label": "Operator-owned artifact",
+          "description": "The operator owns the artifact and can provide it locally."
+        },
+        {
+          "id": "lawfully-supplied",
+          "label": "Lawfully supplied",
+          "description": "The artifact was supplied for the stated local analysis."
+        },
+        {
+          "id": "unknown",
+          "label": "Not established",
+          "description": "Keep the route at planning until provenance is established."
+        }
+      ],
+      "policy": {
+        "class": "manual-only",
+        "summary": "Artifact possession and inspection authority require a direct operator answer."
+      }
+    },
+    {
+      "id": "operation-scope",
+      "prompt": "Which system may the operation affect?",
+      "choices": [
+        {
+          "id": "operator-system",
+          "label": "My system",
+          "description": "Plan against the operator-controlled system."
+        },
+        {
+          "id": "authorized-system",
+          "label": "Authorized system",
+          "description": "Preserve the separate authorization source before execution."
+        },
+        {
+          "id": "unknown-system",
+          "label": "Not established",
+          "description": "Keep the route at planning and inspection."
+        }
+      ],
+      "policy": {
+        "class": "manual-only",
+        "summary": "System ownership or delegated control cannot be recommended by the router."
+      }
+    },
+    {
+      "id": "external-action-intent",
+      "prompt": "Should this objective include an external message or change?",
+      "choices": [
+        {
+          "id": "draft-only",
+          "label": "Draft only",
+          "description": "Prepare the content without sending or applying it."
+        },
+        {
+          "id": "send-or-apply",
+          "label": "Send or apply",
+          "description": "Route the concrete external action through its own reviewed adapter."
+        },
+        {
+          "id": "undecided",
+          "label": "Undecided",
+          "description": "Prepare options and retain the decision."
+        }
+      ],
+      "policy": {
+        "class": "manual-only",
+        "summary": "An external write or message is a direct operator decision."
+      }
+    },
+    {
+      "id": "research-depth",
+      "prompt": "How should the first research pass be bounded?",
+      "choices": [
+        {
+          "id": "evidence-led",
+          "label": "Evidence-led pass",
+          "description": "Start with a small source set and expand only when contradictions remain."
+        },
+        {
+          "id": "broad-survey",
+          "label": "Broad survey",
+          "description": "Map the field before selecting the strongest sources."
+        }
+      ],
+      "policy": {
+        "class": "operator-preference",
+        "summary": "A bounded evidence-led pass is the reviewed default for a new research objective.",
+        "defaultChoiceId": "evidence-led"
+      }
+    }
+  ],
+  "evidenceSteps": [
+    {
+      "id": "outcome-definition",
+      "description": "State the desired result and the evidence that would make it satisfactory."
+    },
+    {
+      "id": "source-preservation",
+      "description": "Preserve available source material and record provenance before transforming it."
+    },
+    {
+      "id": "source-ledger",
+      "description": "Separate observed facts, inferences, contradictions, and unknowns."
+    },
+    {
+      "id": "competing-hypotheses",
+      "description": "List plausible explanations and the observation that would distinguish each one."
+    },
+    {
+      "id": "smallest-discriminating-check",
+      "description": "Choose the smallest bounded check that separates the leading explanations."
+    },
+    {
+      "id": "result-validation",
+      "description": "Compare the observed result with the acceptance evidence before claiming completion."
+    },
+    {
+      "id": "change-validation",
+      "description": "Bind a proposed change to focused validation and its broader required checks."
+    },
+    {
+      "id": "incident-timeline",
+      "description": "Correlate account, order, payment, session, device, and notification timestamps."
+    },
+    {
+      "id": "authority-boundary",
+      "description": "Keep planning facts separate from authority, access, and external-effect decisions."
+    },
+    {
+      "id": "tool-readiness",
+      "description": "Distinguish a catalogued candidate from an installed, verified, admitted, and suitable tool."
+    },
+    {
+      "id": "report-findings",
+      "description": "Produce a reviewable result with evidence, uncertainty, and the next unresolved decision."
+    }
+  ],
+  "dataRequestCategories": [
+    {
+      "id": "repository-context",
+      "description": "Private project contract and bounded repository context.",
+      "classification": "internal"
+    },
+    {
+      "id": "acceptance-criteria",
+      "description": "Desired result, constraints, and evidence of completion.",
+      "classification": "internal"
+    },
+    {
+      "id": "existing-test-evidence",
+      "description": "Current failures, prior attempts, and relevant validation evidence.",
+      "classification": "internal"
+    },
+    {
+      "id": "authorization-category",
+      "description": "Categorical authority state without authorization text or target selectors.",
+      "classification": "sensitive"
+    },
+    {
+      "id": "program-terms",
+      "description": "Private program terms and source references for local Program Profile intake.",
+      "classification": "sensitive"
+    },
+    {
+      "id": "account-order-history",
+      "description": "Accessible order and account activity records with timestamps.",
+      "classification": "sensitive"
+    },
+    {
+      "id": "payment-transaction-records",
+      "description": "Accessible payment instrument, charge, credit, refund, and transaction records.",
+      "classification": "sensitive"
+    },
+    {
+      "id": "security-notifications",
+      "description": "Accessible login, account-change, recovery, and fraud notifications.",
+      "classification": "sensitive"
+    },
+    {
+      "id": "session-device-history",
+      "description": "Accessible session and device history relevant to the event timeline.",
+      "classification": "sensitive"
+    },
+    {
+      "id": "delivery-address-history",
+      "description": "Accessible destination history needed to correlate disputed activity.",
+      "classification": "sensitive"
+    },
+    {
+      "id": "provider-correspondence",
+      "description": "Existing support or provider correspondence and case references.",
+      "classification": "sensitive"
+    },
+    {
+      "id": "local-artifact-reference",
+      "description": "Private local artifact reference without copying artifact bytes into the proposal.",
+      "classification": "sensitive"
+    },
+    {
+      "id": "artifact-provenance",
+      "description": "Source, possession basis, timestamp, and digest for a local artifact.",
+      "classification": "sensitive"
+    },
+    {
+      "id": "public-sources",
+      "description": "Declared public sources relevant to the objective.",
+      "classification": "public"
+    },
+    {
+      "id": "system-state",
+      "description": "Bounded current state and recovery information for the affected system.",
+      "classification": "internal"
+    },
+    {
+      "id": "recipient-context",
+      "description": "Private recipient, channel, and disclosure context retained outside model-visible output.",
+      "classification": "sensitive"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "project-change-delivery",
+      "description": "Prepare and validate a project change through the configured delivery path.",
+      "toolCandidates": []
+    },
+    {
+      "id": "project-investigation",
+      "description": "Produce a project-bound investigation or design report without changing the project.",
+      "toolCandidates": []
+    },
+    {
+      "id": "program-profile-intake",
+      "description": "Build and locally review a source-backed bug bounty Program Profile.",
+      "toolCandidates": []
+    },
+    {
+      "id": "security-assessment-planning",
+      "description": "Map authority, scope, evidence, environments, and testing workstreams before execution.",
+      "toolCandidates": []
+    },
+    {
+      "id": "incident-evidence-preservation",
+      "description": "Preserve accessible incident records and their provenance without changing the source systems.",
+      "toolCandidates": []
+    },
+    {
+      "id": "timeline-correlation",
+      "description": "Correlate timestamps and identities across heterogeneous incident records.",
+      "toolCandidates": ["plaso", "timesketch"]
+    },
+    {
+      "id": "hypothesis-analysis",
+      "description": "Test competing explanations against available evidence and record uncertainty.",
+      "toolCandidates": []
+    },
+    {
+      "id": "offline-artifact-inspection",
+      "description": "Inspect a supported local artifact through an admitted offline adapter.",
+      "toolCandidates": ["rea", "exiftool", "yara"]
+    },
+    {
+      "id": "passive-research",
+      "description": "Collect and compare a bounded set of declared sources without target testing.",
+      "toolCandidates": []
+    },
+    {
+      "id": "system-operation-planning",
+      "description": "Map current state, intended change, validation, rollback, and observation needs.",
+      "toolCandidates": []
+    },
+    {
+      "id": "external-communication-planning",
+      "description": "Prepare a reviewed message or external change for a separate action adapter.",
+      "toolCandidates": []
+    },
+    {
+      "id": "general-analysis",
+      "description": "Turn an uncategorized objective into evidence, hypotheses, decisions, and bounded next actions.",
+      "toolCandidates": []
+    }
+  ],
+  "routes": [
+    {
+      "id": "bug-bounty-assessment",
+      "priority": 900,
+      "rationale": "A bug bounty objective belongs in the source-backed Program Profile intake before case creation or target contact.",
+      "match": {
+        "domains": ["security-assessment"],
+        "signalsAll": ["bounty-program"]
+      },
+      "handler": {
+        "id": "program-profile-intake",
+        "owner": "gate",
+        "state": "ready",
+        "reason": "The local Program Profile intake and browser review path are implemented.",
+        "requirements": ["local-program-profile-review"]
+      },
+      "plan": {
+        "evidenceStepIds": ["outcome-definition", "source-ledger", "authority-boundary", "tool-readiness"],
+        "dataRequestCategoryIds": ["program-terms", "authorization-category"],
+        "capabilityIds": ["program-profile-intake"],
+        "questionIds": [],
+        "nextActions": [
+          {
+            "id": "start-program-profile-intake",
+            "description": "Create or resume the private Program Profile and ingest the program sources locally.",
+            "effect": "local-write",
+            "maxMinutes": 60,
+            "maxItems": 128,
+            "requiresQuestionIds": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "security-incident-investigation",
+      "priority": 850,
+      "rationale": "A reported account, payment, identity, or service-abuse event needs evidence preservation and competing-hypothesis analysis before any security-testing route is considered.",
+      "match": {
+        "domains": ["security-incident"]
+      },
+      "handler": {
+        "id": "incident-investigation-plan",
+        "owner": "gate",
+        "state": "planning-only",
+        "reason": "GATE can produce the investigation plan; a persisted incident workflow and action adapters are not implemented.",
+        "requirements": ["incident-workflow-adapter"]
+      },
+      "plan": {
+        "evidenceStepIds": [
+          "outcome-definition",
+          "source-preservation",
+          "source-ledger",
+          "incident-timeline",
+          "competing-hypotheses",
+          "smallest-discriminating-check",
+          "report-findings"
+        ],
+        "dataRequestCategoryIds": [
+          "account-order-history",
+          "payment-transaction-records",
+          "security-notifications",
+          "session-device-history",
+          "delivery-address-history",
+          "provider-correspondence"
+        ],
+        "capabilityIds": ["incident-evidence-preservation", "timeline-correlation", "hypothesis-analysis"],
+        "questionIds": ["subject-relationship", "data-access-basis", "immediate-goal"],
+        "nextActions": [
+          {
+            "id": "outline-incident-evidence",
+            "description": "Create a category-only evidence checklist and competing-hypothesis register.",
+            "effect": "none",
+            "maxMinutes": 20,
+            "maxItems": 32,
+            "requiresQuestionIds": []
+          },
+          {
+            "id": "preserve-accessible-records",
+            "description": "Preserve the accessible records selected by the operator with timestamps and provenance.",
+            "effect": "local-read",
+            "maxMinutes": 45,
+            "maxItems": 128,
+            "requiresQuestionIds": ["data-access-basis"]
+          },
+          {
+            "id": "build-incident-timeline",
+            "description": "Build a private event timeline and correlate orders, payments, account changes, sessions, devices, and destinations.",
+            "effect": "local-write",
+            "maxMinutes": 90,
+            "maxItems": 1000,
+            "requiresQuestionIds": ["data-access-basis"]
+          },
+          {
+            "id": "test-leading-explanations",
+            "description": "Compare each leading explanation with the timeline and identify the smallest missing observation.",
+            "effect": "local-read",
+            "maxMinutes": 90,
+            "maxItems": 32,
+            "requiresQuestionIds": ["data-access-basis", "immediate-goal"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "local-artifact-analysis",
+      "priority": 800,
+      "rationale": "A local artifact should be inspected through an exact supported offline adapter before any live-system hypothesis is pursued.",
+      "match": {
+        "domains": ["data-analysis"],
+        "signalsAll": ["artifact"]
+      },
+      "handler": {
+        "id": "offline-analysis-capability",
+        "owner": "gate",
+        "state": "handoff-only",
+        "reason": "The implemented lane supports one fixed PE-resource adapter; other artifact types remain planning-only.",
+        "requirements": ["supported-artifact-adapter", "registered-project-binding"]
+      },
+      "plan": {
+        "evidenceStepIds": ["source-preservation", "source-ledger", "tool-readiness", "competing-hypotheses"],
+        "dataRequestCategoryIds": ["local-artifact-reference", "artifact-provenance"],
+        "capabilityIds": ["offline-artifact-inspection", "hypothesis-analysis"],
+        "questionIds": ["artifact-possession"],
+        "nextActions": [
+          {
+            "id": "inventory-local-artifact",
+            "description": "Record the private artifact reference, provenance, type, and available digest without executing it.",
+            "effect": "local-read",
+            "maxMinutes": 20,
+            "maxItems": 16,
+            "requiresQuestionIds": ["artifact-possession"]
+          },
+          {
+            "id": "check-offline-adapter-fit",
+            "description": "Compare the artifact type with the exact currently admitted offline capability.",
+            "effect": "local-read",
+            "maxMinutes": 15,
+            "maxItems": 16,
+            "requiresQuestionIds": ["artifact-possession"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "software-change",
+      "priority": 750,
+      "rationale": "A requested software change should become a project-bound delivery task with acceptance evidence.",
+      "match": {
+        "domains": ["software"],
+        "deliverables": ["change"]
+      },
+      "handler": {
+        "id": "firstmate-ship",
+        "owner": "firstmate",
+        "state": "handoff-only",
+        "reason": "Firstmate defines project ship tasks, but GATE does not yet implement its reviewed dispatch bridge.",
+        "requirements": ["reviewed-firstmate-dispatch-bridge"]
+      },
+      "plan": {
+        "evidenceStepIds": ["outcome-definition", "source-ledger", "change-validation", "result-validation"],
+        "dataRequestCategoryIds": ["repository-context", "acceptance-criteria", "existing-test-evidence"],
+        "capabilityIds": ["project-change-delivery"],
+        "questionIds": ["project-binding"],
+        "nextActions": [
+          {
+            "id": "prepare-project-change-handoff",
+            "description": "Prepare a bounded project change brief with acceptance criteria and validation evidence.",
+            "effect": "local-write",
+            "maxMinutes": 30,
+            "maxItems": 64,
+            "requiresQuestionIds": ["project-binding"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "project-investigation",
+      "priority": 700,
+      "rationale": "A software question, diagnosis, audit, or design request should produce project-bound evidence before implementation is chosen.",
+      "match": {
+        "domains": ["software"],
+        "deliverables": ["answer", "investigation-report", "decision"]
+      },
+      "handler": {
+        "id": "firstmate-scout",
+        "owner": "firstmate",
+        "state": "handoff-only",
+        "reason": "Firstmate defines project scout tasks, but GATE does not yet implement its reviewed dispatch bridge.",
+        "requirements": ["reviewed-firstmate-dispatch-bridge"]
+      },
+      "plan": {
+        "evidenceStepIds": [
+          "outcome-definition",
+          "source-ledger",
+          "competing-hypotheses",
+          "smallest-discriminating-check",
+          "report-findings"
+        ],
+        "dataRequestCategoryIds": ["repository-context", "acceptance-criteria", "existing-test-evidence"],
+        "capabilityIds": ["project-investigation"],
+        "questionIds": ["project-binding"],
+        "nextActions": [
+          {
+            "id": "prepare-project-investigation-handoff",
+            "description": "Prepare a bounded project investigation brief and the evidence needed to change the decision.",
+            "effect": "local-write",
+            "maxMinutes": 30,
+            "maxItems": 64,
+            "requiresQuestionIds": ["project-binding"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "security-assessment-planning",
+      "priority": 650,
+      "rationale": "A security assessment outside the bug bounty contract needs its own authority, scope, and workflow design before a domain handler is selected.",
+      "match": {
+        "domains": ["security-assessment"]
+      },
+      "handler": {
+        "id": "security-assessment-plan",
+        "owner": "gate",
+        "state": "planning-only",
+        "reason": "The bug bounty Program Profile must not be reused as a generic client or internal assessment contract.",
+        "requirements": ["assessment-specific-intake"]
+      },
+      "plan": {
+        "evidenceStepIds": ["outcome-definition", "authority-boundary", "source-ledger", "tool-readiness"],
+        "dataRequestCategoryIds": ["authorization-category", "acceptance-criteria"],
+        "capabilityIds": ["security-assessment-planning"],
+        "questionIds": ["subject-relationship", "data-access-basis"],
+        "nextActions": [
+          {
+            "id": "map-assessment-boundary",
+            "description": "Prepare a categorical authority, scope, environment, evidence, and effect-boundary map.",
+            "effect": "none",
+            "maxMinutes": 30,
+            "maxItems": 64,
+            "requiresQuestionIds": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "research-analysis",
+      "priority": 600,
+      "rationale": "A research objective should start with a bounded source plan and expand only when evidence or contradictions justify it.",
+      "match": {
+        "domains": ["research"]
+      },
+      "handler": {
+        "id": "research-plan",
+        "owner": "gate",
+        "state": "planning-only",
+        "reason": "GATE has no generic persisted research runner or source-fetch adapter in v0.1.",
+        "requirements": ["declared-source-route"]
+      },
+      "plan": {
+        "evidenceStepIds": [
+          "outcome-definition",
+          "source-preservation",
+          "source-ledger",
+          "competing-hypotheses",
+          "report-findings"
+        ],
+        "dataRequestCategoryIds": ["public-sources", "acceptance-criteria"],
+        "capabilityIds": ["passive-research"],
+        "questionIds": ["research-depth"],
+        "nextActions": [
+          {
+            "id": "prepare-research-source-plan",
+            "description": "Select a bounded first source set and define what evidence would change the conclusion.",
+            "effect": "none",
+            "maxMinutes": 20,
+            "maxItems": 32,
+            "requiresQuestionIds": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "system-operation",
+      "priority": 550,
+      "rationale": "A system operation needs current-state evidence, an intended change, validation, observation, and recovery before execution.",
+      "match": {
+        "domains": ["system-operations"]
+      },
+      "handler": {
+        "id": "system-operation-plan",
+        "owner": "gate",
+        "state": "planning-only",
+        "reason": "Generic system-operation execution is not implemented through a reviewed GATE adapter.",
+        "requirements": ["reviewed-system-operation-adapter"]
+      },
+      "plan": {
+        "evidenceStepIds": ["outcome-definition", "source-ledger", "change-validation", "result-validation"],
+        "dataRequestCategoryIds": ["system-state", "acceptance-criteria"],
+        "capabilityIds": ["system-operation-planning"],
+        "questionIds": ["operation-scope"],
+        "nextActions": [
+          {
+            "id": "prepare-system-operation-plan",
+            "description": "Prepare the current-state check, intended change, validation, observation, and recovery sequence.",
+            "effect": "local-read",
+            "maxMinutes": 30,
+            "maxItems": 64,
+            "requiresQuestionIds": ["operation-scope"]
+          }
+        ]
+      }
+    },
+    {
+      "id": "external-communication",
+      "priority": 500,
+      "rationale": "An external message or change should be prepared separately from the adapter that sends or applies it.",
+      "match": {
+        "domains": ["communication"]
+      },
+      "handler": {
+        "id": "external-communication-plan",
+        "owner": "gate",
+        "state": "planning-only",
+        "reason": "The router can prepare content, while sending requires a separate reviewed external-action adapter.",
+        "requirements": ["reviewed-external-action-adapter"]
+      },
+      "plan": {
+        "evidenceStepIds": ["outcome-definition", "source-ledger", "result-validation"],
+        "dataRequestCategoryIds": ["recipient-context", "acceptance-criteria"],
+        "capabilityIds": ["external-communication-planning"],
+        "questionIds": ["external-action-intent"],
+        "nextActions": [
+          {
+            "id": "prepare-external-content",
+            "description": "Prepare a private draft and a review checklist without sending or applying it.",
+            "effect": "local-write",
+            "maxMinutes": 30,
+            "maxItems": 32,
+            "requiresQuestionIds": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "data-analysis",
+      "priority": 450,
+      "rationale": "A general data-analysis objective should preserve provenance, test explanations, and report uncertainty without assuming an artifact adapter fits.",
+      "match": {
+        "domains": ["data-analysis"]
+      },
+      "handler": {
+        "id": "general-analysis-plan",
+        "owner": "gate",
+        "state": "planning-only",
+        "reason": "GATE has no generic persisted data-analysis runner in v0.1.",
+        "requirements": ["analysis-specific-adapter"]
+      },
+      "plan": {
+        "evidenceStepIds": [
+          "outcome-definition",
+          "source-preservation",
+          "source-ledger",
+          "competing-hypotheses",
+          "smallest-discriminating-check",
+          "report-findings"
+        ],
+        "dataRequestCategoryIds": ["acceptance-criteria"],
+        "capabilityIds": ["general-analysis", "hypothesis-analysis"],
+        "questionIds": [],
+        "nextActions": [
+          {
+            "id": "prepare-data-analysis-plan",
+            "description": "Prepare the provenance map, competing explanations, and smallest discriminating checks.",
+            "effect": "none",
+            "maxMinutes": 30,
+            "maxItems": 64,
+            "requiresQuestionIds": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "general-objective-analysis",
+      "priority": 1,
+      "rationale": "An objective without a more specific registered route should still receive an evidence-led plan and explicit unresolved decisions.",
+      "match": {},
+      "handler": {
+        "id": "general-objective-plan",
+        "owner": "gate",
+        "state": "planning-only",
+        "reason": "No more specific reviewed handler matches the categorical proposal.",
+        "requirements": ["domain-specific-handoff"]
+      },
+      "plan": {
+        "evidenceStepIds": [
+          "outcome-definition",
+          "source-ledger",
+          "competing-hypotheses",
+          "smallest-discriminating-check",
+          "report-findings"
+        ],
+        "dataRequestCategoryIds": ["acceptance-criteria"],
+        "capabilityIds": ["general-analysis"],
+        "questionIds": [],
+        "nextActions": [
+          {
+            "id": "prepare-general-objective-plan",
+            "description": "Prepare the outcome, evidence map, competing explanations, and smallest bounded next step.",
+            "effect": "none",
+            "maxMinutes": 30,
+            "maxItems": 64,
+            "requiresQuestionIds": []
+          }
+        ]
+      }
+    }
+  ]
+}
