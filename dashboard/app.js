@@ -754,6 +754,34 @@ export function caseScanPresentation(scan = {}, visibleCount = 0) {
   return `${scanned} scanned / ${discoveredLabel} discovered${omitted ? ` · ${omittedLabel} omitted` : ""}${invalid ? ` · ${invalid} invalid` : ""}${complete ? "" : " · partial"}`;
 }
 
+export function emptyFleetPresentation(status = {}) {
+  const caseScan = status.caseScan || {};
+  const profileScan = status.profileSetupScan || {};
+  const cases = Array.isArray(status.cases) ? status.cases : [];
+  const setups = Array.isArray(status.profileSetups) ? status.profileSetups : [];
+  const caseScanExact = caseScanIsExact(caseScan, cases.length);
+  const profileScanExact = profileSetupScanIsExact(profileScan, setups.length, cases.length);
+  if (caseScanExact && profileScanExact) {
+    return {
+      glyph: "▱",
+      title: "No campaigns observed",
+      detail: "Create or bind a case to open its separate live activity view."
+    };
+  }
+  if (caseScan.availability !== "available" || profileScan.availability !== "available") {
+    return {
+      glyph: "…",
+      title: "Campaign scan unavailable",
+      detail: "Waiting for case and profile setup coverage before reporting an empty fleet."
+    };
+  }
+  return {
+    glyph: "…",
+    title: "Waiting for complete campaign scan",
+    detail: "Campaign coverage is partial, so an empty fleet cannot be confirmed yet."
+  };
+}
+
 export function offlineAnalysisPresentation(analysis = {}) {
   const base = executionPresentation(analysis);
   const retention = analysis.retention || {};
@@ -1391,10 +1419,11 @@ function renderCases() {
   );
 
   if (!entries.length) {
+    const empty = emptyFleetPresentation(state.status);
     const row = element("tr", "campaign-empty-row");
     const cell = element("td", "");
     cell.colSpan = 8;
-    cell.append(emptyState("▱", "No campaigns observed", "Create or bind a case to open its separate live activity view."));
+    cell.append(emptyState(empty.glyph, empty.title, empty.detail));
     row.append(cell);
     view.caseGrid.replaceChildren(row);
     renderFleetDetail(null);

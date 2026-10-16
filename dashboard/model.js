@@ -680,10 +680,10 @@ function caseScanShape(input, visibleCases) {
   const value = record(input);
   const hasLegacyObservation = ["discovered", "scanned", "omitted", "invalid", "complete", "truncated"]
     .some((field) => Object.hasOwn(value, field));
-  const availability = Object.hasOwn(value, "availability")
-    ? enumValue(value.availability, CASE_SCAN_AVAILABILITY, "unavailable")
-    : value.attempted === false
-      ? "unavailable"
+  const availability = value.attempted === false
+    ? "unavailable"
+    : Object.hasOwn(value, "availability")
+      ? enumValue(value.availability, CASE_SCAN_AVAILABILITY, "unavailable")
       : hasLegacyObservation || value.attempted === true ? "available" : "unavailable";
   const unavailable = availability === "unavailable";
   if (unavailable) {
@@ -747,6 +747,8 @@ function profileSetupShape(input) {
   const boundedProgress = answered !== null && total !== null && answered <= total;
   const completeProgress = boundedProgress && total > 0 && answered === total;
   const pendingProgress = boundedProgress && answered < total;
+  // Superseded is terminal, so a legacy or abandoned 0/0 intake remains a
+  // truthful aggregate as long as it has no actionable next section.
   const stateConsistent = stage === "questionnaire"
     ? readiness === "not-ready" && pendingProgress && blockerCount > 0 && nextSection !== null
     : stage === "operator-review"

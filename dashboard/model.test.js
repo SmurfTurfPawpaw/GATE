@@ -1276,6 +1276,22 @@ test("case scan availability survives sanitization and unavailable claims fail c
   assert.equal(notAttempted.caseScan.complete, false);
   assert.equal(notAttempted.caseScan.truncated, true);
 
+  const contradictoryAttempt = sanitizeStatusPayload({
+    caseScan: {
+      availability: "available",
+      attempted: false,
+      discovered: 0,
+      scanned: 0,
+      omitted: 0,
+      invalid: 0,
+      complete: true,
+      truncated: false
+    }
+  });
+  assert.equal(contradictoryAttempt.caseScan.availability, "unavailable");
+  assert.equal(contradictoryAttempt.caseScan.complete, false);
+  assert.equal(contradictoryAttempt.caseScan.truncated, true);
+
   const contradictory = sanitizeStatusPayload({
     caseScan: {
       availability: "available",
@@ -1496,17 +1512,20 @@ test("profile setup browser projection enforces the stage matrix and scan accoun
         stage: "ready", readiness: "ready", progress: { answered: 66, total: 66 }, blockerCount: 0, nextSection: null
       }),
       row("4", { stage: "superseded", blockerCount: 0, nextSection: null }),
+      row("0", {
+        stage: "superseded", progress: { answered: 0, total: 0 }, blockerCount: 0, nextSection: null
+      }),
       row("5", { progress: { answered: 66, total: 66 }, nextSection: null }),
       row("6", { stage: "operator-review" }),
       row("7", { stage: "superseded" })
     ],
     profileSetupScan: {
       availability: "available",
-      discovered: 7,
-      scanned: 7,
+      discovered: 8,
+      scanned: 8,
       omitted: 0,
       invalid: 3,
-      visible: 4,
+      visible: 5,
       representedByCases: 0,
       complete: true,
       truncated: false
@@ -1514,10 +1533,11 @@ test("profile setup browser projection enforces the stage matrix and scan accoun
   });
 
   assert.deepEqual(status.profileSetups.map((item) => item.stage), [
-    "questionnaire", "operator-review", "ready", "superseded"
+    "questionnaire", "operator-review", "ready", "superseded", "superseded"
   ]);
-  assert.equal(status.profileSetupScan.visible, 4);
-  assert.equal(status.profileSetupScan.scanned, 7);
+  assert.deepEqual(status.profileSetups.at(-1).progress, { answered: 0, total: 0 });
+  assert.equal(status.profileSetupScan.visible, 5);
+  assert.equal(status.profileSetupScan.scanned, 8);
   assert.equal(status.profileSetupScan.invalid, 3);
   assert.equal(status.profileSetupScan.complete, false);
   assert.equal(status.profileSetupScan.truncated, true);

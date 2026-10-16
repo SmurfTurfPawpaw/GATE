@@ -499,6 +499,15 @@ test("unavailable case scans stay unavailable through projection, sanitization, 
     invalid: 0,
     complete: true,
     truncated: false
+  }, {
+    availability: "available",
+    attempted: false,
+    discovered: 0,
+    scanned: 0,
+    omitted: 0,
+    invalid: 0,
+    complete: true,
+    truncated: false
   }]) {
     const projected = projectSnapshot(statusFixture({
       cases: [],
@@ -1841,7 +1850,7 @@ test("observer accepts read-only local requests and rejects foreign authorities 
   assert.throws(() => createObserver({ paths, host: "0.0.0.0" }), /loopback/);
 });
 
-test("status failures return a generic service error without exception details", async (t) => {
+test("cold status failures return a generic service error without scan claims or exception details", async (t) => {
   const { origin } = await listen(t, () => {
     throw new Error("SENSITIVE_BUILDER_FAILURE");
   });
@@ -1850,9 +1859,10 @@ test("status failures return a generic service error without exception details",
   const body = await response.text();
   assert.match(body, /observer status unavailable/);
   assert.doesNotMatch(body, /SENSITIVE_BUILDER_FAILURE/);
+  assert.deepEqual(JSON.parse(body), { error: "observer status unavailable" });
 });
 
-test("cached fallback marks every case telemetry stale while keeping the local endpoint available", async (t) => {
+test("warm cached fallback marks rows stale and fleet scans unavailable", async (t) => {
   const now = new Date().toISOString();
   const runtime = statusFixture({
     at: now,
@@ -1863,7 +1873,17 @@ test("cached fallback marks every case telemetry stale while keeping the local e
     at: now,
     events: [canonicalEvent({ id: "evt_cachedroot1", at: now })],
     cases: [caseFixture({ id: "cached-case", displayName: "Cached case", projectId: null, runtime })],
-    caseScan: { discovered: 1, scanned: 1, omitted: 0, invalid: 0, complete: true, truncated: false }
+    caseScan: { discovered: 1, scanned: 1, omitted: 0, invalid: 0, complete: true, truncated: false },
+    profileSetups: [],
+    profileSetupScan: {
+      availability: "available",
+      discovered: 0,
+      scanned: 0,
+      omitted: 0,
+      invalid: 0,
+      complete: true,
+      truncated: false
+    }
   });
   let calls = 0;
   const { origin } = await listen(t, () => {
@@ -1875,14 +1895,29 @@ test("cached fallback marks every case telemetry stale while keeping the local e
   const firstResponse = await fetch(`${origin}/api/status`);
   const first = await firstResponse.json();
   assert.equal(first.cases[0].telemetry.freshness, "fresh");
+  assert.equal(first.caseScan.availability, "available");
+  assert.equal(fleetSummaryPresentation(sanitizeStatusPayload(first)).availability, "exact");
   await new Promise((resolve) => setTimeout(resolve, 275));
   const fallbackResponse = await fetch(`${origin}/api/status`);
   const fallback = await fallbackResponse.json();
   assert.equal(fallbackResponse.status, 200, "the observer connection remains available from cache");
   assert.equal(fallback.telemetry.freshness, "stale");
   assert.ok(fallback.cases.every((item) => item.telemetry.freshness === "stale"));
+  assert.deepEqual(fallback.caseScan, {
+    availability: "unavailable",
+    discovered: null,
+    scanned: null,
+    omitted: null,
+    invalid: null,
+    discoveredAtLeast: false,
+    omittedAtLeast: false,
+    complete: false,
+    truncated: true
+  });
   const dashboard = sanitizeStatusPayload(fallback);
   assert.ok(dashboard.cases.every((item) => item.telemetry.state === "stale"));
+  assert.equal(dashboard.caseScan.availability, "unavailable");
+  assert.equal(fleetSummaryPresentation(dashboard).availability, "lower-bound");
   assert.equal(JSON.stringify(fallback).includes("PRIVATE_CACHED_BUILDER_FAILURE"), false);
 });
 

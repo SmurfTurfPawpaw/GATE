@@ -1325,10 +1325,10 @@ function summarizeCaseScan(value, visible, projectionInvalid, overflow) {
   const scan = object(value) || {};
   const hasScanObservation = ["discovered", "scanned", "omitted", "invalid", "complete", "truncated"]
     .some((key) => Object.hasOwn(scan, key));
-  const availability = Object.hasOwn(scan, "availability")
-    ? safeEnum(scan.availability, CASE_SCAN_AVAILABILITY, "unavailable")
-    : scan.attempted === false
-      ? "unavailable"
+  const availability = scan.attempted === false
+    ? "unavailable"
+    : Object.hasOwn(scan, "availability")
+      ? safeEnum(scan.availability, CASE_SCAN_AVAILABILITY, "unavailable")
       : hasScanObservation || scan.attempted === true ? "available" : "unavailable";
   if (availability === "unavailable") {
     return {
@@ -1410,6 +1410,8 @@ function summarizeProfileSetup(value) {
   const boundedProgress = answered !== null && total !== null && answered <= total;
   const completeProgress = boundedProgress && total > 0 && answered === total;
   const pendingProgress = boundedProgress && answered < total;
+  // Superseded is terminal, so a legacy or abandoned 0/0 intake remains a
+  // truthful aggregate as long as it has no actionable next section.
   const stateConsistent = stage === "questionnaire"
     ? readiness === "not-ready" && pendingProgress && blockerCount > 0 && nextSection !== null
     : stage === "operator-review"
@@ -1836,6 +1838,20 @@ function unavailableProfileSetupScan(visible) {
   };
 }
 
+function unavailableCaseScan() {
+  return {
+    availability: "unavailable",
+    discovered: null,
+    scanned: null,
+    omitted: null,
+    invalid: null,
+    discoveredAtLeast: false,
+    omittedAtLeast: false,
+    complete: false,
+    truncated: true
+  };
+}
+
 function projectWithoutCurrentProfileSetups(status, previous, paths) {
   const projected = projectSnapshot({
     ...status,
@@ -1916,6 +1932,7 @@ export function createObserver(options = {}) {
                 telemetry: { ...item.telemetry, freshness: "stale" }
               }))
             : [],
+          caseScan: unavailableCaseScan(),
           profileSetups: Array.isArray(cached.status.profileSetups)
             ? cached.status.profileSetups.map((item) => ({ ...item, freshness: "stale" }))
             : [],

@@ -412,14 +412,17 @@ test("profile setup stage and scan accounting remain fail-closed through browser
     }),
     rawSetup("matrix-superseded", {
       stage: "superseded", progress: { answered: 10, total: 66 }, blockerCount: 0, nextSection: null
+    }),
+    rawSetup("matrix-superseded-empty", {
+      stage: "superseded", progress: { answered: 0, total: 0 }, blockerCount: 0, nextSection: null
     })
   ];
   const raw = rawStatus({
     profileSetups: accepted,
     profileSetupScan: {
       availability: "available",
-      discovered: 5,
-      scanned: 5,
+      discovered: 6,
+      scanned: 6,
       omitted: 0,
       invalid: 0,
       complete: true,
@@ -428,16 +431,18 @@ test("profile setup stage and scan accounting remain fail-closed through browser
   });
 
   const serverStatus = projectSnapshot(raw, { repo }).status;
-  assert.equal(serverStatus.profileSetups.length, 4);
-  assert.equal(serverStatus.profileSetupScan.visible, 4);
-  assert.equal(serverStatus.profileSetupScan.scanned, 5);
+  assert.equal(serverStatus.profileSetups.length, 5);
+  assert.deepEqual(serverStatus.profileSetups.at(-1).progress, { answered: 0, total: 0 });
+  assert.equal(serverStatus.profileSetupScan.visible, 5);
+  assert.equal(serverStatus.profileSetupScan.scanned, 6);
   assert.equal(serverStatus.profileSetupScan.invalid, 0);
   assert.equal(serverStatus.profileSetupScan.complete, false);
   assert.equal(serverStatus.profileSetupScan.truncated, true);
 
   const browserStatus = sanitizeStatusPayload(serverStatus);
-  assert.equal(browserStatus.profileSetups.length, 4);
-  assert.equal(browserStatus.profileSetupScan.visible, 4);
+  assert.equal(browserStatus.profileSetups.length, 5);
+  assert.deepEqual(browserStatus.profileSetups.at(-1).progress, { answered: 0, total: 0 });
+  assert.equal(browserStatus.profileSetupScan.visible, 5);
   assert.equal(browserStatus.profileSetupScan.complete, false);
   assert.equal(browserStatus.profileSetupScan.truncated, true);
   assert.equal(JSON.stringify(browserStatus).includes("matrix-"), false);

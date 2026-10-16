@@ -10,6 +10,7 @@ import {
   caseScanPresentation,
   cycleCaseSelection,
   engagementScanPresentation,
+  emptyFleetPresentation,
   executionPresentation,
   executionRunPresentation,
   fleetSummaryPresentation,
@@ -1147,4 +1148,31 @@ test("case scan presentation exposes invalid and partial scan state", () => {
     }, 0),
     "1 scanned / 0 discovered · partial"
   );
+});
+
+test("empty fleet copy requires exact case and profile coverage", () => {
+  const exactCaseScan = {
+    availability: "available",
+    discovered: 0,
+    scanned: 0,
+    omitted: 0,
+    invalid: 0,
+    complete: true,
+    truncated: false
+  };
+  const exactProfileScan = {
+    ...exactCaseScan,
+    visible: 0,
+    representedByCases: 0
+  };
+  assert.equal(emptyFleetPresentation({ caseScan: exactCaseScan, profileSetupScan: exactProfileScan }).title,
+    "No campaigns observed");
+  assert.equal(emptyFleetPresentation({
+    caseScan: { availability: "unavailable", complete: false, truncated: true },
+    profileSetupScan: exactProfileScan
+  }).title, "Campaign scan unavailable");
+  assert.equal(emptyFleetPresentation({
+    caseScan: { availability: "available", complete: false, truncated: true },
+    profileSetupScan: exactProfileScan
+  }).title, "Waiting for complete campaign scan");
 });
