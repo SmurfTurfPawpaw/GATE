@@ -31,7 +31,11 @@ All static and JSON responses use `Cache-Control: no-store`, a self-only content
 
 ## JSON API
 
-Every endpoint returns a server-side allowlisted `gate.observer/v1` projection. These responses are reduced views, rather than canonical event, learning, engagement, or usage records. `dashboard/model.js` applies a second allowlist before any value reaches the DOM.
+The `/api/*` endpoints return server-side allowlisted `gate.observer/v1` projections. These responses are reduced views, rather than canonical event, learning, engagement, or usage records. `dashboard/model.js` applies a second allowlist before any value reaches the DOM.
+
+### `GET /healthz`
+
+The health response contains `ok: true`, `service: "gate-observer"`, the response time `at`, and `build` with `version`, full `commit`, 12-character `commitShort`, and `state`. Unverified version or commit fields are `null`; `state` is `clean`, `modified`, or `unavailable`. This is the same immutable startup identity embedded in the snapshotted HTML, even if the checkout later changes or `/api/status` is unavailable. It does not certify operational readiness.
 
 ### `GET /api/status`
 
