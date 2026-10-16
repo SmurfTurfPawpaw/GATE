@@ -967,6 +967,7 @@ test("case cockpit projection keeps only bounded lifecycle metadata and an exact
           }],
           scan: { discovered: 1, scanned: 1, omitted: 0, complete: true, truncated: false }
         },
+        learningCount: 3,
         activity: [{
           id: "evt_case_activity_01",
           at: "2026-10-15T08:00:02.000Z",
@@ -1078,6 +1079,7 @@ test("case cockpit projection keeps only bounded lifecycle metadata and an exact
   assert.equal(caseView.engagementScan.truncated, true);
   assert.equal(caseView.workflows.instances[0].activePhase.toolId, "httpx");
   assert.equal(caseView.activity[0].action.toolName, "httpx");
+  assert.equal(caseView.learningCount, 3);
   assert.deepEqual(tombstone, {
     id: `case_${"d".repeat(16)}`,
     displayName: "Invalid case",
@@ -1203,7 +1205,8 @@ test("case cockpit projection keeps only bounded lifecycle metadata and an exact
       },
       recent: []
     },
-    activity: []
+    activity: [],
+    learningCount: 0
   });
 
   const serialized = JSON.stringify(status);
@@ -1261,6 +1264,79 @@ test("case status is normalized from current binding metadata and runtime failur
   assert.equal(status.cases[2].state, "blocked");
   assert.equal(status.cases[2].execution.runningCount, null);
   assert.equal(JSON.stringify(status).includes("PRIVATE_RUNTIME_FAILURE"), false);
+});
+
+test("profile setup projection preserves guided progress while withholding private profile identity", () => {
+  const status = sanitizeStatusPayload({
+    profileSetups: [{
+      id: `program_${"a".repeat(16)}`,
+      displayName: null,
+      stage: "questionnaire",
+      readiness: "not-ready",
+      progress: { answered: 41, total: 66, answers: "PRIVATE_ANSWERS_CANARY" },
+      blockerCount: 3,
+      nextSection: "scope-assets",
+      recommendationMode: "mixed",
+      updatedAt: "2026-10-16T08:00:00.000Z",
+      freshness: "fresh",
+      targetName: "PRIVATE_TARGET_CANARY",
+      source: "PRIVATE_SOURCE_CANARY"
+    }, {
+      id: `program_${"b".repeat(16)}`,
+      displayName: "PRIVATE_DISPLAY_CANARY",
+      stage: "ready",
+      readiness: "ready",
+      progress: { answered: 66, total: 66 },
+      blockerCount: 0,
+      nextSection: null,
+      recommendationMode: null,
+      updatedAt: "2026-10-16T08:00:00.000Z",
+      freshness: "fresh"
+    }],
+    profileSetupScan: {
+      discovered: 3,
+      scanned: 2,
+      omitted: 1,
+      invalid: 1,
+      visible: 1,
+      representedByCases: 1,
+      discoveredAtLeast: true,
+      omittedAtLeast: false,
+      complete: false,
+      truncated: true,
+      filenames: ["PRIVATE_FILENAME_CANARY"]
+    }
+  });
+
+  assert.deepEqual(status.profileSetups, [{
+    id: `program_${"a".repeat(16)}`,
+    displayName: null,
+    stage: "questionnaire",
+    readiness: "not-ready",
+    progress: { answered: 41, total: 66 },
+    blockerCount: 3,
+    nextSection: "scope-assets",
+    recommendationMode: "mixed",
+    updatedAt: "2026-10-16T08:00:00.000Z",
+    freshness: "fresh"
+  }]);
+  assert.deepEqual(status.profileSetupScan, {
+    discovered: 3,
+    scanned: 2,
+    omitted: 1,
+    invalid: 1,
+    visible: 1,
+    representedByCases: 1,
+    discoveredAtLeast: true,
+    omittedAtLeast: false,
+    complete: false,
+    truncated: true
+  });
+  const serialized = JSON.stringify(status);
+  for (const canary of [
+    "PRIVATE_ANSWERS_CANARY", "PRIVATE_TARGET_CANARY", "PRIVATE_SOURCE_CANARY",
+    "PRIVATE_DISPLAY_CANARY", "PRIVATE_FILENAME_CANARY"
+  ]) assert.equal(serialized.includes(canary), false, `profile setup projection leaked ${canary}`);
 });
 
 test("case projection preserves schema-valid trailing spaces as trimmed display labels", () => {

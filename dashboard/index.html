@@ -8,20 +8,20 @@
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; connect-src 'self'; font-src 'self'; img-src 'self' data:; object-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'"
     >
-    <title>GATE Observer</title>
+    <title>GATE Fleet Board</title>
     <link rel="icon" href="/dashboard/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/dashboard/styles.css">
     <script type="module" src="/dashboard/app.js"></script>
   </head>
   <body>
-    <a class="skip-link" href="#workspace">Skip to live operations</a>
+    <a class="skip-link" href="#workspace">Skip to campaign fleet</a>
 
     <header class="topbar">
-      <div class="brand" aria-label="GATE Observer">
+      <div class="brand" aria-label="GATE Fleet Board">
         <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
         <span>
           <strong>GATE</strong>
-          <small>observer</small>
+          <small>fleet board</small>
         </span>
       </div>
 
@@ -48,31 +48,21 @@
       </nav>
     </header>
 
-    <section class="metrics" aria-label="Live summary">
+    <section class="metrics fleet-metrics" aria-label="Campaign fleet summary">
       <article class="metric-card accent-cyan">
-        <span class="metric-label">Fleet running</span>
+        <span class="metric-label">Campaigns active</span>
         <strong class="metric-value" id="metric-running">—</strong>
         <span class="metric-detail" id="metric-running-detail">Waiting for status</span>
       </article>
       <article class="metric-card accent-amber">
-        <span class="metric-label">Fleet waiting</span>
+        <span class="metric-label">Waiting</span>
         <strong class="metric-value" id="metric-waiting">—</strong>
-        <span class="metric-detail">Approval or operator input</span>
+        <span class="metric-detail">Operator input or queued decision</span>
       </article>
       <article class="metric-card accent-red">
-        <span class="metric-label">Fleet attention</span>
+        <span class="metric-label">Needs attention</span>
         <strong class="metric-value" id="metric-attention">—</strong>
-        <span class="metric-detail">Blocked or failed</span>
-      </article>
-      <article class="metric-card accent-violet">
-        <span class="metric-label">Host/base tokens</span>
-        <strong class="metric-value" id="metric-tokens">Unavailable</strong>
-        <span class="metric-detail" id="metric-tokens-detail">No provider data</span>
-      </article>
-      <article class="metric-card accent-blue">
-        <span class="metric-label">Host/base context</span>
-        <strong class="metric-value" id="metric-context">Unavailable</strong>
-        <span class="metric-detail" id="metric-context-detail">No active window</span>
+        <span class="metric-detail">Projected case signals</span>
       </article>
       <article class="metric-card accent-green">
         <span class="metric-label">Telemetry</span>
@@ -81,29 +71,78 @@
       </article>
     </section>
 
-    <section class="panel case-cockpit" id="case-panel" tabindex="-1" aria-labelledby="case-panel-title">
-      <header class="panel-header">
-        <div>
-          <p class="eyebrow">Concurrent program state separation</p>
-          <h1 id="case-panel-title">Case cockpit</h1>
-        </div>
-        <div class="case-panel-meta" aria-label="Case scan status">
-          <span id="case-scan">0 / 0 scanned · partial</span>
-          <span class="count-badge" id="case-count">0</span>
-        </div>
-      </header>
-      <div class="case-grid" id="case-grid">
-        <div class="empty-state">
-          <span class="empty-glyph" aria-hidden="true">▱</span>
-          <strong>Waiting for cases</strong>
-          <span>Each case will appear in its own structured activity terminal.</span>
-        </div>
-      </div>
-      <p class="execution-note">
-        Terminals show allowlisted lifecycle metadata. Completion percentages, ETAs, commands, targets, and raw output are not inferred.
-      </p>
-    </section>
+    <main class="fleet-workspace" id="workspace">
+      <section class="panel case-cockpit campaign-board" id="case-panel" tabindex="-1" aria-labelledby="case-panel-title">
+        <header class="panel-header campaign-board-header">
+          <div>
+            <p class="eyebrow">Parallel programs · isolated case state</p>
+            <h1 id="case-panel-title">Campaign fleet</h1>
+          </div>
+          <div class="case-panel-meta" aria-label="Case scan status">
+            <span id="case-scan">Cases: 0 scanned / 0 discovered · partial · Profiles: 0 setups visible / 0 discovered · partial</span>
+            <span class="count-badge" id="case-count">0</span>
+          </div>
+        </header>
 
+        <div class="campaign-table-region" role="region" aria-label="Campaign fleet table" tabindex="0">
+          <table class="campaign-table" aria-describedby="campaign-table-note">
+            <thead>
+              <tr>
+                <th scope="col">Campaign</th>
+                <th scope="col">State</th>
+                <th scope="col">Current step / tool</th>
+                <th scope="col">Last signal</th>
+                <th scope="col">Active work</th>
+                <th scope="col">Attention</th>
+                <th scope="col">Tokens</th>
+                <th scope="col">Learnings</th>
+              </tr>
+            </thead>
+            <tbody id="case-grid">
+              <tr class="campaign-empty-row">
+                <td colspan="8">
+                  <div class="empty-state">
+                    <span class="empty-glyph" aria-hidden="true">▱</span>
+                    <strong>Waiting for campaigns</strong>
+                    <span>Each isolated case will appear as one row.</span>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="execution-note" id="campaign-table-note">
+          Rows contain allowlisted lifecycle or guided profile-setup metadata. Findings, execution percentages, ETAs, commands, targets, and raw output are never inferred.
+        </p>
+
+        <section class="case-detail" id="case-detail" tabindex="-1" aria-labelledby="case-detail-title" hidden>
+          <button class="case-detail-close" id="case-detail-close" type="button" aria-label="Collapse live activity">Collapse</button>
+          <div id="case-detail-body"></div>
+        </section>
+      </section>
+    </main>
+
+    <details class="system-health" id="system-health">
+      <summary>
+        <span>
+          <strong>System health</strong>
+          <small>Base runtime, offline analysis, managed tools, shared activity, tokens, and learning</small>
+        </span>
+        <span class="disclosure-hint">Open diagnostics</span>
+      </summary>
+      <div class="system-health-body">
+        <section class="metrics system-metrics" aria-label="Host and base resource summary">
+          <article class="metric-card accent-violet">
+            <span class="metric-label">Host/base tokens</span>
+            <strong class="metric-value" id="metric-tokens">Unavailable</strong>
+            <span class="metric-detail" id="metric-tokens-detail">No provider data</span>
+          </article>
+          <article class="metric-card accent-blue">
+            <span class="metric-label">Host/base context</span>
+            <strong class="metric-value" id="metric-context">Unavailable</strong>
+            <span class="metric-detail" id="metric-context-detail">No active window</span>
+          </article>
+        </section>
     <section class="panel execution-overview" id="execution-panel" tabindex="-1" aria-labelledby="execution-title">
       <header class="panel-header compact">
         <div>
@@ -254,7 +293,7 @@
       <p class="execution-note">Runtime readiness is local evidence only. Target contact still requires engagement authority and an approved execution manifest.</p>
     </section>
 
-    <main class="workspace" id="workspace">
+    <div class="workspace system-workspace" id="system-workspace">
       <section class="panel fleet-panel" id="fleet-panel" tabindex="-1" aria-labelledby="fleet-title">
         <header class="panel-header">
           <div>
@@ -362,7 +401,10 @@
           </ol>
         </section>
       </aside>
-    </main>
+    </div>
+
+      </div>
+    </details>
 
     <footer class="footer">
       <span><i class="footer-dot" aria-hidden="true"></i> Read-only local observer</span>
@@ -380,16 +422,17 @@
           <button class="close-button" value="close" aria-label="Close keyboard shortcuts">×</button>
         </header>
         <dl class="shortcut-list">
-          <div><dt><kbd>0</kbd></dt><dd>Focus the case cockpit</dd></div>
-          <div><dt><kbd>1</kbd></dt><dd>Focus agents and tasks</dd></div>
-          <div><dt><kbd>2</kbd></dt><dd>Focus activity timeline</dd></div>
-          <div><dt><kbd>3</kbd></dt><dd>Focus active execution</dd></div>
-          <div><dt><kbd>4</kbd></dt><dd>Focus resource posture</dd></div>
-          <div><dt><kbd>5</kbd></dt><dd>Focus learning log</dd></div>
-          <div><dt><kbd>6</kbd></dt><dd>Focus offline analysis</dd></div>
-          <div><dt><kbd>7</kbd></dt><dd>Focus managed tool runtimes</dd></div>
-          <div><dt><kbd>[</kbd> <kbd>]</kbd></dt><dd>Previous or next case terminal</dd></div>
-          <div><dt><kbd>/</kbd></dt><dd>Filter safe activity metadata</dd></div>
+          <div><dt><kbd>0</kbd></dt><dd>Focus the campaign fleet</dd></div>
+          <div><dt><kbd>1</kbd></dt><dd>Focus selected live activity</dd></div>
+          <div><dt><kbd>2</kbd></dt><dd>Open System health</dd></div>
+          <div><dt><kbd>3</kbd></dt><dd>Open base active execution</dd></div>
+          <div><dt><kbd>4</kbd></dt><dd>Open host/base resource posture</dd></div>
+          <div><dt><kbd>5</kbd></dt><dd>Open shared learning</dd></div>
+          <div><dt><kbd>6</kbd></dt><dd>Open base offline analysis</dd></div>
+          <div><dt><kbd>7</kbd></dt><dd>Open managed tool runtimes</dd></div>
+          <div><dt><kbd>↑</kbd> <kbd>↓</kbd> or <kbd>[</kbd> <kbd>]</kbd></dt><dd>Previous or next campaign</dd></div>
+          <div><dt><kbd>Enter</kbd></dt><dd>Open the selected campaign activity</dd></div>
+          <div><dt><kbd>/</kbd></dt><dd>Open and filter shared safe activity</dd></div>
           <div><dt><kbd>R</kbd></dt><dd>Refresh all endpoints</dd></div>
           <div><dt><kbd>P</kbd></dt><dd>Pause or resume live updates</dd></div>
           <div><dt><kbd>?</kbd></dt><dd>Show this guide</dd></div>

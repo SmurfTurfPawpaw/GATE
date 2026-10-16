@@ -7,6 +7,7 @@
 
 const RECORD_LIMIT = 100;
 const CASE_LIMIT = 64;
+const PROFILE_SETUP_LIMIT = 64;
 const TOOL_RUNTIME_LIMIT = 256;
 const STRING_LIMIT = 160;
 const MAX_COUNT = Number.MAX_SAFE_INTEGER;
@@ -211,6 +212,25 @@ const CASE_PROCESS_BOUNDARIES = new Set(["shared-user"]);
 const CASE_NETWORK_BOUNDARIES = new Set(["adapter-dependent"]);
 const CASE_RUNTIME_HEALTH_STATUSES = new Set(["available", "unavailable"]);
 const CASE_RUNTIME_HEALTH_REASONS = new Set(["invalid-case", "runtime-observation-failed"]);
+const PROFILE_SETUP_STAGES = new Set(["questionnaire", "operator-review", "ready", "superseded"]);
+const PROFILE_SETUP_READINESS = new Set(["not-ready", "ready"]);
+const PROFILE_SETUP_NEXT_SECTIONS = new Set([
+  "identity-objectives",
+  "authority-sources",
+  "actions-techniques",
+  "limits-schedule",
+  "scope-assets",
+  "accounts-identities",
+  "architecture-data-flows",
+  "workflow-coverage",
+  "data-evidence",
+  "stops-escalation-cleanup",
+  "reporting-disclosure",
+  "ambiguities-attestation",
+  "conditional-modules"
+]);
+const PROFILE_SETUP_RECOMMENDATION_MODES = new Set(["policy", "proposal", "mixed"]);
+const PROFILE_SETUP_FRESHNESS = new Set(["fresh", "stale"]);
 const ENGAGEMENT_SCAN_AVAILABILITY = new Set(["loaded", "not-loaded", "unavailable"]);
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/;
 const EVENT_KIND = /^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+$/;
@@ -599,7 +619,8 @@ function caseShape(input) {
       workflows: workflowsShape({}),
       engagementScan: engagementScanShape({}),
       offlineAnalysis: offlineAnalysisShape({}),
-      activity: []
+      activity: [],
+      learningCount: count(value.learningCount) ?? 0
     };
   }
   const binding = record(value.binding);
@@ -647,7 +668,8 @@ function caseShape(input) {
     workflows: workflowsShape(runtimeAvailable ? value.workflows : {}),
     engagementScan: engagementScanShape(runtimeAvailable ? value.engagementScan : {}),
     offlineAnalysis: offlineAnalysisShape(runtimeAvailable ? value.offlineAnalysis : {}),
-    activity: runtimeAvailable ? activity : []
+    activity: runtimeAvailable ? activity : [],
+    learningCount: count(value.learningCount) ?? 0
   };
 }
 
@@ -658,6 +680,57 @@ function caseScanShape(input) {
     scanned: count(value.scanned),
     omitted: count(value.omitted),
     invalid: count(value.invalid),
+    discoveredAtLeast: typeof value.discoveredAtLeast === "boolean" ? value.discoveredAtLeast : false,
+    omittedAtLeast: typeof value.omittedAtLeast === "boolean" ? value.omittedAtLeast : false,
+    complete: typeof value.complete === "boolean" ? value.complete : false,
+    truncated: typeof value.truncated === "boolean" ? value.truncated : true
+  };
+}
+
+function profileSetupShape(input) {
+  const value = record(input);
+  const id = typeof value.id === "string" && PROGRAM_ID.test(value.id) ? value.id : null;
+  const stage = enumValue(value.stage, PROFILE_SETUP_STAGES, null);
+  const readiness = enumValue(value.readiness, PROFILE_SETUP_READINESS, null);
+  const progress = record(value.progress);
+  const answered = count(progress.answered);
+  const total = count(progress.total);
+  const blockerCount = count(value.blockerCount);
+  const nextSection = value.nextSection === null
+    ? null
+    : enumValue(value.nextSection, PROFILE_SETUP_NEXT_SECTIONS, null);
+  const recommendationMode = value.recommendationMode === null
+    ? null
+    : enumValue(value.recommendationMode, PROFILE_SETUP_RECOMMENDATION_MODES, null);
+  const updatedAt = timestamp(value.updatedAt);
+  const setupFreshness = enumValue(value.freshness, PROFILE_SETUP_FRESHNESS, null);
+  if (!id || value.displayName !== null || !stage || !readiness || answered === null || total === null || answered > total ||
+      blockerCount === null || !updatedAt || !setupFreshness ||
+      (value.nextSection !== null && nextSection === null) ||
+      (value.recommendationMode !== null && recommendationMode === null)) return null;
+  return {
+    id,
+    displayName: null,
+    stage,
+    readiness,
+    progress: { answered, total },
+    blockerCount,
+    nextSection,
+    recommendationMode,
+    updatedAt,
+    freshness: setupFreshness
+  };
+}
+
+function profileSetupScanShape(input) {
+  const value = record(input);
+  return {
+    discovered: count(value.discovered),
+    scanned: count(value.scanned),
+    omitted: count(value.omitted),
+    invalid: count(value.invalid),
+    visible: count(value.visible),
+    representedByCases: count(value.representedByCases),
     discoveredAtLeast: typeof value.discoveredAtLeast === "boolean" ? value.discoveredAtLeast : false,
     omittedAtLeast: typeof value.omittedAtLeast === "boolean" ? value.omittedAtLeast : false,
     complete: typeof value.complete === "boolean" ? value.complete : false,
@@ -857,6 +930,10 @@ export function sanitizeStatusPayload(input) {
       ? value.cases.slice(0, CASE_LIMIT).map(caseShape).filter(Boolean)
       : [],
     caseScan: caseScanShape(value.caseScan),
+    profileSetups: Array.isArray(value.profileSetups)
+      ? value.profileSetups.slice(0, PROFILE_SETUP_LIMIT).map(profileSetupShape).filter(Boolean)
+      : [],
+    profileSetupScan: profileSetupScanShape(value.profileSetupScan),
     engagementScan: engagementScanShape(value.engagementScan),
     execution: executionShape(value.execution),
     workflows: workflowsShape(value.workflows),
