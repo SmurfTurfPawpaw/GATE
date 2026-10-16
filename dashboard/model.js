@@ -231,6 +231,7 @@ const PROFILE_SETUP_NEXT_SECTIONS = new Set([
 ]);
 const PROFILE_SETUP_RECOMMENDATION_MODES = new Set(["policy", "proposal", "mixed"]);
 const PROFILE_SETUP_FRESHNESS = new Set(["fresh", "stale"]);
+const CASE_SCAN_AVAILABILITY = new Set(["available", "unavailable"]);
 const PROFILE_SETUP_SCAN_AVAILABILITY = new Set(["available", "unavailable"]);
 const ENGAGEMENT_SCAN_AVAILABILITY = new Set(["loaded", "not-loaded", "unavailable"]);
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/;
@@ -676,15 +677,22 @@ function caseShape(input) {
 
 function caseScanShape(input) {
   const value = record(input);
+  const hasLegacyObservation = ["discovered", "scanned", "omitted", "invalid", "complete", "truncated"]
+    .some((field) => Object.hasOwn(value, field));
+  const availability = Object.hasOwn(value, "availability")
+    ? enumValue(value.availability, CASE_SCAN_AVAILABILITY, "unavailable")
+    : hasLegacyObservation ? "available" : "unavailable";
+  const unavailable = availability === "unavailable";
   return {
-    discovered: count(value.discovered),
-    scanned: count(value.scanned),
-    omitted: count(value.omitted),
-    invalid: count(value.invalid),
-    discoveredAtLeast: typeof value.discoveredAtLeast === "boolean" ? value.discoveredAtLeast : false,
-    omittedAtLeast: typeof value.omittedAtLeast === "boolean" ? value.omittedAtLeast : false,
-    complete: typeof value.complete === "boolean" ? value.complete : false,
-    truncated: typeof value.truncated === "boolean" ? value.truncated : true
+    availability,
+    discovered: unavailable ? null : count(value.discovered),
+    scanned: unavailable ? null : count(value.scanned),
+    omitted: unavailable ? null : count(value.omitted),
+    invalid: unavailable ? null : count(value.invalid),
+    discoveredAtLeast: unavailable ? false : typeof value.discoveredAtLeast === "boolean" ? value.discoveredAtLeast : false,
+    omittedAtLeast: unavailable ? false : typeof value.omittedAtLeast === "boolean" ? value.omittedAtLeast : false,
+    complete: !unavailable && value.complete === true,
+    truncated: unavailable || (typeof value.truncated === "boolean" ? value.truncated : true)
   };
 }
 

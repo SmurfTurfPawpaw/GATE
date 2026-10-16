@@ -26,6 +26,7 @@ import {
   toolRuntimePresentation,
   usageScopeLabel
 } from "./app.js";
+import { sanitizeStatusPayload } from "./model.js";
 
 const at = "2026-10-13T12:00:00.000Z";
 
@@ -737,6 +738,40 @@ test("fleet summary cards distinguish unavailable, lower-bound, and exact covera
   assert.equal(exact.activeLabel, "1");
   assert.equal(exact.waitingLabel, "0");
   assert.equal(exact.attentionLabel, "0");
+});
+
+test("sanitized unavailable scan states cannot become exact fleet zeroes", () => {
+  const contradictoryExactZero = {
+    discovered: 0,
+    scanned: 0,
+    omitted: 0,
+    invalid: 0,
+    complete: true,
+    truncated: false
+  };
+  const caseUnavailable = sanitizeStatusPayload({
+    at,
+    cases: [],
+    profileSetups: [],
+    caseScan: { availability: "unavailable", ...contradictoryExactZero },
+    profileSetupScan: { availability: "available", visible: 0, representedByCases: 0, ...contradictoryExactZero }
+  });
+  assert.equal(caseUnavailable.caseScan.availability, "unavailable");
+  assert.equal(caseUnavailable.caseScan.complete, false);
+  assert.equal(fleetSummaryPresentation(caseUnavailable).availability, "lower-bound");
+  assert.equal(fleetSummaryPresentation(caseUnavailable).activeLabel, "0+");
+
+  const profileUnavailable = sanitizeStatusPayload({
+    at,
+    cases: [],
+    profileSetups: [],
+    caseScan: { availability: "available", ...contradictoryExactZero },
+    profileSetupScan: { availability: "unavailable", visible: 0, representedByCases: 0, ...contradictoryExactZero }
+  });
+  assert.equal(profileUnavailable.profileSetupScan.availability, "unavailable");
+  assert.equal(profileUnavailable.profileSetupScan.complete, false);
+  assert.equal(fleetSummaryPresentation(profileUnavailable).availability, "lower-bound");
+  assert.equal(fleetSummaryPresentation(profileUnavailable).attentionLabel, "0+");
 });
 
 test("private profile setup rows show guided progress without inventing a target identity", () => {

@@ -1035,6 +1035,7 @@ test("case cockpit projection keeps only bounded lifecycle metadata and an exact
 
   assert.deepEqual(status.operator, { displayName: "Giovanni" });
   assert.deepEqual(status.caseScan, {
+    availability: "available",
     discovered: 5,
     scanned: 5,
     omitted: 0,
@@ -1220,6 +1221,55 @@ test("case cockpit projection keeps only bounded lifecycle metadata and an exact
   ]) assert.equal(serialized.includes(canary), false, `case projection leaked ${canary}`);
 });
 
+test("case scan availability survives sanitization and unavailable claims fail closed", () => {
+  const unavailable = sanitizeStatusPayload({
+    caseScan: {
+      availability: "unavailable",
+      discovered: 0,
+      scanned: 0,
+      omitted: 0,
+      invalid: 0,
+      discoveredAtLeast: true,
+      omittedAtLeast: true,
+      complete: true,
+      truncated: false
+    }
+  });
+  assert.deepEqual(unavailable.caseScan, {
+    availability: "unavailable",
+    discovered: null,
+    scanned: null,
+    omitted: null,
+    invalid: null,
+    discoveredAtLeast: false,
+    omittedAtLeast: false,
+    complete: false,
+    truncated: true
+  });
+
+  const invalid = sanitizeStatusPayload({
+    caseScan: {
+      availability: "PRIVATE_INVALID_AVAILABILITY_CANARY",
+      discovered: 0,
+      scanned: 0,
+      omitted: 0,
+      invalid: 0,
+      complete: true,
+      truncated: false
+    }
+  });
+  assert.equal(invalid.caseScan.availability, "unavailable");
+  assert.equal(invalid.caseScan.complete, false);
+  assert.equal(invalid.caseScan.truncated, true);
+  assert.equal(JSON.stringify(invalid).includes("PRIVATE_INVALID_AVAILABILITY_CANARY"), false);
+
+  const legacyAvailable = sanitizeStatusPayload({
+    caseScan: { discovered: 0, scanned: 0, omitted: 0, invalid: 0, complete: true, truncated: false }
+  });
+  assert.equal(legacyAvailable.caseScan.availability, "available");
+  assert.equal(legacyAvailable.caseScan.complete, true);
+});
+
 test("case status is normalized from current binding metadata and runtime failures stay separate", () => {
   const base = {
     displayName: "Binding truth",
@@ -1382,6 +1432,24 @@ test("profile setup browser projection preserves unavailable scan truth and reje
     complete: false,
     truncated: true
   });
+
+  const invalidAvailability = sanitizeStatusPayload({
+    profileSetupScan: {
+      availability: "PRIVATE_INVALID_PROFILE_SCAN_AVAILABILITY_CANARY",
+      discovered: 0,
+      scanned: 0,
+      omitted: 0,
+      invalid: 0,
+      visible: 0,
+      representedByCases: 0,
+      complete: true,
+      truncated: false
+    }
+  });
+  assert.equal(invalidAvailability.profileSetupScan.availability, "unavailable");
+  assert.equal(invalidAvailability.profileSetupScan.complete, false);
+  assert.equal(invalidAvailability.profileSetupScan.truncated, true);
+  assert.equal(JSON.stringify(invalidAvailability).includes("PRIVATE_INVALID_PROFILE_SCAN_AVAILABILITY_CANARY"), false);
 });
 
 test("case projection preserves schema-valid trailing spaces as trimmed display labels", () => {
