@@ -68,6 +68,18 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["provenance", "claimState", "code", "sourceRefs"],
+      "not": {
+        "anyOf": [
+          {
+            "required": ["provenance"],
+            "properties": { "provenance": { "const": "reviewed-policy" } }
+          },
+          {
+            "required": ["code"],
+            "properties": { "code": { "const": "reviewed-default" } }
+          }
+        ]
+      },
       "properties": {
         "provenance": {
           "enum": ["reviewed-policy", "operator-stated", "source-derived", "model-derived", "local-derived"]

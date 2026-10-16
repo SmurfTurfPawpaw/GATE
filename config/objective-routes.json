@@ -4,7 +4,7 @@
   "kind": "ObjectiveRouteCatalog",
   "metadata": {
     "name": "gate-objective-routes",
-    "version": 2,
+    "version": 3,
     "updatedAt": "2026-10-16T00:00:00.000Z"
   },
   "dimensions": {
@@ -636,10 +636,10 @@
     {
       "id": "mixed-bounty-incident-decomposition",
       "priority": 1200,
-      "rationale": "Bounty-assessment and incident signals require separate evidence, authority, and execution lifecycles.",
+      "rationale": "A separately classified incident inside a bounty-program context requires distinct evidence, authority, and execution lifecycles.",
       "match": {
         "domains": [
-          "security-assessment",
+          "mixed",
           "security-incident"
         ],
         "signalsAll": [

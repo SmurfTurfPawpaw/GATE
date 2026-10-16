@@ -55,6 +55,7 @@ import {
   offlineAnalysisStatus,
   purgeOfflineAnalysisArtifact
 } from "./lib/offline-analysis.mjs";
+import { recommendObjectiveFromPrivateFile } from "./lib/objectives.mjs";
 import { ensureRuntime, runtimePaths } from "./lib/paths.mjs";
 import { checkPublication, publishPullRequest } from "./lib/publication.mjs";
 import {
@@ -130,6 +131,10 @@ Projects
   project list                      List registered project summaries
   project show ID                   Show one registered project contract
   project verify ID                 Verify one registered project contract
+
+Objectives
+  objective recommend --proposal PRIVATE_FILE --json
+                                    Route one private categorical objective proposal
 
 Cases
   case create ID --program PROFILE --name NAME [--project ID]
@@ -382,6 +387,19 @@ function assertUnambiguousBountyArgs(argv) {
     const name = value.slice(2, equals === -1 ? undefined : equals);
     if (!name) throw new Error("bounty profile options must have a name");
     if (seen.has(name)) throw new Error(`bounty profile option must not be repeated: --${name}`);
+    seen.add(name);
+  }
+}
+
+function assertUnambiguousObjectiveArgs(argv) {
+  const seen = new Set();
+  for (const value of argv) {
+    if (value === "--") throw new Error("objective commands do not accept passthrough arguments");
+    if (!value.startsWith("--")) continue;
+    const equals = value.indexOf("=");
+    const name = value.slice(2, equals === -1 ? undefined : equals);
+    if (!name) throw new Error("objective options must have a name");
+    if (seen.has(name)) throw new Error(`objective option must not be repeated: --${name}`);
     seen.add(name);
   }
 }
@@ -1324,6 +1342,7 @@ const GLOBAL_CASE_COMMANDS = new Set([
   "up",
   "case",
   "project",
+  "objective",
   "workspace",
   "upstream",
   "publication"
@@ -1552,6 +1571,21 @@ export async function main(argv) {
       return;
     }
     throw new Error(`unknown project action: ${action}`);
+  }
+
+  if (command === "objective") {
+    assertUnambiguousObjectiveArgs(rest);
+    const [action] = parsed.positional;
+    if (action !== "recommend") throw new Error(`unknown objective action: ${action || "missing"}`);
+    assertPositionals(parsed.positional, 1, "gate objective recommend --proposal PRIVATE_FILE --json");
+    assertFlags(parsed.flags, ["proposal", "json"]);
+    assertBooleanSwitch(parsed.flags, "json");
+    if (parsed.flags.json !== true) throw new Error("gate objective recommend requires --json");
+    const recommendation = recommendObjectiveFromPrivateFile(
+      requiredFlag(parsed.flags, "proposal"),
+      { paths: basePaths }
+    );
+    return output(recommendation, true);
   }
 
   if (command === "bounty") {

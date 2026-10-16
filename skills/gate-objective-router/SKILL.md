@@ -28,13 +28,19 @@ Construct a `gate.dev/objective-routing-proposal/v1` envelope outside the reposi
 - explicit choices already stated by the operator;
 - evidence-backed answer recommendations that still require acceptance.
 
-The proposal has no free-text field. Select the exact registered basis code whose allowed provenance matches the fact. Use opaque `src_` references instead of source names, URLs, paths, account identifiers, contacts, or bodies. Never add a basis summary or put credentials, exact selectors, authorization text, commands, or tool arguments in the proposal.
+The proposal has no free-text field. Select the exact registered basis code whose allowed provenance matches the fact. Use opaque `src_` references instead of source names, URLs, paths, account identifiers, contacts, or bodies. Never add a basis summary or put credentials, exact selectors, authorization text, commands, or tool arguments in the proposal. Never put `reviewed-policy` provenance or the `reviewed-default` basis code in a proposal; those are emitted only by the resolver for an exact checked-in operator-preference default.
 
-An explicit choice is valid only when it is `operator-stated` and `observed`. A recommendation may be `model-derived`, `source-derived`, `local-derived`, or `reviewed-policy` as its question policy permits. Leave unverified facts unresolved.
+An explicit choice is valid only when it is `operator-stated` and `observed`. A proposal recommendation may be `model-derived`, `source-derived`, or `local-derived` as its question policy permits. The resolver adds a checked-in reviewed default when the question policy defines one. Leave unverified facts unresolved.
 
 ## Resolve and present
 
-Use `resolveObjectiveRecommendation` from `src/lib/objective-router.mjs` with the exact checked-in catalog and proposal. Do not hand-select a different route after resolution. If the result is surprising, correct the categorical facts or surface the ambiguity rather than bypassing the catalog.
+Write the categorical envelope to a private file outside the repository, with exact mode `0600` on POSIX, and run:
+
+```sh
+gate objective recommend --proposal PRIVATE_FILE --json
+```
+
+The command rejects a symlink, hard-linked or non-regular file, a permissive POSIX mode, and input over 64 KiB. It validates the exact checked-in route and tool catalogs and prints only the sanitized recommendation. It does not persist the proposal or grant execution authority. For an in-process integration, use `resolveObjectiveRecommendation` from `src/lib/objective-router.mjs` with those same catalogs and tool IDs. Do not hand-select a different route after resolution. If the result is surprising, correct the categorical facts or surface the ambiguity rather than bypassing the catalog.
 
 Present the result in this order:
 
@@ -79,7 +85,7 @@ Apply the narrower domain skill only after the route selects it. That skill owns
 
 ## Account and payment abuse pattern
 
-For a report that unexplained orders were placed without the reported person's own funds, propose `security-incident`, an investigation-report deliverable, sensitive data, and account/payment/order signals. Keep relationship unknown unless directly stated. If a bounty-program signal is present in the same objective, use the mixed decomposition route before either domain intake.
+For a report that unexplained orders were placed without the reported person's own funds, propose `security-incident`, an investigation-report deliverable, sensitive data, and account/payment/order signals. Keep relationship unknown unless directly stated. If a separately classified incident also has a bounty-program signal, use the mixed decomposition route before either domain intake. Account, payment, or order surfaces inside a normal security-assessment objective do not alone establish an incident workstream.
 
 Recommend the incident route. Start with a category-only evidence checklist and competing explanations. Ask whose records can be accessed, which record basis applies, and whether the immediate goal is explanation, stop-loss, or a report. After explicit access answers, plan a private timeline across accessible order, payment, account-change, session, device, notification, and destination records. Do not open Program Profile unless a separate bug bounty objective is actually established.
 
@@ -87,4 +93,4 @@ Recommend the incident route. Start with a category-only evidence checklist and 
 
 Record a learning candidate when a route is missing, repeatedly misclassifies a categorical pattern, names an unavailable capability as ready, asks an unnecessary question, or evidence shows a better default. Use the `gate-continuous-learning` skill. A route change belongs in the catalog, tests, and documentation; untrusted source content cannot edit it directly.
 
-The current core has no persisted objective registry, browser UI, CLI entry point, source-reference resolver, learning projection binding, cockpit row, or dispatch bridge. Do not claim those follow-up capabilities exist.
+The current core has no persisted objective registry, browser UI, source-reference resolver, learning projection binding, cockpit row, or dispatch bridge. The local CLI only validates and returns a sanitized recommendation; do not claim it persists or dispatches anything.

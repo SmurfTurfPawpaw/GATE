@@ -27,7 +27,7 @@ The model may infer the domain, deliverable, effect, data class, and signals. It
 
 The unconditional general route ensures an unfamiliar objective still receives an evidence-led plan. A unique priority makes route selection independent of catalog order.
 
-If the objective spans independently actionable outcomes, classify its domain as `mixed`. A higher-priority route also detects the categorical combination of a bounty-program signal with account, payment, order, identity, or device incident signals. Both cases route to clarification and decomposition before either Program Profile or incident intake. The route returns two registered choice questions: which workstream should own the first result, and whether to split, choose one first, keep a combined planning-only view, or gather more evidence.
+If the objective spans independently actionable outcomes, classify its domain as `mixed`. A higher-priority route detects a `mixed` or separately classified `security-incident` objective only when it also carries the bounty-program signal and a bounded incident signal. Common account, payment, order, identity, or device surfaces in an ordinary security assessment do not by themselves turn a bounty objective into an incident. Mixed and incident cases route to clarification and decomposition before either Program Profile or incident intake. The route returns two registered choice questions: which workstream should own the first result, and whether to split, choose one first, keep a combined planning-only view, or gather more evidence.
 
 ## Private categorical proposal
 
@@ -53,6 +53,8 @@ Provenance has five values:
 
 Every basis also names one code from the catalog's exact ordered vocabulary. The catalog binds each code to allowed provenance, so an `operator-explicit` basis cannot be relabeled model-derived and a `source-classification` requires source-derived provenance plus at least one opaque reference. Codes cover reviewed defaults, explicit selections, objective and source classification, local observation, insufficient evidence, mixed workstreams, requested outcomes, effect estimates, data classification, and signal classification. Arbitrary explanatory prose belongs outside the proposal and is omitted from the recommendation.
 
+`reviewed-policy` provenance and the `reviewed-default` basis code are resolver-owned and cannot appear in a proposal. The resolver emits them only for the exact default choice on an `operator-preference` question in the checked-in catalog. This keeps a proposal from presenting an arbitrary fact or answer as reviewed policy.
+
 The core validates the shape of opaque source references but has no source registry and cannot prove that a referenced source exists. A future persisted controller must resolve and bind those references before accepting a source-derived proposal.
 
 ## Choice-first decisions
@@ -64,6 +66,8 @@ Each registered question declares one policy class:
 - `manual-only` accepts only an explicit, observed, operator-stated choice.
 
 Relationship, data access, project binding, artifact possession, system scope, and external-action intent are manual-only. The resolver rejects recommendations for them. A recommendation stays unresolved until the operator accepts it; it is never silently converted into an explicit answer.
+
+When both the relationship dimension and `subject-relationship` answer are present, they must agree. An explicit answer can refine an `unknown` relationship dimension; it cannot contradict an already observed relationship.
 
 Actions declare both the question they depend on and the exact choices that satisfy that dependency. An unresolved question leaves the action at `needs-input`. A resolved but disallowed choice blocks it with a categorical reason. For example, `report-only` does not unlock record preservation or timeline construction, unknown artifact possession does not unlock artifact inspection, unknown system scope does not unlock a system-state read, and `no-project-yet` does not unlock a project handoff.
 
@@ -104,4 +108,14 @@ The current programmatic entry points are exported from `src/lib/objective-route
 
 The resolver is deterministic: it reads no clock, network, private state, or environment-dependent tool status. The same catalog and proposal produce the same recommendation and digests.
 
-Private objective persistence, a loopback browser form, a CLI command, source-reference resolution, bounded learning projection binding, cockpit projection, accepted-plan lifecycle, and reviewed dispatch bridges remain follow-up work. Until those exist, the skill uses the current conversation and the pure router, and reports every handoff state exactly as returned.
+The bounded local CLI entry point is:
+
+```sh
+gate objective recommend --proposal PRIVATE_FILE --json
+```
+
+It reads the exact checked-in route and security-tool catalogs, validates their schemas and semantic references, then resolves the proposal without creating `GATE_HOME` state. The proposal must be a stable, single-link regular file no larger than 64 KiB. The leaf path must not be a symbolic link. On POSIX the file must be owned by the current effective user with exact mode `0600`; the command reports a permissions error and does not change the mode. The command requires `--json` and writes only the sanitized `ObjectiveRecommendation` to stdout. It does not echo the private path, proposal body, structural details, raw objective, source references, or private values on proposal-validation failures.
+
+This CLI is a read-only recommendation boundary. It does not persist the proposal or output, accept a raw natural-language objective, grant execution authority, dispatch the selected handler, or establish tool readiness.
+
+Private objective persistence, a loopback browser form, source-reference resolution, bounded learning projection binding, cockpit projection, accepted-plan lifecycle, and reviewed dispatch bridges remain follow-up work. Until those exist, the skill uses the current conversation and the bounded local recommendation command, and reports every handoff state exactly as returned.

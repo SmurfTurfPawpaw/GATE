@@ -217,6 +217,28 @@ test("manual facts cannot be recommendations or model-inferred relationship clai
   assert.equal(access.resolved, true);
   assert.equal(access.selectedChoiceId, "own-records");
   assert.equal(access.recommendedChoiceId, null);
+
+  const contradictoryRelationship = proposal({
+    dimensions: { relationship: { value: "owned", basis: stated() } },
+    answers: {
+      "subject-relationship": { choiceId: "authorized", mode: "explicit", basis: stated() }
+    }
+  });
+  assert.match(
+    objectiveRoutingProposalSemanticErrors(catalog, contradictoryRelationship, { paths }).join("; "),
+    /contradicts the observed owned relationship dimension/u
+  );
+
+  const refinedUnknownRelationship = proposal({
+    answers: {
+      "subject-relationship": { choiceId: "authorized", mode: "explicit", basis: stated() }
+    }
+  });
+  const refined = resolveObjectiveRecommendation(catalog, refinedUnknownRelationship, { paths });
+  assert.equal(
+    refined.questions.find((question) => question.id === "subject-relationship").selectedChoiceId,
+    "authorized"
+  );
 });
 
 test("resolved manual choices gate access-dependent actions by allowed choice", () => {
@@ -311,9 +333,26 @@ test("unknown and mixed objectives surface a bounded clarification and decomposi
   });
   assert.equal(resolveObjectiveRecommendation(catalog, mixed, { paths }).route.id, "objective-clarification");
 
-  const bountyAndIncident = proposal({
+  const normalBountyWithAccountSignals = proposal({
     dimensions: {
       domain: { value: "security-assessment", basis: inferred() },
+      deliverable: { value: "investigation-report", basis: inferred() },
+      highestEffect: { value: "target-contact", basis: inferred() }
+    },
+    signals: ["bounty-program", "account", "payment"].map((id) => ({
+      id,
+      basis: inferred("signal-classification")
+    })),
+    answers: {}
+  });
+  assert.equal(
+    resolveObjectiveRecommendation(catalog, normalBountyWithAccountSignals, { paths }).route.id,
+    "bug-bounty-assessment"
+  );
+
+  const bountyAndIncident = proposal({
+    dimensions: {
+      domain: { value: "security-incident", basis: inferred() },
       deliverable: { value: "investigation-report", basis: inferred() },
       highestEffect: { value: "target-contact", basis: inferred() }
     },
@@ -375,6 +414,82 @@ test("stale, non-categorical, structurally expanded, and false-observation propo
     objectiveRoutingProposalSemanticErrors(catalog, unregisteredCode, { paths }).join("; "),
     /unregistered basis code/u
   );
+
+  const forgedDimensionDefault = proposal({
+    dimensions: {
+      domain: {
+        value: "security-incident",
+        basis: {
+          provenance: "reviewed-policy",
+          claimState: "observed",
+          code: "reviewed-default",
+          sourceRefs: []
+        }
+      }
+    }
+  });
+
+  const forgedAnswerDefault = proposal({
+    answers: {
+      "immediate-goal": {
+        choiceId: "explain",
+        mode: "recommendation",
+        basis: {
+          provenance: "reviewed-policy",
+          claimState: "observed",
+          code: "reviewed-default",
+          sourceRefs: []
+        }
+      }
+    }
+  });
+  const forgedSignalDefault = proposal();
+  forgedSignalDefault.signals[0].basis = {
+    provenance: "model-derived",
+    claimState: "inferred",
+    code: "reviewed-default",
+    sourceRefs: []
+  };
+  const forgedSplitMarker = proposal();
+  forgedSplitMarker.dimensions.domain.basis = {
+    provenance: "reviewed-policy",
+    claimState: "observed",
+    code: "objective-classification",
+    sourceRefs: []
+  };
+  for (const forged of [
+    forgedDimensionDefault,
+    forgedAnswerDefault,
+    forgedSignalDefault,
+    forgedSplitMarker
+  ]) {
+    assert.equal(validateDocument(forged, "objective-routing-proposal.schema.json", { paths }).ok, false);
+    assert.throws(
+      () => resolveObjectiveRecommendation(catalog, forged, { paths }),
+      /objective routing proposal rejected/u
+    );
+  }
+
+  const research = proposal({
+    dimensions: {
+      domain: { value: "research", basis: inferred() },
+      deliverable: { value: "answer", basis: inferred() },
+      highestEffect: { value: "none", basis: inferred() },
+      dataClass: { value: "public", basis: inferred() }
+    },
+    signals: [{ id: "public-source", basis: inferred("signal-classification") }],
+    answers: {}
+  });
+  const researchResult = resolveObjectiveRecommendation(catalog, research, { paths });
+  const researchDepth = researchResult.questions.find((question) => question.id === "research-depth");
+  assert.equal(researchDepth.recommendedChoiceId, "evidence-led");
+  assert.deepEqual(researchDepth.recommendationBasis, {
+    provenance: "reviewed-policy",
+    claimState: "observed",
+    basisCode: "reviewed-default",
+    sourceCount: 0
+  });
+  assert.equal(validateDocument(researchResult, "objective-recommendation.schema.json", { paths }).ok, true);
 });
 
 test("handler availability and objective effect bounds remain visible", () => {

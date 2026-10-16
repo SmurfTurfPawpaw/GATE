@@ -82,6 +82,13 @@ const BASIS_CODE_PROVENANCE = new Map([
   ["signal-classification", ["model-derived", "local-derived"]]
 ]);
 
+const SUBJECT_RELATIONSHIP_CHOICES = new Map([
+  ["owned", "owned"],
+  ["authorized", "authorized"],
+  ["public", "public-only"],
+  ["third-party", "third-party-or-unknown"]
+]);
+
 export const OBJECTIVE_SIGNALS = Object.freeze([
   "repository",
   "bounty-program",
@@ -370,6 +377,14 @@ export function objectiveRoutingProposalSemanticErrors(catalog, proposal, option
     if (question.policy.class === "manual-only" && answer.mode !== "explicit") {
       errors.push(`objective answer ${questionId} is manual-only and cannot be recommended`);
     }
+  }
+  const relationshipAnswer = proposal.answers["subject-relationship"];
+  const expectedRelationshipChoice = SUBJECT_RELATIONSHIP_CHOICES.get(relationship.value);
+  if (relationshipAnswer?.mode === "explicit" && expectedRelationshipChoice &&
+    relationshipAnswer.choiceId !== expectedRelationshipChoice) {
+    errors.push(
+      `objective answer subject-relationship contradicts the observed ${relationship.value} relationship dimension`
+    );
   }
   return errors;
 }
