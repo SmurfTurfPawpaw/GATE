@@ -44,6 +44,8 @@ const MAX_ANSWERS_BYTES = 2 * 1024 * 1024;
 const MAX_PROVIDER_BYTES = 1024 * 1024;
 const MAX_STATE_BINDING_BYTES = 16 * 1024;
 const MAX_TRANSACTION_INTENT_BYTES = 32 * 1024;
+const MAX_PROFILE_SETUP_SCAN = 32;
+const MAX_PROFILE_SETUP_DISCOVERY = 1024;
 const PROFILE_SCHEMA_REF = "https://gate.local/schemas/bug-bounty-program-profile.schema.json";
 const COMPILATION_CONTRACT_VERSION = "gate.dev/program-profile-compilation/v3";
 const PROVIDER_TEMPLATE_ID = "replace-provider";
@@ -1651,6 +1653,111 @@ function listProfileDirectories(paths) {
     }
   }
   return entries.sort((left, right) => String(left.id || left.entry).localeCompare(String(right.id || right.entry)));
+}
+
+function scanProgramProfileSetupNames(paths) {
+  const names = [];
+  const directory = fs.opendirSync(paths.programs);
+  try {
+    while (names.length <= MAX_PROFILE_SETUP_DISCOVERY) {
+      const entry = directory.readSync();
+      if (!entry) break;
+      names.push(entry.name);
+    }
+  } finally {
+    directory.closeSync();
+  }
+  const discoveryTruncated = names.length > MAX_PROFILE_SETUP_DISCOVERY;
+  const discoveredNames = names.slice(0, MAX_PROFILE_SETUP_DISCOVERY).sort();
+  const selected = discoveredNames.slice(0, MAX_PROFILE_SETUP_SCAN);
+  const discovered = discoveryTruncated ? MAX_PROFILE_SETUP_DISCOVERY + 1 : discoveredNames.length;
+  const omitted = Math.max(0, discovered - selected.length);
+  return {
+    names: selected,
+    scan: {
+      limit: MAX_PROFILE_SETUP_SCAN,
+      discoveryLimit: MAX_PROFILE_SETUP_DISCOVERY,
+      discovered,
+      scanned: selected.length,
+      omitted,
+      discoveredAtLeast: discoveryTruncated,
+      omittedAtLeast: discoveryTruncated,
+      complete: !discoveryTruncated && omitted === 0,
+      truncated: discoveryTruncated || omitted > 0,
+      invalid: 0
+    }
+  };
+}
+
+function programProfileSetupProgress(profile, envelope, options = {}) {
+  const applicableModules = new Set(profile.questionnaire?.applicableModules || []);
+  const applicable = questionnaireRecords(options).questions.filter((question) =>
+    (!question.moduleId || applicableModules.has(question.moduleId)) && conditionMatches(question.condition, profile)
+  );
+  const answers = envelope?.answers || {};
+  const answered = applicable.reduce(
+    (total, question) => total + (Object.hasOwn(answers, question.id) ? 1 : 0),
+    0
+  );
+  const next = applicable.find((question) => !Object.hasOwn(answers, question.id));
+  return {
+    answered,
+    total: applicable.length,
+    nextSection: next?.sectionId || (next?.moduleId ? "conditional-modules" : null)
+  };
+}
+
+function programProfileSetupStage(profile, verification) {
+  if (verification.ready === true) return "ready";
+  if (profile.metadata.status === "needs-operator-review") return "operator-review";
+  if (profile.metadata.status === "superseded") return "superseded";
+  return "questionnaire";
+}
+
+// This read-only fleet view deliberately contains no title, target, source,
+// answer, digest, path, authorization, or blocker detail. The observer applies
+// its process-local opaque identifier after this bounded, binding-checked read.
+export function programProfileSetupFleetStatus(options = {}) {
+  const paths = bountyPaths(options);
+  ensurePrograms(paths);
+  const result = scanProgramProfileSetupNames(paths);
+  const profiles = [];
+  let invalid = 0;
+  for (const name of result.names) {
+    if (!PROFILE_ID.test(name)) {
+      invalid += 1;
+      continue;
+    }
+    try {
+      const stored = loadStoredProfileState(paths, name);
+      const verification = verifyProfileValue(stored.profile, name, { ...options, paths });
+      if (!verification.structuralValid || stored.profile.metadata.id !== name) {
+        invalid += 1;
+        continue;
+      }
+      const progress = programProfileSetupProgress(stored.profile, stored.answers, { paths });
+      profiles.push({
+        id: name,
+        stage: programProfileSetupStage(stored.profile, verification),
+        readiness: verification.ready === true ? "ready" : "not-ready",
+        progress: { answered: progress.answered, total: progress.total },
+        blockerCount: verification.blockers.length,
+        nextSection: progress.nextSection,
+        recommendationMode: null,
+        updatedAt: stored.profile.metadata.updatedAt
+      });
+    } catch {
+      invalid += 1;
+    }
+  }
+  return {
+    profiles,
+    scan: {
+      ...result.scan,
+      invalid,
+      complete: result.scan.complete && invalid === 0
+    }
+  };
 }
 
 export function programProfileStatus(id = null, options = {}) {
