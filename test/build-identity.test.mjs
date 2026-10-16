@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -31,10 +32,10 @@ test("build identity combines a bounded package version with exact clean Git ide
   });
   assert.deepEqual(calls, [
     ["/synthetic/repository", ["rev-parse", "--verify", "HEAD^{commit}"]],
-    ["/synthetic/repository", [
-      "status", "--porcelain=v1", "--untracked-files=normal", "--ignore-submodules=none"
-    ]],
-    ["/synthetic/repository", ["ls-files", "-v", "-z"]]
+    ["/synthetic/repository", ["ls-files", "-v", "-z"]],
+    ["/synthetic/repository", ["diff-index", "--cached", "--raw", "--no-renames", "--ignore-submodules=all", SHA1, "--"]],
+    ["/synthetic/repository", ["ls-files", "--others", "--exclude-standard", "-z"]],
+    ["/synthetic/repository", ["ls-files", "--stage", "-z"]]
   ]);
   assert.equal(Object.isFrozen(identity), true);
 });
@@ -127,4 +128,33 @@ test("injected build identity cannot claim clean source without a valid exact co
   });
 
   assert.equal(normalizeBuildIdentity({ version: "0.1.0", commit: SHA1, state: "unexpected" }).state, "unavailable");
+});
+
+ test("raw identity verification never invokes clean or process filters", () => {
+  const root = fs.mkdtempSync(path.join(repo, ".build-filter-test-"));
+  const git = (_repo, args) => {
+    const result = spawnSync("git", args, { cwd: root, encoding: "utf8", timeout: 2000 });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout;
+  };
+  try {
+    git(root, ["init", "--quiet"]);
+    fs.writeFileSync(path.join(root, "file"), "original\n");
+    fs.writeFileSync(path.join(root, ".gitattributes"), "file filter=trap\n");
+    git(root, ["add", "."]);
+    git(root, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "-m", "fixture"]);
+    for (const kind of ["clean", "process"]) {
+      git(root, ["config", `filter.trap.${kind}`, "touch filter-ran; exit 1"]);
+    }
+    const observe = () => observeBuildIdentity(root, { runGit: git, readPackage: () => ({ version: "0.1.1" }) });
+    assert.equal(observe().state, "clean");
+    fs.writeFileSync(path.join(root, "file"), "changed\n");
+    assert.equal(observe().state, "modified");
+    assert.equal(fs.existsSync(path.join(root, "filter-ran")), false);
+    fs.writeFileSync(path.join(root, "file"), "original\n");
+    fs.writeFileSync(path.join(root, "extra"), "untracked");
+    assert.equal(observe().state, "modified");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

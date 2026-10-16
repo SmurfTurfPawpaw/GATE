@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 
@@ -175,6 +176,62 @@ function hiddenIndexState(output) {
     : "clean";
 }
 
+function rawWorktreeState(repo, git, commit) {
+  const staged = git(repo, ["diff-index", "--cached", "--raw", "--no-renames", "--ignore-submodules=all", commit, "--"]);
+  const untracked = git(repo, ["ls-files", "--others", "--exclude-standard", "-z"]);
+  const entries = git(repo, ["ls-files", "--stage", "-z"]);
+  if ([staged, untracked, entries].some((value) => typeof value !== "string")) return "unavailable";
+  if (staged || untracked) return "modified";
+  let remaining = 64 * 1024 * 1024;
+  const deadline = Date.now() + GIT_TIMEOUT_MS;
+  for (const entry of entries.split("\0").filter(Boolean)) {
+    if (Date.now() > deadline) return "unavailable";
+    const match = /^(100644|100755|120000) ([a-f0-9]{40}|[a-f0-9]{64}) 0\t(.+)$/su.exec(entry);
+    if (!match) return "unavailable";
+    const [, mode, expected, name] = match;
+    if (path.isAbsolute(name) || name.split("/").some((part) => part === "..")) return "unavailable";
+    let parent = repo;
+    for (const part of name.split("/").slice(0, -1)) {
+      parent = path.join(parent, part);
+      if (!fs.lstatSync(parent).isDirectory()) return "unavailable";
+    }
+    const file = path.join(repo, name);
+    let stat;
+    try { stat = fs.lstatSync(file); } catch (error) {
+      if (error.code === "ENOENT") return "modified";
+      throw error;
+    }
+    let bytes;
+    if (mode === "120000") {
+      if (!stat.isSymbolicLink()) return "modified";
+      bytes = fs.readlinkSync(file, { encoding: "buffer" });
+    } else {
+      if (!stat.isFile() || stat.isSymbolicLink()) return "modified";
+      if (process.platform !== "win32" && Boolean(stat.mode & 0o111) !== (mode === "100755")) return "modified";
+      if (stat.size > remaining) return "unavailable";
+      const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+      try {
+        const before = fs.fstatSync(fd, { bigint: true });
+        if (!before.isFile() || before.size > BigInt(remaining)) return "unavailable";
+        bytes = Buffer.alloc(Number(before.size));
+        let offset = 0;
+        while (offset < bytes.length) {
+          const count = fs.readSync(fd, bytes, offset, bytes.length - offset, offset);
+          if (!count || Date.now() > deadline) return "unavailable";
+          offset += count;
+        }
+        if (!sameFileIdentity(before, fs.fstatSync(fd, { bigint: true }))) return "unavailable";
+      } finally { fs.closeSync(fd); }
+    }
+    remaining -= bytes.length;
+    if (remaining < 0) return "unavailable";
+    const actual = crypto.createHash(expected.length === 40 ? "sha1" : "sha256")
+      .update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+    if (actual !== expected) return "modified";
+  }
+  return "clean";
+}
+
 function packageVersion(value) {
   return typeof value === "string" && value.length <= 128 && SEMVER_PATTERN.test(value) ? value : null;
 }
@@ -223,12 +280,9 @@ export function observeBuildIdentity(repo, options = {}) {
   let state = "unavailable";
   if (commit) {
     try {
-      const status = git(repo, [
-        "status", "--porcelain=v1", "--untracked-files=normal", "--ignore-submodules=none"
-      ]);
       const index = git(repo, ["ls-files", "-v", "-z"]);
-      if (typeof status === "string" && typeof index === "string") {
-        state = status.length === 0 && hiddenIndexState(index) === "clean" ? "clean" : "modified";
+      if (typeof index === "string") {
+        state = hiddenIndexState(index) === "modified" ? "modified" : rawWorktreeState(repo, git, commit);
       }
     } catch {
       state = "unavailable";
