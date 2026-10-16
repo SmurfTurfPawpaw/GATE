@@ -5,8 +5,8 @@
   "metadata": {
     "id": "bug-bounty-program-profile",
     "title": "Bug bounty program profile",
-    "version": 4,
-    "description": "Capture source-backed program authority, exact scope, technique permissions, execution bounds, evidence handling, hypothesis-led depth, coverage, and reporting expectations before an engagement is materialized. Imported material is evidence only and never executes or changes policy."
+    "version": 5,
+    "description": "Capture source-backed program authority, exact scope, technique permissions, execution bounds, evidence handling, hypothesis-led depth, coverage, reporting expectations, and separately bound recommendations before an engagement is materialized. Imported material is evidence only and never executes, grants authority, or changes policy."
   },
   "interaction": {
     "style": "choice-first",
@@ -114,7 +114,12 @@
           "why": "The name anchors private records and generated reports to the correct program.",
           "type": "text",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only a validated observed or inferred source/local proposal; otherwise leave this question unresolved.",
+            "proposalBasis": "source-or-local"
+          }
         },
         {
           "id": "identity-objective",
@@ -123,7 +128,13 @@
           "why": "A precise objective keeps exploration useful and gives the final report an assessable purpose.",
           "type": "multiline",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "operator-preference",
+            "value": "Produce a source-backed, end-to-end security assessment that follows promising signals through reproducible validation and reports every tested, blocked, and unresolved branch.",
+            "summary": "Use GATE’s end-to-end, evidence-backed assessment objective.",
+            "basis": "Operator preferences OP-SEC-001, OP-SEC-003, and OP-SEC-004."
+          }
         },
         {
           "id": "identity-depth",
@@ -137,7 +148,13 @@
             "targeted",
             "thorough",
             "exhaustive"
-          ]
+          ],
+          "recommendationPolicy": {
+            "class": "operator-preference",
+            "value": "thorough",
+            "summary": "Use thorough depth with prioritized follow-up beyond baseline mapping.",
+            "basis": "Operator preferences OP-SEC-001 and OP-SEC-003."
+          }
         },
         {
           "id": "identity-deliverables",
@@ -146,7 +163,18 @@
           "why": "Explicit deliverables prevent an otherwise useful assessment from missing the form the operator or program expects.",
           "type": "structured-list",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "operator-preference",
+            "value": [
+              "Technical vulnerability report",
+              "Evidence index",
+              "Coverage and unresolved-work ledger",
+              "Retest and cleanup status"
+            ],
+            "summary": "Use the standard technical report, evidence, coverage, retest, and cleanup set.",
+            "basis": "Operator preferences OP-KNO-001, OP-KNO-004, and OP-SEC-001."
+          }
         },
         {
           "id": "identity-success-criteria",
@@ -155,7 +183,18 @@
           "why": "Success criteria distinguish completion from merely running tools or collecting output and keep unresolved hypotheses visible instead of silently ending at surface coverage.",
           "type": "structured-list",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "operator-preference",
+            "value": [
+              "Every selected coverage domain has a recorded disposition.",
+              "Every promising signal has an evidence-backed conclusion or a visible blocker.",
+              "Every applicable high-friction scenario is tested, not applicable, blocked, or explicitly untested.",
+              "Target-side changes have a recorded cleanup and verification outcome."
+            ],
+            "summary": "Require dispositions for coverage, promising signals, high-friction tests, and cleanup.",
+            "basis": "Operator preferences OP-SEC-003, OP-SEC-004, and OP-KNO-001."
+          }
         }
       ]
     },
@@ -172,7 +211,12 @@
           "why": "Every decisive claim cites this ledger so changed or unsupported terms can be detected instead of inferred.",
           "type": "source-list",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "authority-basis",
@@ -188,7 +232,12 @@
             "contract",
             "public-bug-bounty-program",
             "dedicated-lab"
-          ]
+          ],
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "authority-program-url",
@@ -198,7 +247,12 @@
           "type": "text",
           "required": false,
           "sensitive": false,
-          "allowNull": true
+          "allowNull": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "authority-safe-harbor",
@@ -207,7 +261,12 @@
           "why": "The decision must be allowed, denied, conditional, or unknown, with provenance and every stated condition.",
           "type": "decision",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "authority-valid-from",
@@ -217,7 +276,12 @@
           "type": "datetime",
           "required": false,
           "sensitive": false,
-          "allowNull": true
+          "allowNull": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "authority-valid-until",
@@ -227,7 +291,12 @@
           "type": "datetime",
           "required": false,
           "sensitive": false,
-          "allowNull": true
+          "allowNull": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "authority-last-verified",
@@ -236,7 +305,12 @@
           "why": "Program scope and rules can change; freshness is part of the authorization claim.",
           "type": "datetime",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "authority-source-refs",
@@ -245,16 +319,12 @@
           "why": "Authority must point to exact source-ledger entries rather than a free-form assertion.",
           "type": "structured-list",
           "required": true,
-          "sensitive": false
-        },
-        {
-          "id": "authority-operator-confirmed",
-          "path": "authorization.operatorConfirmed",
-          "prompt": "Have you reviewed these sources and confirmed that they authorize the described work?",
-          "why": "Imported text can provide evidence but cannot grant authority by itself.",
-          "type": "boolean",
-          "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "authority-contacts",
@@ -263,7 +333,25 @@
           "why": "Named roles and channels make ambiguity and emergency handling actionable.",
           "type": "contact-list",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
+        },
+        {
+          "id": "authority-operator-confirmed",
+          "path": "authorization.operatorConfirmed",
+          "prompt": "Have you reviewed these sources and confirmed that they authorize the described work?",
+          "why": "Imported text can provide evidence but cannot grant authority by itself.",
+          "type": "boolean",
+          "required": true,
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "manual-only",
+            "summary": "Only the operator can confirm that reviewed sources authorize the described work."
+          }
         }
       ]
     },
@@ -288,7 +376,20 @@
             "execute",
             "report",
             "retest"
-          ]
+          ],
+          "recommendationPolicy": {
+            "class": "operator-preference",
+            "value": [
+              "plan",
+              "analyze",
+              "generate-command",
+              "execute",
+              "report",
+              "retest"
+            ],
+            "summary": "Enable every GATE assistance mode while leaving execution authority unchanged.",
+            "basis": "Operator preferences OP-WRK-001, OP-WRK-002, and OP-SEC-001."
+          }
         },
         {
           "id": "actions-all",
@@ -297,7 +398,12 @@
           "why": "Every action needs its own source-backed decision; conditional and unknown answers never compile as allowed.",
           "type": "action-decisions",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "actions-techniques",
@@ -306,7 +412,12 @@
           "why": "Program terms often distinguish high-friction automation, credential testing, callbacks, persistence, or data access within the same broad action. Naming these techniques makes tests that are costly or error-prone to perform manually available for exact planning.",
           "type": "structured-list",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         }
       ]
     },
@@ -323,7 +434,12 @@
           "why": "A named timezone prevents local-clock ambiguity when windows or contacts are elsewhere.",
           "type": "text",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use an observed local IANA timezone or a source-derived proposal; otherwise leave this question unresolved.",
+            "proposalBasis": "source-or-local"
+          }
         },
         {
           "id": "limits-windows",
@@ -332,7 +448,12 @@
           "why": "Explicit windows let planning and preflight reject activity outside the permitted schedule.",
           "type": "schedule-windows",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "limits-max-minutes",
@@ -341,7 +462,12 @@
           "why": "A wall-clock ceiling bounds stalled or unexpectedly slow work.",
           "type": "integer",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "limits-max-requests",
@@ -350,7 +476,12 @@
           "why": "A request ceiling turns an open-ended operation into a bounded test plan.",
           "type": "integer",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "limits-max-parallel",
@@ -359,7 +490,12 @@
           "why": "Concurrency affects target load even when the average rate appears acceptable.",
           "type": "integer",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "limits-max-rate",
@@ -368,7 +504,12 @@
           "why": "A rate ceiling captures short bursts that a total request limit cannot.",
           "type": "number",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "limits-max-tokens",
@@ -377,7 +518,13 @@
           "why": "A token ceiling makes model cost and context use visible and comparable.",
           "type": "integer",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "operator-preference",
+            "value": 50000,
+            "summary": "Start with a visible 50,000-token budget per run.",
+            "basis": "Operator preference to make token use visible and bounded."
+          }
         },
         {
           "id": "limits-max-spend",
@@ -387,7 +534,13 @@
           "type": "number",
           "required": true,
           "sensitive": false,
-          "allowNull": true
+          "allowNull": true,
+          "recommendationPolicy": {
+            "class": "operator-preference",
+            "value": 0,
+            "summary": "Prohibit external spend until the operator sets a different ceiling.",
+            "basis": "GATE’s no-unplanned-spend default."
+          }
         },
         {
           "id": "limits-source-refs",
@@ -396,7 +549,12 @@
           "why": "Limit values must remain traceable when program rules or operator decisions change.",
           "type": "structured-list",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         }
       ]
     },
@@ -413,7 +571,12 @@
           "why": "Each asset must carry its own effective action and limit policy so a broad global rule cannot silently authorize a narrower or adjacent target. Global action and limit rules remain ceilings.",
           "type": "selector-decisions",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "scope-third-party-handling",
@@ -422,7 +585,12 @@
           "why": "A program may own an application without authorizing tests against every dependency it uses.",
           "type": "decision",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "scope-redirect-handling",
@@ -431,7 +599,12 @@
           "why": "Redirects and aliases can cross the exact selector boundary even when the starting URL is allowed.",
           "type": "decision",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "scope-discovered-asset-handling",
@@ -440,7 +613,12 @@
           "why": "Discovery is evidence, not automatic scope expansion; this decision defines the review path.",
           "type": "decision",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "execution-phase-policies",
@@ -449,7 +627,12 @@
           "why": "Phase slices keep tool use, target contact, provenance, resource ceilings, and high-friction follow-up bound to exact assets and workflow phases instead of flattening global rules across the program.",
           "type": "structured-list",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         }
       ]
     },
@@ -466,7 +649,12 @@
           "why": "Distinct identities are required to plan authentication, authorization, tenancy, and privilege-transition tests.",
           "type": "structured-list",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only a validated observed or inferred source/local proposal; otherwise leave this question unresolved.",
+            "proposalBasis": "source-or-local"
+          }
         },
         {
           "id": "accounts-identity-provider-notes",
@@ -475,7 +663,12 @@
           "why": "Identity topology and recovery paths often determine both test coverage and lockout risk.",
           "type": "multiline",
           "required": false,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only a validated observed or inferred source/local proposal; otherwise leave this question unresolved.",
+            "proposalBasis": "source-or-local"
+          }
         }
       ]
     },
@@ -492,7 +685,12 @@
           "why": "A component map keeps testing hypothesis-led instead of driven only by tool availability.",
           "type": "structured-list",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only a validated observed or inferred source/local proposal; otherwise leave this question unresolved.",
+            "proposalBasis": "source-or-local"
+          }
         },
         {
           "id": "architecture-trust-boundaries",
@@ -501,7 +699,12 @@
           "why": "Trust boundaries identify high-value authorization and isolation hypotheses.",
           "type": "structured-list",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only a validated observed or inferred source/local proposal; otherwise leave this question unresolved.",
+            "proposalBasis": "source-or-local"
+          }
         },
         {
           "id": "architecture-data-flows",
@@ -510,7 +713,12 @@
           "why": "Data paths connect technical behavior to confidentiality, integrity, and impact claims.",
           "type": "structured-list",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only a validated observed or inferred source/local proposal; otherwise leave this question unresolved.",
+            "proposalBasis": "source-or-local"
+          }
         },
         {
           "id": "architecture-unknowns",
@@ -519,7 +727,12 @@
           "why": "Explicit unknowns become questions to resolve rather than assumptions silently embedded in a plan.",
           "type": "structured-list",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only a validated observed or inferred source/local proposal; otherwise leave this question unresolved.",
+            "proposalBasis": "source-or-local"
+          }
         },
         {
           "id": "architecture-source-refs",
@@ -528,7 +741,12 @@
           "why": "Architecture claims can be observed, inferred, or unverified, but still need traceable provenance.",
           "type": "structured-list",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only a validated observed or inferred source/local proposal; otherwise leave this question unresolved.",
+            "proposalBasis": "source-or-local"
+          }
         }
       ]
     },
@@ -545,7 +763,12 @@
           "why": "A complete matrix exposes gaps and prevents narrow scanner output from being mistaken for end-to-end coverage.",
           "type": "coverage-decisions",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "coverage-applicable-modules",
@@ -565,7 +788,12 @@
             "wireless-radio",
             "human-physical",
             "embedded-iot-ot"
-          ]
+          ],
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         }
       ]
     },
@@ -588,7 +816,13 @@
             "internal",
             "confidential",
             "restricted"
-          ]
+          ],
+          "recommendationPolicy": {
+            "class": "operator-preference",
+            "value": "restricted",
+            "summary": "Treat expected evidence as restricted until source-backed handling supports a lower classification.",
+            "basis": "GATE’s conservative private-evidence handling preference."
+          }
         },
         {
           "id": "data-destinations",
@@ -602,7 +836,15 @@
             "gate-home",
             "configured-cloud-model",
             "client-destination"
-          ]
+          ],
+          "recommendationPolicy": {
+            "class": "operator-preference",
+            "value": [
+              "gate-home"
+            ],
+            "summary": "Keep evidence in the private local GATE home by default.",
+            "basis": "Operator preference OP-PUR-003 and GATE private-state policy."
+          }
         },
         {
           "id": "data-retention-days",
@@ -611,7 +853,12 @@
           "why": "A retention period makes cleanup and closeout verifiable.",
           "type": "integer",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "data-redaction-rules",
@@ -620,7 +867,15 @@
           "why": "Specific redaction rules reduce unnecessary exposure while preserving reproducible proof.",
           "type": "structured-list",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "operator-preference",
+            "value": [
+              "Remove credentials, authentication artifacts, unrelated personal data, and unnecessary record content."
+            ],
+            "summary": "Use the standard credential and data-minimization rule.",
+            "basis": "GATE’s symbolic-secret and minimum-proof handling policy."
+          }
         },
         {
           "id": "data-minimum-proof",
@@ -629,7 +884,13 @@
           "why": "A minimum-proof rule limits unnecessary record access or extraction after impact is established.",
           "type": "multiline",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "operator-preference",
+            "value": "Stop collecting or accessing data once the smallest reproducible evidence set establishes the security impact.",
+            "summary": "Collect only the smallest reproducible proof needed to establish impact.",
+            "basis": "GATE’s minimum-proof evidence preference."
+          }
         },
         {
           "id": "data-secret-refs",
@@ -638,7 +899,12 @@
           "why": "Only references belong in the profile; credential values stay outside repository and general logs.",
           "type": "secret-ref-list",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only a validated observed or inferred source/local proposal; otherwise leave this question unresolved.",
+            "proposalBasis": "source-or-local"
+          }
         },
         {
           "id": "data-source-refs",
@@ -647,7 +913,12 @@
           "why": "Destinations and retention are receipt-relevant terms and must be traceable.",
           "type": "structured-list",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         }
       ]
     },
@@ -664,7 +935,12 @@
           "why": "Every mandatory stop remains enabled; response detail makes stopping, evidence preservation, and safe teardown repeatable.",
           "type": "stop-responses",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "stops-escalation-contacts",
@@ -673,7 +949,12 @@
           "why": "A reachable escalation path prevents an uncertain event from becoming an improvised decision.",
           "type": "contact-list",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "stops-cleanup-required",
@@ -682,7 +963,13 @@
           "why": "The workflow requires deterministic cleanup accounting for any stateful test.",
           "type": "boolean",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "operator-preference",
+            "value": true,
+            "summary": "Require cleanup or an explicit recovery hold for every target-side change.",
+            "basis": "GATE’s end-to-end cleanup accounting requirement."
+          }
         },
         {
           "id": "stops-cleanup-steps",
@@ -691,7 +978,15 @@
           "why": "Predefined steps allow safe teardown after an ordinary completion, stop, or authorization expiry.",
           "type": "structured-list",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "operator-preference",
+            "value": [
+              "Remove test data and callbacks, revoke temporary sessions and credentials, and account for every retained target-side change."
+            ],
+            "summary": "Use the standard target-state cleanup checklist as the starting point.",
+            "basis": "GATE’s cleanup and recovery preference."
+          }
         },
         {
           "id": "stops-cleanup-verification",
@@ -700,7 +995,13 @@
           "why": "A cleanup action is incomplete until evidence shows the intended state was restored.",
           "type": "multiline",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "operator-preference",
+            "value": "Verify the restored state with the smallest non-destructive check and preserve a private evidence reference.",
+            "summary": "Verify restored state with a minimal non-destructive check.",
+            "basis": "GATE’s evidence-backed cleanup requirement."
+          }
         },
         {
           "id": "stops-cleanup-source-refs",
@@ -709,7 +1010,12 @@
           "why": "Cleanup obligations need the same provenance as authorization and scope.",
           "type": "structured-list",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         }
       ]
     },
@@ -726,7 +1032,13 @@
           "why": "A named standard makes severity reasoning comparable to the program's expectations.",
           "type": "text",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "operator-preference",
+            "value": "CVSS 4.0 with program-specific prioritization overrides",
+            "summary": "Use CVSS 4.0 with any source-backed program overrides.",
+            "basis": "GATE’s comparable technical reporting preference."
+          }
         },
         {
           "id": "reporting-submission-channel",
@@ -735,7 +1047,12 @@
           "why": "The correct private destination and format are part of responsible handling.",
           "type": "multiline",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "reporting-disclosure-policy",
@@ -744,7 +1061,12 @@
           "why": "Disclosure terms affect where findings may appear and when they may be discussed.",
           "type": "multiline",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "reporting-retest-policy",
@@ -753,7 +1075,13 @@
           "why": "A defined retest path connects a finding to remediation evidence and closure.",
           "type": "multiline",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "operator-preference",
+            "value": "Retest the exact reported condition and relevant regression path after a fix, preserving before-and-after evidence.",
+            "summary": "Retest the exact condition and its relevant regression path.",
+            "basis": "GATE’s evidence-backed retest preference."
+          }
         },
         {
           "id": "reporting-required-sections",
@@ -762,7 +1090,24 @@
           "why": "Required content prevents a technically valid result from being rejected as incomplete.",
           "type": "structured-list",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "operator-preference",
+            "value": [
+              "Summary",
+              "Affected asset",
+              "Prerequisites",
+              "Reproduction",
+              "Impact",
+              "Evidence",
+              "Remediation",
+              "Cleanup",
+              "Retest status",
+              "Limitations"
+            ],
+            "summary": "Use GATE’s complete technical vulnerability report section set.",
+            "basis": "Operator preferences OP-KNO-001, OP-KNO-004, and OP-SEC-001."
+          }
         },
         {
           "id": "reporting-source-refs",
@@ -771,7 +1116,12 @@
           "why": "Delivery and disclosure constraints must remain traceable when terms change.",
           "type": "structured-list",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         }
       ]
     },
@@ -788,7 +1138,12 @@
           "why": "Unknowns must remain visible so they cannot silently become permissions during compilation.",
           "type": "structured-list",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only a validated observed or inferred source/local proposal; otherwise leave this question unresolved.",
+            "proposalBasis": "source-or-local"
+          }
         },
         {
           "id": "attestation-operator",
@@ -797,7 +1152,11 @@
           "why": "The attestation must identify the human who reviewed the private source-backed record.",
           "type": "text",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "manual-only",
+            "summary": "Final profile attestation requires direct local operator review and cannot be recommended."
+          }
         },
         {
           "id": "attestation-answers-complete",
@@ -806,7 +1165,11 @@
           "why": "An incomplete draft can be saved, but cannot become ready to materialize.",
           "type": "boolean",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "manual-only",
+            "summary": "Final profile attestation requires direct local operator review and cannot be recommended."
+          }
         },
         {
           "id": "attestation-sources-reviewed",
@@ -815,7 +1178,11 @@
           "why": "This review separates operator confirmation from imported or inferred source material.",
           "type": "boolean",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "manual-only",
+            "summary": "Final profile attestation requires direct local operator review and cannot be recommended."
+          }
         },
         {
           "id": "attestation-scope-reviewed",
@@ -824,7 +1191,11 @@
           "why": "Exact-scope review prevents a broad summary from hiding selector-level differences.",
           "type": "boolean",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "manual-only",
+            "summary": "Final profile attestation requires direct local operator review and cannot be recommended."
+          }
         },
         {
           "id": "attestation-at",
@@ -833,7 +1204,11 @@
           "why": "The timestamp and runtime-managed revision binding make the attestation specific to the exact reviewed profile revision.",
           "type": "datetime",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "manual-only",
+            "summary": "Final profile attestation requires direct local operator review and cannot be recommended."
+          }
         }
       ]
     }
@@ -855,7 +1230,12 @@
           "why": "Module-level permission cannot be inferred from the presence of a web asset.",
           "type": "decision",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "web-api-entry-points",
@@ -864,7 +1244,12 @@
           "why": "Entry points organize coverage without expanding the exact asset selectors.",
           "type": "structured-list",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "web-api-auth-flows",
@@ -873,7 +1258,12 @@
           "why": "Flow detail supports role and state-transition hypotheses.",
           "type": "structured-list",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "web-api-automation-rules",
@@ -882,7 +1272,12 @@
           "why": "Programs often set technique-specific limits beyond the broad scan and fuzz labels. Record tests worth automating because manual state, sequencing, timing, or repetition would be costly or error-prone.",
           "type": "multiline",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         }
       ]
     },
@@ -902,7 +1297,12 @@
           "why": "Cloud tenancy and provider terms require an explicit module decision.",
           "type": "decision",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "cloud-container-footprint",
@@ -911,7 +1311,12 @@
           "why": "Cloud scope must distinguish owned resources from provider-managed and neighboring tenant infrastructure.",
           "type": "structured-list",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "cloud-container-identities",
@@ -920,7 +1325,12 @@
           "why": "Identity and trust edges drive cloud authorization coverage.",
           "type": "structured-list",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "cloud-container-provider-limits",
@@ -929,7 +1339,12 @@
           "why": "Program permission does not remove provider or shared-tenancy boundaries.",
           "type": "multiline",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         }
       ]
     },
@@ -949,7 +1364,12 @@
           "why": "Possessing a client build does not by itself authorize live backend contact or device-side techniques.",
           "type": "decision",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "mobile-builds",
@@ -958,7 +1378,12 @@
           "why": "Exact build identity keeps client evidence tied to the assessed release.",
           "type": "structured-list",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "mobile-device-conditions",
@@ -967,7 +1392,12 @@
           "why": "Device and instrumentation conditions affect both method and validity of observations.",
           "type": "multiline",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "mobile-backend-rules",
@@ -976,7 +1406,12 @@
           "why": "Client scope and backend scope can differ and must remain separately explicit.",
           "type": "multiline",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         }
       ]
     },
@@ -996,7 +1431,12 @@
           "why": "Offline artifact analysis and live service interaction are separate permissions.",
           "type": "decision",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "desktop-artifacts",
@@ -1005,7 +1445,12 @@
           "why": "Exact artifact identity makes static and dynamic results reproducible.",
           "type": "structured-list",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "desktop-dynamic-conditions",
@@ -1014,7 +1459,12 @@
           "why": "Dynamic analysis needs explicit environment and egress assumptions.",
           "type": "multiline",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "desktop-live-protocol-rules",
@@ -1023,7 +1473,12 @@
           "why": "Endpoints discovered in a client do not automatically become authorized targets.",
           "type": "multiline",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         }
       ]
     },
@@ -1043,7 +1498,12 @@
           "why": "Model behavior, provider infrastructure, connected tools, and customer data can have different scope owners.",
           "type": "decision",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "ai-llm-system-map",
@@ -1052,7 +1512,12 @@
           "why": "The system map identifies trust boundaries beyond the chat surface.",
           "type": "structured-list",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "ai-llm-input-surfaces",
@@ -1061,7 +1526,12 @@
           "why": "Input provenance and tool connectivity determine relevant injection and isolation hypotheses.",
           "type": "structured-list",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "ai-llm-data-and-cost-rules",
@@ -1070,7 +1540,12 @@
           "why": "AI tests can expose data or consume variable external resources, so those bounds must be explicit.",
           "type": "multiline",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         }
       ]
     },
@@ -1090,7 +1565,12 @@
           "why": "Scanning, authentication, relay, segmentation, and privilege tests need exact infrastructure authority.",
           "type": "decision",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "network-identity-ranges",
@@ -1099,7 +1579,12 @@
           "why": "Exact network selectors and source constraints are required for bounded enumeration.",
           "type": "structured-list",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "network-identity-systems",
@@ -1108,7 +1593,12 @@
           "why": "Identity infrastructure establishes the trust paths for authentication and authorization testing.",
           "type": "structured-list",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "network-identity-sensitive-techniques",
@@ -1117,7 +1607,12 @@
           "why": "These techniques differ materially in load, state change, visibility, and impact.",
           "type": "multiline",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         }
       ]
     },
@@ -1137,7 +1632,12 @@
           "why": "Passive observation and active transmission are separate effects and may involve bystander systems.",
           "type": "decision",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "wireless-radio-footprint",
@@ -1146,7 +1646,12 @@
           "why": "Physical propagation makes location and time part of exact scope.",
           "type": "structured-list",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "wireless-radio-equipment",
@@ -1155,7 +1660,12 @@
           "why": "Equipment and transmit power affect reach, reproducibility, and interference risk.",
           "type": "structured-list",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "wireless-radio-active-rules",
@@ -1164,7 +1674,12 @@
           "why": "Active radio actions require explicit technique-level treatment rather than inference from observation authority.",
           "type": "multiline",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         }
       ]
     },
@@ -1184,7 +1699,12 @@
           "why": "These activities require separately explicit participants, locations, methods, and stop ownership.",
           "type": "decision",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "human-physical-population",
@@ -1193,7 +1713,12 @@
           "why": "Exact population and location boundaries prevent contact with uninvolved people.",
           "type": "structured-list",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "human-physical-pretexts",
@@ -1202,7 +1727,12 @@
           "why": "Method-specific authorization is necessary for human and physical exercises.",
           "type": "structured-list",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "human-physical-protections",
@@ -1211,7 +1741,12 @@
           "why": "Explicit protections and emergency paths are necessary before any independently delivered exercise begins.",
           "type": "multiline",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         }
       ]
     },
@@ -1231,7 +1766,12 @@
           "why": "Device ownership does not automatically authorize connected services, radio activity, or physical-process impact.",
           "type": "decision",
           "required": true,
-          "sensitive": false
+          "sensitive": false,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "embedded-iot-ot-assets",
@@ -1240,7 +1780,12 @@
           "why": "Exact device and process identity is required for reproducible lab and site testing.",
           "type": "structured-list",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "embedded-iot-ot-safety",
@@ -1249,7 +1794,12 @@
           "why": "Safety and process ownership govern whether and how any stateful test may proceed.",
           "type": "structured-list",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         },
         {
           "id": "embedded-iot-ot-recovery",
@@ -1258,7 +1808,12 @@
           "why": "A deterministic recovery path is required before mutation, fault injection, or destructive effects can be considered.",
           "type": "multiline",
           "required": true,
-          "sensitive": true
+          "sensitive": true,
+          "recommendationPolicy": {
+            "class": "evidence-proposal",
+            "summary": "Use only an observed, source-derived proposal with cited current sources; otherwise leave this question unresolved.",
+            "proposalBasis": "source-required"
+          }
         }
       ]
     }

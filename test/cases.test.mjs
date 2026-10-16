@@ -7,8 +7,10 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  applyProgramProfileAuthorityConfirmation,
   bountyProfileInternals,
   createProgramProfile,
+  resumeProgramProfile,
   verifyProgramProfile
 } from "../src/lib/bounty-profiles.mjs";
 import {
@@ -278,7 +280,22 @@ function completeProfile(id) {
 }
 
 function createReadyProgram(id, paths) {
-  createProgramProfile(id, completeProfile(id), { paths, now: fixedAt });
+  const profile = completeProfile(id);
+  createProgramProfile(id, profile, {
+    paths,
+    now: new Date(Date.parse(fixedAt) - 1).toISOString()
+  });
+  const reviewed = resumeProgramProfile(id, { paths }).answers;
+  Object.assign(reviewed.answers, {
+    "authority-operator-confirmed": true,
+    "attestation-operator": profile.attestation.operator,
+    "attestation-answers-complete": profile.attestation.answersComplete,
+    "attestation-sources-reviewed": profile.attestation.sourceClaimsReviewed,
+    "attestation-scope-reviewed": profile.attestation.exactScopeReviewed,
+    "attestation-at": profile.attestation.attestedAt
+  });
+  reviewed.metadata.updatedAt = fixedAt;
+  applyProgramProfileAuthorityConfirmation(id, reviewed, { paths, now: fixedAt });
   const verification = verifyProgramProfile(id, { paths, now: fixedAt });
   assert.equal(verification.ok, true);
   assert.equal(verification.ready, true);

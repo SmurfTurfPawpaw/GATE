@@ -1,6 +1,6 @@
 # Operator opinions for GATE
 
-Last reviewed: 15 October 2026 (Europe/Brussels)
+Last reviewed: 16 October 2026 (Europe/Brussels)
 
 This document records the operator's durable operating preferences for GATE. It explains how to choose between reasonable options when a task, policy, or implementation leaves room for judgment.
 
@@ -110,6 +110,14 @@ Treat limited time, budget, tokens, hardware, and access as prompts to find a be
 
 Agents should exercise judgment. Explain a better option, its evidence, its tradeoffs, and the concrete next move. Do not follow a weak implementation literally when the underlying goal supports a stronger solution.
 
+### OP-THK-008 — Route the objective before choosing the workflow
+
+**Labels:** explicit · high confidence · current
+
+**Sources:** `SRC-GATE`
+
+The recommendation engine applies to every new objective, not only regular bug bounty programs. First determine the objective's domain, expected result, relationship, effect, data class, evidence needs, and best available handler. Clarify or split mixed work before selecting a specialist intake. A Program Profile is one domain handoff; an account or payment-abuse report, software change, local artifact, research question, system operation, or unfamiliar objective should receive the route and plan suited to it.
+
 ## Operator relationship and autonomy
 
 ### OP-WRK-001 — Execute the plan
@@ -191,6 +199,8 @@ For work performed on the operator's machine, make the exact command or planned 
 **Sources:** `SRC-GATE`
 
 When an interactive workflow needs operator input, especially while creating a Program Profile, use a concise interview with clear, clickable answer choices. Recommend a sensible option when the evidence supports one. Import, derive, or prefill exact values locally first, then ask the operator to type only a short unresolved value when the available choices cannot capture a material detail. Avoid broad prompts, repeated manual entry, and long open-ended answers.
+
+The operator should be able to accept a reviewed recommendation question by question or apply every currently supported unanswered recommendation in one action. Recommendations must distinguish durable operator preferences from source- or local-evidence proposals and direct human confirmations. Explicit answers take precedence, unsupported questions stay visible, and authorization confirmation and final attestation remain direct operator acts.
 
 ## Knowledge and synchronization
 

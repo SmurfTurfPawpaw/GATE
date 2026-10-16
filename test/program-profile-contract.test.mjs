@@ -12,8 +12,10 @@ import {
   PROGRAM_PROFILE_EXECUTION_LIMITS,
   PROGRAM_PROFILE_MODULE_IDS,
   PROGRAM_PROFILE_MODULE_QUESTIONS,
+  PROGRAM_PROFILE_MANUAL_ONLY_QUESTION_IDS,
   PROGRAM_PROFILE_QUESTIONS,
   PROGRAM_PROFILE_QUESTIONNAIRE,
+  PROGRAM_PROFILE_RECOMMENDATION_POLICY_CLASSES,
   PROGRAM_PROFILE_SECTION_IDS,
   PROGRAM_PROFILE_SECTIONS,
   PROGRAM_PROFILE_STOP_CONDITIONS,
@@ -21,9 +23,12 @@ import {
   loadProgramProfileQuestionnaire,
   normalizeProgramProfile,
   programProfileQuestionAnswerIsComplete,
+  programProfileRecommendationRequiresObservedSource,
+  programProfileQuestionnaireBinding,
   validateProgramProfile,
   validateProgramProfileAnswers,
-  validateProgramProfileQuestionnaire
+  validateProgramProfileQuestionnaire,
+  validateProgramProfileRecommendations
 } from "../src/lib/program-profile-contract.mjs";
 
 const repo = path.resolve(".");
@@ -282,7 +287,7 @@ test("questionnaire exposes the exact 12-section, 9-module, 13-action, 13-stop, 
   const questionnaire = loadProgramProfileQuestionnaire({ repo });
   assert.deepEqual(validateProgramProfileQuestionnaire(questionnaire, { repo }).errors, []);
   assert.equal(questionnaire.apiVersion, "gate.dev/program-profile-questionnaire/v2");
-  assert.equal(questionnaire.metadata.version, 4);
+  assert.equal(questionnaire.metadata.version, 5);
   assert.deepEqual(questionnaire.interaction, {
     style: "choice-first",
     preferredSurface: "native-choice-controls",
@@ -298,13 +303,39 @@ test("questionnaire exposes the exact 12-section, 9-module, 13-action, 13-stop, 
   assert.deepEqual(questionnaire.semantics.stopConditions, PROGRAM_PROFILE_STOP_CONDITIONS);
   assert.deepEqual(questionnaire.semantics.coverageDomains, PROGRAM_PROFILE_COVERAGE_DOMAINS);
   assert.ok(PROGRAM_PROFILE_QUESTIONS.every((question) => question.section || question.module));
+  assert.equal(PROGRAM_PROFILE_QUESTIONS.filter((question) => !question.module).length, 66);
+  assert.equal(PROGRAM_PROFILE_QUESTIONS.length, 102);
+  assert.ok(PROGRAM_PROFILE_QUESTIONS.every((question) =>
+    PROGRAM_PROFILE_RECOMMENDATION_POLICY_CLASSES.includes(question.recommendationPolicy.class)
+  ));
+  assert.deepEqual(
+    PROGRAM_PROFILE_QUESTIONS.filter((question) => question.recommendationPolicy.class === "manual-only")
+      .map((question) => question.id),
+    PROGRAM_PROFILE_MANUAL_ONLY_QUESTION_IDS
+  );
+  for (const questionId of [
+    "limits-timezone", "limits-max-minutes", "limits-max-requests", "limits-max-parallel", "limits-max-rate"
+  ]) {
+    assert.equal(
+      PROGRAM_PROFILE_QUESTIONS.find((question) => question.id === questionId).recommendationPolicy.class,
+      "evidence-proposal",
+      questionId
+    );
+  }
+  const timezone = PROGRAM_PROFILE_QUESTIONS.find((question) => question.id === "limits-timezone");
+  assert.equal(timezone.recommendationPolicy.proposalBasis, "source-or-local");
+  assert.equal(programProfileRecommendationRequiresObservedSource(timezone), false);
+  for (const question of PROGRAM_PROFILE_QUESTIONS.filter(programProfileRecommendationRequiresObservedSource)) {
+    assert.equal(question.recommendationPolicy.class, "evidence-proposal", question.id);
+    assert.equal(question.recommendationPolicy.proposalBasis, "source-required", question.id);
+  }
   assert.ok(PROGRAM_PROFILE_MODULE_QUESTIONS.every((question) =>
     question.condition.path === "questionnaire.applicableModules" && question.condition.includes === question.module
   ));
   assert.equal(Object.isFrozen(PROGRAM_PROFILE_QUESTIONNAIRE), true);
 });
 
-test("questionnaire v2 requires choice-first interaction metadata while v1 remains readable", () => {
+test("questionnaire v2 requires choice-first recommendations and rejects unsupported legacy v1", () => {
   const questionnaire = loadProgramProfileQuestionnaire({ repo });
   const missingInteraction = structuredClone(questionnaire);
   delete missingInteraction.interaction;
@@ -312,9 +343,184 @@ test("questionnaire v2 requires choice-first interaction metadata while v1 remai
     error.includes("interaction")
   ));
 
-  const legacy = structuredClone(missingInteraction);
+  const legacy = structuredClone(questionnaire);
   legacy.apiVersion = "gate.dev/program-profile-questionnaire/v1";
-  assert.deepEqual(validateProgramProfileQuestionnaire(legacy, { repo }).errors, []);
+  delete legacy.interaction;
+  for (const section of legacy.sections) {
+    for (const question of section.questions) delete question.recommendationPolicy;
+  }
+  for (const module of legacy.conditionalModules) {
+    for (const question of module.questions) delete question.recommendationPolicy;
+  }
+  assert.equal(validateProgramProfileQuestionnaire(legacy, { repo }).ok, false);
+
+  const missingCanonicalQuestion = structuredClone(questionnaire);
+  const identitySection = missingCanonicalQuestion.sections.find((section) => section.id === "identity-objectives");
+  identitySection.questions = identitySection.questions.filter((question) => question.id !== "identity-depth");
+  const missingCanonicalResult = validateProgramProfileQuestionnaire(missingCanonicalQuestion, { repo });
+  assert.equal(missingCanonicalResult.ok, false);
+  assert.ok(missingCanonicalResult.errors.some((error) =>
+    error.includes("canonical 66-question id/path/type/section contract")
+  ));
+
+  const mutatedCanonicalQuestion = structuredClone(questionnaire);
+  mutatedCanonicalQuestion.conditionalModules[0].questions[1].path = "modules.web-api.answers.renamedEntryPoints";
+  const mutatedCanonicalResult = validateProgramProfileQuestionnaire(mutatedCanonicalQuestion, { repo });
+  assert.equal(mutatedCanonicalResult.ok, false);
+  assert.ok(mutatedCanonicalResult.errors.some((error) =>
+    error.includes("canonical 36-question id/path/type/module contract")
+  ));
+
+  const renamedModuleQuestion = structuredClone(questionnaire);
+  const moduleQuestion = renamedModuleQuestion.conditionalModules[0].questions[0];
+  moduleQuestion.id = "renamed-module-assessment";
+  moduleQuestion.recommendationPolicy = {
+    class: "evidence-proposal",
+    summary: "Invalid local proposal for a conditional module question.",
+    proposalBasis: "source-or-local"
+  };
+  assert.ok(validateProgramProfileQuestionnaire(renamedModuleQuestion, { repo }).errors.some((error) =>
+    error.includes("must require an observed source-derived recommendation proposal")
+  ));
+});
+
+test("recommendation proposals bind the reviewed questionnaire and exclude operator authority and attestation", () => {
+  const binding = programProfileQuestionnaireBinding({ repo });
+  const envelope = {
+    $schema: "https://gate.local/schemas/bug-bounty-program-profile-recommendations.schema.json",
+    apiVersion: "gate.dev/program-profile-recommendations/v1",
+    kind: "BugBountyProgramProfileRecommendations",
+    metadata: {
+      programId: "example-program",
+      createdAt: at,
+      questionnaireId: binding.id,
+      questionnaireVersion: binding.version,
+      questionnaireSha256: binding.sha256,
+      baseRevision: null,
+      baseProfileSha256: null
+    },
+    proposals: {
+      "identity-program-name": {
+        value: "Example program",
+        provenance: "local-derived",
+        basis: { summary: "Use the locally recorded program label.", claimState: "observed", sourceRefs: [] }
+      }
+    }
+  };
+  assert.deepEqual(validateProgramProfileRecommendations(envelope, { repo }).errors, []);
+
+  const manual = structuredClone(envelope);
+  manual.proposals = {
+    "authority-operator-confirmed": {
+      value: true,
+      provenance: "local-derived",
+      basis: { summary: "Invalid authority proposal.", claimState: "observed", sourceRefs: [] }
+    }
+  };
+  assert.ok(validateProgramProfileRecommendations(manual, { repo }).errors.some((error) =>
+    error.includes("manual-only")
+  ));
+
+  const stale = structuredClone(envelope);
+  stale.metadata.questionnaireSha256 = "a".repeat(64);
+  assert.ok(validateProgramProfileRecommendations(stale, { repo }).errors.some((error) =>
+    error.includes("questionnaire binding")
+  ));
+
+  const unsupported = structuredClone(envelope);
+  unsupported.proposals["identity-program-name"].provenance = "source-derived";
+  assert.ok(validateProgramProfileRecommendations(unsupported, { repo }).errors.some((error) =>
+    error.includes("requires at least one basis source reference")
+  ));
+
+  const fixedPreference = structuredClone(envelope);
+  fixedPreference.proposals = {
+    "limits-max-tokens": {
+      value: 25_000,
+      provenance: "local-derived",
+      basis: { summary: "Invalid override of a fixed policy preference.", claimState: "observed", sourceRefs: [] }
+    }
+  };
+  assert.ok(validateProgramProfileRecommendations(fixedPreference, { repo }).errors.some((error) =>
+    error.includes("fixed operator preference")
+  ));
+
+  const emptyActionMatrix = structuredClone(envelope);
+  emptyActionMatrix.proposals = {
+    "actions-all": {
+      value: {},
+      provenance: "source-derived",
+      basis: { summary: "Invalid empty action matrix.", claimState: "observed", sourceRefs: ["program-rules"] }
+    }
+  };
+  assert.ok(validateProgramProfileRecommendations(emptyActionMatrix, { repo }).errors.some((error) =>
+    error.includes("canonical decision keys")
+  ));
+
+  const malformedDecisionMatrix = structuredClone(envelope);
+  malformedDecisionMatrix.proposals = {
+    "actions-all": {
+      value: Object.fromEntries(PROGRAM_PROFILE_ACTIONS.map((action) => [action, {
+        ...decision("allowed", ["program-rules"]),
+        sourceRefs: [123],
+        unexpected: "must not be accepted"
+      }])),
+      provenance: "source-derived",
+      basis: { summary: "Invalid nested decision shape.", claimState: "observed", sourceRefs: ["program-rules"] }
+    }
+  };
+  const malformedDecisionErrors = validateProgramProfileRecommendations(malformedDecisionMatrix, { repo }).errors;
+  assert.ok(malformedDecisionErrors.some((error) => error.includes("exactly the canonical decision keys")));
+  assert.ok(malformedDecisionErrors.some((error) => error.includes("canonical source ids")));
+
+  const meaninglessList = structuredClone(envelope);
+  meaninglessList.proposals = {
+    "accounts-personas": {
+      value: [{}],
+      provenance: "local-derived",
+      basis: { summary: "Invalid empty account item.", claimState: "observed", sourceRefs: [] }
+    }
+  };
+  assert.ok(validateProgramProfileRecommendations(meaninglessList, { repo }).errors.some((error) =>
+    error.includes("empty or meaningless item")
+  ));
+
+  const emptyModuleList = structuredClone(envelope);
+  emptyModuleList.proposals = {
+    "web-api-entry-points": {
+      value: [],
+      provenance: "source-derived",
+      basis: { summary: "Invalid empty module entry point list.", claimState: "observed", sourceRefs: ["program-rules"] }
+    }
+  };
+  assert.ok(validateProgramProfileRecommendations(emptyModuleList, { repo }).errors.some((error) =>
+    error.includes("at least one meaningful item")
+  ));
+
+  const legitimateEmptyLists = structuredClone(envelope);
+  legitimateEmptyLists.proposals = {
+    "actions-techniques": {
+      value: [],
+      provenance: "source-derived",
+      basis: { summary: "No technique-specific overrides are needed.", claimState: "observed", sourceRefs: ["program-rules"] }
+    },
+    "architecture-unknowns": {
+      value: [],
+      provenance: "local-derived",
+      basis: { summary: "No architecture unknowns are recorded.", claimState: "observed", sourceRefs: [] }
+    },
+    "coverage-applicable-modules": {
+      value: [],
+      provenance: "source-derived",
+      basis: { summary: "No conditional module applies.", claimState: "observed", sourceRefs: ["program-rules"] }
+    },
+    "ambiguities-items": {
+      value: [],
+      provenance: "local-derived",
+      basis: { summary: "No unresolved ambiguity is recorded.", claimState: "observed", sourceRefs: [] }
+    }
+  };
+  assert.deepEqual(validateProgramProfileRecommendations(legitimateEmptyLists, { repo }).errors, []);
 });
 
 test("questionnaire validation requires exact execution-policy questions and assistance choices", () => {
@@ -676,6 +882,22 @@ test("architecture unknowns require visible supplied entries while allowing an e
     assert.equal(validateProgramProfile(value, { repo }).ok, true);
     assert.equal(programProfileQuestionAnswerIsComplete(question, unknowns), true);
   }
+});
+
+test("required core lists need meaningful items while explicit empty selector lists remain complete", () => {
+  for (const [questionId, answer] of [
+    ["identity-deliverables", []],
+    ["identity-deliverables", [" \t"]],
+    ["limits-windows", []]
+  ]) {
+    const question = PROGRAM_PROFILE_QUESTIONS.find((item) => item.id === questionId);
+    assert.equal(programProfileQuestionAnswerIsComplete(question, answer), false, questionId);
+  }
+
+  const applicableModules = PROGRAM_PROFILE_QUESTIONS.find(
+    (item) => item.id === "coverage-applicable-modules"
+  );
+  assert.equal(programProfileQuestionAnswerIsComplete(applicableModules, []), true);
 });
 
 test("ready profiles reject invisible-only text outside conditional modules", () => {

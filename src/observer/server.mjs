@@ -4,6 +4,7 @@ import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { programProfileSetupFleetStatus } from "../lib/bounty-profiles.mjs";
 import { buildStatus } from "../lib/status.mjs";
 import { sanitizeOperatorDisplayName, terminalWelcomeBanner } from "../lib/terminal-ui.mjs";
 import { assertNoLikelySecret, redactSensitiveHeaders } from "../lib/text.mjs";
@@ -50,6 +51,26 @@ const CASE_RUNTIME_HEALTH_REASONS = new Set(["invalid-case", "runtime-observatio
 const CASE_STATE_NAMESPACES = new Set(["isolated-directory"]);
 const CASE_PROCESS_BOUNDARIES = new Set(["shared-user"]);
 const CASE_NETWORK_BOUNDARIES = new Set(["adapter-dependent"]);
+const CASE_SCAN_AVAILABILITY = new Set(["available", "unavailable"]);
+const PROFILE_SETUP_STAGES = new Set(["questionnaire", "operator-review", "ready", "superseded"]);
+const PROFILE_SETUP_READINESS = new Set(["not-ready", "ready"]);
+const PROFILE_SETUP_NEXT_SECTIONS = new Set([
+  "identity-objectives",
+  "authority-sources",
+  "actions-techniques",
+  "limits-schedule",
+  "scope-assets",
+  "accounts-identities",
+  "architecture-data-flows",
+  "workflow-coverage",
+  "data-evidence",
+  "stops-escalation-cleanup",
+  "reporting-disclosure",
+  "ambiguities-attestation",
+  "conditional-modules"
+]);
+const PROFILE_SETUP_RECOMMENDATION_MODES = new Set(["policy", "proposal", "mixed"]);
+const PROFILE_SETUP_SCAN_AVAILABILITY = new Set(["available", "unavailable"]);
 const EXECUTION_MODES = new Set(["supervised-generic"]);
 const EXECUTION_REASONS = new Set([
   "unsupported-platform",
@@ -199,6 +220,7 @@ const WORKFLOW_CONTROLS = new Set(["enforced", "measured-only", "unavailable"]);
 const MAX_TOOL_RUNTIMES = 256;
 const MAX_WORKFLOW_RECORDS = 64;
 const MAX_CASE_RECORDS = 32;
+const MAX_PROFILE_SETUP_RECORDS = 32;
 const ENGAGEMENT_STATUSES = new Set(["draft", "proposed", "approved", "active", "paused", "closed", "expired", "revoked"]);
 const TECHNICAL_REVIEW_STATUSES = new Set(["pending", "passed", "failed"]);
 const OPERATOR_RECEIPT_STATUSES = new Set(["pending", "approved", "revoked"]);
@@ -1299,25 +1321,180 @@ function summarizeCase(value, paths) {
   };
 }
 
-function summarizeCaseScan(value, visible) {
+function summarizeCaseScan(value, visible, projectionInvalid, overflow) {
   const scan = object(value) || {};
-  const discovered = nonNegativeInteger(scan.discovered);
-  const scanned = nonNegativeInteger(scan.scanned);
-  const omitted = nonNegativeInteger(scan.omitted);
-  const invalid = nonNegativeInteger(scan.invalid);
+  const hasScanObservation = ["discovered", "scanned", "omitted", "invalid", "complete", "truncated"]
+    .some((key) => Object.hasOwn(scan, key));
+  const availability = scan.attempted === false
+    ? "unavailable"
+    : Object.hasOwn(scan, "availability")
+      ? safeEnum(scan.availability, CASE_SCAN_AVAILABILITY, "unavailable")
+      : hasScanObservation || scan.attempted === true ? "available" : "unavailable";
+  if (availability === "unavailable") {
+    return {
+      availability,
+      discovered: null,
+      scanned: null,
+      omitted: null,
+      invalid: null,
+      discoveredAtLeast: false,
+      omittedAtLeast: false,
+      complete: false,
+      truncated: true
+    };
+  }
+  const rawDiscovered = nonNegativeInteger(scan.discovered);
+  const rawScanned = nonNegativeInteger(scan.scanned);
+  const rawOmitted = nonNegativeInteger(scan.omitted);
+  const rawInvalidValue = nonNegativeInteger(scan.invalid);
+  const rawInvalid = rawInvalidValue ?? 0;
+  const projectedScanned = visible + projectionInvalid;
+  const scanOverflow = Math.max(overflow, Math.max(0, (rawScanned ?? 0) - MAX_CASE_RECORDS));
+  const scanned = Math.min(
+    MAX_CASE_RECORDS,
+    Math.max(projectedScanned, Math.min(rawScanned ?? projectedScanned, MAX_CASE_RECORDS))
+  );
+  const omitted = Math.max(
+    rawOmitted ?? 0,
+    scanOverflow,
+    Math.max(0, (rawDiscovered ?? scanned) - scanned)
+  );
+  const discovered = Math.max(rawDiscovered ?? 0, scanned + omitted);
+  const invalid = Math.min(scanned, Math.max(rawInvalid, projectionInvalid));
   const discoveredAtLeast = typeof scan.discoveredAtLeast === "boolean" ? scan.discoveredAtLeast : false;
   const omittedAtLeast = typeof scan.omittedAtLeast === "boolean" ? scan.omittedAtLeast : false;
-  const complete = typeof scan.complete === "boolean" ? scan.complete : false;
-  const truncated = typeof scan.truncated === "boolean" ? scan.truncated : true;
+  const countersPresent = [rawDiscovered, rawScanned, rawOmitted, rawInvalidValue]
+    .every((item) => item !== null);
+  const counterInconsistent = !countersPresent ||
+    (rawScanned !== null && rawScanned < projectedScanned) ||
+    (rawDiscovered !== null && rawScanned !== null && rawDiscovered < rawScanned) ||
+    rawInvalid > scanned;
+  const projectionConsistent = projectedScanned === scanned;
+  const coverageConsistent = discovered === scanned + omitted;
+  const consistencyFailure = counterInconsistent || !projectionConsistent || !coverageConsistent;
+  const exactCoverage = invalid === 0 && omitted === 0 && projectionInvalid === 0 && scanOverflow === 0 &&
+    !discoveredAtLeast && !omittedAtLeast && !consistencyFailure;
+  const contradictoryCompleteClaim = scan.complete === true && (scan.truncated !== false || !exactCoverage);
   return {
+    availability,
     discovered: discovered ?? visible,
     scanned: scanned ?? visible,
     omitted: omitted ?? 0,
     invalid: invalid ?? 0,
     discoveredAtLeast,
     omittedAtLeast,
-    complete,
-    truncated
+    complete: scan.complete === true && scan.truncated === false && exactCoverage,
+    truncated: (typeof scan.truncated === "boolean" ? scan.truncated : true) || omitted > 0 ||
+      scanOverflow > 0 || discoveredAtLeast || omittedAtLeast || consistencyFailure || contradictoryCompleteClaim
+  };
+}
+
+function summarizeProfileSetup(value) {
+  const setup = object(value);
+  const hasNextSection = Boolean(setup && Object.hasOwn(setup, "nextSection"));
+  const privateId = id(setup?.id);
+  const stage = safeEnum(setup?.stage, PROFILE_SETUP_STAGES, null);
+  const readiness = safeEnum(setup?.readiness, PROFILE_SETUP_READINESS, null);
+  const progress = object(setup?.progress);
+  const answered = nonNegativeInteger(progress?.answered);
+  const total = nonNegativeInteger(progress?.total);
+  const blockerCount = nonNegativeInteger(setup?.blockerCount);
+  const rawNextSection = setup?.nextSection;
+  const nextSection = rawNextSection === null
+    ? null
+    : safeEnum(rawNextSection, PROFILE_SETUP_NEXT_SECTIONS, null);
+  const recommendationMode = setup?.recommendationMode === null || setup?.recommendationMode === undefined
+    ? null
+    : safeEnum(setup?.recommendationMode, PROFILE_SETUP_RECOMMENDATION_MODES, null);
+  const updatedAt = timestamp(setup?.updatedAt);
+  const boundedProgress = answered !== null && total !== null && answered <= total;
+  const completeProgress = boundedProgress && total > 0 && answered === total;
+  const pendingProgress = boundedProgress && answered < total;
+  // Superseded is terminal, so a legacy or abandoned 0/0 intake remains a
+  // truthful aggregate as long as it has no actionable next section.
+  const stateConsistent = stage === "questionnaire"
+    ? readiness === "not-ready" && pendingProgress && blockerCount > 0 && nextSection !== null
+    : stage === "operator-review"
+      ? readiness === "not-ready" && completeProgress && blockerCount > 0 && nextSection === null
+      : stage === "ready"
+        ? readiness === "ready" && completeProgress && blockerCount === 0 && nextSection === null
+        : stage === "superseded" && readiness === "not-ready" && boundedProgress && nextSection === null;
+  if (!privateId || !stage || !readiness || answered === null || total === null || answered > total ||
+      blockerCount === null || updatedAt === null || !hasNextSection || !stateConsistent ||
+      (rawNextSection !== null && nextSection === null) ||
+      (setup?.recommendationMode !== null && setup?.recommendationMode !== undefined && recommendationMode === null)) {
+    return null;
+  }
+  return {
+    id: opaqueId("program", privateId),
+    displayName: null,
+    stage,
+    readiness,
+    progress: { answered, total },
+    blockerCount,
+    nextSection,
+    recommendationMode,
+    updatedAt,
+    freshness: "fresh"
+  };
+}
+
+function summarizeProfileSetupScan(value, visible, representedByCases, projectionInvalid, overflow) {
+  const scan = object(value) || {};
+  const rawDiscovered = nonNegativeInteger(scan.discovered);
+  const rawScanned = nonNegativeInteger(scan.scanned);
+  const rawOmitted = nonNegativeInteger(scan.omitted);
+  const rawInvalidValue = nonNegativeInteger(scan.invalid);
+  const rawInvalid = rawInvalidValue ?? 0;
+  const projectedValid = visible + representedByCases;
+  const projectedScanned = projectedValid + projectionInvalid;
+  const scanOverflow = Math.max(overflow, Math.max(0, (rawScanned ?? 0) - MAX_PROFILE_SETUP_RECORDS));
+  const scanned = Math.min(
+    MAX_PROFILE_SETUP_RECORDS,
+    Math.max(projectedScanned, Math.min(rawScanned ?? projectedScanned, MAX_PROFILE_SETUP_RECORDS))
+  );
+  const invalidCapacity = Math.max(0, scanned - projectedValid);
+  const invalid = Math.min(invalidCapacity, projectionInvalid + rawInvalid);
+  const countersPresent = [rawDiscovered, rawScanned, rawOmitted, rawInvalidValue]
+    .every((item) => item !== null);
+  const counterInconsistent = !countersPresent ||
+    (rawScanned !== null && rawScanned < projectedScanned) ||
+    (rawDiscovered !== null && rawScanned !== null && rawDiscovered < rawScanned) ||
+    projectionInvalid + rawInvalid > invalidCapacity;
+  const omitted = Math.max(
+    rawOmitted ?? 0,
+    scanOverflow,
+    Math.max(0, (rawDiscovered ?? scanned) - scanned)
+  );
+  const discovered = Math.max(rawDiscovered ?? 0, scanned + omitted);
+  const discoveredAtLeast = typeof scan.discoveredAtLeast === "boolean" ? scan.discoveredAtLeast : false;
+  const omittedAtLeast = typeof scan.omittedAtLeast === "boolean" ? scan.omittedAtLeast : false;
+  const accountingConsistent = projectedValid + invalid === scanned;
+  const coverageConsistent = discovered === scanned + omitted;
+  const hasScanObservation = ["discovered", "scanned", "omitted", "invalid", "complete", "truncated"]
+    .some((key) => Object.hasOwn(scan, key));
+  const availability = Object.hasOwn(scan, "availability")
+    ? safeEnum(scan.availability, PROFILE_SETUP_SCAN_AVAILABILITY, "unavailable")
+    : hasScanObservation ? "available" : "unavailable";
+  const unavailable = availability === "unavailable";
+  const consistencyFailure = counterInconsistent || !accountingConsistent || !coverageConsistent;
+  const exactCoverage = projectionInvalid === 0 && invalid === 0 && omitted === 0 && scanOverflow === 0 &&
+    !discoveredAtLeast && !omittedAtLeast && !consistencyFailure;
+  const contradictoryCompleteClaim = scan.complete === true && (scan.truncated !== false || !exactCoverage);
+  return {
+    availability,
+    discovered: unavailable ? null : discovered,
+    scanned: unavailable ? null : scanned,
+    omitted: unavailable ? null : omitted,
+    invalid: unavailable ? null : invalid,
+    visible,
+    representedByCases: unavailable ? null : representedByCases,
+    discoveredAtLeast: unavailable ? false : discoveredAtLeast,
+    omittedAtLeast: unavailable ? false : omittedAtLeast,
+    complete: !unavailable && scan.complete === true && scan.truncated === false && exactCoverage,
+    truncated: unavailable || (typeof scan.truncated === "boolean" ? scan.truncated : true) ||
+      omitted > 0 || scanOverflow > 0 || discoveredAtLeast || omittedAtLeast || consistencyFailure ||
+      contradictoryCompleteClaim
   };
 }
 
@@ -1408,9 +1585,29 @@ export function projectSnapshot(rawStatus, paths) {
     agents: agents.length,
     tasks: tasks.length
   };
-  const cases = Array.isArray(raw.cases)
-    ? raw.cases.slice(0, MAX_CASE_RECORDS).map((value) => summarizeCase(value, paths)).filter(Boolean)
-    : [];
+  const rawCases = Array.isArray(raw.cases) ? raw.cases : [];
+  const boundedCases = rawCases.slice(0, MAX_CASE_RECORDS);
+  const cases = boundedCases.map((value) => summarizeCase(value, paths)).filter(Boolean);
+  const caseProjectionInvalid = boundedCases.length - cases.length;
+  const caseOverflow = Math.max(0, rawCases.length - boundedCases.length);
+  const representedPrograms = new Set(cases
+    .filter((item) => item.binding?.program?.current === true)
+    .map((item) => item.binding.program.id));
+  const rawProfileSetups = Array.isArray(raw.profileSetups) ? raw.profileSetups : [];
+  const boundedProfileSetups = rawProfileSetups.slice(0, MAX_PROFILE_SETUP_RECORDS);
+  const profileSetupOverflow = Math.max(0, rawProfileSetups.length - boundedProfileSetups.length);
+  const projectedProfileSetupRows = boundedProfileSetups.map(summarizeProfileSetup).filter(Boolean);
+  const profileSetupIdCounts = new Map();
+  for (const item of projectedProfileSetupRows) {
+    profileSetupIdCounts.set(item.id, (profileSetupIdCounts.get(item.id) || 0) + 1);
+  }
+  const projectedProfileSetups = projectedProfileSetupRows.filter((item) => profileSetupIdCounts.get(item.id) === 1);
+  const profileSetupProjectionInvalid = boundedProfileSetups.length - projectedProfileSetups.length;
+  const representedByCases = projectedProfileSetups.reduce(
+    (total, item) => total + (representedPrograms.has(item.id) ? 1 : 0),
+    0
+  );
+  const profileSetups = projectedProfileSetups.filter((item) => !representedPrograms.has(item.id));
   for (const key of ["queued", "running", "waiting", "blocked", "failed", "succeeded", "unknown"]) {
     counts[key] += cases.reduce((total, item) => total + Number(item.counts?.[key] || 0), 0);
   }
@@ -1484,7 +1681,15 @@ export function projectSnapshot(rawStatus, paths) {
         displayName: sanitizeOperatorDisplayName(raw.operator?.displayName)
       },
       cases,
-      caseScan: summarizeCaseScan(raw.caseScan, cases.length),
+      caseScan: summarizeCaseScan(raw.caseScan, cases.length, caseProjectionInvalid, caseOverflow),
+      profileSetups,
+      profileSetupScan: summarizeProfileSetupScan(
+        raw.profileSetupScan,
+        profileSetups.length,
+        representedByCases,
+        profileSetupProjectionInvalid,
+        profileSetupOverflow
+      ),
       engagements: Array.isArray(raw.engagements)
         ? raw.engagements.map((value) => summarizeEngagement(value, execution)).filter(Boolean)
         : [],
@@ -1617,6 +1822,55 @@ function preloadStaticAssets(root) {
   );
 }
 
+function unavailableProfileSetupScan(visible) {
+  return {
+    availability: "unavailable",
+    discovered: null,
+    scanned: null,
+    omitted: null,
+    invalid: null,
+    visible,
+    representedByCases: null,
+    discoveredAtLeast: false,
+    omittedAtLeast: false,
+    complete: false,
+    truncated: true
+  };
+}
+
+function unavailableCaseScan() {
+  return {
+    availability: "unavailable",
+    discovered: null,
+    scanned: null,
+    omitted: null,
+    invalid: null,
+    discoveredAtLeast: false,
+    omittedAtLeast: false,
+    complete: false,
+    truncated: true
+  };
+}
+
+function projectWithoutCurrentProfileSetups(status, previous, paths) {
+  const projected = projectSnapshot({
+    ...status,
+    profileSetups: [],
+    profileSetupScan: { availability: "unavailable" }
+  }, paths);
+  const representedPrograms = new Set(projected.status.cases
+    .filter((item) => item.binding?.program?.current === true)
+    .map((item) => item.binding.program.id));
+  const cachedSetups = Array.isArray(previous?.status?.profileSetups)
+    ? previous.status.profileSetups
+      .filter((item) => !representedPrograms.has(item.id))
+      .map((item) => ({ ...item, freshness: "stale" }))
+    : [];
+  projected.status.profileSetups = cachedSetups;
+  projected.status.profileSetupScan = unavailableProfileSetupScan(cachedSetups.length);
+  return projected;
+}
+
 export function createObserver(options = {}) {
   const paths = options.paths;
   if (!paths?.repo) throw new Error("observer paths.repo is required");
@@ -1628,6 +1882,9 @@ export function createObserver(options = {}) {
   // dashboard-root trust boundary.
   const staticAssets = preloadStaticAssets(dashboardRoot);
   const statusBuilder = options.statusBuilder || buildStatus;
+  const profileSetupBuilder = options.profileSetupBuilder === null
+    ? null
+    : options.profileSetupBuilder || (paths.home ? programProfileSetupFleetStatus : null);
   const requestedRefreshMs = Number(options.refreshMs ?? 2_000);
   const refreshMs = Number.isFinite(requestedRefreshMs) ? Math.max(250, requestedRefreshMs) : 2_000;
   let cached = null;
@@ -1638,10 +1895,23 @@ export function createObserver(options = {}) {
     const now = Date.now();
     if (cached && now - cachedAt < refreshMs) return cached;
     if (inFlight) return inFlight;
-    inFlight = Promise.resolve()
-      .then(() => statusBuilder({ paths }))
-      .then((status) => {
-        cached = projectSnapshot(status, paths);
+    const statusPromise = Promise.resolve().then(() => statusBuilder({ paths }));
+    const profileSetupPromise = profileSetupBuilder
+      ? Promise.resolve().then(() => profileSetupBuilder({ paths }))
+      : Promise.resolve(null);
+    inFlight = Promise.allSettled([statusPromise, profileSetupPromise])
+      .then(([statusResult, setupResult]) => {
+        if (statusResult.status === "rejected") throw statusResult.reason;
+        const status = statusResult.value;
+        if (setupResult.status === "rejected") {
+          cached = projectWithoutCurrentProfileSetups(status, cached, paths);
+        } else {
+          const setupFleet = setupResult.value;
+          const input = setupFleet
+            ? { ...status, profileSetups: setupFleet.profiles, profileSetupScan: setupFleet.scan }
+            : status;
+          cached = projectSnapshot(input, paths);
+        }
         cachedAt = Date.now();
         return cached;
       })
@@ -1661,7 +1931,14 @@ export function createObserver(options = {}) {
                 ...item,
                 telemetry: { ...item.telemetry, freshness: "stale" }
               }))
-            : []
+            : [],
+          caseScan: unavailableCaseScan(),
+          profileSetups: Array.isArray(cached.status.profileSetups)
+            ? cached.status.profileSetups.map((item) => ({ ...item, freshness: "stale" }))
+            : [],
+          profileSetupScan: unavailableProfileSetupScan(
+            Array.isArray(cached.status.profileSetups) ? cached.status.profileSetups.length : 0
+          )
         }
       };
       throw new Error("observer status unavailable");

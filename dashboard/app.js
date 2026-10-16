@@ -1,6 +1,5 @@
 import {
   boundedPercent,
-  deriveCounts,
   freshness,
   observerContract,
   sanitizeEventsPayload,
@@ -38,6 +37,11 @@ const view = {
   caseGrid: select("#case-grid"),
   caseCount: select("#case-count"),
   caseScan: select("#case-scan"),
+  caseDetail: select("#case-detail"),
+  caseDetailBody: select("#case-detail-body"),
+  caseDetailClose: select("#case-detail-close"),
+  systemHealth: select("#system-health"),
+  systemHealthSummary: select("#system-health-summary"),
   executionLane: select("#execution-lane"),
   executionMode: select("#execution-mode"),
   executionRunning: select("#execution-running"),
@@ -97,7 +101,9 @@ const view = {
   metricRunning: select("#metric-running"),
   metricRunningDetail: select("#metric-running-detail"),
   metricWaiting: select("#metric-waiting"),
+  metricWaitingDetail: select("#metric-waiting-detail"),
   metricAttention: select("#metric-attention"),
+  metricAttentionDetail: select("#metric-attention-detail"),
   metricTokens: select("#metric-tokens"),
   metricTokensDetail: select("#metric-tokens-detail"),
   metricContext: select("#metric-context"),
@@ -128,6 +134,8 @@ const state = {
   agentFilter: "all",
   search: "",
   selectedCaseId: null,
+  caseDetailCollapsed: false,
+  caseDetailScrollPositions: new Map(),
   paused: false,
   refreshing: false,
   timer: null,
@@ -277,6 +285,265 @@ function caseTokenLabel(usage = {}) {
   return `${availability} · ${fullNumber(usage.totalTokens)} tokens observed`;
 }
 
+function relativeTimeAt(value, now = Date.now()) {
+  if (!value) return "time unavailable";
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return "time unavailable";
+  return formatAge(Math.max(0, now - parsed));
+}
+
+function summedObservedCounts(values) {
+  const observed = values.filter(Number.isFinite);
+  return observed.length ? observed.reduce((total, value) => total + value, 0) : null;
+}
+
+function countedLabel(value, singular, plural = `${singular}s`) {
+  return `${value} ${value === 1 ? singular : plural}`;
+}
+
+/**
+ * Build the compact fleet row from the already allowlisted case projection.
+ * It never derives findings, commands, targets, percentages, or prose from raw
+ * activity. "Current" means an explicitly active workflow phase.
+ */
+export function caseFleetRowPresentation(caseView = {}, now = Date.now()) {
+  const runtimeAvailable = caseView.runtimeHealth?.status === "available";
+  const workflows = caseView.workflows || {};
+  const workflowInstances = Array.isArray(workflows.instances) ? workflows.instances : [];
+  const activePhases = workflowInstances.filter((workflow) => workflow?.activePhase);
+  const phase = activePhases[0]?.activePhase || null;
+  const phaseLabel = phase
+    ? `${readableCapability(phase.id)}${activePhases.length > 1 ? ` +${activePhases.length - 1}` : ""}`
+    : runtimeAvailable
+      ? "No active phase"
+      : "Unavailable";
+  const toolLabel = phase?.toolId ? phase.toolId : phase ? "No tool assigned" : "—";
+
+  const execution = caseView.execution || {};
+  const offlineCounts = caseView.offlineAnalysis?.counts || {};
+  const workflowCount = Number.isFinite(workflows.counts?.active)
+    ? workflows.counts.active
+    : activePhases.length;
+  const executionCount = summedObservedCounts([
+    execution.queuedCount,
+    execution.runningCount,
+    execution.stoppingCount
+  ]);
+  const analysisCount = summedObservedCounts([offlineCounts.queued, offlineCounts.running]);
+  const activeLabels = [];
+  if (workflowCount > 0) activeLabels.push(countedLabel(workflowCount, "phase"));
+  if (executionCount > 0) activeLabels.push(countedLabel(executionCount, "run"));
+  if (analysisCount > 0) activeLabels.push(countedLabel(analysisCount, "analysis", "analyses"));
+  if (!activeLabels.length) {
+    const taskCount = summedObservedCounts([
+      caseView.counts?.queued,
+      caseView.counts?.running,
+      caseView.counts?.waiting
+    ]);
+    if (taskCount > 0) activeLabels.push(countedLabel(taskCount, "task"));
+  }
+  const hasCompleteZeroSignal = [workflowCount, executionCount, analysisCount].every((value) => value === 0);
+  const activeWorkLabel = activeLabels.length
+    ? activeLabels.join(" · ")
+    : hasCompleteZeroSignal
+      ? "None observed"
+      : ["queued", "running", "waiting"].includes(caseView.state)
+        ? "Active signal"
+        : "Unavailable";
+
+  const attention = [];
+  if (caseView.status === "invalid") attention.push("Invalid case");
+  else if (caseView.status === "stale") attention.push("Stale binding");
+  if (!runtimeAvailable) attention.push("Runtime unavailable");
+  const telemetryState = caseView.telemetry?.state || "unknown";
+  if (telemetryState === "offline") attention.push("Telemetry offline");
+  else if (telemetryState === "stale") attention.push("Telemetry stale");
+  else if (telemetryState === "unknown") attention.push("Telemetry unknown");
+  if (caseView.state === "blocked") attention.push("Blocked");
+  else if (caseView.state === "failed") attention.push("Failed");
+  if (Number(caseView.counts?.blocked || 0) > 0) attention.push(countedLabel(caseView.counts.blocked, "blocked item"));
+  if (Number(caseView.counts?.failed || 0) > 0) attention.push(countedLabel(caseView.counts.failed, "failed item"));
+  if (Number(workflows.counts?.degraded || 0) > 0) attention.push(countedLabel(workflows.counts.degraded, "degraded workflow"));
+  const scan = caseView.engagementScan || {};
+  if (scan.availability === "loaded") {
+    if (Number(scan.invalid || 0) > 0) attention.push(countedLabel(scan.invalid, "invalid engagement"));
+    if (scan.truncated === true) attention.push("Engagement scan truncated");
+    else if (scan.complete === false) attention.push("Engagement scan partial");
+  }
+
+  const uniqueAttention = [...new Set(attention)];
+  const signalAt = caseView.telemetry?.lastActivityAt || null;
+  const usage = caseView.usage || {};
+  const learningCount = Number.isFinite(caseView.learningCount) ? caseView.learningCount : null;
+  return {
+    id: caseView.id || null,
+    displayName: caseView.displayName || "Unnamed case",
+    state: caseView.state || "unknown",
+    status: caseView.status || "invalid",
+    phaseLabel,
+    toolLabel,
+    lastSignalState: telemetryState,
+    lastSignalAt: signalAt,
+    lastSignalLabel: `${readableCapability(telemetryState)} · ${relativeTimeAt(signalAt, now)}`,
+    activeWorkLabel,
+    attentionLabel: uniqueAttention.length ? uniqueAttention.join(" · ") : "None observed",
+    attentionTone: uniqueAttention.some((item) => /invalid|unavailable|offline|blocked|failed/i.test(item))
+      ? "critical"
+      : uniqueAttention.length
+        ? "warning"
+        : "clear",
+    tokensLabel: usage.availability === "unavailable"
+      ? "Unavailable"
+      : Number.isFinite(usage.totalTokens)
+        ? `${formatTokens(usage.totalTokens)} · ${usage.availability}`
+        : `Total unavailable · ${usage.availability || "unknown"}`,
+    learningCount,
+    findingsLabel: "Unavailable"
+  };
+}
+
+function privateProfileName(id) {
+  const suffix = typeof id === "string" && id ? id.slice(-6) : "unknown";
+  return `Private profile · ${suffix}`;
+}
+
+export function profileSetupPresentation(setup = {}, now = Date.now()) {
+  const stage = setup.stage || "questionnaire";
+  const ready = setup.readiness === "ready";
+  const stale = setup.freshness === "stale";
+  const answered = Number.isFinite(setup.progress?.answered) ? setup.progress.answered : null;
+  const total = Number.isFinite(setup.progress?.total) ? setup.progress.total : null;
+  const blockerCount = Number.isFinite(setup.blockerCount) ? setup.blockerCount : null;
+  const attention = [];
+  if (stale) attention.push("Status stale");
+  if (stage === "superseded") attention.push("Superseded");
+  if (blockerCount > 0) attention.push(countedLabel(blockerCount, "blocker"));
+  const progressLabel = answered !== null && total !== null ? `${answered} / ${total} answered` : "Unavailable";
+  const nextSectionLabel = setup.nextSection ? readableCapability(setup.nextSection) : ready ? "Ready for case" : "Review required";
+  const recommendationLabel = setup.recommendationMode
+    ? `${readableCapability(setup.recommendationMode)} recommendations`
+    : "No recommendation mode";
+  return {
+    id: setup.id || null,
+    kind: "profile-setup",
+    displayName: privateProfileName(setup.id),
+    state: stage === "superseded" ? "cancelled" : ready ? "succeeded" : "waiting",
+    status: stale ? "stale" : "ready",
+    stage,
+    readiness: setup.readiness || "not-ready",
+    phaseLabel: nextSectionLabel,
+    toolLabel: recommendationLabel,
+    lastSignalState: stale ? "stale" : "live",
+    lastSignalAt: setup.updatedAt || null,
+    lastSignalLabel: `${readableCapability(stale ? "stale" : "fresh")} · ${relativeTimeAt(setup.updatedAt, now)}`,
+    activeWorkLabel: progressLabel,
+    answered,
+    total,
+    attentionLabel: attention.length ? attention.join(" · ") : ready ? "Ready for case" : "None observed",
+    attentionTone: attention.some((item) => /blocker/i.test(item)) ? "critical" : attention.length ? "warning" : "clear",
+    tokensLabel: "Unavailable",
+    learningCount: null,
+    findingsLabel: "Unavailable",
+    blockerCount,
+    nextSection: setup.nextSection || null,
+    recommendationMode: setup.recommendationMode || null,
+    updatedAt: setup.updatedAt || null,
+    freshness: setup.freshness || "stale"
+  };
+}
+
+export function profileSetupScanPresentation(scan = {}, visibleCount = 0) {
+  const visible = Number.isFinite(scan.visible) ? scan.visible : Number.isFinite(visibleCount) ? visibleCount : 0;
+  if (scan.availability === "unavailable") {
+    return `${visible} cached setup${visible === 1 ? "" : "s"} visible · scan unavailable · partial`;
+  }
+  const scanned = Number.isFinite(scan.scanned) ? scan.scanned : visible;
+  const discovered = Number.isFinite(scan.discovered) ? scan.discovered : visible;
+  const represented = Number.isFinite(scan.representedByCases) ? scan.representedByCases : 0;
+  const omitted = Number.isFinite(scan.omitted) ? scan.omitted : Math.max(0, discovered - scanned);
+  const invalid = Number.isFinite(scan.invalid) ? scan.invalid : 0;
+  const discoveredLabel = `${discovered}${scan.discoveredAtLeast === true ? "+" : ""}`;
+  const omittedLabel = `${omitted}${scan.omittedAtLeast === true ? "+" : ""}`;
+  return `${visible} setup${visible === 1 ? "" : "s"} visible / ${discoveredLabel} discovered` +
+    `${represented ? ` · ${represented} represented by cases` : ""}` +
+    `${omitted ? ` · ${omittedLabel} omitted` : ""}` +
+    `${invalid ? ` · ${invalid} invalid` : ""}` +
+    `${scan.complete === true ? "" : " · partial"}`;
+}
+
+function fleetEntries(statusView = {}) {
+  const cases = Array.isArray(statusView.cases) ? statusView.cases : [];
+  const setups = Array.isArray(statusView.profileSetups) ? statusView.profileSetups : [];
+  return [
+    ...cases.map((value) => ({ id: value.id, kind: "case", value })),
+    ...setups.map((value) => ({ id: value.id, kind: "profile-setup", value }))
+  ];
+}
+
+function scanCoverageIsExact(scan = {}) {
+  if (!scan || typeof scan !== "object" || Array.isArray(scan)) return false;
+  const sourceAvailable = !Object.hasOwn(scan, "availability") || scan.availability === "available";
+  return sourceAvailable && scan.complete === true && scan.truncated === false && scan.discoveredAtLeast !== true &&
+    scan.omittedAtLeast !== true && Number.isFinite(scan.discovered) && Number.isFinite(scan.scanned) &&
+    scan.scanned === scan.discovered && Number.isFinite(scan.omitted) && scan.omitted === 0 &&
+    Number.isFinite(scan.invalid) && scan.invalid === 0;
+}
+
+function caseScanIsExact(scan, visibleCases) {
+  return scanCoverageIsExact(scan) && scan.scanned === visibleCases;
+}
+
+function profileSetupScanIsExact(scan, visibleSetups, visibleCases) {
+  if (!scanCoverageIsExact(scan) || !Number.isFinite(scan.visible) ||
+      !Number.isFinite(scan.representedByCases)) return false;
+  return scan.visible === visibleSetups && scan.representedByCases <= visibleCases &&
+    scan.scanned === scan.visible + scan.representedByCases;
+}
+
+/** Summary cards must describe fleet coverage, not present a scanned subset as exact. */
+export function fleetSummaryPresentation(statusView = {}) {
+  const cases = Array.isArray(statusView.cases) ? statusView.cases : [];
+  const setups = Array.isArray(statusView.profileSetups) ? statusView.profileSetups : [];
+  const currentCases = statusView.caseScan && statusView.caseScan.availability !== "unavailable" ? cases : [];
+  const currentSetups = statusView.profileSetupScan && statusView.profileSetupScan.availability !== "unavailable"
+    ? setups.filter((item) => item.freshness !== "stale") : [];
+  const caseRows = currentCases.map((caseView) => ({
+    row: caseFleetRowPresentation(caseView),
+    live: casePresentation(caseView, statusView.operator)
+  }));
+  const setupRows = currentSetups.map((setup) => profileSetupPresentation(setup));
+  const counts = {
+    active: caseRows.filter(({ live }) => live.active).length,
+    waiting: caseRows.filter(({ row }) => row.state === "waiting").length +
+      setupRows.filter((row) => row.readiness !== "ready" && row.stage !== "superseded").length,
+    attention: caseRows.filter(({ row }) => row.attentionTone !== "clear").length +
+      setupRows.filter((row) => row.attentionTone !== "clear").length,
+    visible: currentCases.length + currentSetups.length
+  };
+  const observed = typeof statusView.observedAt === "string" && Number.isFinite(Date.parse(statusView.observedAt));
+  const exact = observed && cases.every((item) => item.runtimeHealth?.status === "available") &&
+    caseScanIsExact(statusView.caseScan, cases.length) &&
+    profileSetupScanIsExact(statusView.profileSetupScan, setups.length, cases.length);
+  const available = observed && statusView.caseScan && statusView.profileSetupScan &&
+    statusView.caseScan.availability !== "unavailable" && statusView.profileSetupScan.availability !== "unavailable" &&
+    currentCases.length === cases.length && currentSetups.length === setups.length;
+  const availability = !available ? "unavailable" : exact ? "exact" : "lower-bound";
+  const label = (value) => availability === "unavailable" ? "—" : availability === "lower-bound" ? `${value}+` : String(value);
+  const detail = availability === "unavailable"
+    ? "Fleet status unavailable"
+    : availability === "lower-bound"
+      ? `Lower bound from ${counts.visible} visible campaign${counts.visible === 1 ? "" : "s"}`
+      : `${counts.visible} campaign${counts.visible === 1 ? "" : "s"} observed · ${setups.length} in setup`;
+  return {
+    availability,
+    counts,
+    activeLabel: label(counts.active),
+    waitingLabel: label(counts.waiting),
+    attentionLabel: label(counts.attention),
+    detail
+  };
+}
+
 export function usageScopeLabel(usage = {}) {
   if (usage.source === "codex-session-jsonl") return "Host-wide, unattributed sessions";
   if (usage.source === "gate-token-log") return "Base/unassigned token log";
@@ -368,7 +635,12 @@ export function casePresentation(caseView = {}, operator = {}) {
         : "counts unavailable"
     ),
     terminalLine("engagements", engagementScan.label, engagementScan.attention ? "blocked" : "neutral"),
-    terminalLine("tokens", caseTokenLabel(caseView.usage))
+    terminalLine("tokens", caseTokenLabel(caseView.usage)),
+    terminalLine(
+      "learnings",
+      Number.isFinite(caseView.learningCount) ? `${caseView.learningCount} observed` : "unavailable"
+    ),
+    terminalLine("findings", "tracking unavailable", "neutral")
   ];
 
   for (const workflow of activeWorkflows.slice(0, 4)) {
@@ -432,7 +704,7 @@ export function captureCaseRenderContinuity(caseGrid, activeElement) {
       scrollPositions.set(caseId, {
         top: Number.isFinite(terminal.scrollTop) ? Math.max(0, terminal.scrollTop) : 0,
         left: Number.isFinite(terminal.scrollLeft) ? Math.max(0, terminal.scrollLeft) : 0,
-        atBottom: maximumTop !== null && maximumTop > 0 && terminal.scrollTop >= maximumTop - 1
+        atBottom: maximumTop !== null && terminal.scrollTop >= maximumTop - 1
       });
     }
     if (card === activeElement || card.contains?.(activeElement)) focusedCaseId = caseId;
@@ -472,13 +744,49 @@ export function restoreCaseRenderContinuity(caseGrid, snapshot = {}) {
 
 export function caseScanPresentation(scan = {}, visibleCount = 0) {
   const visible = Number.isFinite(visibleCount) && visibleCount >= 0 ? visibleCount : 0;
+  if (scan.availability === "unavailable" ||
+      (Object.hasOwn(scan, "availability") && scan.availability !== "available")) {
+    return `${visible} case${visible === 1 ? "" : "s"} visible · scan unavailable · partial`;
+  }
   const scanned = Number.isFinite(scan.scanned) ? scan.scanned : visible;
   const discovered = Number.isFinite(scan.discovered) ? scan.discovered : visible;
   const omitted = Number.isFinite(scan.omitted) ? scan.omitted : Math.max(0, discovered - scanned);
   const invalid = Number.isFinite(scan.invalid) ? scan.invalid : 0;
   const discoveredLabel = `${discovered}${scan.discoveredAtLeast === true ? "+" : ""}`;
   const omittedLabel = `${omitted}${scan.omittedAtLeast === true ? "+" : ""}`;
-  return `${scanned} scanned / ${discoveredLabel} discovered${omitted ? ` · ${omittedLabel} omitted` : ""}${invalid ? ` · ${invalid} invalid` : ""}${scan.complete === true ? "" : " · partial"}`;
+  const coverageConsistent = discovered === scanned + omitted && scanned >= visible;
+  const complete = scan.complete === true && scan.truncated === false && coverageConsistent &&
+    scanned === visible && omitted === 0 && invalid === 0 && scan.discoveredAtLeast !== true &&
+    scan.omittedAtLeast !== true;
+  return `${scanned} scanned / ${discoveredLabel} discovered${omitted ? ` · ${omittedLabel} omitted` : ""}${invalid ? ` · ${invalid} invalid` : ""}${complete ? "" : " · partial"}`;
+}
+
+export function emptyFleetPresentation(status = {}) {
+  const caseScan = status.caseScan || {};
+  const profileScan = status.profileSetupScan || {};
+  const cases = Array.isArray(status.cases) ? status.cases : [];
+  const setups = Array.isArray(status.profileSetups) ? status.profileSetups : [];
+  const caseScanExact = caseScanIsExact(caseScan, cases.length);
+  const profileScanExact = profileSetupScanIsExact(profileScan, setups.length, cases.length);
+  if (caseScanExact && profileScanExact) {
+    return {
+      glyph: "▱",
+      title: "No campaigns observed",
+      detail: "Create or bind a case to open its separate live activity view."
+    };
+  }
+  if (caseScan.availability !== "available" || profileScan.availability !== "available") {
+    return {
+      glyph: "…",
+      title: "Campaign scan unavailable",
+      detail: "Waiting for case and profile setup coverage before reporting an empty fleet."
+    };
+  }
+  return {
+    glyph: "…",
+    title: "Waiting for complete campaign scan",
+    detail: "Campaign coverage is partial, so an empty fleet cannot be confirmed yet."
+  };
 }
 
 export function offlineAnalysisPresentation(analysis = {}) {
@@ -867,108 +1175,335 @@ function renderLearnings() {
 function applyCaseSelection({ focus = false } = {}) {
   if (!view.caseGrid) return;
   let selected = null;
-  for (const card of view.caseGrid.querySelectorAll("[data-case-id]")) {
-    const active = card.dataset.caseId === state.selectedCaseId;
-    card.tabIndex = active ? 0 : -1;
+  for (const row of view.caseGrid.querySelectorAll("[data-case-id]")) {
+    const active = row.dataset.caseId === state.selectedCaseId;
+    row.tabIndex = active ? 0 : -1;
     if (active) {
-      card.setAttribute("aria-current", "true");
-      selected = card;
+      row.setAttribute("aria-selected", "true");
+      row.setAttribute("aria-expanded", String(!state.caseDetailCollapsed));
+      selected = row;
     } else {
-      card.removeAttribute("aria-current");
+      row.setAttribute("aria-selected", "false");
+      row.setAttribute("aria-expanded", "false");
     }
   }
   if (focus) selected?.focus();
 }
 
+export function captureLiveDetailContinuity(detail, activeElement) {
+  const caseId = detail?.dataset?.caseId || null;
+  const terminal = detail?.querySelector?.(".case-terminal") || null;
+  const maximumTop = terminal && Number.isFinite(terminal.scrollHeight) && Number.isFinite(terminal.clientHeight)
+    ? Math.max(0, terminal.scrollHeight - terminal.clientHeight)
+    : null;
+  const focusWithin = detail === activeElement || detail?.contains?.(activeElement) === true;
+  return {
+    caseId,
+    position: caseId && terminal ? {
+      top: Number.isFinite(terminal.scrollTop) ? Math.max(0, terminal.scrollTop) : 0,
+      left: Number.isFinite(terminal.scrollLeft) ? Math.max(0, terminal.scrollLeft) : 0,
+      atBottom: maximumTop !== null && terminal.scrollTop >= maximumTop - 1
+    } : null,
+    focusTarget: focusWithin && activeElement !== detail ? activeElement : null,
+    detailFocused: focusWithin && activeElement === detail
+  };
+}
+
+export function restoreLiveDetailContinuity(detail, snapshot = {}) {
+  if (!detail || detail.dataset?.caseId !== snapshot.caseId) return;
+  const terminal = detail.querySelector?.(".case-terminal");
+  const position = snapshot.position;
+  if (terminal && position) {
+    terminal.scrollTop = position.atBottom && Number.isFinite(terminal.scrollHeight) && Number.isFinite(terminal.clientHeight)
+      ? Math.max(0, terminal.scrollHeight - terminal.clientHeight)
+      : position.top;
+    terminal.scrollLeft = position.left;
+  }
+  const persistentTarget = snapshot.focusTarget && detail.contains?.(snapshot.focusTarget) === true
+    ? snapshot.focusTarget
+    : null;
+  const focusTarget = persistentTarget || (snapshot.detailFocused ? detail : null);
+  if (focusTarget?.focus) {
+    try {
+      focusTarget.focus({ preventScroll: true });
+    } catch {
+      focusTarget.focus();
+    }
+  }
+}
+
+function appendTableCell(row, className, contents) {
+  const cell = element("td", className);
+  if (Array.isArray(contents)) cell.append(...contents);
+  else if (contents instanceof Node) cell.append(contents);
+  else cell.textContent = String(contents);
+  row.append(cell);
+}
+
+function renderCaseDetail(caseView) {
+  if (!caseView) {
+    view.caseDetail.hidden = true;
+    view.caseDetail.removeAttribute("data-case-id");
+    view.caseDetailBody.replaceChildren();
+    return;
+  }
+
+  const display = casePresentation(caseView, state.status.operator);
+  const rowDisplay = caseFleetRowPresentation(caseView);
+  view.caseDetail.dataset.caseId = display.id;
+  view.caseDetail.hidden = state.caseDetailCollapsed;
+  view.caseDetail.setAttribute("aria-busy", String(display.active));
+
+  const header = element("header", "case-detail-header");
+  const identity = element("div", "case-detail-identity");
+  identity.append(
+    element("p", "eyebrow", "Selected campaign · live activity"),
+    element("h2", "", display.displayName),
+    element("code", "", shortId(display.id))
+  );
+  identity.querySelector("h2").id = "case-detail-title";
+  const stateGroup = element("div", "case-card-state");
+  if (display.indeterminate) {
+    const spinner = element("span", "terminal-spinner");
+    spinner.setAttribute("aria-hidden", "true");
+    stateGroup.append(spinner);
+  }
+  stateGroup.append(element("span", `state-pill ${display.state}`, display.state));
+  header.append(identity, stateGroup);
+
+  const terminal = element("section", "case-terminal case-live-terminal");
+  terminal.setAttribute("role", "log");
+  terminal.setAttribute("aria-live", "off");
+  terminal.setAttribute("aria-busy", String(display.active));
+  terminal.setAttribute("aria-label", `${display.displayName} structured lifecycle activity`);
+  terminal.append(element("p", "terminal-greeting", display.greeting));
+  const lines = element("ol", "terminal-lines");
+  for (const line of display.lines) {
+    const item = element("li", `terminal-line tone-${line.tone}`);
+    const value = element("span", "terminal-value", line.value);
+    if (line.observedAt) {
+      const observed = element("time", "terminal-observed", relativeTime(line.observedAt));
+      observed.dateTime = line.observedAt;
+      observed.title = dateTime(line.observedAt);
+      value.append(" · ", observed);
+    }
+    item.append(element("span", "terminal-label", line.label), value);
+    lines.append(item);
+  }
+  terminal.append(lines);
+
+  const progress = element(
+    "div",
+    `terminal-progress${display.indeterminate ? " indeterminate" : ""}${display.active ? " active" : ""}`
+  );
+  if (display.indeterminate) {
+    progress.setAttribute("role", "progressbar");
+    progress.setAttribute("aria-label", `${display.displayName} activity`);
+    progress.setAttribute("aria-valuetext", "In progress; completion percentage unavailable");
+    progress.append(element("span", ""));
+  }
+  const terminalFrame = element("div", "case-terminal-frame");
+  terminalFrame.append(terminal, progress);
+
+  const facts = element("dl", "case-live-facts");
+  const fact = (label, value, className = "") => {
+    const container = element("div", className);
+    container.append(element("dt", "", label), element("dd", "", value));
+    facts.append(container);
+  };
+  fact("Current phase", rowDisplay.phaseLabel);
+  fact("Current tool", rowDisplay.toolLabel);
+  fact("Active work", rowDisplay.activeWorkLabel);
+  fact("Attention", rowDisplay.attentionLabel, `attention-${rowDisplay.attentionTone}`);
+  fact("Tokens", rowDisplay.tokensLabel);
+  fact("Learnings", Number.isFinite(rowDisplay.learningCount) ? String(rowDisplay.learningCount) : "Unavailable");
+  fact("Findings tracking", rowDisplay.findingsLabel, "tracking-unavailable");
+
+  const layout = element("div", "case-live-layout");
+  layout.append(terminalFrame, facts);
+  view.caseDetailBody.replaceChildren(header, layout);
+}
+
+function renderProfileSetupDetail(setup) {
+  const display = profileSetupPresentation(setup);
+  view.caseDetail.dataset.caseId = display.id;
+  view.caseDetail.hidden = state.caseDetailCollapsed;
+  view.caseDetail.setAttribute("aria-busy", "false");
+
+  const header = element("header", "case-detail-header profile-setup-header");
+  const identity = element("div", "case-detail-identity");
+  identity.append(
+    element("p", "eyebrow", "Program intake · private identity withheld"),
+    element("h2", "", display.displayName),
+    element("code", "", shortId(display.id))
+  );
+  identity.querySelector("h2").id = "case-detail-title";
+  header.append(identity, element("span", `state-pill ${display.state}`, readableCapability(display.stage)));
+
+  const intro = element("section", "profile-setup-guidance");
+  intro.append(
+    element("p", "profile-setup-kicker", "Guided setup status"),
+    element(
+      "p",
+      "",
+      "Target-specific details remain in the private local profile editor. This observer receives no target identity, answers, sources, or editor launch authority."
+    )
+  );
+  const progressLabel = display.answered !== null && display.total !== null
+    ? `${display.answered} of ${display.total} applicable questions answered`
+    : "Question progress unavailable";
+  const progress = element("div", "profile-setup-progress");
+  const progressHead = element("div", "profile-setup-progress-head");
+  progressHead.append(element("span", "", "Questionnaire"), element("strong", "", progressLabel));
+  const track = element("div", "meter-track");
+  track.setAttribute("role", "progressbar");
+  track.setAttribute("aria-label", "Program Profile questionnaire progress");
+  track.setAttribute("aria-valuemin", "0");
+  const progressPercent = boundedPercent(display.answered, display.total);
+  track.setAttribute("aria-valuetext", progressLabel);
+  if (Number.isFinite(progressPercent)) track.setAttribute("aria-valuenow", String(Math.round(progressPercent)));
+  const fill = element("span", "meter-fill cyan");
+  fill.style.width = `${Number.isFinite(progressPercent) ? progressPercent : 0}%`;
+  track.append(fill);
+  progress.append(progressHead, track);
+
+  const facts = element("dl", "profile-setup-facts");
+  const fact = (label, value, className = "") => {
+    const container = element("div", className);
+    container.append(element("dt", "", label), element("dd", "", value));
+    facts.append(container);
+  };
+  fact("Stage", readableCapability(display.stage));
+  fact("Readiness", readableCapability(display.readiness));
+  fact("Next section", display.nextSection ? readableCapability(display.nextSection) : display.phaseLabel);
+  fact("Recommendations", display.recommendationMode ? readableCapability(display.recommendationMode) : "Unavailable");
+  fact("Blockers", Number.isFinite(display.blockerCount) ? String(display.blockerCount) : "Unavailable");
+  fact("Last update", display.updatedAt ? `${readableCapability(display.freshness)} · ${relativeTime(display.updatedAt)}` : "Unavailable");
+  fact("Tokens", "Unavailable", "tracking-unavailable");
+  fact("Findings tracking", "Unavailable", "tracking-unavailable");
+
+  const body = element("div", "profile-setup-body");
+  body.append(intro, progress, facts);
+  view.caseDetailBody.replaceChildren(header, body);
+}
+
+function renderFleetDetail(entry) {
+  if (!entry) {
+    renderCaseDetail(null);
+    return;
+  }
+  if (entry.kind === "profile-setup") renderProfileSetupDetail(entry.value);
+  else renderCaseDetail(entry.value);
+}
+
 function renderCases() {
   const continuity = captureCaseRenderContinuity(view.caseGrid, document.activeElement);
+  const detailContinuity = captureLiveDetailContinuity(view.caseDetail, document.activeElement);
+  if (detailContinuity.caseId && detailContinuity.position) {
+    state.caseDetailScrollPositions.set(detailContinuity.caseId, detailContinuity.position);
+  }
   const cases = Array.isArray(state.status.cases) ? state.status.cases : [];
-  state.selectedCaseId = cycleCaseSelection(cases, state.selectedCaseId, 0);
+  const setups = Array.isArray(state.status.profileSetups) ? state.status.profileSetups : [];
+  const entries = fleetEntries(state.status);
+  state.selectedCaseId = cycleCaseSelection(entries, state.selectedCaseId, 0);
   continuity.fallbackFocusCaseId = state.selectedCaseId;
-  setText(view.caseCount, String(cases.length));
+  const visibleIds = new Set(entries.map((entry) => entry.id));
+  for (const caseId of state.caseDetailScrollPositions.keys()) {
+    if (!visibleIds.has(caseId)) state.caseDetailScrollPositions.delete(caseId);
+  }
+  setText(view.caseCount, String(entries.length));
   const scan = state.status.caseScan || {};
-  setText(view.caseScan, caseScanPresentation(scan, cases.length));
+  const setupScan = state.status.profileSetupScan || {};
+  setText(
+    view.caseScan,
+    `Cases: ${caseScanPresentation(scan, cases.length)} · Profiles: ${profileSetupScanPresentation(setupScan, setups.length)}`
+  );
+  view.caseScan.classList.toggle(
+    "attention",
+    scan.availability !== "available" || scan.complete !== true || scan.truncated === true ||
+      Number(scan.invalid || 0) > 0 ||
+      setupScan.complete !== true || setupScan.truncated === true || Number(setupScan.invalid || 0) > 0
+  );
 
-  if (!cases.length) {
-    view.caseGrid.replaceChildren(
-      emptyState("▱", "No cases observed", "Create or bind a case to open its separate activity terminal.")
-    );
+  if (!entries.length) {
+    const empty = emptyFleetPresentation(state.status);
+    const row = element("tr", "campaign-empty-row");
+    const cell = element("td", "");
+    cell.colSpan = 8;
+    cell.append(emptyState(empty.glyph, empty.title, empty.detail));
+    row.append(cell);
+    view.caseGrid.replaceChildren(row);
+    renderFleetDetail(null);
     return;
   }
 
   const fragment = document.createDocumentFragment();
-  for (const caseView of cases) {
-    const display = casePresentation(caseView, state.status.operator);
-    const card = element("article", `case-card state-${display.state} case-${display.status}`);
-    card.dataset.caseId = display.id;
-    card.tabIndex = display.id === state.selectedCaseId ? 0 : -1;
-    const headingId = `case-title-${display.id}`;
-    card.setAttribute("aria-labelledby", headingId);
-    if (display.id === state.selectedCaseId) card.setAttribute("aria-current", "true");
-    card.addEventListener("focus", () => {
+  for (const entry of entries) {
+    const display = entry.kind === "profile-setup"
+      ? profileSetupPresentation(entry.value)
+      : caseFleetRowPresentation(entry.value);
+    const row = element("tr", `campaign-row state-${display.state} case-${display.status}`);
+    row.dataset.caseId = display.id;
+    row.dataset.campaignKind = entry.kind;
+    row.tabIndex = display.id === state.selectedCaseId ? 0 : -1;
+    row.setAttribute("aria-selected", String(display.id === state.selectedCaseId));
+    row.setAttribute("aria-controls", "case-detail");
+    row.setAttribute("aria-expanded", String(display.id === state.selectedCaseId && !state.caseDetailCollapsed));
+    row.addEventListener("click", () => {
       state.selectedCaseId = display.id;
-      applyCaseSelection();
+      state.caseDetailCollapsed = false;
+      renderCases();
+      applyCaseSelection({ focus: true });
+      setText(view.screenReaderStatus, `Opened live activity for ${display.displayName}.`);
     });
-    card.addEventListener("click", () => {
-      state.selectedCaseId = display.id;
-      applyCaseSelection();
-    });
-
-    const header = element("header", "case-card-header");
-    const identity = element("div", "case-card-identity");
-    identity.append(
-      element("p", "eyebrow", "Case terminal"),
-      element("h3", "", display.displayName),
-      element("code", "", shortId(display.id))
-    );
-    identity.querySelector("h3").id = headingId;
-    const stateGroup = element("div", "case-card-state");
-    if (display.indeterminate) {
-      const spinner = element("span", "terminal-spinner");
-      spinner.setAttribute("aria-hidden", "true");
-      stateGroup.append(spinner);
-    }
-    stateGroup.append(element("span", `state-pill ${display.state}`, display.state));
-    header.append(identity, stateGroup);
-
-    const terminal = element("section", "case-terminal");
-    terminal.setAttribute("role", "log");
-    terminal.setAttribute("aria-live", "off");
-    terminal.setAttribute("aria-busy", String(display.active));
-    terminal.setAttribute("aria-label", `${display.displayName} structured lifecycle activity`);
-    terminal.append(element("p", "terminal-greeting", display.greeting));
-    const lines = element("ol", "terminal-lines");
-    for (const line of display.lines) {
-      const item = element("li", `terminal-line tone-${line.tone}`);
-      const value = element("span", "terminal-value", line.value);
-      if (line.observedAt) {
-        const observed = element("time", "terminal-observed", relativeTime(line.observedAt));
-        observed.dateTime = line.observedAt;
-        observed.title = dateTime(line.observedAt);
-        value.append(" · ", observed);
+    row.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        state.selectedCaseId = display.id;
+        state.caseDetailCollapsed = false;
+        renderCases();
+        applyCaseSelection({ focus: true });
+      } else if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+        event.preventDefault();
+        cycleCaseFocus(event.key === "ArrowUp" ? -1 : 1);
       }
-      item.append(
-        element("span", "terminal-label", line.label),
-        value
-      );
-      lines.append(item);
-    }
-    terminal.append(lines);
+    });
 
-    const progress = element(
-      "div",
-      `terminal-progress${display.indeterminate ? " indeterminate" : ""}${display.active ? " active" : ""}`
-    );
-    if (display.indeterminate) {
-      progress.setAttribute("role", "progressbar");
-      progress.setAttribute("aria-label", `${display.displayName} activity`);
-      progress.setAttribute("aria-valuetext", "In progress; completion percentage unavailable");
-      progress.append(element("span", ""));
+    const identity = element("span", "campaign-identity");
+    identity.append(element("strong", "", display.displayName), element("code", "", shortId(display.id)));
+    appendTableCell(row, "campaign-name-cell", identity);
+    appendTableCell(row, "campaign-state-cell", element("span", `state-pill ${display.state}`, display.state));
+    const phase = element("span", "campaign-primary", display.phaseLabel);
+    phase.append(element("small", "", display.toolLabel));
+    appendTableCell(row, "campaign-phase-cell", phase);
+    const signal = element("span", `campaign-signal signal-${display.lastSignalState}`, display.lastSignalLabel);
+    if (display.lastSignalAt) {
+      signal.title = dateTime(display.lastSignalAt);
     }
-    card.append(header, terminal, progress);
-    fragment.append(card);
+    appendTableCell(row, "campaign-signal-cell", signal);
+    appendTableCell(row, "campaign-work-cell", display.activeWorkLabel);
+    appendTableCell(
+      row,
+      "campaign-attention-cell",
+      element("span", `attention-pill ${display.attentionTone}`, display.attentionLabel)
+    );
+    appendTableCell(row, "campaign-token-cell", display.tokensLabel);
+    appendTableCell(
+      row,
+      "campaign-learning-cell",
+      Number.isFinite(display.learningCount) ? String(display.learningCount) : "—"
+    );
+    fragment.append(row);
   }
   view.caseGrid.replaceChildren(fragment);
+  const selectedEntry = entries.find((entry) => entry.id === state.selectedCaseId) || entries[0];
+  renderFleetDetail(selectedEntry);
+  restoreLiveDetailContinuity(view.caseDetail, {
+    caseId: state.selectedCaseId,
+    position: state.caseDetailScrollPositions.get(state.selectedCaseId) || null,
+    focusTarget: detailContinuity.caseId === state.selectedCaseId ? detailContinuity.focusTarget : null,
+    detailFocused: detailContinuity.caseId === state.selectedCaseId && detailContinuity.detailFocused
+  });
   restoreCaseRenderContinuity(view.caseGrid, continuity);
 }
 
@@ -1292,17 +1827,16 @@ function renderConnection() {
 }
 
 function renderMetrics() {
-  const agents = activeAgents();
-  const counts = deriveCounts({ ...state.status, agents });
-  const countText = (value) => Number.isFinite(value) ? String(value) : "—";
-  const attention = Number.isFinite(counts.blocked) && Number.isFinite(counts.failed) ? counts.blocked + counts.failed : null;
-  setText(view.metricRunning, countText(counts.running));
-  setText(
-    view.metricRunningDetail,
-    Number.isFinite(counts.queued) ? `${counts.queued} fleet queued · ${agents.length} base members observed` : "Waiting for status"
-  );
-  setText(view.metricWaiting, countText(counts.waiting));
-  setText(view.metricAttention, countText(attention));
+  const summary = fleetSummaryPresentation(state.status);
+  setText(view.metricRunning, summary.activeLabel);
+  setText(view.metricRunningDetail, summary.detail);
+  setText(view.metricWaiting, summary.waitingLabel);
+  setText(view.metricWaitingDetail, summary.detail);
+  setText(view.metricAttention, summary.attentionLabel);
+  setText(view.metricAttentionDetail, summary.detail);
+  for (const node of [view.metricRunning, view.metricWaiting, view.metricAttention]) {
+    node.dataset.availability = summary.availability;
+  }
   renderUsage();
   renderConnection();
 }
@@ -1352,7 +1886,9 @@ function validStatusPayload(value) {
     OBSERVER_STATUS_STATES.has(value.state) &&
     value.counts !== null && typeof value.counts === "object" && !Array.isArray(value.counts) &&
     value.telemetry !== null && typeof value.telemetry === "object" && !Array.isArray(value.telemetry) &&
-    Array.isArray(value.cases);
+    Array.isArray(value.cases) &&
+    Array.isArray(value.profileSetups) &&
+    value.profileSetupScan !== null && typeof value.profileSetupScan === "object" && !Array.isArray(value.profileSetupScan);
 }
 
 /**
@@ -1371,6 +1907,14 @@ export function reconcileRefreshResults(current, results, now = Date.now()) {
     networkSucceeded = true;
   } else {
     failedEndpoints.add(observerContract.status);
+    status = {
+      ...status,
+      telemetry: { ...status?.telemetry, state: "stale" },
+      cases: (status?.cases || []).map((item) => ({ ...item, telemetry: { ...item.telemetry, state: "stale" } })),
+      profileSetups: (status?.profileSetups || []).map((item) => ({ ...item, freshness: "stale" })),
+      caseScan: { ...status?.caseScan, availability: "unavailable", complete: false, truncated: true },
+      profileSetupScan: { ...status?.profileSetupScan, availability: "unavailable", complete: false, truncated: true }
+    };
   }
 
   if (results.events.status === "fulfilled" && validCollectionPayload(results.events.value, "events")) {
@@ -1449,17 +1993,50 @@ export function observerShortcutAllowed(event = {}, dialogOpen = false) {
 }
 
 function cycleCaseFocus(direction) {
-  const cases = Array.isArray(state.status.cases) ? state.status.cases : [];
-  const selected = cycleCaseSelection(cases, state.selectedCaseId, direction);
+  const entries = fleetEntries(state.status);
+  const selected = cycleCaseSelection(entries, state.selectedCaseId, direction);
   if (!selected) {
     view.casePanel?.focus();
     setText(view.screenReaderStatus, "No case terminals are available.");
     return;
   }
   state.selectedCaseId = selected;
+  state.caseDetailCollapsed = false;
+  renderCases();
   applyCaseSelection({ focus: true });
-  const current = cases.find((item) => item.id === selected);
-  setText(view.screenReaderStatus, `Focused case ${current?.displayName || selected}.`);
+  const current = entries.find((item) => item.id === selected);
+  const label = current?.kind === "profile-setup"
+    ? privateProfileName(current.id)
+    : current?.value?.displayName || selected;
+  setText(view.screenReaderStatus, `Opened campaign detail for ${label}.`);
+}
+
+export function revealDisclosureAndFocus(target) {
+  const disclosure = target?.closest?.("details");
+  if (disclosure) disclosure.open = true;
+  if (target?.focus) {
+    try {
+      target.focus({ preventScroll: true });
+    } catch {
+      target.focus();
+    }
+  }
+  target?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  return Boolean(target);
+}
+
+function revealAndFocus(selector) {
+  return revealDisclosureAndFocus(document.querySelector(selector));
+}
+
+export function activateLiveDetailShortcut(options = {}) {
+  const availableIds = Array.isArray(options.availableIds) ? options.availableIds : [];
+  if (!options.selectedId || !availableIds.includes(options.selectedId)) return false;
+  options.setCollapsed?.(false);
+  options.render?.();
+  revealDisclosureAndFocus(options.detail);
+  options.announce?.();
+  return true;
 }
 
 function handleKeyboard(event) {
@@ -1470,22 +2047,38 @@ function handleKeyboard(event) {
 
   const focusTargets = {
     "0": "#case-panel",
-    "1": "#fleet-panel",
-    "2": "#timeline-panel",
+    "2": "#system-health-summary",
     "3": "#execution-panel",
     "4": "#telemetry-panel",
     "5": "#learning-panel",
     "6": "#offline-analysis-panel",
     "7": "#tool-runtime-panel"
   };
+  if (event.key === "1") {
+    event.preventDefault();
+    const entries = fleetEntries(state.status);
+    const opened = activateLiveDetailShortcut({
+      selectedId: state.selectedCaseId,
+      availableIds: entries.map((entry) => entry.id),
+      setCollapsed(value) { state.caseDetailCollapsed = value; },
+      render: renderCases,
+      detail: view.caseDetail,
+      announce() { setText(view.screenReaderStatus, "Selected campaign detail opened."); }
+    });
+    if (!opened) {
+      view.casePanel?.focus();
+      setText(view.screenReaderStatus, "No campaign detail is available.");
+    }
+    return;
+  }
   if (focusTargets[event.key]) {
     event.preventDefault();
-    document.querySelector(focusTargets[event.key])?.focus();
+    revealAndFocus(focusTargets[event.key]);
     return;
   }
   if (event.key === "/") {
     event.preventDefault();
-    view.eventSearch.focus();
+    revealAndFocus("#event-search");
   } else if (event.key === "[") {
     event.preventDefault();
     cycleCaseFocus(-1);
@@ -1526,6 +2119,12 @@ if (browserAvailable) {
   view.pauseButton.addEventListener("click", togglePause);
   view.refreshButton.addEventListener("click", () => refresh({ announce: true }));
   view.shortcutsButton.addEventListener("click", showShortcuts);
+  view.caseDetailClose.addEventListener("click", () => {
+    state.caseDetailCollapsed = true;
+    renderCases();
+    applyCaseSelection({ focus: true });
+    setText(view.screenReaderStatus, "Live activity detail collapsed.");
+  });
   document.addEventListener("keydown", handleKeyboard);
   document.addEventListener("visibilitychange", syncMotionState);
 

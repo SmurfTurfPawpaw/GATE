@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { PassThrough, Writable } from "node:stream";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -13,7 +13,11 @@ import {
   createProgramProfile,
   resumeProgramProfile
 } from "../src/lib/bounty-profiles.mjs";
-import { PROGRAM_PROFILE_ACTIONS, PROGRAM_PROFILE_QUESTIONS } from "../src/lib/program-profile-contract.mjs";
+import {
+  PROGRAM_PROFILE_ACTIONS,
+  PROGRAM_PROFILE_QUESTIONS,
+  programProfileQuestionnaireBinding
+} from "../src/lib/program-profile-contract.mjs";
 import { runtimePaths } from "../src/lib/paths.mjs";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -40,8 +44,70 @@ test("help exposes the private bug-bounty profile workflow", (t) => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /bounty profile create ID \[--answers FILE\]/u);
   assert.match(result.stdout, /bounty profile resume ID \[--answers FILE\]/u);
+  assert.match(result.stdout, /bounty profile ui ID \[--host 127\.0\.0\.1\] \[--port N\] \[--open\]/u);
   assert.match(result.stdout, /bounty profile compile ID/u);
   assert.match(result.stdout, /deterministic no-contact proposed assessment bundle/u);
+});
+
+test("profile UI CLI starts one private loopback session and stops on SIGTERM", { timeout: 10_000 }, async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-bounty-ui-cli-"));
+  const home = path.join(root, "home");
+  const paths = runtimePaths({ repo, home });
+  createProgramProfile("ui-cli-profile", {}, { paths, now: "2026-10-16T00:00:00.000Z" });
+  const child = spawn(process.execPath, [gate, "bounty", "profile", "ui", "ui-cli-profile"], {
+    cwd: repo,
+    env: { ...process.env, GATE_HOME: home },
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => { stdout += chunk; });
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  t.after(() => {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  const privateUrl = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`profile UI did not start: ${stderr}`)), 5000);
+    const inspect = () => {
+      const match = stdout.match(/GATE profile wizard: (http:\/\/127\.0\.0\.1:\d+\/#\S+)/u);
+      if (!match || !/Private loopback session for ui-cli-profile\. Press Ctrl\+C to stop\./u.test(stdout)) return;
+      clearTimeout(timer);
+      resolve(match[1]);
+    };
+    child.stdout.on("data", inspect);
+    child.once("exit", (code, signal) => {
+      clearTimeout(timer);
+      reject(new Error(`profile UI exited before startup: code=${code} signal=${signal} stderr=${stderr}`));
+    });
+    inspect();
+  });
+
+  assert.equal(child.exitCode, null);
+  assert.match(stdout, /Private loopback session for ui-cli-profile\. Press Ctrl\+C to stop\./u);
+  const response = await fetch(privateUrl);
+  assert.equal(response.status, 200);
+  assert.match(await response.text(), /GATE/u);
+
+  const exited = new Promise((resolve) => child.once("exit", (code, signal) => resolve({ code, signal })));
+  child.kill("SIGTERM");
+  assert.deepEqual(await exited, { code: 143, signal: null });
+});
+
+test("profile UI CLI rejects non-loopback hosts before opening a listener", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-bounty-ui-host-"));
+  const home = path.join(root, "home");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const result = invoke([
+    "bounty", "profile", "ui", "missing-profile", "--host", "0.0.0.0"
+  ], home);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /must bind to an explicit loopback address/u);
+  assert.equal(fs.existsSync(home), false);
 });
 
 test("interactive profile creation and resume require a terminal before private state is created", (t) => {
@@ -151,7 +217,10 @@ test("interactive format guidance explains contract-backed structured answer sha
   input.end();
 
   assert.equal(result.outcome, "saved");
-  assert.match(transcript, /Commands: back, edit QUESTION_ID, why, format, save, quit\./u);
+  assert.match(
+    transcript,
+    /Commands: back, edit QUESTION_ID, why, format, recommended, apply recommended, save, quit\./u
+  );
   assert.match(transcript, /Accepted format: a JSON array matching the records requested by this prompt/u);
   assert.match(transcript, /"Technical vulnerability report"/u);
   assert.match(transcript, /Accepted format: a JSON decision object with disposition, claimState, sourceRefs, rationale, and conditions\./u);
@@ -206,6 +275,12 @@ test("terminal fallback renders numbered choices and stores their canonical valu
   const depth = question("identity-depth");
   assert.match(cliInternals.questionChoicePrompt(depth), /1\. targeted/u);
   assert.match(cliInternals.questionChoicePrompt(depth), /2\. thorough/u);
+  assert.match(cliInternals.questionChoicePrompt(depth), /R\. Use recommended/u);
+  assert.match(cliInternals.questionChoicePrompt(depth, {
+    available: true,
+    summary: "A private proposal is available.",
+    basis: { claimState: "inferred" }
+  }), /Use recommended \[evidence: inferred\]/u);
   assert.equal(cliInternals.parseQuestionAnswer(depth, "2"), "thorough");
   assert.equal(cliInternals.parseQuestionAnswer(depth, "exhaustive"), "exhaustive");
   assert.throws(() => cliInternals.parseQuestionAnswer(depth, "9"), /between 1 and 3/u);
@@ -216,9 +291,111 @@ test("terminal fallback renders numbered choices and stores their canonical valu
 
   const attestation = question("attestation-answers-complete");
   assert.match(cliInternals.questionChoicePrompt(attestation), /1\. yes[\s\S]*2\. no/u);
+  assert.doesNotMatch(cliInternals.questionChoicePrompt(attestation), /R\. Use recommended/u);
+  assert.match(cliInternals.questionChoicePrompt(attestation), /direct local operator review/u);
   assert.equal(cliInternals.parseQuestionAnswer(attestation, "1"), true);
   assert.equal(cliInternals.parseQuestionAnswer(attestation, "2"), false);
   assert.equal(cliInternals.parseQuestionAnswer(attestation, "0"), false);
+});
+
+test("interactive questions can accept the canonical recommendation without treating draft examples as recommendations", { timeout: 5000 }, async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-bounty-recommended-"));
+  const paths = runtimePaths({ repo, home: path.join(root, "home") });
+  const input = new PassThrough();
+  let transcript = "";
+  const terminalOutput = new Writable({
+    write(chunk, _encoding, callback) {
+      transcript += chunk.toString();
+      callback();
+    }
+  });
+  const timers = [];
+  t.after(() => {
+    for (const timer of timers) clearTimeout(timer);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  ["edit identity-depth\n", "recommended\n", "quit\n"].forEach((response, index) => {
+    timers.push(setTimeout(() => input.write(response), 40 * (index + 1)));
+  });
+  await cliInternals.runProgramProfileQuestionnaire("recommended-profile", "create", {
+    paths,
+    input,
+    output: terminalOutput,
+    interactive: true,
+    terminal: false
+  });
+  input.end();
+
+  const stored = resumeProgramProfile("recommended-profile", { paths });
+  assert.equal(stored.answers.answers["identity-depth"], "thorough");
+  assert.match(transcript, /Saved identity-depth from the operator-preference recommendation\./u);
+  const programNamePrompt = transcript.split("Identity, objectives, and completion · 3/66")[0];
+  assert.doesNotMatch(programNamePrompt, /R\. Use recommended/u);
+});
+
+test("interactive resume can accept one validated base-bound evidence proposal", { timeout: 5000 }, async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-bounty-evidence-recommendation-"));
+  const paths = runtimePaths({ repo, home: path.join(root, "home") });
+  const id = "evidence-recommendation-profile";
+  createProgramProfile(id, {}, { paths, now: "2026-10-15T10:00:00.000Z" });
+  const current = resumeProgramProfile(id, { paths });
+  const questionnaire = programProfileQuestionnaireBinding({ repo });
+  const recommendations = {
+    $schema: "https://gate.local/schemas/bug-bounty-program-profile-recommendations.schema.json",
+    apiVersion: "gate.dev/program-profile-recommendations/v1",
+    kind: "BugBountyProgramProfileRecommendations",
+    metadata: {
+      programId: id,
+      createdAt: "2026-10-15T10:01:00.000Z",
+      questionnaireId: questionnaire.id,
+      questionnaireVersion: questionnaire.version,
+      questionnaireSha256: questionnaire.sha256,
+      baseRevision: current.summary.revision,
+      baseProfileSha256: current.summary.profileSha256
+    },
+    proposals: {
+      "limits-timezone": {
+        value: "Europe/Brussels",
+        provenance: "local-derived",
+        basis: {
+          summary: "Use the locally configured testing timezone.",
+          claimState: "observed",
+          sourceRefs: []
+        }
+      }
+    }
+  };
+  const input = new PassThrough();
+  let transcript = "";
+  const terminalOutput = new Writable({
+    write(chunk, _encoding, callback) {
+      transcript += chunk.toString();
+      callback();
+    }
+  });
+  const timers = [
+    setTimeout(() => input.write("edit limits-timezone\n"), 40),
+    setTimeout(() => input.write("recommended\n"), 80),
+    setTimeout(() => input.write("quit\n"), 120)
+  ];
+  t.after(() => {
+    for (const timer of timers) clearTimeout(timer);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  await cliInternals.runProgramProfileQuestionnaire(id, "resume", {
+    paths,
+    input,
+    output: terminalOutput,
+    interactive: true,
+    terminal: false,
+    recommendations
+  });
+  input.end();
+
+  assert.equal(resumeProgramProfile(id, { paths }).profile.limits.timezone, "Europe/Brussels", transcript);
+  assert.match(transcript, /R\. Use recommended \[evidence: observed\]/u);
+  assert.match(transcript, /Saved limits-timezone from the local-derived recommendation\./u);
 });
 
 test("persisted legacy values are escaped before terminal display", () => {
@@ -462,7 +639,7 @@ test("resume maps a ready-required empty list back to its exact question", { tim
   });
   input.end();
 
-  assert.match(transcript, /All required answers are recorded\. Verification still has \d+ blocker\(s\); opening identity-deliverables for review\./u);
+  assert.match(transcript, /Resuming at unanswered required question: identity-deliverables\./u);
   assert.match(transcript, /identity-deliverables/u);
   assert.doesNotMatch(transcript, /Resuming at unanswered required question: identity-program-name\./u);
 });

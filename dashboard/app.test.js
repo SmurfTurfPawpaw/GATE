@@ -2,22 +2,32 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  activateLiveDetailShortcut,
   captureCaseRenderContinuity,
+  captureLiveDetailContinuity,
+  caseFleetRowPresentation,
   casePresentation,
   caseScanPresentation,
   cycleCaseSelection,
   engagementScanPresentation,
+  emptyFleetPresentation,
   executionPresentation,
   executionRunPresentation,
+  fleetSummaryPresentation,
   observerShortcutAllowed,
   offlineAnalysisPresentation,
   offlineAnalysisRunPresentation,
+  profileSetupPresentation,
+  profileSetupScanPresentation,
   reconcileRefreshResults,
+  revealDisclosureAndFocus,
   restoreCaseRenderContinuity,
+  restoreLiveDetailContinuity,
   toolRuntimeItemPresentation,
   toolRuntimePresentation,
   usageScopeLabel
 } from "./app.js";
+import { sanitizeStatusPayload } from "./model.js";
 
 const at = "2026-10-13T12:00:00.000Z";
 
@@ -47,6 +57,8 @@ function statusEnvelope(overrides = {}) {
     counts: {},
     telemetry: {},
     cases: [],
+    profileSetups: [],
+    profileSetupScan: {},
     ...overrides
   };
 }
@@ -72,14 +84,18 @@ test("malformed successful status envelopes preserve the last valid status and r
     statusEnvelope({ apiVersion: "wrong/v1" }),
     statusEnvelope({ at: "not-a-time" }),
     statusEnvelope({ counts: null }),
-    statusEnvelope({ cases: null })
+    statusEnvelope({ cases: null }),
+    statusEnvelope({ profileSetups: null }),
+    statusEnvelope({ profileSetupScan: null })
   ]) {
     const next = reconcileRefreshResults(current, {
       status: fulfilled(malformed),
       events: rejected(),
       learnings: rejected()
     }, 250);
-    assert.strictEqual(next.status, current.status);
+    assert.equal(next.status.observedAt, current.status.observedAt);
+    assert.equal(next.status.telemetry.state, "stale");
+    assert.equal(fleetSummaryPresentation(next.status).availability, "unavailable");
     assert.equal(next.failedEndpoints.has("/api/status"), true);
     assert.equal(next.lastNetworkSuccess, current.lastNetworkSuccess);
   }
@@ -107,7 +123,9 @@ test("a total refresh failure keeps the previous network-success timestamp", () 
     learnings: rejected()
   }, 400);
 
-  assert.strictEqual(next.status, current.status);
+  assert.equal(next.status.observedAt, current.status.observedAt);
+  assert.equal(next.status.telemetry.state, "stale");
+  assert.equal(fleetSummaryPresentation(next.status).availability, "unavailable");
   assert.strictEqual(next.events, current.events);
   assert.strictEqual(next.learnings, current.learnings);
   assert.equal(next.lastNetworkSuccess, 100);
@@ -554,6 +572,349 @@ test("case terminal animation is indeterminate only for fresh active lifecycle s
   assert.equal(staleTelemetry.indeterminate, false, "stale telemetry must stop progress animation");
 });
 
+test("compact campaign rows expose current operational metadata without inferring findings", () => {
+  const display = caseFleetRowPresentation({
+    id: `case_${"a".repeat(16)}`,
+    displayName: "Parallel assessment",
+    status: "ready",
+    runtimeHealth: { status: "available", reason: null },
+    state: "running",
+    counts: { running: 1, queued: 0, waiting: 0, blocked: 0, failed: 0 },
+    telemetry: { state: "live", lastActivityAt: at },
+    usage: { availability: "exact", totalTokens: 2048 },
+    workflows: {
+      counts: { active: 1, degraded: 0 },
+      instances: [{ activePhase: { id: "active-testing", toolId: "httpx", target: "PHASE_TARGET_CANARY" } }]
+    },
+    execution: { queuedCount: 0, runningCount: 1, stoppingCount: 0, argv: ["ARGV_CANARY"] },
+    offlineAnalysis: { counts: { queued: 0, running: 1 } },
+    engagementScan: { availability: "loaded", invalid: 1, complete: false, truncated: false },
+    learningCount: 4,
+    findings: [{ title: "FINDING_CANARY" }],
+    command: "COMMAND_CANARY",
+    target: "TARGET_CANARY"
+  }, Date.parse(at) + 1_000);
+
+  assert.equal(display.phaseLabel, "Active testing");
+  assert.equal(display.toolLabel, "httpx");
+  assert.equal(display.lastSignalLabel, "Live · just now");
+  assert.equal(display.activeWorkLabel, "1 phase · 1 run · 1 analysis");
+  assert.equal(display.attentionLabel, "1 invalid engagement · Engagement scan partial");
+  assert.equal(display.attentionTone, "critical");
+  assert.equal(display.learningCount, 4);
+  assert.equal(display.findingsLabel, "Unavailable");
+  assert.match(display.tokensLabel, /exact/u);
+  const rendered = JSON.stringify(display);
+  for (const canary of ["PHASE_TARGET_CANARY", "ARGV_CANARY", "FINDING_CANARY", "COMMAND_CANARY", "TARGET_CANARY"]) {
+    assert.equal(rendered.includes(canary), false, `fleet row leaked ${canary}`);
+  }
+});
+
+test("compact campaign rows distinguish unavailable runtime state from observed idle work", () => {
+  const unavailable = caseFleetRowPresentation({
+    status: "invalid",
+    state: "blocked",
+    runtimeHealth: { status: "unavailable", reason: "invalid-case" },
+    telemetry: { state: "unknown", lastActivityAt: null },
+    usage: { availability: "unavailable" },
+    workflows: { counts: {}, instances: [] },
+    execution: {},
+    offlineAnalysis: { counts: {} },
+    learningCount: 0
+  }, Date.parse(at));
+  assert.equal(unavailable.phaseLabel, "Unavailable");
+  assert.equal(unavailable.activeWorkLabel, "Unavailable");
+  assert.match(unavailable.attentionLabel, /Invalid case/u);
+  assert.match(unavailable.attentionLabel, /Runtime unavailable/u);
+  assert.equal(unavailable.tokensLabel, "Unavailable");
+
+  const idle = caseFleetRowPresentation({
+    status: "ready",
+    state: "idle",
+    runtimeHealth: { status: "available", reason: null },
+    telemetry: { state: "live", lastActivityAt: at },
+    usage: { availability: "estimated", totalTokens: null },
+    workflows: { counts: { active: 0, degraded: 0 }, instances: [] },
+    execution: { queuedCount: 0, runningCount: 0, stoppingCount: 0 },
+    offlineAnalysis: { counts: { queued: 0, running: 0 } },
+    engagementScan: { availability: "not-loaded" },
+    learningCount: 0
+  }, Date.parse(at));
+  assert.equal(idle.activeWorkLabel, "None observed");
+  assert.equal(idle.attentionLabel, "None observed");
+  assert.equal(idle.findingsLabel, "Unavailable");
+});
+
+test("offline telemetry is critical while stale and unknown telemetry require attention", () => {
+  const base = {
+    id: `case_${"e".repeat(16)}`,
+    displayName: "Telemetry truth",
+    status: "ready",
+    runtimeHealth: { status: "available", reason: null },
+    state: "idle",
+    counts: { queued: 0, running: 0, waiting: 0, blocked: 0, failed: 0 },
+    usage: { availability: "unavailable" },
+    workflows: { counts: { active: 0, degraded: 0 }, instances: [] },
+    execution: { queuedCount: 0, runningCount: 0, stoppingCount: 0 },
+    offlineAnalysis: { counts: { queued: 0, running: 0 } },
+    engagementScan: { availability: "not-loaded" },
+    learningCount: 0
+  };
+  const offline = caseFleetRowPresentation({ ...base, telemetry: { state: "offline", lastActivityAt: at } });
+  const stale = caseFleetRowPresentation({ ...base, telemetry: { state: "stale", lastActivityAt: at } });
+  const unknown = caseFleetRowPresentation({ ...base, telemetry: { state: "unknown", lastActivityAt: null } });
+  assert.equal(offline.attentionLabel, "Telemetry offline");
+  assert.equal(offline.attentionTone, "critical");
+  assert.equal(stale.attentionLabel, "Telemetry stale");
+  assert.equal(stale.attentionTone, "warning");
+  assert.equal(unknown.attentionLabel, "Telemetry unknown");
+  assert.equal(unknown.attentionTone, "warning");
+
+  const exactScan = { availability: "available", discovered: 1, scanned: 1, complete: true, truncated: false, omitted: 0, invalid: 0 };
+  const fleet = fleetSummaryPresentation({
+    observedAt: at,
+    cases: [{ ...base, telemetry: { state: "offline", lastActivityAt: at } }],
+    profileSetups: [],
+    caseScan: exactScan,
+    profileSetupScan: { ...exactScan, discovered: 0, scanned: 0, visible: 0, representedByCases: 0 }
+  });
+  assert.equal(fleet.availability, "exact");
+  assert.equal(fleet.attentionLabel, "1");
+});
+
+test("fleet summary cards distinguish unavailable, lower-bound, and exact coverage", () => {
+  const initial = fleetSummaryPresentation({});
+  assert.equal(initial.availability, "unavailable");
+  assert.equal(initial.activeLabel, "—");
+  assert.equal(initial.waitingLabel, "—");
+  assert.equal(initial.attentionLabel, "—");
+  assert.equal(
+    fleetSummaryPresentation({ observedAt: at, caseScan: null, profileSetupScan: null }).availability,
+    "unavailable"
+  );
+
+  const visibleCase = {
+    id: `case_${"f".repeat(16)}`,
+    displayName: "Visible campaign",
+    status: "ready",
+    runtimeHealth: { status: "available", reason: null },
+    state: "running",
+    counts: { queued: 0, running: 1, waiting: 0, blocked: 0, failed: 0 },
+    telemetry: { state: "live", lastActivityAt: at },
+    usage: { availability: "unavailable" },
+    workflows: { counts: { active: 0, degraded: 0 }, instances: [] },
+    execution: { queuedCount: 0, runningCount: 0, stoppingCount: 0 },
+    offlineAnalysis: { counts: { queued: 0, running: 0 } },
+    engagementScan: { availability: "not-loaded" },
+    learningCount: 0
+  };
+  const partial = fleetSummaryPresentation({
+    observedAt: at,
+    cases: [visibleCase],
+    profileSetups: [],
+    caseScan: { complete: false, truncated: true, omitted: 1, invalid: 1 },
+    profileSetupScan: { discovered: 0, scanned: 0, complete: true, truncated: false, omitted: 0, invalid: 0 }
+  });
+  assert.equal(partial.availability, "lower-bound");
+  assert.equal(partial.activeLabel, "1+");
+  assert.equal(partial.waitingLabel, "0+");
+  assert.equal(partial.attentionLabel, "0+");
+  assert.match(partial.detail, /Lower bound/u);
+
+  const unavailable = fleetSummaryPresentation({
+    observedAt: at,
+    cases: [visibleCase],
+    profileSetups: [],
+    caseScan: { availability: "unavailable", discovered: 1, scanned: 1, complete: true, truncated: false, omitted: 0, invalid: 0 },
+    profileSetupScan: { availability: "available", discovered: 0, scanned: 0, complete: true, truncated: false, omitted: 0, invalid: 0 }
+  });
+  assert.equal(unavailable.availability, "unavailable", "an unavailable scan cannot establish current fleet counts");
+  assert.equal(unavailable.activeLabel, "—");
+
+  const exactScan = { availability: "available", discovered: 1, scanned: 1, complete: true, truncated: false, omitted: 0, invalid: 0 };
+  const exact = fleetSummaryPresentation({
+    observedAt: at,
+    cases: [visibleCase],
+    profileSetups: [],
+    caseScan: exactScan,
+    profileSetupScan: { ...exactScan, discovered: 0, scanned: 0, visible: 0, representedByCases: 0 }
+  });
+  assert.equal(exact.availability, "exact");
+  assert.equal(exact.activeLabel, "1");
+  assert.equal(exact.waitingLabel, "0");
+  assert.equal(exact.attentionLabel, "0");
+  const observed = {
+    observedAt: at, cases: [visibleCase], profileSetups: [], caseScan: exactScan,
+    profileSetupScan: { ...exactScan, discovered: 0, scanned: 0, visible: 0, representedByCases: 0 }
+  };
+  const refresh = reconcileRefreshResults({ ...currentState(), status: observed }, {
+    status: rejected(), events: fulfilled({ apiVersion: "gate.observer/v1", at, events: [] }), learnings: rejected()
+  }, 500);
+  assert.equal(refresh.status.cases.length, 1);
+  assert.equal(refresh.status.cases[0].state, "running");
+  assert.equal(refresh.status.cases[0].telemetry.state, "stale");
+  const cached = fleetSummaryPresentation(refresh.status);
+  assert.equal(cached.availability, "unavailable");
+  assert.equal(cached.activeLabel, "—");
+  assert.equal(cached.counts.active, 0);
+  assert.equal(fleetSummaryPresentation(observed).activeLabel, "1");
+});
+
+test("sanitized unavailable scan states cannot become exact fleet zeroes", () => {
+  const contradictoryExactZero = {
+    discovered: 0,
+    scanned: 0,
+    omitted: 0,
+    invalid: 0,
+    complete: true,
+    truncated: false
+  };
+  const caseUnavailable = sanitizeStatusPayload({
+    at,
+    cases: [],
+    profileSetups: [],
+    caseScan: { availability: "unavailable", ...contradictoryExactZero },
+    profileSetupScan: { availability: "available", visible: 0, representedByCases: 0, ...contradictoryExactZero }
+  });
+  assert.equal(caseUnavailable.caseScan.availability, "unavailable");
+  assert.equal(caseUnavailable.caseScan.complete, false);
+  assert.equal(fleetSummaryPresentation(caseUnavailable).availability, "unavailable");
+  assert.equal(fleetSummaryPresentation(caseUnavailable).activeLabel, "—");
+
+  const profileUnavailable = sanitizeStatusPayload({
+    at,
+    cases: [],
+    profileSetups: [],
+    caseScan: { availability: "available", ...contradictoryExactZero },
+    profileSetupScan: { availability: "unavailable", visible: 0, representedByCases: 0, ...contradictoryExactZero }
+  });
+  assert.equal(profileUnavailable.profileSetupScan.availability, "unavailable");
+  assert.equal(profileUnavailable.profileSetupScan.complete, false);
+  assert.equal(fleetSummaryPresentation(profileUnavailable).availability, "unavailable");
+  assert.equal(fleetSummaryPresentation(profileUnavailable).attentionLabel, "—");
+});
+
+test("sanitized contradictory available scan counts remain lower bounds", () => {
+  const exactZero = {
+    availability: "available",
+    discovered: 0,
+    scanned: 0,
+    omitted: 0,
+    invalid: 0,
+    complete: true,
+    truncated: false
+  };
+  const contradictoryCaseScan = sanitizeStatusPayload({
+    at,
+    cases: [],
+    profileSetups: [],
+    caseScan: { ...exactZero, discovered: 0, scanned: 1 },
+    profileSetupScan: { ...exactZero, visible: 0, representedByCases: 0 }
+  });
+  assert.equal(contradictoryCaseScan.caseScan.availability, "available");
+  assert.equal(contradictoryCaseScan.caseScan.scanned, 1);
+  assert.equal(contradictoryCaseScan.caseScan.discovered, 0);
+  assert.equal(fleetSummaryPresentation(contradictoryCaseScan).availability, "lower-bound");
+
+  const contradictoryProfileScan = sanitizeStatusPayload({
+    at,
+    cases: [],
+    profileSetups: [],
+    caseScan: exactZero,
+    profileSetupScan: {
+      ...exactZero,
+      discovered: 0,
+      scanned: 1,
+      visible: 0,
+      representedByCases: 0
+    }
+  });
+  assert.equal(contradictoryProfileScan.profileSetupScan.availability, "available");
+  assert.equal(contradictoryProfileScan.profileSetupScan.scanned, 1);
+  assert.equal(contradictoryProfileScan.profileSetupScan.discovered, 0);
+  assert.equal(fleetSummaryPresentation(contradictoryProfileScan).availability, "lower-bound");
+
+  const missingRows = sanitizeStatusPayload({
+    at,
+    cases: [],
+    profileSetups: [],
+    caseScan: { ...exactZero, discovered: 1, scanned: 1 },
+    profileSetupScan: { ...exactZero, visible: 0, representedByCases: 0 }
+  });
+  assert.equal(
+    fleetSummaryPresentation(missingRows).availability,
+    "lower-bound",
+    "exact scan counters cannot make an incomplete row projection exact"
+  );
+
+  const missingProfileRows = sanitizeStatusPayload({
+    at,
+    cases: [],
+    profileSetups: [],
+    caseScan: exactZero,
+    profileSetupScan: {
+      ...exactZero,
+      discovered: 1,
+      scanned: 1,
+      visible: 1,
+      representedByCases: 0
+    }
+  });
+  assert.equal(
+    fleetSummaryPresentation(missingProfileRows).availability,
+    "lower-bound",
+    "profile scan counters must agree with the sanitized setup rows"
+  );
+});
+
+test("private profile setup rows show guided progress without inventing a target identity", () => {
+  const display = profileSetupPresentation({
+    id: `program_${"c".repeat(16)}`,
+    displayName: null,
+    stage: "questionnaire",
+    readiness: "not-ready",
+    progress: { answered: 41, total: 66 },
+    blockerCount: 2,
+    nextSection: "scope-assets",
+    recommendationMode: "mixed",
+    updatedAt: at,
+    freshness: "fresh",
+    targetName: "PRIVATE_TARGET_CANARY",
+    answers: "PRIVATE_ANSWER_CANARY"
+  }, Date.parse(at) + 1_000);
+
+  assert.equal(display.displayName, "Private profile · cccccc");
+  assert.equal(display.state, "waiting");
+  assert.equal(display.phaseLabel, "Scope assets");
+  assert.equal(display.toolLabel, "Mixed recommendations");
+  assert.equal(display.activeWorkLabel, "41 / 66 answered");
+  assert.equal(display.attentionLabel, "2 blockers");
+  assert.equal(display.tokensLabel, "Unavailable");
+  assert.equal(display.findingsLabel, "Unavailable");
+  assert.equal(JSON.stringify(display).includes("PRIVATE_TARGET_CANARY"), false);
+  assert.equal(JSON.stringify(display).includes("PRIVATE_ANSWER_CANARY"), false);
+
+  assert.equal(
+    profileSetupScanPresentation({
+      discovered: 5,
+      scanned: 4,
+      omitted: 1,
+      invalid: 1,
+      visible: 2,
+      representedByCases: 2,
+      discoveredAtLeast: true,
+      omittedAtLeast: true,
+      complete: false,
+      truncated: true
+    }, 2),
+    "2 setups visible / 5+ discovered · 2 represented by cases · 1+ omitted · 1 invalid · partial"
+  );
+  assert.equal(
+    profileSetupScanPresentation({ availability: "unavailable", visible: 1, complete: false, truncated: true }, 1),
+    "1 cached setup visible · scan unavailable · partial"
+  );
+});
+
 test("invalid case tombstones render unavailable binding and isolation metadata", () => {
   const display = casePresentation({
     id: `case_${"d".repeat(16)}`,
@@ -660,6 +1021,61 @@ test("case render continuity restores focused cards and independent terminal scr
   assert.deepEqual(fallbackCalls, [{ preventScroll: true }], "a removed focused case transfers focus to the selected fallback");
 });
 
+test("selected live activity preserves terminal scroll and focus across polling renders", () => {
+  const childFocusCalls = [];
+  const focusedChild = { focus: (options) => childFocusCalls.push(options) };
+  const terminal = { scrollTop: 100, scrollLeft: 5, scrollHeight: 300, clientHeight: 200 };
+  const detail = {
+    dataset: { caseId: `case_${"1".repeat(16)}` },
+    querySelector: () => terminal,
+    contains: (candidate) => candidate === focusedChild
+  };
+  const snapshot = captureLiveDetailContinuity(detail, focusedChild);
+  assert.deepEqual(snapshot, {
+    caseId: detail.dataset.caseId,
+    position: { top: 100, left: 5, atBottom: true },
+    focusTarget: focusedChild,
+    detailFocused: false
+  });
+
+  const restoredTerminal = { scrollTop: 0, scrollLeft: 0, scrollHeight: 420, clientHeight: 200 };
+  const detailFocusCalls = [];
+  const restored = {
+    dataset: { ...detail.dataset },
+    querySelector: () => restoredTerminal,
+    contains: (candidate) => candidate === focusedChild,
+    focus: (options) => detailFocusCalls.push(options)
+  };
+  restoreLiveDetailContinuity(restored, snapshot);
+  assert.equal(restoredTerminal.scrollTop, 220);
+  assert.equal(restoredTerminal.scrollLeft, 5);
+  assert.deepEqual(childFocusCalls, [{ preventScroll: true }], "polling keeps focus on the persistent collapse control");
+  assert.deepEqual(detailFocusCalls, [], "polling must not transfer descendant focus to the detail container");
+
+  restoredTerminal.scrollTop = 17;
+  restoreLiveDetailContinuity(restored, { ...snapshot, caseId: `case_${"2".repeat(16)}` });
+  assert.equal(restoredTerminal.scrollTop, 17, "a different selected case must not receive another terminal's scroll position");
+});
+
+test("a zero-overflow terminal remains bottom-anchored when polling adds overflow", () => {
+  const terminal = { scrollTop: 0, scrollLeft: 0, scrollHeight: 200, clientHeight: 200 };
+  const detail = {
+    dataset: { caseId: `case_${"3".repeat(16)}` },
+    querySelector: () => terminal,
+    contains: () => false
+  };
+  const snapshot = captureLiveDetailContinuity(detail, null);
+  assert.equal(snapshot.position.atBottom, true);
+
+  const grown = { scrollTop: 0, scrollLeft: 0, scrollHeight: 340, clientHeight: 200 };
+  restoreLiveDetailContinuity({
+    dataset: { ...detail.dataset },
+    querySelector: () => grown,
+    contains: () => false
+  }, snapshot);
+  assert.equal(grown.scrollTop, 140);
+});
+
 test("observer shortcuts ignore browser modifiers and an open shortcuts dialog", () => {
   assert.equal(observerShortcutAllowed({ key: "r" }), true);
   assert.equal(observerShortcutAllowed({ key: "r", ctrlKey: true }), false);
@@ -671,6 +1087,50 @@ test("observer shortcuts ignore browser modifiers and an open shortcuts dialog",
   assert.equal(observerShortcutAllowed({ key: "r" }, true), false);
 });
 
+test("shortcut 1 reopens and focuses the selected live detail", () => {
+  const order = [];
+  let collapsed = true;
+  const detail = {
+    closest: () => null,
+    focus: (options) => order.push(["focus", options]),
+    scrollIntoView: (options) => order.push(["scroll", options])
+  };
+  const activated = activateLiveDetailShortcut({
+    selectedId: "case_selected",
+    availableIds: ["case_selected"],
+    setCollapsed(value) { collapsed = value; order.push(["collapse", value]); },
+    render() { order.push(["render", collapsed]); },
+    detail,
+    announce() { order.push(["announce"]); }
+  });
+  assert.equal(activated, true);
+  assert.equal(collapsed, false);
+  assert.deepEqual(order, [
+    ["collapse", false],
+    ["render", false],
+    ["focus", { preventScroll: true }],
+    ["scroll", { block: "nearest", inline: "nearest" }],
+    ["announce"]
+  ]);
+  assert.equal(activateLiveDetailShortcut({ selectedId: null, availableIds: [] }), false);
+});
+
+test("shortcut 2 opens System health and focuses and scrolls its summary", () => {
+  const disclosure = { open: false };
+  const calls = [];
+  const summary = {
+    closest: (selector) => selector === "details" ? disclosure : null,
+    focus: (options) => calls.push(["focus", options]),
+    scrollIntoView: (options) => calls.push(["scroll", options])
+  };
+  assert.equal(revealDisclosureAndFocus(summary), true);
+  assert.equal(disclosure.open, true);
+  assert.deepEqual(calls, [
+    ["focus", { preventScroll: true }],
+    ["scroll", { block: "nearest", inline: "nearest" }]
+  ]);
+});
+
 test("token scope labels distinguish host sessions from base records", () => {
   assert.equal(usageScopeLabel({ source: "codex-session-jsonl" }), "Host-wide, unattributed sessions");
   assert.equal(usageScopeLabel({ source: "gate-token-log" }), "Base/unassigned token log");
@@ -678,6 +1138,10 @@ test("token scope labels distinguish host sessions from base records", () => {
 });
 
 test("case scan presentation exposes invalid and partial scan state", () => {
+  assert.equal(
+    caseScanPresentation({ availability: "unavailable", complete: false, truncated: true }, 0),
+    "0 cases visible · scan unavailable · partial"
+  );
   assert.equal(
     caseScanPresentation({
       discovered: 1024,
@@ -691,4 +1155,43 @@ test("case scan presentation exposes invalid and partial scan state", () => {
     "32 scanned / 1024+ discovered · 992+ omitted · 2 invalid · partial"
   );
   assert.equal(caseScanPresentation({}, 2), "2 scanned / 2 discovered · partial");
+  assert.equal(
+    caseScanPresentation({
+      availability: "available",
+      discovered: 0,
+      scanned: 1,
+      omitted: 0,
+      invalid: 0,
+      complete: true,
+      truncated: false
+    }, 0),
+    "1 scanned / 0 discovered · partial"
+  );
+});
+
+test("empty fleet copy requires exact case and profile coverage", () => {
+  const exactCaseScan = {
+    availability: "available",
+    discovered: 0,
+    scanned: 0,
+    omitted: 0,
+    invalid: 0,
+    complete: true,
+    truncated: false
+  };
+  const exactProfileScan = {
+    ...exactCaseScan,
+    visible: 0,
+    representedByCases: 0
+  };
+  assert.equal(emptyFleetPresentation({ caseScan: exactCaseScan, profileSetupScan: exactProfileScan }).title,
+    "No campaigns observed");
+  assert.equal(emptyFleetPresentation({
+    caseScan: { availability: "unavailable", complete: false, truncated: true },
+    profileSetupScan: exactProfileScan
+  }).title, "Campaign scan unavailable");
+  assert.equal(emptyFleetPresentation({
+    caseScan: { availability: "available", complete: false, truncated: true },
+    profileSetupScan: exactProfileScan
+  }).title, "Waiting for complete campaign scan");
 });

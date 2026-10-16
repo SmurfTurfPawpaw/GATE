@@ -7,6 +7,8 @@
 
 const RECORD_LIMIT = 100;
 const CASE_LIMIT = 64;
+const CASE_SCAN_LIMIT = 32;
+const PROFILE_SETUP_LIMIT = 32;
 const TOOL_RUNTIME_LIMIT = 256;
 const STRING_LIMIT = 160;
 const MAX_COUNT = Number.MAX_SAFE_INTEGER;
@@ -211,6 +213,27 @@ const CASE_PROCESS_BOUNDARIES = new Set(["shared-user"]);
 const CASE_NETWORK_BOUNDARIES = new Set(["adapter-dependent"]);
 const CASE_RUNTIME_HEALTH_STATUSES = new Set(["available", "unavailable"]);
 const CASE_RUNTIME_HEALTH_REASONS = new Set(["invalid-case", "runtime-observation-failed"]);
+const PROFILE_SETUP_STAGES = new Set(["questionnaire", "operator-review", "ready", "superseded"]);
+const PROFILE_SETUP_READINESS = new Set(["not-ready", "ready"]);
+const PROFILE_SETUP_NEXT_SECTIONS = new Set([
+  "identity-objectives",
+  "authority-sources",
+  "actions-techniques",
+  "limits-schedule",
+  "scope-assets",
+  "accounts-identities",
+  "architecture-data-flows",
+  "workflow-coverage",
+  "data-evidence",
+  "stops-escalation-cleanup",
+  "reporting-disclosure",
+  "ambiguities-attestation",
+  "conditional-modules"
+]);
+const PROFILE_SETUP_RECOMMENDATION_MODES = new Set(["policy", "proposal", "mixed"]);
+const PROFILE_SETUP_FRESHNESS = new Set(["fresh", "stale"]);
+const CASE_SCAN_AVAILABILITY = new Set(["available", "unavailable"]);
+const PROFILE_SETUP_SCAN_AVAILABILITY = new Set(["available", "unavailable"]);
 const ENGAGEMENT_SCAN_AVAILABILITY = new Set(["loaded", "not-loaded", "unavailable"]);
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/;
 const EVENT_KIND = /^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+$/;
@@ -599,7 +622,8 @@ function caseShape(input) {
       workflows: workflowsShape({}),
       engagementScan: engagementScanShape({}),
       offlineAnalysis: offlineAnalysisShape({}),
-      activity: []
+      activity: [],
+      learningCount: count(value.learningCount) ?? 0
     };
   }
   const binding = record(value.binding);
@@ -647,21 +671,158 @@ function caseShape(input) {
     workflows: workflowsShape(runtimeAvailable ? value.workflows : {}),
     engagementScan: engagementScanShape(runtimeAvailable ? value.engagementScan : {}),
     offlineAnalysis: offlineAnalysisShape(runtimeAvailable ? value.offlineAnalysis : {}),
-    activity: runtimeAvailable ? activity : []
+    activity: runtimeAvailable ? activity : [],
+    learningCount: count(value.learningCount) ?? 0
   };
 }
 
-function caseScanShape(input) {
+function caseScanShape(input, visibleCases) {
   const value = record(input);
+  const hasLegacyObservation = ["discovered", "scanned", "omitted", "invalid", "complete", "truncated"]
+    .some((field) => Object.hasOwn(value, field));
+  const availability = value.attempted === false
+    ? "unavailable"
+    : Object.hasOwn(value, "availability")
+      ? enumValue(value.availability, CASE_SCAN_AVAILABILITY, "unavailable")
+      : hasLegacyObservation || value.attempted === true ? "available" : "unavailable";
+  const unavailable = availability === "unavailable";
+  if (unavailable) {
+    return {
+      availability,
+      discovered: null,
+      scanned: null,
+      omitted: null,
+      invalid: null,
+      discoveredAtLeast: false,
+      omittedAtLeast: false,
+      complete: false,
+      truncated: true
+    };
+  }
+  const discovered = count(value.discovered);
+  const scanned = count(value.scanned);
+  const omitted = count(value.omitted);
+  const invalid = count(value.invalid);
+  const discoveredAtLeast = typeof value.discoveredAtLeast === "boolean" ? value.discoveredAtLeast : false;
+  const omittedAtLeast = typeof value.omittedAtLeast === "boolean" ? value.omittedAtLeast : false;
+  const countsConsistent = [discovered, scanned, omitted, invalid].every((item) => item !== null) &&
+    scanned <= CASE_SCAN_LIMIT && invalid <= scanned && visibleCases <= scanned &&
+    discovered === scanned + omitted;
+  const exactCoverage = countsConsistent && scanned === visibleCases && omitted === 0 && invalid === 0 &&
+    !discoveredAtLeast && !omittedAtLeast;
+  const contradictoryCompleteClaim = value.complete === true &&
+    (value.truncated !== false || !exactCoverage);
   return {
-    discovered: count(value.discovered),
-    scanned: count(value.scanned),
-    omitted: count(value.omitted),
-    invalid: count(value.invalid),
-    discoveredAtLeast: typeof value.discoveredAtLeast === "boolean" ? value.discoveredAtLeast : false,
-    omittedAtLeast: typeof value.omittedAtLeast === "boolean" ? value.omittedAtLeast : false,
-    complete: typeof value.complete === "boolean" ? value.complete : false,
-    truncated: typeof value.truncated === "boolean" ? value.truncated : true
+    availability,
+    discovered,
+    scanned,
+    omitted,
+    invalid,
+    discoveredAtLeast,
+    omittedAtLeast,
+    complete: value.complete === true && value.truncated === false && exactCoverage,
+    truncated: (typeof value.truncated === "boolean" ? value.truncated : true) || !countsConsistent ||
+      omitted > 0 || discoveredAtLeast || omittedAtLeast || contradictoryCompleteClaim
+  };
+}
+
+function profileSetupShape(input) {
+  const value = record(input);
+  const hasNextSection = Object.hasOwn(value, "nextSection");
+  const id = typeof value.id === "string" && PROGRAM_ID.test(value.id) ? value.id : null;
+  const stage = enumValue(value.stage, PROFILE_SETUP_STAGES, null);
+  const readiness = enumValue(value.readiness, PROFILE_SETUP_READINESS, null);
+  const progress = record(value.progress);
+  const answered = count(progress.answered);
+  const total = count(progress.total);
+  const blockerCount = count(value.blockerCount);
+  const nextSection = value.nextSection === null
+    ? null
+    : enumValue(value.nextSection, PROFILE_SETUP_NEXT_SECTIONS, null);
+  const recommendationMode = value.recommendationMode === null
+    ? null
+    : enumValue(value.recommendationMode, PROFILE_SETUP_RECOMMENDATION_MODES, null);
+  const updatedAt = timestamp(value.updatedAt);
+  const setupFreshness = enumValue(value.freshness, PROFILE_SETUP_FRESHNESS, null);
+  const boundedProgress = answered !== null && total !== null && answered <= total;
+  const completeProgress = boundedProgress && total > 0 && answered === total;
+  const pendingProgress = boundedProgress && answered < total;
+  // Superseded is terminal, so a legacy or abandoned 0/0 intake remains a
+  // truthful aggregate as long as it has no actionable next section.
+  const stateConsistent = stage === "questionnaire"
+    ? readiness === "not-ready" && pendingProgress && blockerCount > 0 && nextSection !== null
+    : stage === "operator-review"
+      ? readiness === "not-ready" && completeProgress && blockerCount > 0 && nextSection === null
+      : stage === "ready"
+        ? readiness === "ready" && completeProgress && blockerCount === 0 && nextSection === null
+        : stage === "superseded" && readiness === "not-ready" && boundedProgress && nextSection === null;
+  if (!id || value.displayName !== null || !stage || !readiness || answered === null || total === null || answered > total ||
+      blockerCount === null || !updatedAt || !setupFreshness || !hasNextSection || !stateConsistent ||
+      (value.nextSection !== null && nextSection === null) ||
+      (value.recommendationMode !== null && recommendationMode === null)) return null;
+  return {
+    id,
+    displayName: null,
+    stage,
+    readiness,
+    progress: { answered, total },
+    blockerCount,
+    nextSection,
+    recommendationMode,
+    updatedAt,
+    freshness: setupFreshness
+  };
+}
+
+function profileSetupScanShape(input, visibleSetups, visibleCases) {
+  const value = record(input);
+  const availability = enumValue(value.availability, PROFILE_SETUP_SCAN_AVAILABILITY, "unavailable");
+  const visible = count(visibleSetups) ?? 0;
+  if (availability === "unavailable") {
+    return {
+      availability,
+      discovered: null,
+      scanned: null,
+      omitted: null,
+      invalid: null,
+      visible,
+      representedByCases: null,
+      discoveredAtLeast: false,
+      omittedAtLeast: false,
+      complete: false,
+      truncated: true
+    };
+  }
+  const discovered = count(value.discovered);
+  const scanned = count(value.scanned);
+  const omitted = count(value.omitted);
+  const invalid = count(value.invalid);
+  const rawVisible = count(value.visible);
+  const representedByCases = count(value.representedByCases);
+  const discoveredAtLeast = typeof value.discoveredAtLeast === "boolean" ? value.discoveredAtLeast : false;
+  const omittedAtLeast = typeof value.omittedAtLeast === "boolean" ? value.omittedAtLeast : false;
+  const countersPresent = [discovered, scanned, omitted, invalid, rawVisible, representedByCases]
+    .every((item) => item !== null);
+  const countsConsistent = countersPresent && scanned <= PROFILE_SETUP_LIMIT && rawVisible === visible &&
+    representedByCases <= visibleCases && discovered === scanned + omitted &&
+    visible + representedByCases + invalid === scanned;
+  const exactCoverage = countsConsistent && omitted === 0 && invalid === 0 &&
+    !discoveredAtLeast && !omittedAtLeast;
+  const contradictoryCompleteClaim = value.complete === true &&
+    (value.truncated !== false || !exactCoverage);
+  return {
+    availability,
+    discovered,
+    scanned,
+    omitted,
+    invalid,
+    visible,
+    representedByCases,
+    discoveredAtLeast,
+    omittedAtLeast,
+    complete: value.complete === true && value.truncated === false && exactCoverage,
+    truncated: (typeof value.truncated === "boolean" ? value.truncated : true) ||
+      !countsConsistent || omitted > 0 || discoveredAtLeast || omittedAtLeast || contradictoryCompleteClaim
   };
 }
 
@@ -844,6 +1005,12 @@ export function sanitizeStatusPayload(input) {
     .slice(0, RECORD_LIMIT)
     .map(agentShape)
     .filter(Boolean);
+  const cases = Array.isArray(value.cases)
+    ? value.cases.slice(0, CASE_LIMIT).map(caseShape).filter(Boolean)
+    : [];
+  const profileSetups = Array.isArray(value.profileSetups)
+    ? value.profileSetups.slice(0, PROFILE_SETUP_LIMIT).map(profileSetupShape).filter(Boolean)
+    : [];
   const telemetry = record(value.telemetry);
   const telemetryState = enumValue(telemetry.freshness, FRESHNESS, "unknown");
 
@@ -853,10 +1020,10 @@ export function sanitizeStatusPayload(input) {
     state: status(firstDefined(value.state, value.status)),
     counts: safeCounts(value.counts),
     agents,
-    cases: Array.isArray(value.cases)
-      ? value.cases.slice(0, CASE_LIMIT).map(caseShape).filter(Boolean)
-      : [],
-    caseScan: caseScanShape(value.caseScan),
+    cases,
+    caseScan: caseScanShape(value.caseScan, cases.length),
+    profileSetups,
+    profileSetupScan: profileSetupScanShape(value.profileSetupScan, profileSetups.length, cases.length),
     engagementScan: engagementScanShape(value.engagementScan),
     execution: executionShape(value.execution),
     workflows: workflowsShape(value.workflows),

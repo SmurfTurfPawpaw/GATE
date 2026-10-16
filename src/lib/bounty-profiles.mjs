@@ -25,8 +25,12 @@ import {
   assertValidProgramProfile,
   loadProgramProfileQuestionnaire,
   normalizeProgramProfile,
+  programProfileQuestionAnswerIsComplete,
+  programProfileRecommendationRequiresObservedSource,
+  programProfileQuestionnaireBinding,
   validateProgramProfile,
-  validateProgramProfileAnswers
+  validateProgramProfileAnswers,
+  validateProgramProfileRecommendations
 } from "./program-profile-contract.mjs";
 
 const PROFILE_ID = /^[a-z][a-z0-9-]{1,62}$/u;
@@ -41,9 +45,13 @@ const LOCK_PENDING_FILE = ".profile.lock.pending";
 const LOCK_SERIALIZATION_FILE = ".profile.lock.serialization";
 const MAX_PROFILE_BYTES = 2 * 1024 * 1024;
 const MAX_ANSWERS_BYTES = 2 * 1024 * 1024;
+const MAX_RECOMMENDATIONS_BYTES = 2 * 1024 * 1024;
 const MAX_PROVIDER_BYTES = 1024 * 1024;
 const MAX_STATE_BINDING_BYTES = 16 * 1024;
 const MAX_TRANSACTION_INTENT_BYTES = 32 * 1024;
+const FRESH_AUTHORITY_CONFIRMATION = Symbol("fresh-authority-confirmation");
+const MAX_PROFILE_SETUP_SCAN = 32;
+const MAX_PROFILE_SETUP_DISCOVERY = 1024;
 const PROFILE_SCHEMA_REF = "https://gate.local/schemas/bug-bounty-program-profile.schema.json";
 const COMPILATION_CONTRACT_VERSION = "gate.dev/program-profile-compilation/v3";
 const PROVIDER_TEMPLATE_ID = "replace-provider";
@@ -581,6 +589,161 @@ function questionMap(options = {}) {
   return new Map(questionnaireRecords(options).questions.map((item) => [item.id, item]));
 }
 
+function recommendationSourceRefs(value, found = new Set()) {
+  if (Array.isArray(value)) {
+    for (const item of value) recommendationSourceRefs(item, found);
+    return found;
+  }
+  if (!value || typeof value !== "object") return found;
+  for (const [key, child] of Object.entries(value)) {
+    if (key === "sourceRefs" && Array.isArray(child)) {
+      for (const sourceRef of child) if (typeof sourceRef === "string") found.add(sourceRef);
+    } else {
+      recommendationSourceRefs(child, found);
+    }
+  }
+  return found;
+}
+
+function availableRecommendationSources(profile) {
+  return new Map((profile?.sources || []).filter((source) => source?.id).map((source) => [source.id, source]));
+}
+
+function recommendationDisplaySummary(question, summary) {
+  return question.sensitive
+    ? "A private local recommendation is available; its value remains hidden."
+    : String(summary || "A supported recommendation is available.");
+}
+
+/**
+ * Resolve one recommendation without mutating profile state. The exact value
+ * is returned only for trusted local callers; terminal and browser surfaces
+ * must render `summary`, never serialize this result wholesale.
+ */
+export function programProfileRecommendation(questionId, options = {}) {
+  const question = (options.questions || PROGRAM_PROFILE_QUESTIONS).find((item) => item.id === questionId);
+  if (!question) return { available: false, questionId, reason: "unknown-question" };
+  const policy = question.recommendationPolicy;
+  if (policy.class === "manual-only") {
+    return {
+      available: false,
+      questionId,
+      reason: "manual-only",
+      summary: "Direct local operator review is required; GATE will not recommend this answer."
+    };
+  }
+
+  const supplied = policy.class === "evidence-proposal"
+    ? options.recommendations?.proposals?.[questionId]
+    : undefined;
+  if (supplied) {
+    if (!new Set(["source-derived", "local-derived"]).has(supplied.provenance) ||
+        !new Set(["observed", "inferred", "unverified"]).has(supplied.basis?.claimState) ||
+        !Array.isArray(supplied.basis?.sourceRefs) ||
+        (supplied.provenance === "source-derived" && supplied.basis.sourceRefs.length === 0)) {
+      return {
+        available: false,
+        questionId,
+        reason: "proposal-invalid",
+        summary: "The private proposal is not a valid provenance-bound recommendation."
+      };
+    }
+    if (supplied.basis?.claimState === "unverified") {
+      return {
+        available: false,
+        questionId,
+        reason: "proposal-unverified",
+        summary: "The private proposal remains unresolved because its basis is unverified."
+      };
+    }
+    const observedSourceRequired = programProfileRecommendationRequiresObservedSource(question);
+    if (observedSourceRequired &&
+        (supplied.provenance !== "source-derived" || supplied.basis?.claimState !== "observed" ||
+          !supplied.basis?.sourceRefs?.length)) {
+      return {
+        available: false,
+        questionId,
+        reason: "observed-source-required",
+        summary: "This question requires an observed, source-derived proposal with cited current sources."
+      };
+    }
+    // Evidence eligibility is bound to the profile revision supplied to the
+    // recommendation operation. Earlier proposals in the same bulk update may
+    // change applicability, but they cannot bootstrap sources for later
+    // proposals in that update.
+    const availableSources = availableRecommendationSources(options.sourceProfile || options.profile);
+    const requiredSources = new Set([
+      ...(supplied.basis?.sourceRefs || []),
+      ...recommendationSourceRefs(supplied.value),
+      ...(String(question.path || "").endsWith(".sourceRefs") && Array.isArray(supplied.value)
+        ? supplied.value.filter((sourceRef) => typeof sourceRef === "string")
+        : [])
+    ]);
+    if ([...requiredSources].some((sourceRef) => !availableSources.has(sourceRef))) {
+      return {
+        available: false,
+        questionId,
+        reason: "source-missing",
+        summary: "The private proposal remains unresolved because a referenced source is absent."
+      };
+    }
+    if (observedSourceRequired && [...requiredSources].some((sourceRef) =>
+      availableSources.get(sourceRef)?.claimState !== "observed"
+    )) {
+      return {
+        available: false,
+        questionId,
+        reason: "source-not-observed",
+        summary: "The private proposal remains unresolved because a cited source is not observed."
+      };
+    }
+    const decisionTime = Date.parse(options.now || new Date().toISOString());
+    if (observedSourceRequired && [...requiredSources].some((sourceRef) => {
+      const source = availableSources.get(sourceRef);
+      const observedAt = Date.parse(source?.observedAt);
+      return !Number.isFinite(observedAt) || observedAt > decisionTime ||
+        (CONTENT_BOUND_SOURCE_TYPES.has(source?.type) && !/^[a-f0-9]{64}$/u.test(source?.contentSha256 || ""));
+    })) {
+      return {
+        available: false,
+        questionId,
+        reason: "source-not-current",
+        summary: "The private proposal remains unresolved because a cited observed source is not current and content-bound."
+      };
+    }
+    return {
+      available: true,
+      questionId,
+      value: structuredClone(supplied.value),
+      provenance: supplied.provenance,
+      summary: recommendationDisplaySummary(question, supplied.basis.summary),
+      basis: {
+        claimState: supplied.basis.claimState,
+        sourceCount: supplied.basis.sourceRefs.length
+      }
+    };
+  }
+
+  if (policy.class === "operator-preference") {
+    return {
+      available: true,
+      questionId,
+      value: structuredClone(policy.value),
+      provenance: "operator-preference",
+      summary: recommendationDisplaySummary(question, policy.summary),
+      basis: { policy: policy.basis }
+    };
+  }
+  return {
+    available: false,
+    questionId,
+    reason: "proposal-required",
+    summary: programProfileRecommendationRequiresObservedSource(question)
+      ? "An observed source-derived proposal with cited current sources is required."
+      : "A validated source-derived or local-derived proposal is required."
+  };
+}
+
 function attestationQuestionIds(options = {}) {
   return questionnaireRecords(options).questions
     .filter((item) => String(item.path || "").startsWith("attestation."))
@@ -588,7 +751,7 @@ function attestationQuestionIds(options = {}) {
 }
 
 function substantiveProfileSha256(profile) {
-  const value = structuredClone(profile);
+  const value = normalizeProgramProfile(structuredClone(profile));
   value.metadata = {
     id: value.metadata?.id,
     title: value.metadata?.title,
@@ -637,6 +800,49 @@ function attestationClaims(attestation) {
   const claims = structuredClone(attestation || {});
   delete claims.attestedRevision;
   return claims;
+}
+
+function authorityReviewBasis(profile) {
+  const normalized = normalizeProgramProfile(structuredClone(profile || {}));
+  const authorization = normalized.authorization || {};
+  const contacts = [...(authorization.contacts || [])].sort((left, right) =>
+    canonicalText(left).localeCompare(canonicalText(right))
+  );
+  return {
+    sources: structuredClone(normalized.sources || []),
+    authorization: {
+      basis: authorization.basis,
+      programUrl: authorization.programUrl,
+      safeHarbor: structuredClone(authorization.safeHarbor),
+      validFrom: authorization.validFrom,
+      validUntil: authorization.validUntil,
+      lastVerifiedAt: authorization.lastVerifiedAt,
+      sourceRefs: structuredClone(authorization.sourceRefs || []),
+      contacts: structuredClone(contacts)
+    }
+  };
+}
+
+function inputExplicitlyConfirmsAuthority(value, overlay, suppliedEnvelope) {
+  const supplied = suppliedEnvelope
+    ? Object.hasOwn(suppliedEnvelope.answers || {}, "authority-operator-confirmed")
+    : pathPresent(overlay, "authorization.operatorConfirmed");
+  return supplied && value.authorization?.operatorConfirmed === true;
+}
+
+function invalidateChangedAuthorityConfirmation(current, value, overlay, suppliedEnvelope, answerEnvelope, options = {}) {
+  const explicitTrue = inputExplicitlyConfirmsAuthority(value, overlay, suppliedEnvelope);
+  const freshConfirmation = options[FRESH_AUTHORITY_CONFIRMATION] === true;
+  if (freshConfirmation && !explicitTrue) {
+    throw new Error("fresh authority confirmation requires an explicit true authority-operator-confirmed answer");
+  }
+  const changed = canonicalSha256(authorityReviewBasis(current)) !== canonicalSha256(authorityReviewBasis(value));
+  const establishesConfirmation = current.authorization?.operatorConfirmed !== true &&
+    value.authorization?.operatorConfirmed === true;
+  if (freshConfirmation && explicitTrue) return;
+  if (!changed && !establishesConfirmation) return;
+  value.authorization.operatorConfirmed = false;
+  delete answerEnvelope.answers["authority-operator-confirmed"];
 }
 
 function suppliedAttestationIsFresh(value, overlay, suppliedEnvelope, currentProfile, options = {}) {
@@ -815,7 +1021,13 @@ function assertAnswerMutationBase(stored, envelope, options = {}) {
 function normalizeProfileProgress(profile, envelope, options = {}) {
   const normalized = structuredClone(profile);
   const { questionnaire, questions } = questionnaireRecords(options);
-  const answered = new Set(Object.keys(envelope?.answers || {}));
+  const questionsById = new Map(questions.map((question) => [question.id, question]));
+  const answered = new Set(Object.entries(envelope?.answers || {})
+    .filter(([id, answer]) => {
+      const question = questionsById.get(id);
+      return question && programProfileQuestionAnswerIsComplete(question, answer);
+    })
+    .map(([id]) => id));
   if (answered.has("identity-program-name") && typeof normalized.identity?.programName === "string") {
     normalized.metadata.title = normalized.identity.programName;
   }
@@ -1459,6 +1671,264 @@ export function loadProgramProfileAnswers(file, options = {}) {
   return value;
 }
 
+export function loadProgramProfileRecommendations(file, options = {}) {
+  const paths = bountyPaths(options);
+  const value = readExternalJson(file, MAX_RECOMMENDATIONS_BYTES, "program profile recommendations source");
+  const validation = validateProgramProfileRecommendations(value, { paths });
+  if (!validation.ok) {
+    throw new Error(`program profile recommendations validation failed: ${validation.errors.join("; ")}`);
+  }
+  const secretErrors = inspectSecretReferences(value);
+  if (secretErrors.length) {
+    throw new Error(`program profile recommendations rejected: ${secretErrors.join("; ")}`);
+  }
+  return value;
+}
+
+function recommendationMutationBase(profile, recommendations, options = {}) {
+  const currentSha256 = canonicalSha256(profile);
+  if (options.expectedRevision !== undefined && options.expectedRevision !== profile.metadata.revision) {
+    throw new Error(
+      `program profile revision changed: expected ${options.expectedRevision}, observed ${profile.metadata.revision}`
+    );
+  }
+  if (options.expectedProfileSha256 !== undefined && options.expectedProfileSha256 !== currentSha256) {
+    throw new Error(
+      `program profile digest changed: expected ${options.expectedProfileSha256}, observed ${currentSha256}`
+    );
+  }
+  if (!recommendations) return currentSha256;
+  if (recommendations.metadata.programId !== profile.metadata.id) {
+    throw new Error("program profile recommendations do not match the requested program id");
+  }
+  const unbound = recommendations.metadata.baseRevision === null &&
+    recommendations.metadata.baseProfileSha256 === null;
+  if (unbound) {
+    throw new Error("program profile recommendations are not bound to the current base profile");
+  }
+  if (recommendations.metadata.baseRevision !== profile.metadata.revision) {
+    throw new Error(
+      `program profile recommendation revision changed: expected ${recommendations.metadata.baseRevision}, ` +
+      `observed ${profile.metadata.revision}`
+    );
+  }
+  if (recommendations.metadata.baseProfileSha256 !== currentSha256) {
+    throw new Error("program profile recommendation digest does not match the current profile");
+  }
+  return currentSha256;
+}
+
+function recommendationMode(selected, recommendations) {
+  const provenances = new Set(selected.map((item) => item.provenance));
+  if (provenances.has("operator-preference") && provenances.size > 1) return "mixed";
+  if (provenances.has("operator-preference")) return "policy";
+  if (provenances.size > 0 || recommendations) return "proposal";
+  return "policy";
+}
+
+function assertRecommendationEnvelope(recommendations, paths) {
+  if (!recommendations) return;
+  const validation = validateProgramProfileRecommendations(recommendations, { paths });
+  if (!validation.ok) {
+    throw new Error(`program profile recommendations validation failed: ${validation.errors.join("; ")}`);
+  }
+  const secretErrors = inspectSecretReferences(recommendations);
+  if (secretErrors.length) {
+    throw new Error(`program profile recommendations rejected: ${secretErrors.join("; ")}`);
+  }
+}
+
+function selectProgramProfileRecommendations(profile, currentAnswers, recommendations, options = {}) {
+  const workingProfile = structuredClone(profile);
+  const selected = [];
+  let skippedExplicitCount = 0;
+  let skippedNotApplicableCount = 0;
+  let unavailableCount = 0;
+  let manualOnlyCount = 0;
+
+  for (const question of PROGRAM_PROFILE_QUESTIONS) {
+    if (Object.hasOwn(currentAnswers.answers, question.id)) {
+      skippedExplicitCount += 1;
+      continue;
+    }
+    if (!conditionMatches(question.condition, workingProfile)) {
+      skippedNotApplicableCount += 1;
+      continue;
+    }
+    const resolved = programProfileRecommendation(question.id, {
+      profile: workingProfile,
+      sourceProfile: profile,
+      recommendations,
+      now: options.now
+    });
+    if (!resolved.available) {
+      if (resolved.reason === "manual-only") manualOnlyCount += 1;
+      else unavailableCount += 1;
+      continue;
+    }
+    if (!programProfileQuestionAnswerIsComplete(question, resolved.value)) {
+      unavailableCount += 1;
+      continue;
+    }
+    selected.push({
+      questionId: question.id,
+      provenance: resolved.provenance,
+      value: structuredClone(resolved.value)
+    });
+    setAtPath(workingProfile, question.path, resolved.value);
+  }
+
+  return {
+    selected,
+    mode: recommendationMode(selected, recommendations),
+    skippedExplicitCount,
+    skippedNotApplicableCount,
+    unavailableCount,
+    manualOnlyCount
+  };
+}
+
+function emptyProgramProfileAnswers(id, at) {
+  return {
+    $schema: "https://gate.local/schemas/bug-bounty-program-profile-answers.schema.json",
+    apiVersion: "gate.dev/program-profile-answers/v2",
+    kind: "BugBountyProgramProfileAnswers",
+    metadata: {
+      programId: id,
+      title: id,
+      updatedAt: at,
+      baseRevision: null,
+      baseProfileSha256: null
+    },
+    answers: {}
+  };
+}
+
+export function createProgramProfileWithRecommendations(id, recommendations = null, options = {}) {
+  const cleanId = cleanProfileId(id);
+  const paths = bountyPaths(options);
+  assertRecommendationEnvelope(recommendations, paths);
+  if (recommendations) {
+    if (recommendations.metadata.programId !== cleanId) {
+      throw new Error("program profile recommendations do not match the requested program id");
+    }
+    if (recommendations.metadata.baseRevision !== null || recommendations.metadata.baseProfileSha256 !== null) {
+      throw new Error("program profile create requires unbound recommendations with null base fields");
+    }
+  }
+  const at = options.now || new Date().toISOString();
+  const answers = emptyProgramProfileAnswers(cleanId, at);
+  const profile = initialProfile(cleanId, { now: at });
+  const selection = selectProgramProfileRecommendations(profile, answers, recommendations, { now: at });
+  for (const item of selection.selected) answers.answers[item.questionId] = item.value;
+  const result = createProgramProfile(cleanId, answers, { paths, now: at });
+  return {
+    ...result,
+    updated: selection.selected.length > 0,
+    recommendationMode: selection.mode,
+    appliedCount: selection.selected.length,
+    appliedQuestionIds: selection.selected.map((item) => item.questionId),
+    skippedExplicitCount: selection.skippedExplicitCount,
+    skippedNotApplicableCount: selection.skippedNotApplicableCount,
+    unavailableCount: selection.unavailableCount,
+    manualOnlyCount: selection.manualOnlyCount
+  };
+}
+
+export function applyProgramProfileRecommendations(id, recommendations = null, options = {}) {
+  const cleanId = cleanProfileId(id);
+  const paths = bountyPaths(options);
+  assertRecommendationEnvelope(recommendations, paths);
+
+  const resumed = resumeProgramProfile(cleanId, { paths });
+  const profile = resumed.profile;
+  const currentAnswers = resumed.answers;
+  const currentProfileSha256 = recommendationMutationBase(profile, recommendations, options);
+  const selection = selectProgramProfileRecommendations(profile, currentAnswers, recommendations, { now: options.now });
+  const { selected } = selection;
+  const mode = selection.mode;
+  if (selected.length === 0) {
+    return {
+      updated: false,
+      id: cleanId,
+      revision: profile.metadata.revision,
+      profileSha256: currentProfileSha256,
+      recommendationMode: mode,
+      appliedCount: 0,
+      appliedQuestionIds: [],
+      skippedExplicitCount: selection.skippedExplicitCount,
+      skippedNotApplicableCount: selection.skippedNotApplicableCount,
+      unavailableCount: selection.unavailableCount,
+      manualOnlyCount: selection.manualOnlyCount
+    };
+  }
+
+  const nextAnswers = structuredClone(currentAnswers);
+  nextAnswers.metadata.updatedAt = options.now || new Date().toISOString();
+  for (const item of selected) nextAnswers.answers[item.questionId] = item.value;
+  const result = applyProgramProfileAnswers(cleanId, nextAnswers, { paths, now: nextAnswers.metadata.updatedAt });
+  return {
+    ...result,
+    recommendationMode: mode,
+    appliedCount: selected.length,
+    appliedQuestionIds: selected.map((item) => item.questionId),
+    skippedExplicitCount: selection.skippedExplicitCount,
+    skippedNotApplicableCount: selection.skippedNotApplicableCount,
+    unavailableCount: selection.unavailableCount,
+    manualOnlyCount: selection.manualOnlyCount
+  };
+}
+
+export function applyProgramProfileRecommendation(id, questionId, recommendations = null, options = {}) {
+  const cleanId = cleanProfileId(id);
+  const paths = bountyPaths(options);
+  assertRecommendationEnvelope(recommendations, paths);
+  const question = questionMap({ paths }).get(questionId);
+  if (!question) throw new Error(`unknown program profile question: ${String(questionId)}`);
+
+  const resumed = resumeProgramProfile(cleanId, { paths });
+  const profile = resumed.profile;
+  const currentAnswers = resumed.answers;
+  const currentProfileSha256 = recommendationMutationBase(profile, recommendations, options);
+  if (Object.hasOwn(currentAnswers.answers || {}, questionId)) {
+    return {
+      updated: false,
+      id: cleanId,
+      revision: profile.metadata.revision,
+      profileSha256: currentProfileSha256,
+      questionId,
+      reason: "explicit-answer"
+    };
+  }
+  if (!conditionMatches(question.condition, profile)) {
+    throw new Error(`program profile recommendation is not applicable: ${questionId}`);
+  }
+  const at = options.now || new Date().toISOString();
+  const resolved = programProfileRecommendation(questionId, {
+    profile,
+    sourceProfile: profile,
+    recommendations,
+    now: at
+  });
+  if (!resolved.available || !programProfileQuestionAnswerIsComplete(question, resolved.value)) {
+    throw new Error(
+      `program profile recommendation is unavailable for ${questionId}: ` +
+      `${resolved.summary || resolved.reason || "unsupported recommendation"}`
+    );
+  }
+
+  const nextAnswers = structuredClone(currentAnswers);
+  nextAnswers.metadata.updatedAt = at;
+  nextAnswers.answers[questionId] = structuredClone(resolved.value);
+  const result = applyProgramProfileAnswers(cleanId, nextAnswers, { paths, now: at });
+  return {
+    ...result,
+    questionId,
+    recommendationMode: resolved.provenance === "operator-preference" ? "policy" : "proposal",
+    provenance: resolved.provenance
+  };
+}
+
 export function createProgramProfile(id, answers = {}, options = {}) {
   const cleanId = cleanProfileId(id);
   const paths = bountyPaths(options);
@@ -1484,6 +1954,13 @@ export function createProgramProfile(id, answers = {}, options = {}) {
     updatedAt: at
   };
   let answerEnvelope = mergedAnswerEnvelope(cleanId, value, overlay, envelope, null, { paths, now: at });
+  const explicitAuthorityConfirmation = inputExplicitlyConfirmsAuthority(value, overlay, envelope);
+  if (explicitAuthorityConfirmation && options[FRESH_AUTHORITY_CONFIRMATION] !== true) {
+    value.authorization.operatorConfirmed = false;
+    delete answerEnvelope.answers["authority-operator-confirmed"];
+    clearAttestation(value);
+    clearAttestationAnswers(answerEnvelope, { paths });
+  }
   value.attestation.attestedRevision = suppliedAttestationIsFresh(value, overlay, envelope, null, { paths })
     ? value.metadata.revision
     : null;
@@ -1530,6 +2007,7 @@ export function applyProgramProfileAnswers(id, answers, options = {}) {
       updatedAt: at
     };
     let answerEnvelope = mergedAnswerEnvelope(cleanId, value, overlay, envelope, existingEnvelope, { paths, now: at });
+    invalidateChangedAuthorityConfirmation(current, value, overlay, envelope, answerEnvelope, options);
     const substantiveChange = substantiveProfileSha256(current) !== substantiveProfileSha256(value) ||
       substantiveAnswersSha256(existingEnvelope, { paths }) !== substantiveAnswersSha256(answerEnvelope, { paths });
     const attestationChanged = canonicalSha256(attestationClaims(current.attestation)) !==
@@ -1554,6 +2032,85 @@ export function applyProgramProfileAnswers(id, answers, options = {}) {
     const verification = verifyProfileValue(value, cleanId, { paths, now: at });
     return {
       updated: true,
+      ...profileSummary(value, verification),
+      profileBytes: state.profile.bytes,
+      answersSha256: state.answers.sha256
+    };
+  });
+}
+
+export function applyProgramProfileAuthorityConfirmation(id, answers, options = {}) {
+  return applyProgramProfileAnswers(id, answers, {
+    ...options,
+    [FRESH_AUTHORITY_CONFIRMATION]: true
+  });
+}
+
+export function clearProgramProfileAnswer(id, questionId, options = {}) {
+  const cleanId = cleanProfileId(id);
+  const paths = bountyPaths(options);
+  const question = questionMap({ paths }).get(questionId);
+  if (!question) throw new Error(`unknown program profile question: ${String(questionId)}`);
+  ensureProfileDirectory(paths, cleanId, { create: false });
+  return withProfileLock(paths, cleanId, () => {
+    const stored = loadStoredProfileState(paths, cleanId);
+    assertAnswerMutationBase(stored, null, options);
+    const current = stored.profile;
+    const existingEnvelope = stored.answers;
+    if (!Object.hasOwn(existingEnvelope.answers || {}, questionId)) {
+      return {
+        updated: false,
+        cleared: false,
+        questionId,
+        ...profileSummary(current, verifyProfileValue(current, cleanId, { paths, now: options.now }))
+      };
+    }
+
+    const at = options.now || new Date().toISOString();
+    let answerEnvelope = structuredClone(existingEnvelope);
+    answerEnvelope.metadata.updatedAt = at;
+    delete answerEnvelope.answers[questionId];
+    const remainingOverlay = overlayFromAnswerEnvelope(answerEnvelope, { paths });
+    let value = deepMerge(initialProfile(cleanId, {
+      now: current.metadata.createdAt,
+      owner: current.metadata.owner
+    }), remainingOverlay);
+    value.$schema = PROFILE_SCHEMA_REF;
+    value.apiVersion = "gate.dev/program-profile/v1";
+    value.kind = "BugBountyProgramProfile";
+    value.metadata = {
+      ...value.metadata,
+      id: cleanId,
+      owner: current.metadata.owner,
+      status: current.metadata.status === "superseded" ? "superseded" : "draft",
+      revision: current.metadata.revision + 1,
+      createdAt: current.metadata.createdAt,
+      updatedAt: at
+    };
+
+    invalidateChangedAuthorityConfirmation(current, value, {}, null, answerEnvelope);
+    const substantiveChange = substantiveProfileSha256(current) !== substantiveProfileSha256(value) ||
+      substantiveAnswersSha256(existingEnvelope, { paths }) !== substantiveAnswersSha256(answerEnvelope, { paths });
+    if (substantiveChange) {
+      clearAttestation(value);
+      clearAttestationAnswers(answerEnvelope, { paths });
+    } else {
+      value.attestation.attestedRevision = null;
+    }
+    value = normalizeProfileProgress(value, answerEnvelope, { paths, now: at });
+    assertValidProgramProfile(value, { paths });
+    assertProfileSafe(value);
+    answerEnvelope = bindAnswerEnvelope(answerEnvelope, value);
+    const answerValidation = validateProgramProfileAnswers(answerEnvelope, { paths });
+    if (!answerValidation.ok) {
+      throw new Error(`program profile answers validation failed: ${answerValidation.errors.join("; ")}`);
+    }
+    const state = writeProfileState(paths, cleanId, value, answerEnvelope);
+    const verification = verifyProfileValue(value, cleanId, { paths, now: at });
+    return {
+      updated: true,
+      cleared: true,
+      questionId,
       ...profileSummary(value, verification),
       profileBytes: state.profile.bytes,
       answersSha256: state.answers.sha256
@@ -1651,6 +2208,274 @@ function listProfileDirectories(paths) {
     }
   }
   return entries.sort((left, right) => String(left.id || left.entry).localeCompare(String(right.id || right.entry)));
+}
+
+function programSetupPathsOverlap(left, right) {
+  return isContained(left, right) || isContained(right, left);
+}
+
+function programSetupProspectiveRealPath(candidate) {
+  let current = path.resolve(candidate);
+  const missing = [];
+  while (true) {
+    try {
+      const real = fs.realpathSync.native ? fs.realpathSync.native(current) : fs.realpathSync(current);
+      return path.resolve(real, ...missing.reverse());
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      const parent = path.dirname(current);
+      if (parent === current) throw error;
+      missing.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+function assertProgramSetupUnscopedRoot(home, canonicalHome) {
+  const visited = new Set();
+  for (const candidate of [home, canonicalHome]) {
+    let current = path.resolve(candidate);
+    while (!visited.has(current)) {
+      visited.add(current);
+      try {
+        fs.lstatSync(path.join(current, ".case-binding.json"));
+        throw new Error("program profile setup root must not be a case state root or its descendant");
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+      const parent = path.dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+  }
+}
+
+function ensureProgramProfileSetupRoot(options = {}) {
+  const supplied = bountyPaths(options);
+  if (supplied.caseId !== null && supplied.caseId !== undefined) {
+    throw new Error("program profile setup scan requires the shared runtime root");
+  }
+  const expected = runtimePaths({ home: supplied.home, repo: supplied.repo, env: options.env });
+  const home = path.resolve(expected.home);
+  const repo = path.resolve(expected.repo);
+  const programs = path.resolve(expected.programs);
+  if (path.resolve(supplied.programs) !== programs || path.resolve(supplied.stateHome || supplied.home) !== home) {
+    throw new Error("program profile setup paths do not match the shared runtime root");
+  }
+  if (home === path.parse(home).root) throw new Error("GATE_HOME cannot be a filesystem root");
+  if (programSetupPathsOverlap(home, repo)) throw new Error("GATE_HOME and the GATE repository must not overlap");
+  const canonicalHome = programSetupProspectiveRealPath(home);
+  const canonicalRepo = programSetupProspectiveRealPath(repo);
+  if (programSetupPathsOverlap(canonicalHome, canonicalRepo)) {
+    throw new Error("GATE_HOME and the GATE repository must not overlap after resolving parent links");
+  }
+  assertProgramSetupUnscopedRoot(home, canonicalHome);
+  fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+  securePrivateDirectory(home, { create: false, label: "GATE_HOME" });
+  securePrivateDirectory(programs, { label: "private program profile root" });
+  const canonicalPrograms = programSetupProspectiveRealPath(programs);
+  if (canonicalPrograms === canonicalHome || !isContained(canonicalHome, canonicalPrograms)) {
+    throw new Error("program profile storage must remain below GATE_HOME after resolving parent links");
+  }
+  return { ...expected, programs };
+}
+
+function boundedProgramSetupEntries(directory, maximum, label) {
+  const entries = [];
+  const handle = fs.opendirSync(directory);
+  try {
+    while (entries.length <= maximum) {
+      const entry = handle.readSync();
+      if (!entry) break;
+      entries.push(entry.name);
+    }
+  } finally {
+    handle.closeSync();
+  }
+  if (entries.length > maximum) throw new Error(`${label} exceeds its ${maximum}-entry bound`);
+  return entries;
+}
+
+function auditProgramProfileSetupEntries(paths, id) {
+  const directory = profileDirectory(paths, id);
+  securePrivateDirectory(directory, { create: false, label: `private program profile ${id}` });
+  const allowed = new Set([
+    PROFILE_FILE,
+    ANSWERS_FILE,
+    STATE_BINDING_FILE,
+    COMPILED_DIRECTORY,
+    TRANSACTIONS_DIRECTORY,
+    LOCK_FILE,
+    LOCK_SERIALIZATION_FILE
+  ]);
+  const entries = boundedProgramSetupEntries(directory, allowed.size, `program profile ${id}`);
+  for (const entry of entries) {
+    if (!allowed.has(entry)) throw new Error(`program profile contains an unexpected entry: ${entry}`);
+    const file = path.join(directory, entry);
+    if ([COMPILED_DIRECTORY, TRANSACTIONS_DIRECTORY].includes(entry)) {
+      securePrivateDirectory(file, { create: false, label: `private program profile directory ${entry} for ${id}` });
+    } else {
+      securePrivateFile(file, { allowMissing: false, label: `private program profile entry ${entry}` });
+    }
+  }
+  if (entries.includes(TRANSACTIONS_DIRECTORY) &&
+      boundedProgramSetupEntries(transactionsRoot(paths, id), 0, `program profile transaction root ${id}`).length) {
+    throw new Error(`program profile ${id} has an interrupted state transaction requiring locked recovery`);
+  }
+}
+
+function loadProgramProfileSetupState(paths, id) {
+  auditProgramProfileSetupEntries(paths, id);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const before = readStateBindingRecord(paths, id);
+    const profileBytes = readPrivateFileBounded(
+      profileFile(paths, id),
+      MAX_PROFILE_BYTES,
+      null,
+      { label: `program profile ${id}` }
+    );
+    const answerBytes = readPrivateFileBounded(
+      answersFile(paths, id),
+      MAX_ANSWERS_BYTES,
+      null,
+      { label: `program profile answers ${id}` }
+    );
+    const after = readStateBindingRecord(paths, id);
+    if (!before.bytes.equals(after.bytes)) {
+      if (attempt === 0) continue;
+      throw new Error(`program profile ${id} changed while its bound state was read`);
+    }
+    const binding = before.binding;
+    if (sha256Bytes(profileBytes) !== binding.profileSha256 || sha256Bytes(answerBytes) !== binding.answersSha256) {
+      throw new Error(`program profile ${id} profile/answers state binding does not match`);
+    }
+    let profile;
+    let answers;
+    try {
+      profile = JSON.parse(profileBytes.toString("utf8"));
+      answers = JSON.parse(answerBytes.toString("utf8"));
+    } catch (error) {
+      throw new Error(`program profile ${id} bound state is not valid JSON`, { cause: error });
+    }
+    if (profile.metadata?.revision !== binding.revision || profile.metadata?.id !== id ||
+        answers.metadata?.programId !== id) {
+      throw new Error(`program profile ${id} bound state identity does not match`);
+    }
+    const profileValidation = validateProgramProfile(profile, { paths });
+    if (!profileValidation.ok) {
+      throw new Error(`program profile validation failed: ${profileValidation.errors.join("; ")}`);
+    }
+    const answerValidation = validateProgramProfileAnswers(answers, { paths });
+    if (!answerValidation.ok) {
+      throw new Error(`program profile answers validation failed: ${answerValidation.errors.join("; ")}`);
+    }
+    return { binding, profile, answers };
+  }
+  throw new Error(`program profile ${id} changed while its bound state was read`);
+}
+
+function scanProgramProfileSetupNames(paths) {
+  const names = [];
+  const directory = fs.opendirSync(paths.programs);
+  try {
+    while (names.length <= MAX_PROFILE_SETUP_DISCOVERY) {
+      const entry = directory.readSync();
+      if (!entry) break;
+      names.push(entry.name);
+    }
+  } finally {
+    directory.closeSync();
+  }
+  const discoveryTruncated = names.length > MAX_PROFILE_SETUP_DISCOVERY;
+  const discoveredNames = names.slice(0, MAX_PROFILE_SETUP_DISCOVERY).sort();
+  const selected = discoveredNames.slice(0, MAX_PROFILE_SETUP_SCAN);
+  const discovered = discoveryTruncated ? MAX_PROFILE_SETUP_DISCOVERY + 1 : discoveredNames.length;
+  const omitted = Math.max(0, discovered - selected.length);
+  return {
+    names: selected,
+    scan: {
+      limit: MAX_PROFILE_SETUP_SCAN,
+      discoveryLimit: MAX_PROFILE_SETUP_DISCOVERY,
+      discovered,
+      scanned: selected.length,
+      omitted,
+      discoveredAtLeast: discoveryTruncated,
+      omittedAtLeast: discoveryTruncated,
+      complete: !discoveryTruncated && omitted === 0,
+      truncated: discoveryTruncated || omitted > 0,
+      invalid: 0
+    }
+  };
+}
+
+function programProfileSetupProgress(profile, envelope, options = {}) {
+  const applicableModules = new Set(profile.questionnaire?.applicableModules || []);
+  const applicable = questionnaireRecords(options).questions.filter((question) =>
+    (!question.moduleId || applicableModules.has(question.moduleId)) && conditionMatches(question.condition, profile)
+  );
+  const answers = envelope?.answers || {};
+  const answered = applicable.reduce(
+    (total, question) => total + (Object.hasOwn(answers, question.id) && programProfileQuestionAnswerIsComplete(question, answers[question.id]) ? 1 : 0),
+    0
+  );
+  const next = applicable.find((question) => !Object.hasOwn(answers, question.id) || !programProfileQuestionAnswerIsComplete(question, answers[question.id]));
+  return {
+    answered,
+    total: applicable.length,
+    nextSection: next?.sectionId || (next?.moduleId ? "conditional-modules" : null)
+  };
+}
+
+function programProfileSetupStage(profile, verification, progress) {
+  if (profile.metadata.status === "superseded") return "superseded";
+  if (progress.answered < progress.total) return "questionnaire";
+  return verification.ready === true ? "ready" : "operator-review";
+}
+
+// This read-only fleet view deliberately contains no title, target, source,
+// answer, digest, path, authorization, or blocker detail. The observer applies
+// its process-local opaque identifier after this bounded, binding-checked read.
+export function programProfileSetupFleetStatus(options = {}) {
+  const paths = ensureProgramProfileSetupRoot(options);
+  const result = scanProgramProfileSetupNames(paths);
+  const profiles = [];
+  let invalid = 0;
+  for (const name of result.names) {
+    if (!PROFILE_ID.test(name)) {
+      invalid += 1;
+      continue;
+    }
+    try {
+      const stored = loadProgramProfileSetupState(paths, name);
+      const verification = verifyProfileValue(stored.profile, name, { ...options, paths });
+      if (!verification.structuralValid || stored.profile.metadata.id !== name) {
+        invalid += 1;
+        continue;
+      }
+      const progress = programProfileSetupProgress(stored.profile, stored.answers, { paths });
+      const stage = programProfileSetupStage(stored.profile, verification, progress);
+      profiles.push({
+        id: name,
+        stage,
+        readiness: stage === "ready" ? "ready" : "not-ready",
+        progress: { answered: progress.answered, total: progress.total },
+        blockerCount: stage === "questionnaire" ? Math.max(1, verification.blockers.length) : verification.blockers.length,
+        nextSection: stage === "questionnaire" ? progress.nextSection : null,
+        recommendationMode: null,
+        updatedAt: stored.profile.metadata.updatedAt
+      });
+    } catch {
+      invalid += 1;
+    }
+  }
+  return {
+    profiles,
+    scan: {
+      ...result.scan,
+      invalid,
+      complete: result.scan.complete && invalid === 0
+    }
+  };
 }
 
 export function programProfileStatus(id = null, options = {}) {

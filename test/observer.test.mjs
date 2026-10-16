@@ -8,6 +8,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { sanitizeStatusPayload } from "../dashboard/model.js";
+import { caseScanPresentation, fleetSummaryPresentation } from "../dashboard/app.js";
 
 import { buildStatus } from "../src/lib/status.mjs";
 import { runtimePaths } from "../src/lib/paths.mjs";
@@ -471,6 +472,74 @@ function statusFixture(overrides = {}) {
   };
 }
 
+test("unavailable case scans stay unavailable through projection, sanitization, and fleet summary", () => {
+  const exactProfileScan = {
+    availability: "available",
+    discovered: 0,
+    scanned: 0,
+    omitted: 0,
+    invalid: 0,
+    complete: true,
+    truncated: false
+  };
+  for (const caseScan of [{
+    availability: "unavailable",
+    discovered: 0,
+    scanned: 0,
+    omitted: 0,
+    invalid: 0,
+    complete: true,
+    truncated: false,
+    detail: "CASE_SCAN_UNAVAILABLE_PRIVATE_CANARY"
+  }, {
+    attempted: false,
+    discovered: 0,
+    scanned: 0,
+    omitted: 0,
+    invalid: 0,
+    complete: true,
+    truncated: false
+  }, {
+    availability: "available",
+    attempted: false,
+    discovered: 0,
+    scanned: 0,
+    omitted: 0,
+    invalid: 0,
+    complete: true,
+    truncated: false
+  }]) {
+    const projected = projectSnapshot(statusFixture({
+      cases: [],
+      caseScan,
+      profileSetups: [],
+      profileSetupScan: exactProfileScan
+    }), paths).status;
+    assert.deepEqual(projected.caseScan, {
+      availability: "unavailable",
+      discovered: null,
+      scanned: null,
+      omitted: null,
+      invalid: null,
+      discoveredAtLeast: false,
+      omittedAtLeast: false,
+      complete: false,
+      truncated: true
+    });
+
+    const dashboard = sanitizeStatusPayload(projected);
+    assert.equal(dashboard.caseScan.availability, "unavailable");
+    assert.equal(dashboard.caseScan.complete, false);
+    assert.equal(dashboard.caseScan.truncated, true);
+    const summary = fleetSummaryPresentation(dashboard);
+    assert.equal(summary.availability, "unavailable");
+    assert.equal(summary.activeLabel, "—");
+    assert.equal(caseScanPresentation(dashboard.caseScan, dashboard.cases.length),
+      "0 cases visible · scan unavailable · partial");
+    assert.equal(JSON.stringify(dashboard).includes("CASE_SCAN_UNAVAILABLE_PRIVATE_CANARY"), false);
+  }
+});
+
 function caseFixture({
   id = "private-alpha-case",
   displayName = "Alpha assessment",
@@ -870,7 +939,15 @@ test("observer publishes multiple isolated cases with opaque bindings and metada
         runtime: secondRuntime
       })
     ],
-    caseScan: { discovered: 2, scanned: 2, omitted: 0, complete: true, truncated: false, root: "/private/CASE_SCAN_PATH_CANARY" }
+    caseScan: {
+      discovered: 2,
+      scanned: 2,
+      omitted: 0,
+      invalid: 0,
+      complete: true,
+      truncated: false,
+      root: "/private/CASE_SCAN_PATH_CANARY"
+    }
   });
   const { origin } = await listen(t, async () => raw);
   const response = await fetch(`${origin}/api/status`);
@@ -879,6 +956,7 @@ test("observer publishes multiple isolated cases with opaque bindings and metada
 
   assert.deepEqual(status.operator, { displayName: "Giovanni" });
   assert.deepEqual(status.caseScan, {
+    availability: "available",
     discovered: 2,
     scanned: 2,
     omitted: 0,
@@ -1012,6 +1090,7 @@ test("stale cases retain sanitized monitoring while invalid rows become blocked 
   assert.deepEqual(invalid.workflows.instances, []);
   assert.equal(invalid.learningCount, 0);
   assert.deepEqual(status.caseScan, {
+    availability: "available",
     discovered: 3,
     scanned: 3,
     omitted: 0,
@@ -1060,6 +1139,7 @@ test("case projection is bounded and preserves the existing top-level observer l
   assert.equal(new Set(projected.status.cases.map((item) => item.id)).size, 32);
   assert.ok(projected.status.cases.every((item) => /^case_[a-f0-9]{16}$/u.test(item.id)));
   assert.deepEqual(projected.status.caseScan, {
+    availability: "available",
     discovered: 33,
     scanned: 32,
     omitted: 1,
@@ -1083,6 +1163,7 @@ test("case projection is bounded and preserves the existing top-level observer l
     }
   }), paths).status.caseScan;
   assert.deepEqual(lowerBound, {
+    availability: "available",
     discovered: 1024,
     scanned: 32,
     omitted: 992,
@@ -1697,6 +1778,11 @@ test("dashboard routes use an exact allowlist and strict browser headers", async
     assert.equal(response.headers.get("cache-control"), "no-store");
     assert.match(response.headers.get("content-security-policy"), /default-src 'self'/);
     assert.equal(response.headers.get("cross-origin-resource-policy"), "same-origin");
+    if (pathname === "/") {
+      const body = await response.text();
+      assert.match(body, /Cases: scan unavailable · pending · Profiles: scan unavailable · pending/u);
+      assert.doesNotMatch(body, /Cases: 0 scanned \/ 0 discovered/u);
+    }
   }
 
   for (const pathname of ["/dashboard/README.md", "/dashboard/model.test.js", "/package.json", "/dashboard/%2e%2e/package.json"]) {
@@ -1764,7 +1850,7 @@ test("observer accepts read-only local requests and rejects foreign authorities 
   assert.throws(() => createObserver({ paths, host: "0.0.0.0" }), /loopback/);
 });
 
-test("status failures return a generic service error without exception details", async (t) => {
+test("cold status failures return a generic service error without scan claims or exception details", async (t) => {
   const { origin } = await listen(t, () => {
     throw new Error("SENSITIVE_BUILDER_FAILURE");
   });
@@ -1773,9 +1859,10 @@ test("status failures return a generic service error without exception details",
   const body = await response.text();
   assert.match(body, /observer status unavailable/);
   assert.doesNotMatch(body, /SENSITIVE_BUILDER_FAILURE/);
+  assert.deepEqual(JSON.parse(body), { error: "observer status unavailable" });
 });
 
-test("cached fallback marks every case telemetry stale while keeping the local endpoint available", async (t) => {
+test("warm cached fallback marks rows stale and fleet scans unavailable", async (t) => {
   const now = new Date().toISOString();
   const runtime = statusFixture({
     at: now,
@@ -1786,7 +1873,17 @@ test("cached fallback marks every case telemetry stale while keeping the local e
     at: now,
     events: [canonicalEvent({ id: "evt_cachedroot1", at: now })],
     cases: [caseFixture({ id: "cached-case", displayName: "Cached case", projectId: null, runtime })],
-    caseScan: { discovered: 1, scanned: 1, omitted: 0, invalid: 0, complete: true, truncated: false }
+    caseScan: { discovered: 1, scanned: 1, omitted: 0, invalid: 0, complete: true, truncated: false },
+    profileSetups: [],
+    profileSetupScan: {
+      availability: "available",
+      discovered: 0,
+      scanned: 0,
+      omitted: 0,
+      invalid: 0,
+      complete: true,
+      truncated: false
+    }
   });
   let calls = 0;
   const { origin } = await listen(t, () => {
@@ -1798,14 +1895,32 @@ test("cached fallback marks every case telemetry stale while keeping the local e
   const firstResponse = await fetch(`${origin}/api/status`);
   const first = await firstResponse.json();
   assert.equal(first.cases[0].telemetry.freshness, "fresh");
+  assert.equal(first.caseScan.availability, "available");
+  assert.equal(fleetSummaryPresentation(sanitizeStatusPayload(first)).availability, "exact");
+  assert.equal(fleetSummaryPresentation(sanitizeStatusPayload(first)).activeLabel, "1");
   await new Promise((resolve) => setTimeout(resolve, 275));
   const fallbackResponse = await fetch(`${origin}/api/status`);
   const fallback = await fallbackResponse.json();
   assert.equal(fallbackResponse.status, 200, "the observer connection remains available from cache");
   assert.equal(fallback.telemetry.freshness, "stale");
   assert.ok(fallback.cases.every((item) => item.telemetry.freshness === "stale"));
+  assert.deepEqual(fallback.caseScan, {
+    availability: "unavailable",
+    discovered: null,
+    scanned: null,
+    omitted: null,
+    invalid: null,
+    discoveredAtLeast: false,
+    omittedAtLeast: false,
+    complete: false,
+    truncated: true
+  });
   const dashboard = sanitizeStatusPayload(fallback);
   assert.ok(dashboard.cases.every((item) => item.telemetry.state === "stale"));
+  assert.equal(dashboard.caseScan.availability, "unavailable");
+  assert.equal(fleetSummaryPresentation(dashboard).availability, "unavailable");
+  assert.equal(fleetSummaryPresentation(dashboard).activeLabel, "—");
+  assert.equal(fleetSummaryPresentation(dashboard).counts.active, 0);
   assert.equal(JSON.stringify(fallback).includes("PRIVATE_CACHED_BUILDER_FAILURE"), false);
 });
 
@@ -1844,4 +1959,31 @@ test("schema-defined execution termination reasons survive observer and dashboar
     const dashboard = sanitizeStatusPayload(payload);
     assert.equal(dashboard.execution.recent[0].terminationReason, expected);
   }
+});
+
+test("complete registry coverage cannot make unobserved case activity counts exact", () => {
+  const exactScan = { discovered: 1, scanned: 1, omitted: 0, invalid: 0, complete: true, truncated: false };
+  const profileSetupScan = { availability: "available", discovered: 0, scanned: 0, omitted: 0, invalid: 0, complete: true, truncated: false };
+  const missingRuntime = caseFixture({ runtimeHealth: { status: "unavailable", reason: "runtime-observation-failed" } });
+  const running = caseFixture({ id: "running-case", runtime: statusFixture() });
+  for (const rows of [[missingRuntime], [running, missingRuntime]]) {
+    const count = rows.length;
+    const projected = projectSnapshot(statusFixture({
+      cases: rows, caseScan: { ...exactScan, discovered: count, scanned: count }, profileSetups: [], profileSetupScan
+    }), paths).status;
+    const dashboard = sanitizeStatusPayload(projected);
+    assert.equal(dashboard.caseScan.complete, true);
+    assert.equal(dashboard.cases.filter((item) => item.runtimeHealth.status === "unavailable").length, 1);
+    const summary = fleetSummaryPresentation(dashboard);
+    assert.equal(summary.availability, "lower-bound");
+    assert.equal(summary.activeLabel, count === 1 ? "0+" : "1+");
+    assert.equal(summary.waitingLabel, "0+");
+    assert.ok(summary.attentionLabel.endsWith("+"));
+    assert.equal(dashboard.cases.length, count);
+  }
+  const observed = sanitizeStatusPayload(projectSnapshot(statusFixture({
+    cases: [running], caseScan: exactScan, profileSetups: [], profileSetupScan
+  }), paths).status);
+  assert.equal(fleetSummaryPresentation(observed).availability, "exact");
+  assert.equal(fleetSummaryPresentation(observed).activeLabel, "1");
 });

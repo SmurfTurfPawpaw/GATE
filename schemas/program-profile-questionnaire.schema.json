@@ -4,15 +4,10 @@
   "title": "GATE program profile questionnaire contract",
   "type": "object",
   "additionalProperties": false,
-  "required": ["$schema", "apiVersion", "kind", "metadata", "semantics", "sections", "conditionalModules"],
+  "required": ["$schema", "apiVersion", "kind", "metadata", "interaction", "semantics", "sections", "conditionalModules"],
   "properties": {
     "$schema": { "type": "string", "minLength": 1 },
-    "apiVersion": {
-      "enum": [
-        "gate.dev/program-profile-questionnaire/v1",
-        "gate.dev/program-profile-questionnaire/v2"
-      ]
-    },
+    "apiVersion": { "const": "gate.dev/program-profile-questionnaire/v2" },
     "kind": { "const": "ProgramProfileQuestionnaire" },
     "metadata": {
       "type": "object",
@@ -112,7 +107,7 @@
     "question": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "path", "prompt", "why", "type", "required", "sensitive"],
+      "required": ["id", "path", "prompt", "why", "type", "required", "sensitive", "recommendationPolicy"],
       "properties": {
         "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,95}$" },
         "path": { "$ref": "#/$defs/path" },
@@ -149,7 +144,41 @@
           "uniqueItems": true,
           "items": { "$ref": "#/$defs/oneLine" }
         },
-        "condition": { "$ref": "#/$defs/condition" }
+        "condition": { "$ref": "#/$defs/condition" },
+        "recommendationPolicy": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["class", "summary", "basis", "value"],
+              "properties": {
+                "class": { "const": "operator-preference" },
+                "summary": { "$ref": "#/$defs/oneLine" },
+                "basis": { "$ref": "#/$defs/oneLine" },
+                "value": true
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["class", "summary", "proposalBasis"],
+              "properties": {
+                "class": { "const": "evidence-proposal" },
+                "summary": { "$ref": "#/$defs/oneLine" },
+                "proposalBasis": { "enum": ["source-required", "source-or-local"] }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["class", "summary"],
+              "properties": {
+                "class": { "const": "manual-only" },
+                "summary": { "$ref": "#/$defs/oneLine" }
+              }
+            }
+          ]
+        }
       }
     },
     "section": {

@@ -2,11 +2,11 @@
 
 **Gateway for Agentic Tooling & Engineering** is a personal, single-operator control plane for agentic software delivery and authorized security work. GATE keeps the reusable system in a version-controlled repository while events, target details, credential references, evidence, receipts, and private learning stay under `GATE_HOME`; credential values should remain in an OS secret store or narrowly permissioned file.
 
-> **New here?** Follow [Getting started](GETTING_STARTED.md) to bootstrap GATE, install and verify the core tools, open the cockpit, and create your first map-first assessment. Before a bug bounty engagement, use the [`gate-program-profile` skill](skills/gate-program-profile/SKILL.md) and [Program Profile guide](docs/bug-bounty-program-profile.md) to turn program terms and testing intent into private, source-backed context through a choice-first interview.
+> **New here?** Follow [Getting started](GETTING_STARTED.md) to bootstrap GATE, install and verify the core tools, open the cockpit, and route your first objective. The [`gate-objective-router` skill](skills/gate-objective-router/SKILL.md) selects the best-supported domain path before a specialist intake begins. Bug bounty work then uses the [`gate-program-profile` skill](skills/gate-program-profile/SKILL.md) and [Program Profile guide](docs/bug-bounty-program-profile.md).
 
 GATE is host-first. It is designed to run on a Windows 11 laptop through WSL2 with Codex CLI as the primary harness. Native tools remain appropriate when a GUI, the Windows certificate store, packet capture, USB, a GPU, or radio hardware needs direct host access. Containers can organize conflicting dependencies, but GATE does not treat a container, WSL2, or a Git worktree as a security boundary.
 
-> **Status: v0.1 foundation.** The checked-in policy, schemas, CLI, private project registry, source-backed bug bounty Program Profile intake, immutable per-program cases, aggregate case cockpit, project-bound zero-network PE-resource analysis, verified Treehouse lease bridge, engagement receipts, one-shot supervised generic execution, two narrow managed active adapters, observer, token reader, upstream pins, 126-tool security catalog, seven-tool managed core runtime, and journaled end-to-end penetration-testing workflow work today. Complete Firstmate, GNHF, and No Mistakes orchestration, broader reviewed adapters and runtime locks, deployment, and lab lifecycle remain integration work. See [Current limits](#current-limits).
+> **Status: v0.1 foundation.** The checked-in policy, schemas, CLI, categorical objective router, private project registry, source-backed bug bounty Program Profile intake, immutable per-program cases, aggregate campaign cockpit, project-bound zero-network PE-resource analysis, verified Treehouse lease bridge, engagement receipts, one-shot supervised generic execution, two narrow managed active adapters, observer, token reader, upstream pins, 126-tool security catalog, seven-tool managed core runtime, and journaled end-to-end penetration-testing workflow work today. Complete objective persistence and dispatch, Firstmate, GNHF, and No Mistakes orchestration, broader reviewed adapters and runtime locks, deployment, and lab lifecycle remain integration work. See [Current limits](#current-limits).
 
 ## Start on Windows 11 with WSL2
 
@@ -46,12 +46,25 @@ export GATE_HOME="$HOME/.local/share/gate"
 
 Do not place `GATE_HOME` inside this repository or a cloud-synced public folder. GATE rejects lexical or physical overlap between the private root and repository in either direction, repairs owner-only POSIX permissions, and rejects linked control-state paths. Each case gets a separate owner-only state directory, while all case directories remain inside one local trust domain: a process that can write the whole `GATE_HOME` can also change case scopes, project records, offline snapshots and manifests, engagement records, receipts, active-execution manifests, claims, runs, stops, evidence, managed tool caches and runtimes, and installation receipts. Give write access only to the operator and trusted GATE processes, and keep credential values in a separate OS secret store or narrowly permissioned file referenced by `env://`, `keychain://`, or `file://`.
 
+## Route any new objective
+
+Tell the agent the outcome you want in ordinary language. Before it opens a specialist workflow, the [`gate-objective-router` skill](skills/gate-objective-router/SKILL.md) classifies the objective across domain, deliverable, relationship, highest effect, data class, and bounded signals. It prepares a private categorical proposal outside the repository and resolves it with the exact reviewed catalog. The CLI enforces current-user ownership and exact mode `0600` on POSIX and WSL2; native Windows ACL ownership is not verified.
+
+```bash
+unset GATE_CASE
+./bin/gate.mjs objective recommend \
+  --proposal "$GATE_HOME/input/objective-routing.json" --json
+```
+
+The proposal has no dedicated field for the raw objective, a target, account, contact, URL, private path, credential, command, or source body. Its producer must generate the opaque handle and references randomly and must never encode private values into them. The recommendation replaces caller-controlled metadata with bounded projections, then selects a route, evidence plan, category-only data requests, capability needs, bounded next actions, and at most a few registered choices. It always reports `executionAuthority: false`. Mixed work is decomposed before routing; a bug bounty objective can hand off to Program Profile, while an account or payment-abuse report routes to incident investigation. See [Objective routing](docs/objective-routing.md) for the proposal contract and current planning-only boundaries.
+
 ## What owns each transition
 
 GATE composes upstream projects at exact commits rather than merging their source trees.
 
 | Component | Role |
 | --- | --- |
+| **GATE objective router** | General categorical recommendation before domain-specific intake |
 | **GATE case registry** | Immutable Program Profile and optional managed-project bindings with separate per-case runtime state |
 | **Firstmate** | Intake, supervision, dispatch, and the operator decision inbox |
 | **Treehouse** | Exclusive development workspace allocation and durable leases |
@@ -65,7 +78,7 @@ GATE composes upstream projects at exact commits rather than merging their sourc
 | **Lavish** | Local interactive planning and decision artifacts |
 | **AXI** | Agent-facing command and output conventions |
 | **Skills CLI** | Distribution of reviewed project-scoped skills |
-| **Observer** | Read-only aggregate case terminals, activity, gate, learning, upstream, and token views |
+| **Observer** | Read-only compact campaign fleet, one selected live-activity view, setup progress, shared health, learning, upstream, and token views |
 
 The full ownership and recovery model is in [docs/architecture.md](docs/architecture.md) and [docs/operating-model.md](docs/operating-model.md). Exact upstream commits, versions, and artifact integrity values live in [locks/upstreams.lock.json](locks/upstreams.lock.json); committed npm dependency trees live under [locks/npm](locks/npm).
 
@@ -108,13 +121,15 @@ A case is an immutable private scope for one ready bug bounty Program Profile an
 GATE_CASE=example-web ./bin/gate.mjs workflow status example-web-map --json
 ```
 
-Omit `--project` when the case does not need a managed-project binding. Scoped commands place events, engagements, workflows, execution state, offline-analysis state, evidence, tokens, and private learning under `GATE_HOME/cases/CASE_ID/state`; Program Profiles, registered projects, managed tools, upstreams, and reviewed public learning remain shared. Every engagement and workflow command, Program Profile compilation, and `analysis manifest`, `run`, `purge`, or `status` requires a leading `--case ID` or `GATE_CASE`. Profile compilation must use the bound Program Profile, and offline analysis must use the bound project. `--case ID` and `GATE_CASE` must agree when both are present.
+Omit `--project` when the case does not need a managed-project binding. Target-specific Program Profiles live in the shared private registry, while scoped commands place campaign execution observations, engagements, workflows, execution state, offline-analysis state, evidence, tokens, and private learning under `GATE_HOME/cases/CASE_ID/state`. Registered projects, managed tools, upstreams, and reviewed public learning also remain shared. Every engagement and workflow command, Program Profile compilation, and `analysis manifest`, `run`, `purge`, or `status` requires a leading `--case ID` or `GATE_CASE`. Profile compilation must use the bound Program Profile, and offline analysis must use the bound project. `--case ID` and `GATE_CASE` must agree when both are present.
 
 Every case-owned command requires an explicit runtime selection: leading `--case ID`, matching `GATE_CASE`, or leading `--unassigned`. `--unassigned` selects the writable base-state compatibility namespace and can create new unscoped records; using it opts out of case attribution and state separation. GATE never selects it implicitly, so prefer a case for program work. Setup and shared-registry commands—including project, case, workspace, upstream, tool, publication, Program Profile intake, and `analysis capability`—reject all runtime selectors. Plain `gate status` is the bounded aggregate fleet view; `gate --unassigned status` reads only base state, while `gate --case ID status` reads one case. Events and private learning without a selector also write to base state.
 
 This is filesystem separation for organizing concurrent work. Case processes still run as the same operating-system user on the same host, with the same host-access implications. Network containment comes only from the selected execution adapter or environment. A case does not grant target authority or strengthen an adapter's isolation.
 
-Run `gate up` without a runtime selector. It presents the bounded fleet cockpit and refuses `--case`, `GATE_CASE`, and `--unassigned` because a scoped observer would hide the other visible cases. One snapshot projects at most 32 cases selected from at most 1,024 discovered entries. Scan metadata marks lower-bound counts and `complete: false`; retrieve a known omitted case directly with `gate case show ID --json` or `gate --case ID status --summary --json`.
+Run `gate up` without a runtime selector. It presents the bounded fleet cockpit and refuses `--case`, `GATE_CASE`, and `--unassigned` because a scoped observer would hide the other visible campaigns. The compact table combines case rows with private, pseudonymous Program Profile setup rows that are not represented in the current bounded case projection; when the case scan is partial, an off-projection current case may still exist. Selecting a row opens one live-activity or setup-detail panel. One snapshot projects at most 32 cases selected from at most 1,024 discovered entries, and the Program Profile setup projection has its own 32-row bound. Summary counts use a `+` suffix when they are only lower bounds and show unavailable when no trustworthy observation exists. Retrieve a known omitted case directly with `gate case show ID --json` or `gate --case ID status --summary --json`.
+
+When two or more programs run concurrently, use the [campaign acceptance and GATE improvement checklist](docs/campaign-acceptance.md) to verify state separation, fleet clarity, adaptive testing, recovery, and the sanitized path from campaign friction to a reusable repository change.
 
 ### Lease and verify a Treehouse workspace
 
@@ -211,7 +226,15 @@ The machine-readable [end-to-end penetration-testing workflow](config/workflows/
 
 Local source review, hypothesis generation, declared passive research, and analysis of saved evidence can proceed without an active receipt under their data and provider rules. Contacting a target through scanning, crawling, interception, authentication, fuzzing, exploitation, persistence, denial-of-service testing, or data access requires an engagement whose reviewed report and operator receipt match the exact plan digest. Each launch then uses either a reviewed scope-aware adapter or the Linux/WSL2 supervised generic lane described below. The generic lane supports only receipt-bound `scope.environment: host`; container, rootless-container, VM, and remote-lab engagements need a lane that implements that environment. Follow the [end-to-end workflow](docs/pentest-workflow.md) to map prerequisites, evidence, stop conditions, and handoffs before selecting a tool.
 
-For bug bounty work, the [`gate-program-profile` skill](skills/gate-program-profile/SKILL.md) is the preferred interactive intake. It derives a draft from current-conversation evidence permitted for the configured provider, structural questionnaire metadata, and manually sanitized categorical outcomes, then uses native choice controls for only the unresolved decisions. Exact selectors, contacts, authorization text, source bodies, and other private literals are captured by the local terminal CLI or a reviewed local-only interface. The [Program Profile guide](docs/bug-bounty-program-profile.md) also documents the numbered terminal wizard and headless answers-file fallbacks. Source bodies stay in operator-controlled private storage; GATE records their references and supplied digests under `GATE_HOME` but does not fetch or rehash them in v0.1. Its private output improves planning and model compatibility checks, but target contact still depends on an exact engagement, reviewed plan, operator receipt, workflow admission, and execution confirmation.
+For bug bounty work, the [`gate-program-profile` skill](skills/gate-program-profile/SKILL.md) is the preferred interactive intake. It derives a draft from current-conversation evidence permitted for the configured provider, structural questionnaire metadata, and manually sanitized categorical outcomes, then uses native choice controls for only the unresolved decisions. Exact selectors, contacts, authorization text, source bodies, and other private literals belong in the loopback-only browser wizard. Initialize a missing draft with reviewed deterministic recommendations, then launch the form:
+
+```bash
+unset GATE_CASE
+./bin/gate.mjs bounty profile create example-program --apply-recommended --json
+./bin/gate.mjs bounty profile ui example-program --open
+```
+
+The second command prints a private session URL, edits exactly one profile through typed controls, and keeps its terminal attached until `Ctrl+C`; if browser launch is unavailable, open the printed URL on the same laptop. Each eligible question offers its reviewed recommendation, and the bulk action applies only supported unanswered recommendations. Source-dependent questions remain unresolved until a current private proposal and its cited source records exist. Authority confirmation and final attestation are always manual. The dashboard stays read-only and does not host this form. The [Program Profile guide](docs/bug-bounty-program-profile.md) documents the browser flow, numbered terminal fallback, and headless answer and recommendation envelopes. Source bodies stay in operator-controlled private storage; GATE records their references and supplied digests under `GATE_HOME` but does not fetch or rehash them in v0.1. Its private output improves planning and model compatibility checks, but target contact still depends on an exact engagement, reviewed plan, operator receipt, workflow admission, and execution confirmation.
 
 Nmap remains a planning example: `./bin/gate.mjs tool plan nmap --json` reports its admission requirements. It is blocked from generic execution pending reviewed runtime admission, even when installed and permitted by an engagement.
 
@@ -322,31 +345,32 @@ OWASP ZAP and mitmproxy are the open-source web interception defaults. Burp Suit
 
 ## Observer and token visibility
 
-`gate up` serves a dependency-free, read-only aggregate cockpit on loopback. Up to 32 valid or attention-worthy cases from the bounded scan appear as separate browser terminals with their Program Profile and optional project binding, isolation posture, lifecycle state, active workflow phases, bounded run metadata, activity, and case-attributed token status. The welcome line uses `operator.displayName` from the merged GATE configuration; the tracked default is `Giovanni`.
+`gate up` serves a dependency-free, read-only aggregate cockpit on loopback. Its compact fleet table shows up to 32 valid or attention-worthy cases from the bounded case scan and up to 32 current Program Profile setups that are not represented in that bounded case projection. A setup row is not proof that no off-projection current case exists when the case scan is incomplete. Case rows show allowlisted campaign identity, state, current phase or tool, last signal, active work, attention, case-attributed token availability, and a case-backed learning count. Setup rows use a process-local pseudonym and show only questionnaire stage and progress, blocker count, next section, update freshness, and readiness. Recommendation mode is nullable and appears only when a reviewed producer supplies it. Learning count is unavailable on setup-only rows because only case rows carry case-backed learning attribution. Setup rows do not expose the program name, answers, sources, contacts, or target details.
 
-These are structured lifecycle views, not PTYs. They never expose raw stdout or stderr, argv, commands, target selectors, evidence contents, or private paths. An active case uses a spinner and indeterminate bar while fresh lifecycle events show work in progress. GATE does not invent a completion percentage: determinate progress requires a source that supplies an actual completed and total count. Motion is disabled when the browser requests reduced motion.
+Selecting a table row opens one detail panel. A case detail contains its bounded structured lifecycle feed; a setup detail contains its guided intake state. These are presentation views, not PTYs. Apart from the operator-controlled case display name, they never expose raw stdout or stderr, argv, commands, target selectors, evidence contents, or private paths. An active case uses a spinner and indeterminate bar while fresh lifecycle events show work in progress. GATE does not invent a completion percentage: determinate progress requires a source that supplies an actual completed and total count. Motion is disabled when the browser requests reduced motion. The welcome line uses `operator.displayName` from the merged GATE configuration; the tracked default is `Giovanni`.
 
-The case terminals are the per-program view. The activity, agent/task, active-execution, and offline-analysis panels below them describe only the writable base/unassigned runtime; their headings say so to prevent cross-case attribution. Managed runtime counts, learnings, telemetry freshness, and aggregate host token use are shared views. The bounded status API also carries base engagement and upstream summaries; v0.1 does not yet render dedicated panels for those two summaries. Runtime `unresolved` is full-catalog readiness rather than a failed-install count. The normal receipt-only view still withholds every managed executable because it performs no current-byte or live-smoke verification; full planning can report the two reviewed DNSx and HTTPx operations adapter-ready after exact verification. Keyboard shortcuts are:
+Summary cards distinguish exact counts, lower bounds (`+`), and unavailable observations (`—`) under the [count precision and cached-state rules](docs/architecture.md#observation-and-token-accounting). The collapsible **System health** area contains base/unassigned activity, agent/task, active-execution, and offline-analysis views. Managed runtime counts, learnings, telemetry freshness, and aggregate host token use are shared views. The bounded status API also carries base engagement and upstream summaries; v0.1 does not yet render dedicated panels for those two summaries. Runtime `unresolved` is full-catalog readiness rather than a failed-install count. The normal receipt-only view still withholds every managed executable because it performs no current-byte or live-smoke verification; full planning can report the two reviewed DNSx and HTTPx operations adapter-ready after exact verification. Keyboard shortcuts are:
 
 Agents should use `gate status --summary --json` and `gate tool list --summary --json`; use `gate tool show ID --json` for one bounded item. The status summary identifies its aggregate, unassigned, or selected-case lane and retains bounded per-case lane counts, case-scan omissions, and case-detail retrieval pointers. See [observation and token accounting](docs/architecture.md#observation-and-token-accounting) for output bounds, pagination, source digests, and telemetry limitations.
 
 | Key | Action |
 | --- | --- |
-| `0` | Focus the case cockpit |
-| `1` | Focus agents and tasks |
-| `2` | Focus activity |
+| `0` | Focus the campaign fleet |
+| `1` | Open and focus the selected campaign detail |
+| `2` | Open System health |
 | `3` | Focus active execution |
 | `4` | Focus resource posture |
 | `5` | Focus learning |
 | `6` | Focus offline analysis |
 | `7` | Focus managed tool runtimes |
-| `[` / `]` | Focus the previous or next case terminal |
+| `↑` / `↓` or `[` / `]` | Select the previous or next campaign |
+| `Enter` | Open the selected campaign detail |
 | `/` | Focus the safe metadata filter |
 | `R` | Refresh now |
 | `P` | Pause or resume polling |
 | `?` | Open shortcut help |
 
-GATE streams local Codex session JSONL files under `CODEX_HOME/sessions` or `~/.codex/sessions` and parses only token-count/usage records. Provider counters are labeled `exact`; a missing value is `unavailable`, never zero. Host session files do not carry a trustworthy case binding, so their totals may appear only in the aggregate view. A case terminal reports token attribution as unavailable until a reviewed producer writes canonical token records inside that case's state directory. The scanner necessarily reads session-file bytes, but it never returns prompt bodies. The observer's browser API omits prompts, responses, commands, tool output, target selectors, absolute paths, and evidence contents.
+GATE streams local Codex session JSONL files under `CODEX_HOME/sessions` or `~/.codex/sessions` and parses only token-count/usage records. Provider counters are labeled `exact`; a missing value is `unavailable`, never zero. Host session files do not carry a trustworthy case binding, so their totals may appear only in the aggregate view. A case row and its selected detail report token attribution as unavailable until a reviewed producer writes canonical token records inside that case's state directory. The scanner necessarily reads session-file bytes, but it never returns prompt bodies. Apart from the operator-controlled case display name, the observer's browser API omits prompts, responses, commands, tool output, target selectors, absolute paths, and evidence contents.
 
 ## Learn and adapt
 
@@ -374,7 +398,7 @@ Public project-scoped learning still fails closed because no public project-prom
 
 A learning is complete only when the behavior, policy, configuration, test, or documentation actually changes. Routine passes and expected negative results stay in workflow evidence. Promote a candidate only when the lesson is reusable, independently validated, and backed by the change that implements it. Repository-level promotion goes through No Mistakes, but GATE does not invoke that review automatically. Target or tool output is untrusted data: it may suggest a learning, but it cannot directly alter memory, policy, authorization, or publication rights.
 
-Consultation is deterministic local retrieval and makes no model call. It returns at most eight records and 4096 bytes by default, contains no raw evidence excerpts, and reports truncation. A workflow test plan refuses a consultation that omitted an applicable lesson. Tokens are consumed only if a caller later places that bounded projection in model context. See [Record and apply adaptive learning](GETTING_STARTED.md#6-record-and-apply-adaptive-learning) for the file-driven commands and accepted JSON shapes.
+Consultation is deterministic local retrieval and makes no model call. It returns at most eight records and 4096 bytes by default, contains no raw evidence excerpts, and reports truncation. A workflow test plan refuses a consultation that omitted an applicable lesson. Tokens are consumed only if a caller later places that bounded projection in model context. See [Record and apply adaptive learning](GETTING_STARTED.md#7-record-and-apply-adaptive-learning) for the file-driven commands and accepted JSON shapes.
 
 ## Upstreams
 
@@ -405,6 +429,7 @@ From the root of a destination project, point the same command at a reviewed GAT
 ```bash
 GATE_SKILLS_ROOT="$(~/src/GATE/bin/gate.mjs upstream path skills-cli)"
 "$GATE_SKILLS_ROOT/node_modules/.bin/skills" add ~/src/GATE/skills \
+  --skill gate-objective-router \
   --skill gate-program-profile \
   --skill gate-workflow \
   --skill gate-security-engagement \
@@ -412,7 +437,7 @@ GATE_SKILLS_ROOT="$(~/src/GATE/bin/gate.mjs upstream path skills-cli)"
   --agent codex --yes
 ```
 
-`gate-program-profile` runs the preferred source-first, choice-first Program Profile interview. Its model-visible choices use provider-approved current-conversation evidence and manually sanitized categorical outcomes; exact private values remain in local capture and review surfaces. `gate-workflow`, `gate-security-engagement`, and `gate-continuous-learning` cover software delivery, active-assessment admission, and durable learning respectively.
+`gate-objective-router` selects the first evidence-led domain route for any new objective. `gate-program-profile` then runs the preferred source-first, choice-first intake when the selected route is a bug bounty program. Its model-visible choices use provider-approved current-conversation evidence and manually sanitized categorical outcomes; exact private values remain in local capture and review surfaces. `gate-workflow`, `gate-security-engagement`, and `gate-continuous-learning` cover software delivery, active-assessment admission, and durable learning respectively.
 
 This is a project-scoped install. Do not add `--global`; review and pin the GATE source commit before distributing its skill content.
 
@@ -420,12 +445,13 @@ This is a project-scoped install. Do not add `--global`; review and pin the GATE
 
 The v0.1 boundary is intentionally explicit:
 
+- Objective routing is deterministic over a caller-prepared categorical proposal and emits a sanitized planning recommendation. It does not store the raw objective, verify opaque source references, bind a learning projection, inspect live tool readiness, provide a browser intake, create a cockpit row, persist an accepted plan, dispatch a domain owner, or grant execution authority.
 - GATE implements the Linux/WSL2 Treehouse `lease`, aggregate `status`, and nonmutating `verify` bridge. Firstmate intake/dispatch, Codex launch, bounded GNHF execution, No Mistakes handoff, and the complete cross-owner lifecycle are not orchestrated.
 - The CLI records a No Mistakes review result but does not invoke No Mistakes or cryptographically verify an external attestation. An operator or trusted adapter must provide truthful run data.
 - Operator approval receipts are digest-checked local files, not signed identities or remotely attested approvals. Their provenance relies on the single-operator process and filesystem permissions around `GATE_HOME`. This limitation applies to engagement authority; managed-upstream byte integrity is independently anchored to reviewed repository locks.
 - GitHub exact-head PR and observed-check preflight is implemented read-only without depending on branch protection. Merge, deploy, and publish remain blocked until a trusted adapter can verify an external No Mistakes attestation for the exact head and enforce project policy. `status --watch`, `down`, and the documented `gate lab` lifecycle are not implemented yet.
 - The private project registry validates, deduplicates, stores, lists, shows, and verifies contracts. It does not update or delete them, select a project implicitly, clone repositories, bind workspace commands to a registered contract, or enforce registered delivery and deployment fields in publication adapters.
-- Cases bind one exact ready Program Profile and at most one exact managed project into separate private state directories. Their bindings are immutable and become stale when the source profile or project digest changes. This is state separation, not process, credential, filesystem, kernel, or host isolation: every case runs under the same user, and network containment remains adapter-dependent. `gate up` aggregates at most the bounded case scan, and case token attribution remains unavailable without canonical case-bound records.
+- Cases bind one exact ready Program Profile and at most one exact managed project into separate private state directories. Their bindings are immutable and become stale when the source profile or project digest changes. This is state separation, not process, credential, filesystem, kernel, or host isolation: every case runs under the same user, and network containment remains adapter-dependent. `gate up` aggregates only the bounded case and Program Profile setup scans, and case token attribution remains unavailable without canonical case-bound records.
 - Safety-critical execution and offline-analysis status and reconciliation scan retained control state so old live, orphaned, or ambiguous work is not hidden by the recent-item display caps. Those paths remain `O(history)`; a hard history-independent time and I/O bound requires a crash-safe active/recovery index that is not implemented in v0.1.
 - Bug bounty Program Profiles store a private questionnaire and compile deterministic review, scope, technique, coverage, model-context, compatibility, and engagement-proposal artifacts without target contact. The `gate-program-profile` skill is an interaction layer: it can reason from provider-approved current-conversation material, structural questionnaire metadata, and manually sanitized categorical outcomes, then prepare the non-sensitive structure of answer envelopes. It cannot safely ingest arbitrary source bodies or `GATE_HOME` records, attest for the operator, or turn a choice into execution authority. Exact private values require local capture, and raw status, verification, review, and model-context output remain local rather than model input. v0.1 has no built-in model-safe Program Profile projector; an operator or reviewed local controller must supply categorical outcomes manually. Profiles do not retrieve or rehash operator-held source bodies, establish the truth or legal effect of operator-supplied terms, create active engagement authority, obtain a No Mistakes review or operator receipt, admit a workflow phase, or guarantee provider acceptance. Provider predictions depend on a complete, truthful, current operator-supplied capability profile; unsupported or unverified entries must remain `unknown`.
 - The Treehouse bridge requires the exact integrity-verified 3.1.3 release, fixed system Git, local refs, and clone-bound one-shot task roots. It invokes only `get` for acquisition; status and verification read bound state directly, and GATE never invokes Treehouse `status`, `return`, or `destroy`. It has no credential/proxy/SSH/network broker, rejects unsafe local Git state including Git LFS filters and submodules, and accepts only the main worktree's checked-out branch as local proof of landing. Verification retains every lease; automatic return, reset, destruction, reuse, and mount-safe cleanup are unavailable. The lifetime limit is 511 retained task roots per physical clone, after which work continues from a new physical clone or waits for future safe upstream lifecycle support. Worktrees do not isolate same-user access to the shared common `.git`, processes, credentials, the kernel, or the host filesystem.

@@ -967,6 +967,7 @@ test("case cockpit projection keeps only bounded lifecycle metadata and an exact
           }],
           scan: { discovered: 1, scanned: 1, omitted: 0, complete: true, truncated: false }
         },
+        learningCount: 3,
         activity: [{
           id: "evt_case_activity_01",
           at: "2026-10-15T08:00:02.000Z",
@@ -1034,14 +1035,15 @@ test("case cockpit projection keeps only bounded lifecycle metadata and an exact
 
   assert.deepEqual(status.operator, { displayName: "Giovanni" });
   assert.deepEqual(status.caseScan, {
+    availability: "available",
     discovered: 5,
     scanned: 5,
     omitted: 0,
     invalid: 1,
     discoveredAtLeast: false,
     omittedAtLeast: false,
-    complete: true,
-    truncated: false
+    complete: false,
+    truncated: true
   });
   assert.deepEqual(status.engagementScan, {
     availability: "loaded",
@@ -1078,6 +1080,7 @@ test("case cockpit projection keeps only bounded lifecycle metadata and an exact
   assert.equal(caseView.engagementScan.truncated, true);
   assert.equal(caseView.workflows.instances[0].activePhase.toolId, "httpx");
   assert.equal(caseView.activity[0].action.toolName, "httpx");
+  assert.equal(caseView.learningCount, 3);
   assert.deepEqual(tombstone, {
     id: `case_${"d".repeat(16)}`,
     displayName: "Invalid case",
@@ -1203,7 +1206,8 @@ test("case cockpit projection keeps only bounded lifecycle metadata and an exact
       },
       recent: []
     },
-    activity: []
+    activity: [],
+    learningCount: 0
   });
 
   const serialized = JSON.stringify(status);
@@ -1215,6 +1219,93 @@ test("case cockpit projection keeps only bounded lifecycle metadata and an exact
     "PRIVATE_ENGAGEMENT_FILENAME_CANARY", "PRIVATE_TOP_ENGAGEMENT_FILENAME_CANARY", "INVALID_ACTIVITY_CANARY",
     "INVALID_COMMAND_CANARY", "INVALID_PATH_CANARY"
   ]) assert.equal(serialized.includes(canary), false, `case projection leaked ${canary}`);
+});
+
+test("case scan availability survives sanitization and unavailable claims fail closed", () => {
+  const unavailable = sanitizeStatusPayload({
+    caseScan: {
+      availability: "unavailable",
+      discovered: 0,
+      scanned: 0,
+      omitted: 0,
+      invalid: 0,
+      discoveredAtLeast: true,
+      omittedAtLeast: true,
+      complete: true,
+      truncated: false
+    }
+  });
+  assert.deepEqual(unavailable.caseScan, {
+    availability: "unavailable",
+    discovered: null,
+    scanned: null,
+    omitted: null,
+    invalid: null,
+    discoveredAtLeast: false,
+    omittedAtLeast: false,
+    complete: false,
+    truncated: true
+  });
+
+  const invalid = sanitizeStatusPayload({
+    caseScan: {
+      availability: "PRIVATE_INVALID_AVAILABILITY_CANARY",
+      discovered: 0,
+      scanned: 0,
+      omitted: 0,
+      invalid: 0,
+      complete: true,
+      truncated: false
+    }
+  });
+  assert.equal(invalid.caseScan.availability, "unavailable");
+  assert.equal(invalid.caseScan.complete, false);
+  assert.equal(invalid.caseScan.truncated, true);
+  assert.equal(JSON.stringify(invalid).includes("PRIVATE_INVALID_AVAILABILITY_CANARY"), false);
+
+  const legacyAvailable = sanitizeStatusPayload({
+    caseScan: { discovered: 0, scanned: 0, omitted: 0, invalid: 0, complete: true, truncated: false }
+  });
+  assert.equal(legacyAvailable.caseScan.availability, "available");
+  assert.equal(legacyAvailable.caseScan.complete, true);
+
+  const notAttempted = sanitizeStatusPayload({
+    caseScan: { attempted: false, discovered: 0, scanned: 0, omitted: 0, invalid: 0, complete: true, truncated: false }
+  });
+  assert.equal(notAttempted.caseScan.availability, "unavailable");
+  assert.equal(notAttempted.caseScan.complete, false);
+  assert.equal(notAttempted.caseScan.truncated, true);
+
+  const contradictoryAttempt = sanitizeStatusPayload({
+    caseScan: {
+      availability: "available",
+      attempted: false,
+      discovered: 0,
+      scanned: 0,
+      omitted: 0,
+      invalid: 0,
+      complete: true,
+      truncated: false
+    }
+  });
+  assert.equal(contradictoryAttempt.caseScan.availability, "unavailable");
+  assert.equal(contradictoryAttempt.caseScan.complete, false);
+  assert.equal(contradictoryAttempt.caseScan.truncated, true);
+
+  const contradictory = sanitizeStatusPayload({
+    caseScan: {
+      availability: "available",
+      discovered: 0,
+      scanned: 1,
+      omitted: 0,
+      invalid: 0,
+      complete: true,
+      truncated: false
+    }
+  });
+  assert.equal(contradictory.caseScan.availability, "available");
+  assert.equal(contradictory.caseScan.complete, false);
+  assert.equal(contradictory.caseScan.truncated, true);
 });
 
 test("case status is normalized from current binding metadata and runtime failures stay separate", () => {
@@ -1261,6 +1352,213 @@ test("case status is normalized from current binding metadata and runtime failur
   assert.equal(status.cases[2].state, "blocked");
   assert.equal(status.cases[2].execution.runningCount, null);
   assert.equal(JSON.stringify(status).includes("PRIVATE_RUNTIME_FAILURE"), false);
+});
+
+test("profile setup projection preserves guided progress while withholding private profile identity", () => {
+  const status = sanitizeStatusPayload({
+    profileSetups: [{
+      id: `program_${"a".repeat(16)}`,
+      displayName: null,
+      stage: "questionnaire",
+      readiness: "not-ready",
+      progress: { answered: 41, total: 66, answers: "PRIVATE_ANSWERS_CANARY" },
+      blockerCount: 3,
+      nextSection: "scope-assets",
+      recommendationMode: "mixed",
+      updatedAt: "2026-10-16T08:00:00.000Z",
+      freshness: "fresh",
+      targetName: "PRIVATE_TARGET_CANARY",
+      source: "PRIVATE_SOURCE_CANARY"
+    }, {
+      id: `program_${"b".repeat(16)}`,
+      displayName: "PRIVATE_DISPLAY_CANARY",
+      stage: "ready",
+      readiness: "ready",
+      progress: { answered: 66, total: 66 },
+      blockerCount: 0,
+      nextSection: null,
+      recommendationMode: null,
+      updatedAt: "2026-10-16T08:00:00.000Z",
+      freshness: "fresh"
+    }],
+    profileSetupScan: {
+      availability: "available",
+      discovered: 3,
+      scanned: 2,
+      omitted: 1,
+      invalid: 1,
+      visible: 1,
+      representedByCases: 1,
+      discoveredAtLeast: true,
+      omittedAtLeast: false,
+      complete: false,
+      truncated: true,
+      filenames: ["PRIVATE_FILENAME_CANARY"]
+    }
+  });
+
+  assert.deepEqual(status.profileSetups, [{
+    id: `program_${"a".repeat(16)}`,
+    displayName: null,
+    stage: "questionnaire",
+    readiness: "not-ready",
+    progress: { answered: 41, total: 66 },
+    blockerCount: 3,
+    nextSection: "scope-assets",
+    recommendationMode: "mixed",
+    updatedAt: "2026-10-16T08:00:00.000Z",
+    freshness: "fresh"
+  }]);
+  assert.deepEqual(status.profileSetupScan, {
+    availability: "available",
+    discovered: 3,
+    scanned: 2,
+    omitted: 1,
+    invalid: 1,
+    visible: 1,
+    representedByCases: 1,
+    discoveredAtLeast: true,
+    omittedAtLeast: false,
+    complete: false,
+    truncated: true
+  });
+  const serialized = JSON.stringify(status);
+  for (const canary of [
+    "PRIVATE_ANSWERS_CANARY", "PRIVATE_TARGET_CANARY", "PRIVATE_SOURCE_CANARY",
+    "PRIVATE_DISPLAY_CANARY", "PRIVATE_FILENAME_CANARY"
+  ]) assert.equal(serialized.includes(canary), false, `profile setup projection leaked ${canary}`);
+});
+
+test("profile setup browser projection preserves unavailable scan truth and rejects contradictory readiness", () => {
+  const status = sanitizeStatusPayload({
+    profileSetups: [{
+      id: `program_${"c".repeat(16)}`,
+      displayName: null,
+      stage: "ready",
+      readiness: "ready",
+      progress: { answered: 65, total: 66 },
+      blockerCount: 0,
+      nextSection: null,
+      recommendationMode: null,
+      updatedAt: "2026-10-16T08:00:00.000Z",
+      freshness: "fresh"
+    }],
+    profileSetupScan: {
+      availability: "unavailable",
+      discovered: 999,
+      scanned: 999,
+      omitted: 0,
+      invalid: 0,
+      visible: 0,
+      representedByCases: 999,
+      complete: true,
+      truncated: false
+    }
+  });
+
+  assert.deepEqual(status.profileSetups, []);
+  assert.deepEqual(status.profileSetupScan, {
+    availability: "unavailable",
+    discovered: null,
+    scanned: null,
+    omitted: null,
+    invalid: null,
+    visible: 0,
+    representedByCases: null,
+    discoveredAtLeast: false,
+    omittedAtLeast: false,
+    complete: false,
+    truncated: true
+  });
+
+  const invalidAvailability = sanitizeStatusPayload({
+    profileSetupScan: {
+      availability: "PRIVATE_INVALID_PROFILE_SCAN_AVAILABILITY_CANARY",
+      discovered: 0,
+      scanned: 0,
+      omitted: 0,
+      invalid: 0,
+      visible: 0,
+      representedByCases: 0,
+      complete: true,
+      truncated: false
+    }
+  });
+  assert.equal(invalidAvailability.profileSetupScan.availability, "unavailable");
+  assert.equal(invalidAvailability.profileSetupScan.complete, false);
+  assert.equal(invalidAvailability.profileSetupScan.truncated, true);
+  assert.equal(JSON.stringify(invalidAvailability).includes("PRIVATE_INVALID_PROFILE_SCAN_AVAILABILITY_CANARY"), false);
+});
+
+test("profile setup browser projection enforces the stage matrix and scan accounting", () => {
+  const row = (suffix, overrides = {}) => ({
+    id: `program_${suffix.repeat(16)}`,
+    displayName: null,
+    stage: "questionnaire",
+    readiness: "not-ready",
+    progress: { answered: 10, total: 66 },
+    blockerCount: 2,
+    nextSection: "scope-assets",
+    recommendationMode: null,
+    updatedAt: "2026-10-16T08:00:00.000Z",
+    freshness: "fresh",
+    ...overrides
+  });
+  const status = sanitizeStatusPayload({
+    profileSetups: [
+      row("1"),
+      row("2", { stage: "operator-review", progress: { answered: 66, total: 66 }, nextSection: null }),
+      row("3", {
+        stage: "ready", readiness: "ready", progress: { answered: 66, total: 66 }, blockerCount: 0, nextSection: null
+      }),
+      row("4", { stage: "superseded", blockerCount: 0, nextSection: null }),
+      row("0", {
+        stage: "superseded", progress: { answered: 0, total: 0 }, blockerCount: 0, nextSection: null
+      }),
+      row("5", { progress: { answered: 66, total: 66 }, nextSection: null }),
+      row("6", { stage: "operator-review" }),
+      row("7", { stage: "superseded" })
+    ],
+    profileSetupScan: {
+      availability: "available",
+      discovered: 8,
+      scanned: 8,
+      omitted: 0,
+      invalid: 3,
+      visible: 5,
+      representedByCases: 0,
+      complete: true,
+      truncated: false
+    }
+  });
+
+  assert.deepEqual(status.profileSetups.map((item) => item.stage), [
+    "questionnaire", "operator-review", "ready", "superseded", "superseded"
+  ]);
+  assert.deepEqual(status.profileSetups.at(-1).progress, { answered: 0, total: 0 });
+  assert.equal(status.profileSetupScan.visible, 5);
+  assert.equal(status.profileSetupScan.scanned, 8);
+  assert.equal(status.profileSetupScan.invalid, 3);
+  assert.equal(status.profileSetupScan.complete, false);
+  assert.equal(status.profileSetupScan.truncated, true);
+
+  const missingAccounting = sanitizeStatusPayload({
+    profileSetups: [row("8")],
+    profileSetupScan: {
+      availability: "available",
+      discovered: 2,
+      scanned: 2,
+      omitted: 0,
+      invalid: 0,
+      visible: 1,
+      representedByCases: 0,
+      complete: true,
+      truncated: false
+    }
+  });
+  assert.equal(missingAccounting.profileSetupScan.visible, 1);
+  assert.equal(missingAccounting.profileSetupScan.complete, false);
+  assert.equal(missingAccounting.profileSetupScan.truncated, true);
 });
 
 test("case projection preserves schema-valid trailing spaces as trimmed display labels", () => {

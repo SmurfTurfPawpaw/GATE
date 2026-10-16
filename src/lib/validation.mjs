@@ -5,6 +5,7 @@ import { readJson } from "./config.mjs";
 import { runtimePaths } from "./paths.mjs";
 import { pentestWorkflowSemanticErrors } from "./pentest-workflow.mjs";
 import { validateManagedAdapterRegistry } from "./managed-adapters.mjs";
+import { objectiveRouteCatalogSemanticErrors } from "./objective-router.mjs";
 import { validateDocument } from "./schema.mjs";
 import { validateToolRuntimeContract } from "./tool-runtimes.mjs";
 
@@ -34,6 +35,7 @@ export function validateRepository(options = {}) {
     "SECURITY.md",
     "locks/upstreams.lock.json",
     "locks/tool-runtimes.lock.json",
+    "config/objective-routes.json",
     "catalog/security-tools.json"
   ];
   for (const relative of required) {
@@ -187,6 +189,7 @@ export function validateRepository(options = {}) {
     ["policies/learning.json", "learning-policy.schema.json"],
     ["policies/updates.json", "update-policy.schema.json"],
     ["catalog/security-tools.json", "tool-catalog.schema.json"],
+    ["config/objective-routes.json", "objective-route-catalog.schema.json"],
     ["config/workflows/pentest-e2e.json", "pentest-workflow.schema.json"],
     ["config/questionnaires/bug-bounty-program-profile.json", "program-profile-questionnaire.schema.json"],
     ["templates/engagement.json", "engagement.schema.json"],
@@ -208,6 +211,12 @@ export function validateRepository(options = {}) {
         errors.push(...pentestWorkflowSemanticErrors(document, {
           catalog: readJson(path.join(paths.repo, "catalog", "security-tools.json")),
           engagementPolicy: readJson(path.join(paths.repo, "policies", "engagements.json"))
+        }));
+      }
+      if (validation.ok && relative === "config/objective-routes.json") {
+        errors.push(...objectiveRouteCatalogSemanticErrors(document, {
+          paths,
+          toolIds: [...catalogIds]
         }));
       }
       checks.push(result(`contract:${relative}`, errors.length === 0, errors.length ? errors.join("; ") : schema));

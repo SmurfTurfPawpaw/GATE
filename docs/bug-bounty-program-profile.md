@@ -48,13 +48,60 @@ Install and invoke the reviewed [`gate-program-profile` skill](../skills/gate-pr
 
 Enter exact program or client names, target selectors, URLs, contacts, source references, private paths, authorization text, and authentication details through the local terminal wizard, a reviewed Lavish interface configured for local-only handling, or another reviewed private local interface. Do not return those literals to Codex through a tool result. Source-first inference remains intact: permitted current-conversation evidence and manually sanitized decision categories support the draft, while private literals fill opaque slots outside model context.
 
-The operator does not need to compose JSON for the sanitized categorical interview. GATE v0.1 provides clickable choices for those decisions and a numbered terminal fallback. Exact and structured private fields still require the terminal wizard or an external reviewed local controller; that local path should import, derive, or prefill values before asking the operator for any remaining short literal. The skill translates accepted non-sensitive decisions into the structure of a private v2 `BugBountyProgramProfileAnswers` envelope, while the local path applies it through `bounty profile create|resume --answers`. The reviewed questionnaire v2 contract records this choice-first preference in metadata version 4. Source-derived values remain labeled `observed`, `inferred`, or `unverified`, and unsupported choices remain unknown or explicit blockers rather than guesses.
+The operator does not need to compose JSON for the sanitized categorical interview. GATE v0.1 provides clickable choices, a local browser wizard for private structured fields, and a numbered terminal fallback. The skill translates accepted non-sensitive decisions into the structure of a private v2 `BugBountyProgramProfileAnswers` envelope, while the local path applies it through `bounty profile create|resume --answers`. The reviewed questionnaire v2 contract records this choice-first and recommendation preference in metadata version 5. Source-derived values remain labeled `observed`, `inferred`, or `unverified`, and unsupported choices remain unknown or explicit blockers rather than guesses.
 
 The choice interface changes how ordinary answers are collected, not what they mean. The same questionnaire, answer schema, verification rules, private storage, operator-confirmed authorization answer, and final attestation requirements apply. A native model choice can continue to local review, request revision, or defer; it cannot serve as either confirmation. After the operator views the exact private review locally, the local controller captures the operator-confirmed authorization answer, operator identity, all attestation answers, and timestamp without returning them to model context. Substantive changes invalidate that attestation and require another exact local review. A choice selection is not an engagement approval or execution confirmation, and the skill makes no target contact.
 
-### Terminal and headless fallbacks
+### Browser wizard and terminal fallback
 
-Interactive CLI creation requires a terminal. This wizard is a typed fallback rather than a clickable interface. Enum and boolean prompts show numbered choices; multi-enum prompts accept comma-separated numbers or values. Structured fields still accept their reviewed JSON shapes. The wizard saves every accepted answer, so it can be resumed and corrected before compilation. A `multiline` prompt accepts the first content line at the primary prompt, then shows a `... ` continuation prompt. Enter `.` on its own line to finish; GATE joins the content lines with newline characters. Wizard controls such as `back`, `edit ID`, `why`, `format`, `save`, and `quit` are recognized only at the primary prompt, before multiline collection begins. `format` prints a pasteable example for the current field and shows `null` as a separate alternative when the field permits it.
+The normal private-data path is the loopback-only browser wizard:
+
+```bash
+unset GATE_CASE
+./bin/gate.mjs bounty profile create acme-program --apply-recommended --json
+./bin/gate.mjs bounty profile ui acme-program --open
+```
+
+The first command initializes a private draft and applies only eligible reviewed preferences; omit it when the profile already exists. The second starts one profile-bound local server, prints its private session URL, optionally opens the browser, and keeps the terminal attached until `Ctrl+C` or `SIGTERM`. It accepts only explicit `127.0.0.1` or `::1` bindings. It edits one local profile through typed controls, including per-asset action and limit overrides, phase limits, and technique parameters. Structured editors preserve unedited fields; advanced JSON remains a fallback. Enter each condition or secret reference on its own line; commas within an entry are preserved. The observer dashboard remains read-only. Interactive CLI creation remains available as a typed fallback. Enum and boolean prompts show numbered choices; multi-enum prompts accept comma-separated numbers or values. Structured fields accept their reviewed JSON shapes, and `format` labels its content as an example rather than a recommendation. The wizard saves every accepted answer, so it can be resumed and corrected before compilation. A `multiline` prompt accepts the first content line at the primary prompt, then shows a `... ` continuation prompt. Enter `.` on its own line to finish; GATE joins the content lines with newline characters. Wizard controls such as `back`, `edit ID`, `why`, `format`, `recommended`, `apply recommended`, `save`, and `quit` are recognized only at the primary prompt, before multiline collection begins.
+
+### Reviewed recommendations
+
+All 66 core questions and all 36 conditional-module questions declare one validated recommendation policy:
+
+- `operator-preference` contains a reviewed, deterministic GATE preference that may be accepted with `recommended` or `R`;
+- `evidence-proposal` needs a separate private proposal. Permission, scope, target-effect limits, coverage, phase policy, and module questions require an `observed` source-derived proposal with current cited sources. Other evidence questions may accept an observed or inferred local proposal;
+- `manual-only` never has a recommendation. It applies to `authority-operator-confirmed` and the five final attestation questions.
+
+Initial profile values and `format` examples are never recommendation inputs. An unverified proposal remains unresolved. A missing source, stale questionnaire digest, stale profile revision, stale profile digest, unsupported question, or manual-only proposal cannot be applied. The terminal and browser show the bounded `observed` or `inferred` evidence state before an evidence proposal can be accepted; they do not rely on its free-form summary to communicate confidence. Sensitive-question prompts report only that a private recommendation exists and may show that bounded evidence-state label; they do not print its value or free-form basis.
+
+Apply every currently supported unanswered recommendation in one base-bound update:
+
+```bash
+./bin/gate.mjs bounty profile resume acme-program \
+  --apply-recommended --json
+
+./bin/gate.mjs bounty profile resume acme-program \
+  --recommendations "$HOME/private/acme-program-recommendations.json" \
+  --apply-recommended --json
+```
+
+To review proposals one at a time, omit `--apply-recommended` and use `recommended` at the selected terminal question, or open the private browser with the same bound envelope:
+
+```bash
+./bin/gate.mjs bounty profile resume acme-program \
+  --recommendations "$HOME/private/acme-program-recommendations.json"
+
+./bin/gate.mjs bounty profile ui acme-program --open \
+  --recommendations "$HOME/private/acme-program-recommendations.json"
+```
+
+After any answer edit or accepted proposal changes the profile revision, reload or regenerate the proposal envelope against the new exact base before accepting another evidence proposal. The browser and terminal exclude stale evidence envelopes when applying independent reviewed policy preferences, so those preferences remain available without restarting the session or supplying a new proposal file.
+
+Explicit answers always win. Bulk application recalculates conditional-module applicability as answers are selected, writes at most one new profile revision, and writes no revision when zero recommendations are eligible. Create with `--apply-recommended` validates the unbound proposal before publication and writes the initialized recommended draft in one profile transaction at revision 1. A substantive recommendation update uses the ordinary answer mutation path, so any prior attestation is invalidated. Recommendation selection does not confirm authorization, attest to the profile, create an engagement, or grant execution authority.
+
+Private proposal files follow the [recommendation schema](../schemas/bug-bounty-program-profile-recommendations.schema.json). They bind the program ID, questionnaire ID/version/digest, and exact base profile revision/digest. Each proposal carries an exact value, `source-derived` or `local-derived` provenance, and a basis with a sanitized summary, claim state, and source references. Create-time proposal files use null base fields only for the same atomic create invocation; resume proposal files require the exact current base. Keep these files outside Git under owner-only permissions.
+
+Enter the source ledger explicitly through the local form or an answer envelope before applying any source-required proposal. A proposal cannot establish the source record that it cites as its own authority; its cited source IDs must already exist in the current profile.
 
 Use an answers file with `--answers` for a headless or repeatable workflow, or when structured content is easier to prepare outside the terminal wizard. An agent using the preferred skill may prepare the non-sensitive structure and categorical answers; a local control must merge exact private values without returning the filled file to model context. The operator should not have to author raw JSON during the normal flow. Keep the file in a private location outside the repository because it may contain targets, program terms, contacts, or unpublished testing plans. Store credentials separately and answer with `env://`, `keychain://`, or `file://` references only.
 
@@ -101,7 +148,7 @@ The file must follow the [answers schema](../schemas/bug-bounty-program-profile-
 
 This partial v2 example creates a draft, so both base fields are `null`. A resume envelope must instead carry the exact current base. After create or apply, the CLI result exposes top-level `revision` and `profileSha256`; `status --json` exposes `profile.revision` and top-level `profileSha256`. The local controller copies those current values into `baseRevision` and `baseProfileSha256` for the next headless batch without returning them to the model. Raw status also contains the profile ID, title, and blocker details. GATE v0.1 has no built-in model-safe Program Profile projector, so keep the command local and return only manually sanitized categorical outcomes when a model assists. GATE stores and rebinds its canonical v2 envelope after each apply; the programmatic resume result returns that binding in `answers`. GATE rejects stale, mismatched, and legacy v1 resume updates, so reload the current summary rather than reconstructing or guessing either base value. Supply the remaining required answers or resume the wizard before expecting verification to report `ready: true`.
 
-Applicable module questions precede final operator attestation. Substantive edits invalidate the prior attestation; review the revised answers and attest again before compiling a ready profile. A headless amendment can include a fresh attestation only by supplying all attestation answers with a timestamp strictly later than both the current profile update and the prior attestation. Answer values must match their questionnaire types, including module answers; key presence alone does not complete a module.
+The authorization confirmation question follows the source ledger, contacts, and every other authority-basis field. Public create and generic headless answer ingestion cannot establish or replay `authority-operator-confirmed: true`; complete that exact review in the local terminal or browser after import. Changing a cited source or any authorization review-basis field clears the prior confirmation and requires another local confirmation. Applicable module questions precede final operator attestation. Substantive edits invalidate the prior attestation; review the revised answers and attest again before compiling a ready profile. A headless amendment can include a fresh attestation only by supplying all attestation answers with a timestamp strictly later than both the current profile update and the prior attestation. Answer values must match their questionnaire types, including module answers; key presence alone does not complete a module.
 
 Interactive resume opens the first unanswered applicable required question. An unconfirmed draft value does not count as an answer: enter it explicitly to confirm it. Progress counts only applicable questions. Quitting or finishing the questions returns a bounded saved-state summary and the next command; finishing alone does not establish readiness. If all required answers are recorded but verification remains blocked, it prioritizes an exact question-path match over a broad parent blocker. For example, a recorded `false` answer to `attestation-answers-complete` reopens that question rather than `attestation-operator`. An attestation blocker without a matching question opens `attestation-at` for renewed review.
 

@@ -3,10 +3,16 @@ import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parseArgs, listFlag, requiredFlag } from "./lib/args.mjs";
 import {
+  applyProgramProfileRecommendation,
+  applyProgramProfileRecommendations,
   applyProgramProfileAnswers,
+  applyProgramProfileAuthorityConfirmation,
   compileProgramProfile,
   createProgramProfile,
+  createProgramProfileWithRecommendations,
   loadProgramProfileAnswers,
+  loadProgramProfileRecommendations,
+  programProfileRecommendation,
   programProfileStatus,
   resumeProgramProfile,
   showProgramProfile,
@@ -49,6 +55,7 @@ import {
   offlineAnalysisStatus,
   purgeOfflineAnalysisArtifact
 } from "./lib/offline-analysis.mjs";
+import { recommendObjectiveFromPrivateFile } from "./lib/objectives.mjs";
 import { ensureRuntime, runtimePaths } from "./lib/paths.mjs";
 import { checkPublication, publishPullRequest } from "./lib/publication.mjs";
 import {
@@ -125,6 +132,10 @@ Projects
   project show ID                   Show one registered project contract
   project verify ID                 Verify one registered project contract
 
+Objectives
+  objective recommend --proposal PRIVATE_FILE --json
+                                    Route one private categorical objective proposal
+
 Cases
   case create ID --program PROFILE --name NAME [--project ID]
                                     Create a bug-program case with a separate state directory
@@ -140,10 +151,14 @@ shared-registry commands reject runtime selectors. Aggregate status, events,
 and private learning remain available without a selector and use base state.
 
 Bug bounty program profiles
-  bounty profile create ID [--answers FILE]
+  bounty profile create ID [--answers FILE] [--apply-recommended]
                                     Create a private profile interactively or from answers
-  bounty profile resume ID [--answers FILE]
+  bounty profile resume ID [--answers FILE] [--apply-recommended]
                                     Resume the questionnaire or apply another answer file
+    --recommendations FILE          Supply a private, base-bound recommendation proposal envelope
+    --apply-recommended             Atomically apply supported unanswered recommendations
+  bounty profile ui ID [--host 127.0.0.1] [--port N] [--open] [--recommendations FILE]
+                                    Open the local-only choice-first profile wizard
   bounty profile status [ID]        Show one profile or the private profile index
   bounty profile show ID [--format json|review|model-context]
                                     Render the canonical profile or a bounded derived view
@@ -376,6 +391,19 @@ function assertUnambiguousBountyArgs(argv) {
   }
 }
 
+function assertUnambiguousObjectiveArgs(argv) {
+  const seen = new Set();
+  for (const value of argv) {
+    if (value === "--") throw new Error("objective commands do not accept passthrough arguments");
+    if (!value.startsWith("--")) continue;
+    const equals = value.indexOf("=");
+    const name = value.slice(2, equals === -1 ? undefined : equals);
+    if (!name) throw new Error("objective options must have a name");
+    if (seen.has(name)) throw new Error(`objective option must not be repeated: --${name}`);
+    seen.add(name);
+  }
+}
+
 function profilePathParts(value) {
   const parts = value.split(".");
   if (!parts.length || parts.some((part) => !part || new Set(["__proto__", "prototype", "constructor"]).has(part))) {
@@ -421,13 +449,26 @@ function resolveChoiceToken(raw, choices) {
   return token;
 }
 
-function questionChoicePrompt(question) {
+function questionChoicePrompt(question, recommendation = programProfileRecommendation(question.id)) {
   const choices = selectableQuestionChoices(question);
-  if (!choices.length) return "";
-  const instruction = question.type === "multi-enum"
-    ? "Choose one or more by number or value; separate selections with commas."
-    : "Choose one by number or value.";
-  return `\n${choices.map((choice, index) => `  ${index + 1}. ${choice}`).join("\n")}\n${instruction}`;
+  const lines = [];
+  if (choices.length) {
+    lines.push(...choices.map((choice, index) => `  ${index + 1}. ${choice}`));
+    lines.push(question.type === "multi-enum"
+      ? "Choose one or more by number or value; separate selections with commas."
+      : "Choose one by number or value.");
+  }
+  if (recommendation.available) {
+    const claimState = new Set(["observed", "inferred"]).has(recommendation.basis?.claimState)
+      ? ` [evidence: ${recommendation.basis.claimState}]`
+      : "";
+    lines.push(`  R. Use recommended${claimState} — ${recommendation.summary}`);
+  } else if (recommendation.reason === "manual-only") {
+    lines.push("Recommendation unavailable — direct local operator review is required.");
+  } else {
+    lines.push(`Recommendation unavailable — ${recommendation.summary || "a validated private proposal is required."}`);
+  }
+  return lines.length ? `\n${lines.join("\n")}` : "";
 }
 
 function parseQuestionAnswer(question, raw) {
@@ -805,7 +846,7 @@ function questionFormatGuidance(question) {
       }]));
       break;
     case "contact-list":
-      accepted = "a JSON array of contact records";
+      accepted = "a JSON array of contact records (terminal fallback); use `gate bounty profile ui ID` for the normal field-by-field editor";
       example = [{
         name: "Program security team",
         role: "Escalation contact",
@@ -883,6 +924,12 @@ function newProgramProfileAnswers(id) {
   };
 }
 
+function firstUnansweredQuestionIndex(questions, profile, answers) {
+  return questions.findIndex((question) =>
+    question.required && questionApplies(question, profile) && !questionHasAnswer(question, profile, answers)
+  );
+}
+
 async function runProgramProfileQuestionnaire(id, mode, options = {}) {
   const input = options.input || process.stdin;
   const terminalOutput = options.output || process.stderr;
@@ -891,15 +938,14 @@ async function runProgramProfileQuestionnaire(id, mode, options = {}) {
     throw new Error("interactive bug-bounty profile questionnaire requires a TTY; pass --answers FILE for headless use");
   }
   const paths = options.paths;
+  const recommendations = options.recommendations || null;
   if (mode === "create") createProgramProfile(id, newProgramProfileAnswers(id), { paths });
 
   let resumed = resumeProgramProfile(id, { paths });
   let profile = resumed.profile;
   let answers = resumed.answers || newProgramProfileAnswers(id);
   const questions = PROGRAM_PROFILE_QUESTIONS;
-  let index = questions.findIndex((question) =>
-    question.required && questionApplies(question, profile) && !questionHasAnswer(question, profile, answers)
-  );
+  let index = firstUnansweredQuestionIndex(questions, profile, answers);
   if (index === -1) {
     const verification = verifyProgramProfile(id, { paths });
     index = verificationQuestionIndex(questions, verification.blockers || []);
@@ -914,7 +960,11 @@ async function runProgramProfileQuestionnaire(id, mode, options = {}) {
     terminalOutput.write(`Resuming at unanswered required question: ${questions[index].id}.\n`);
   }
   const terminal = createInterface({ input, output: terminalOutput, terminal: options.terminal ?? true });
-  terminalOutput.write("Commands: back, edit QUESTION_ID, why, format, save, quit. Choice questions accept numbers; format shows advanced typed shapes.\n");
+  const notices = new Set();
+  terminalOutput.write(
+    "Commands: back, edit QUESTION_ID, why, format, recommended, apply recommended, save, quit. " +
+    "Choice questions accept numbers; format shows advanced typed shapes.\n"
+  );
 
   try {
     while (index < questions.length) {
@@ -931,10 +981,34 @@ async function runProgramProfileQuestionnaire(id, mode, options = {}) {
         : recorded
           ? ` [current: ${boundedTerminalValue(current)}]`
           : ` [unconfirmed draft: ${boundedTerminalValue(current)}; enter explicitly to confirm]`;
-      const choiceHint = questionChoicePrompt(question);
+      const activeRecommendations = recommendations?.metadata?.baseRevision === profile.metadata.revision &&
+        recommendations?.metadata?.baseProfileSha256 === resumed.summary.profileSha256 ? recommendations : null;
+      const recommendation = programProfileRecommendation(question.id, { profile, recommendations: activeRecommendations });
+      const choiceHint = questionChoicePrompt(question, recommendation);
       const requiredHint = question.required ? " [required]" : "";
       const multilineHint = question.type === "multiline" ? " [multiline; finish with . on its own line]" : "";
       const progress = applicableQuestionProgress(questions, profile, index);
+      if (!notices.has(question.id) && question.id === "authority-operator-confirmed") {
+        terminalOutput.write(
+          `Before answering this question, review the exact private draft locally with ` +
+          `./bin/gate.mjs bounty profile show ${id} --format review. ` +
+          "Choosing yes means that review actually occurred; it is never a wizard default or recommendation.\n"
+        );
+        notices.add(question.id);
+      }
+      if (!notices.has(question.id) && question.path.startsWith("attestation.")) {
+        terminalOutput.write(
+          "Final attestation requires the operator's exact local review. GATE does not recommend or infer attestation answers.\n"
+        );
+        notices.add(question.id);
+      }
+      if (!notices.has(question.id) && question.type === "contact-list") {
+        terminalOutput.write(
+          `For normal field-by-field contact entry, quit and run ./bin/gate.mjs bounty profile ui ${id}. ` +
+          "The terminal prompt remains a typed JSON fallback.\n"
+        );
+        notices.add(question.id);
+      }
       const raw = await terminal.question(
         `\n${section.title} · ${progress.position}/${progress.total} applicable · ${question.id}\n${question.prompt}${requiredHint}${multilineHint}${currentHint}${choiceHint}\n> `
       );
@@ -953,6 +1027,26 @@ async function runProgramProfileQuestionnaire(id, mode, options = {}) {
       }
       if (command === "quit") {
         return questionnaireResult(programProfileStatus(id, { paths }), "saved");
+      }
+      if (command === "apply recommended") {
+        try {
+          const result = applyProgramProfileRecommendations(id, activeRecommendations, {
+            paths,
+            expectedRevision: profile.metadata.revision,
+            expectedProfileSha256: resumed.summary.profileSha256
+          });
+          terminalOutput.write(result.appliedCount
+            ? `Applied ${result.appliedCount} supported unanswered recommendation(s) in one profile revision.\n`
+            : "No supported unanswered recommendations were eligible; the profile revision was unchanged.\n");
+          resumed = resumeProgramProfile(id, { paths });
+          profile = resumed.profile;
+          answers = resumed.answers || answers;
+          const unanswered = firstUnansweredQuestionIndex(questions, profile, answers);
+          if (unanswered !== -1) index = unanswered;
+        } catch (error) {
+          terminalOutput.write(`Recommendations were not applied: ${error.message}\n`);
+        }
+        continue;
       }
       if (command === "back") {
         index = Math.max(0, index - 1);
@@ -978,11 +1072,20 @@ async function runProgramProfileQuestionnaire(id, mode, options = {}) {
         continue;
       }
       let answer;
+      let usedRecommendation = false;
       try {
-        const answerInput = question.type === "multiline"
-          ? await readMultilineAnswer(terminal, raw, terminalOutput)
-          : raw;
-        answer = parseQuestionAnswer(question, answerInput);
+        if (/^(?:r|recommend|recommended)$/iu.test(command)) {
+          if (!recommendation.available) {
+            throw new Error(recommendation.summary || "no supported recommendation is available for this question");
+          }
+          answer = structuredClone(recommendation.value);
+          usedRecommendation = true;
+        } else {
+          const answerInput = question.type === "multiline"
+            ? await readMultilineAnswer(terminal, raw, terminalOutput)
+            : raw;
+          answer = parseQuestionAnswer(question, answerInput);
+        }
         if (question.required && !programProfileQuestionAnswerIsComplete(question, answer)) {
           throw new Error("enter a substantive non-empty answer for this required question");
         }
@@ -995,7 +1098,19 @@ async function runProgramProfileQuestionnaire(id, mode, options = {}) {
       updatedAnswers.metadata.updatedAt = new Date().toISOString();
       updatedAnswers.answers[question.id] = answer;
       try {
-        applyProgramProfileAnswers(id, updatedAnswers, { paths });
+        if (usedRecommendation) {
+          applyProgramProfileRecommendation(id, question.id, question.recommendationPolicy?.class === "operator-preference" ? activeRecommendations : recommendations, {
+            paths,
+            expectedRevision: profile.metadata.revision,
+            expectedProfileSha256: resumed.summary.profileSha256,
+            now: updatedAnswers.metadata.updatedAt
+          });
+        } else {
+          const applyAnswer = question.id === "authority-operator-confirmed" && answer === true
+            ? applyProgramProfileAuthorityConfirmation
+            : applyProgramProfileAnswers;
+          applyAnswer(id, updatedAnswers, { paths });
+        }
       } catch (error) {
         terminalOutput.write(`Answer was not accepted: ${error.message}\n`);
         continue;
@@ -1003,7 +1118,11 @@ async function runProgramProfileQuestionnaire(id, mode, options = {}) {
       resumed = resumeProgramProfile(id, { paths });
       profile = resumed.profile;
       answers = resumed.answers || updatedAnswers;
-      terminalOutput.write(`Saved ${question.id}.\n`);
+      terminalOutput.write(
+        usedRecommendation
+          ? `Saved ${question.id} from the ${recommendation.provenance} recommendation.\n`
+          : `Saved ${question.id}.\n`
+      );
       index += 1;
     }
   } finally {
@@ -1225,11 +1344,12 @@ const GLOBAL_CASE_COMMANDS = new Set([
   "up",
   "case",
   "project",
+  "objective",
   "workspace",
   "upstream",
   "publication"
 ]);
-const GLOBAL_BOUNTY_PROFILE_ACTIONS = new Set(["create", "resume", "status", "show", "verify"]);
+const GLOBAL_BOUNTY_PROFILE_ACTIONS = new Set(["create", "resume", "ui", "status", "show", "verify"]);
 const GLOBAL_TOOL_ACTIONS = new Set(["list", "show", "plan", "prefetch", "install", "verify", "remove"]);
 const STALE_SAFE_ENGAGEMENT_ACTIONS = new Set(["status", "stop", "revoke", "reconcile", "close"]);
 const STALE_SAFE_ANALYSIS_ACTIONS = new Set(["status", "purge"]);
@@ -1455,6 +1575,21 @@ export async function main(argv) {
     throw new Error(`unknown project action: ${action}`);
   }
 
+  if (command === "objective") {
+    assertUnambiguousObjectiveArgs(rest);
+    const [action] = parsed.positional;
+    if (action !== "recommend") throw new Error(`unknown objective action: ${action || "missing"}`);
+    assertPositionals(parsed.positional, 1, "gate objective recommend --proposal PRIVATE_FILE --json");
+    assertFlags(parsed.flags, ["proposal", "json"]);
+    assertBooleanSwitch(parsed.flags, "json");
+    if (parsed.flags.json !== true) throw new Error("gate objective recommend requires --json");
+    const recommendation = recommendObjectiveFromPrivateFile(
+      requiredFlag(parsed.flags, "proposal"),
+      { paths: basePaths }
+    );
+    return output(recommendation, true);
+  }
+
   if (command === "bounty") {
     assertUnambiguousBountyArgs(rest);
     const [area, action, id] = parsed.positional;
@@ -1463,10 +1598,23 @@ export async function main(argv) {
     assertBooleanSwitch(parsed.flags, "json");
 
     if (new Set(["create", "resume"]).has(action)) {
-      assertPositionals(parsed.positional, 3, `gate bounty profile ${action} ID [--answers FILE]`);
-      assertFlags(parsed.flags, ["answers", "json"]);
+      assertPositionals(
+        parsed.positional,
+        3,
+        `gate bounty profile ${action} ID [--answers FILE] [--recommendations FILE] [--apply-recommended]`
+      );
+      assertFlags(parsed.flags, ["answers", "recommendations", "apply-recommended", "json"]);
+      assertBooleanSwitch(parsed.flags, "apply-recommended");
       if (!id) throw new Error("program profile id is required");
       const answersFile = optionalValueFlag(parsed.flags, "answers");
+      const recommendationsFile = optionalValueFlag(parsed.flags, "recommendations");
+      const applyRecommended = parsed.flags["apply-recommended"] === true;
+      if (action === "create" && recommendationsFile && !applyRecommended) {
+        throw new Error("create-time --recommendations requires --apply-recommended");
+      }
+      if (answersFile && (applyRecommended || recommendationsFile)) {
+        throw new Error("--answers and --recommendations are separate atomic operations; apply one, then reload the current base");
+      }
       if (answersFile) {
         const answers = loadProgramProfileAnswers(answersFile, { paths });
         const result = action === "create"
@@ -1474,7 +1622,79 @@ export async function main(argv) {
           : applyProgramProfileAnswers(id, answers, { paths });
         return output(result, json);
       }
-      return output(await runProgramProfileQuestionnaire(id, action, { paths }), json);
+      if (applyRecommended) {
+        const recommendations = recommendationsFile
+          ? loadProgramProfileRecommendations(recommendationsFile, { paths })
+          : null;
+        const result = action === "create"
+          ? createProgramProfileWithRecommendations(id, recommendations, { paths })
+          : applyProgramProfileRecommendations(id, recommendations, { paths });
+        return output(result, json);
+      }
+      const recommendations = recommendationsFile
+        ? loadProgramProfileRecommendations(recommendationsFile, { paths })
+        : null;
+      return output(await runProgramProfileQuestionnaire(id, action, { paths, recommendations }), json);
+    }
+
+    if (action === "ui") {
+      assertPositionals(
+        parsed.positional,
+        3,
+        "gate bounty profile ui ID [--host 127.0.0.1] [--port N] [--open] [--recommendations FILE]"
+      );
+      assertFlags(parsed.flags, ["host", "port", "open", "recommendations", "json"]);
+      assertBooleanSwitch(parsed.flags, "open");
+      if (!id) throw new Error("program profile id is required");
+      const host = optionalValueFlag(parsed.flags, "host") || "127.0.0.1";
+      const portFlag = optionalValueFlag(parsed.flags, "port");
+      const port = portFlag === undefined ? 0 : Number(portFlag);
+      const recommendationsFile = optionalValueFlag(parsed.flags, "recommendations");
+      const recommendations = recommendationsFile
+        ? loadProgramProfileRecommendations(recommendationsFile, { paths })
+        : null;
+      const { startProfileWizardServer } = await import("./profile-ui/server.mjs");
+      const started = await startProfileWizardServer({
+        profileId: id,
+        paths,
+        host,
+        port,
+        recommendations,
+        openBrowser: parsed.flags.open === true
+      });
+      const summary = {
+        started: true,
+        profileId: started.profileId,
+        host: started.host,
+        port: started.port,
+        origin: started.origin,
+        url: started.url,
+        browserOpened: started.browserOpened
+      };
+      if (json) output(summary, true);
+      else {
+        process.stdout.write(`GATE profile wizard: ${started.url}\n`);
+        process.stdout.write(`Private loopback session for ${started.profileId}. Press Ctrl+C to stop.\n`);
+        if (parsed.flags.open === true && !started.browserOpened) {
+          process.stdout.write("Automatic browser launch was unavailable; open the private URL above.\n");
+        }
+      }
+      await new Promise((resolve, reject) => {
+        let stopping = false;
+        const stop = (signal) => {
+          if (stopping) return;
+          stopping = true;
+          process.off("SIGINT", onSigint);
+          process.off("SIGTERM", onSigterm);
+          process.exitCode = signal === "SIGINT" ? 130 : 143;
+          started.close().then(resolve, reject);
+        };
+        const onSigint = () => stop("SIGINT");
+        const onSigterm = () => stop("SIGTERM");
+        process.once("SIGINT", onSigint);
+        process.once("SIGTERM", onSigterm);
+      });
+      return;
     }
 
     if (action === "status") {

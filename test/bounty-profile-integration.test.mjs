@@ -12,7 +12,10 @@ import { fileURLToPath } from "node:url";
 import { cliInternals } from "../src/cli.mjs";
 import {
   applyProgramProfileAnswers,
+  applyProgramProfileAuthorityConfirmation,
+  applyProgramProfileRecommendations,
   bountyProfileInternals,
+  clearProgramProfileAnswer,
   compileProgramProfile,
   createProgramProfile,
   loadProgramProfileAnswers,
@@ -23,10 +26,12 @@ import {
 import {
   PROGRAM_PROFILE_ACTIONS,
   PROGRAM_PROFILE_COVERAGE_DOMAINS,
+  PROGRAM_PROFILE_MANUAL_ONLY_QUESTION_IDS,
   PROGRAM_PROFILE_MODULE_IDS,
   PROGRAM_PROFILE_QUESTIONS,
   PROGRAM_PROFILE_SECTION_IDS,
-  PROGRAM_PROFILE_STOP_CONDITIONS
+  PROGRAM_PROFILE_STOP_CONDITIONS,
+  programProfileQuestionnaireBinding
 } from "../src/lib/program-profile-contract.mjs";
 import { runtimePaths } from "../src/lib/paths.mjs";
 import { startObserver } from "../src/observer/server.mjs";
@@ -302,6 +307,66 @@ function answerEnvelope(id, profile) {
   };
 }
 
+// Ready-profile fixtures still exercise the same direct review mutation used by
+// the terminal and browser. Production code intentionally exposes no create
+// shortcut capable of turning a headless envelope into operator confirmation.
+function createReviewedProgramProfile(id, input, options = {}) {
+  const isEnvelope = input?.kind === "BugBountyProgramProfileAnswers";
+  const explicitlyConfirmed = isEnvelope
+    ? input.answers?.["authority-operator-confirmed"] === true
+    : input?.authorization?.operatorConfirmed === true;
+  if (!explicitlyConfirmed) {
+    return createProgramProfile(id, input, options);
+  }
+  const suppliedAnswers = isEnvelope ? input.answers : answerEnvelope(id, input).answers;
+
+  const confirmedAt = options.now || new Date().toISOString();
+  const confirmedAtMs = Date.parse(confirmedAt);
+  const attestedAtMs = Date.parse(suppliedAnswers["attestation-at"]);
+  const firstMutationMs = Number.isFinite(attestedAtMs)
+    ? Math.min(confirmedAtMs, attestedAtMs) - 1
+    : confirmedAtMs - 1;
+  createProgramProfile(id, input, {
+    ...options,
+    now: new Date(firstMutationMs).toISOString()
+  });
+  const current = resumeProgramProfile(id, { paths: options.paths });
+  const reviewed = current.answers;
+  reviewed.metadata.updatedAt = confirmedAt;
+  const attestationIds = PROGRAM_PROFILE_MANUAL_ONLY_QUESTION_IDS.filter(
+    (questionId) => questionId !== "authority-operator-confirmed"
+  );
+  const completeAttestation = suppliedAnswers["attestation-operator"] &&
+    suppliedAnswers["attestation-answers-complete"] === true &&
+    suppliedAnswers["attestation-sources-reviewed"] === true &&
+    suppliedAnswers["attestation-scope-reviewed"] === true &&
+    suppliedAnswers["attestation-at"];
+  reviewed.answers["authority-operator-confirmed"] = true;
+  for (const questionId of completeAttestation ? attestationIds : []) {
+    if (Object.hasOwn(suppliedAnswers, questionId)) {
+      reviewed.answers[questionId] = structuredClone(suppliedAnswers[questionId]);
+    }
+  }
+  const confirmed = applyProgramProfileAuthorityConfirmation(id, reviewed, {
+    paths: options.paths,
+    now: confirmedAt
+  });
+  if (completeAttestation) return confirmed;
+
+  const attestationEdit = resumeProgramProfile(id, { paths: options.paths }).answers;
+  attestationEdit.metadata.updatedAt = confirmedAt;
+  let suppliedAttestation = false;
+  for (const questionId of attestationIds) {
+    if (Object.hasOwn(suppliedAnswers, questionId)) {
+      attestationEdit.answers[questionId] = structuredClone(suppliedAnswers[questionId]);
+      suppliedAttestation = true;
+    }
+  }
+  return suppliedAttestation
+    ? applyProgramProfileAnswers(id, attestationEdit, { paths: options.paths, now: confirmedAt })
+    : confirmed;
+}
+
 function providerProfile(overrides = {}) {
   return {
     $schema: "https://gate.local/schemas/provider-capability-profile.schema.json",
@@ -434,11 +499,26 @@ test("a headless answer file is preserved and deterministically maps every quest
   delete secondStoredAnswers.metadata.baseProfileSha256;
   assert.deepEqual(firstStoredAnswers, secondStoredAnswers);
   const stored = readJson(path.join(first.home, "programs", id, "program-profile.json"));
+  const manualOnly = new Set(PROGRAM_PROFILE_MANUAL_ONLY_QUESTION_IDS);
   for (const question of PROGRAM_PROFILE_QUESTIONS) {
-    assert.deepEqual(valueAt(stored, question.path), valueAt(profile, question.path), question.id);
+    if (manualOnly.has(question.id)) {
+      assert.equal(Object.hasOwn(firstStoredAnswers.answers, question.id), false, question.id);
+    } else {
+      assert.deepEqual(valueAt(stored, question.path), valueAt(profile, question.path), question.id);
+    }
   }
-  assert.equal(stored.metadata.status, "ready-to-materialize");
-  assert.deepEqual(new Set(Object.values(stored.questionnaire.sectionStatus)), new Set(["complete"]));
+  assert.equal(stored.authorization.operatorConfirmed, false);
+  assert.deepEqual(stored.attestation, {
+    operator: "local-operator",
+    answersComplete: false,
+    sourceClaimsReviewed: false,
+    exactScopeReviewed: false,
+    attestedAt: null,
+    attestedRevision: null
+  });
+  assert.equal(stored.metadata.status, "draft");
+  assert.equal(stored.questionnaire.sectionStatus["authority-sources"], "in-progress");
+  assert.equal(stored.questionnaire.sectionStatus["ambiguities-attestation"], "in-progress");
 });
 
 test("parent and child answer paths merge deterministically and every raw value is secret-scanned", (t) => {
@@ -471,8 +551,8 @@ test("parent and child answer paths merge deterministically and every raw value 
     };
   };
 
-  createProgramProfile("parent-first", makeEnvelope("parent-first", true), { paths: first.paths, now: fixedAt });
-  createProgramProfile("child-first", makeEnvelope("child-first", false), { paths: second.paths, now: fixedAt });
+  createReviewedProgramProfile("parent-first", makeEnvelope("parent-first", true), { paths: first.paths, now: fixedAt });
+  createReviewedProgramProfile("child-first", makeEnvelope("child-first", false), { paths: second.paths, now: fixedAt });
   const parentFirst = readJson(path.join(first.home, "programs", "parent-first", "program-profile.json"));
   const childFirst = readJson(path.join(second.home, "programs", "child-first", "program-profile.json"));
   assert.deepEqual(parentFirst.modules["web-api"].answers, childFirst.modules["web-api"].answers);
@@ -482,7 +562,7 @@ test("parent and child answer paths merge deterministically and every raw value 
     const rejected = fixture(t);
     const id = parentFirstOrder ? "secret-parent-first" : "secret-parent-last";
     assert.throws(
-      () => createProgramProfile(id, makeEnvelope(id, parentFirstOrder, secretCanary), { paths: rejected.paths, now: fixedAt }),
+      () => createReviewedProgramProfile(id, makeEnvelope(id, parentFirstOrder, secretCanary), { paths: rejected.paths, now: fixedAt }),
       /credential|secret-value-or-invalid-reference|answers rejected/u
     );
     const retained = allFiles(rejected.home).map((file) => fs.readFileSync(file, "utf8")).join("\n");
@@ -493,7 +573,7 @@ test("parent and child answer paths merge deterministically and every raw value 
 test("legacy stored v1 answers resume through an in-memory v2 binding and migrate on mutation", (t) => {
   const { home, paths } = fixture(t);
   const id = "legacy-answer-state";
-  createProgramProfile(id, {}, { paths, now: fixedAt });
+  createReviewedProgramProfile(id, {}, { paths, now: fixedAt });
   const directory = path.join(home, "programs", id);
   const answerFile = path.join(directory, "answers.json");
   const bindingFile = path.join(directory, "state-binding.json");
@@ -532,10 +612,62 @@ test("create rejects a v2 envelope that claims an existing base", (t) => {
   assert.equal(fs.existsSync(path.join(paths.programs, id)), false);
 });
 
+test("public create cannot establish or replay manual authority confirmation", (t) => {
+  const { paths } = fixture(t);
+  const id = "headless-confirmation-rejected";
+  createProgramProfile(id, answerEnvelope(id, completeProfile(id)), { paths, now: fixedAt });
+
+  const stored = resumeProgramProfile(id, { paths });
+  assert.equal(stored.profile.authorization.operatorConfirmed, false);
+  assert.equal(Object.hasOwn(stored.answers.answers, "authority-operator-confirmed"), false);
+  for (const questionId of PROGRAM_PROFILE_MANUAL_ONLY_QUESTION_IDS.filter((candidate) => candidate.startsWith("attestation-"))) {
+    assert.equal(Object.hasOwn(stored.answers.answers, questionId), false, questionId);
+  }
+  assert.equal(stored.profile.attestation.attestedRevision, null);
+  assert.equal(stored.profile.metadata.status, "draft");
+});
+
+test("generic answer updates cannot establish or replay authority confirmation", (t) => {
+  const { paths } = fixture(t);
+  const id = "generic-confirmation-rejected";
+  createProgramProfile(id, answerEnvelope(id, completeProfile(id)), { paths, now: fixedAt });
+
+  const generic = resumeProgramProfile(id, { paths }).answers;
+  generic.metadata.updatedAt = "2026-10-14T12:01:00.000Z";
+  generic.answers["authority-operator-confirmed"] = true;
+  applyProgramProfileAnswers(id, generic, { paths, now: generic.metadata.updatedAt });
+  let current = resumeProgramProfile(id, { paths });
+  assert.equal(current.profile.authorization.operatorConfirmed, false);
+  assert.equal(Object.hasOwn(current.answers.answers, "authority-operator-confirmed"), false);
+
+  const reviewed = current.answers;
+  reviewed.metadata.updatedAt = "2026-10-14T12:02:00.000Z";
+  reviewed.answers["authority-operator-confirmed"] = true;
+  applyProgramProfileAuthorityConfirmation(id, reviewed, { paths, now: reviewed.metadata.updatedAt });
+  current = resumeProgramProfile(id, { paths });
+  assert.equal(current.profile.authorization.operatorConfirmed, true);
+
+  const changedBasis = current.answers;
+  changedBasis.metadata.updatedAt = "2026-10-14T12:03:00.000Z";
+  changedBasis.answers["authority-program-url"] = "https://program-rules-canary.example.test/updated-rules";
+  applyProgramProfileAnswers(id, changedBasis, { paths, now: changedBasis.metadata.updatedAt });
+  current = resumeProgramProfile(id, { paths });
+  assert.equal(current.profile.authorization.operatorConfirmed, false);
+  assert.equal(Object.hasOwn(current.answers.answers, "authority-operator-confirmed"), false);
+
+  const replay = current.answers;
+  replay.metadata.updatedAt = "2026-10-14T12:04:00.000Z";
+  replay.answers["authority-operator-confirmed"] = true;
+  applyProgramProfileAnswers(id, replay, { paths, now: replay.metadata.updatedAt });
+  current = resumeProgramProfile(id, { paths });
+  assert.equal(current.profile.authorization.operatorConfirmed, false);
+  assert.equal(Object.hasOwn(current.answers.answers, "authority-operator-confirmed"), false);
+});
+
 test("substantive edits invalidate attestation until the current revision is explicitly re-attested", (t) => {
   const { home, paths } = fixture(t);
   const id = "attestation-binding";
-  const created = createProgramProfile(id, completeProfile(id), { paths, now: fixedAt });
+  const created = createReviewedProgramProfile(id, completeProfile(id), { paths, now: fixedAt });
   assert.equal(created.ready, true);
 
   const changed = applyProgramProfileAnswers(id, {
@@ -575,16 +707,121 @@ test("substantive edits invalidate attestation until the current revision is exp
   assert.equal(reattested.ready, true);
   const current = readJson(path.join(home, "programs", id, "program-profile.json"));
   assert.equal(current.attestation.attestedRevision, current.metadata.revision);
-  assert.equal(current.metadata.revision, 3);
+  assert.equal(current.metadata.revision, 4);
+});
+
+test("authority basis changes require a fresh direct confirmation", (t) => {
+  const first = fixture(t);
+  const firstId = "authority-review-invalidated";
+  createReviewedProgramProfile(firstId, answerEnvelope(firstId, completeProfile(firstId)), {
+    paths: first.paths,
+    now: fixedAt
+  });
+  const sourceEdit = resumeProgramProfile(firstId, { paths: first.paths }).answers;
+  sourceEdit.metadata.updatedAt = "2026-10-14T12:01:00.000Z";
+  sourceEdit.answers["authority-sources"][0].notes = "The operator reviewed a newly captured source revision.";
+  applyProgramProfileAnswers(firstId, sourceEdit, {
+    paths: first.paths,
+    now: sourceEdit.metadata.updatedAt
+  });
+  const invalidated = resumeProgramProfile(firstId, { paths: first.paths });
+  assert.equal(invalidated.profile.authorization.operatorConfirmed, false);
+  assert.equal(Object.hasOwn(invalidated.answers.answers, "authority-operator-confirmed"), false);
+  assert.equal(invalidated.profile.attestation.attestedRevision, null);
+
+  const second = fixture(t);
+  const secondId = "authority-review-same-batch";
+  createReviewedProgramProfile(secondId, answerEnvelope(secondId, completeProfile(secondId)), {
+    paths: second.paths,
+    now: fixedAt
+  });
+  const sameBatch = resumeProgramProfile(secondId, { paths: second.paths }).answers;
+  sameBatch.metadata.updatedAt = "2026-10-14T12:01:00.000Z";
+  sameBatch.answers["authority-program-url"] = "https://program-rules-canary.example.test/revised-rules";
+  sameBatch.answers["authority-operator-confirmed"] = true;
+  applyProgramProfileAuthorityConfirmation(secondId, sameBatch, {
+    paths: second.paths,
+    now: sameBatch.metadata.updatedAt
+  });
+  const reconfirmed = resumeProgramProfile(secondId, { paths: second.paths });
+  assert.equal(reconfirmed.profile.authorization.operatorConfirmed, true);
+  assert.equal(reconfirmed.answers.answers["authority-operator-confirmed"], true);
+  assert.equal(reconfirmed.profile.attestation.attestedRevision, null);
+});
+
+test("canonical collection ordering does not invalidate reviewed authority", (t) => {
+  const { paths } = fixture(t);
+  const id = "authority-order-stable";
+  const profile = completeProfile(id);
+  profile.sources.unshift({
+    id: "z-operator-note",
+    type: "operator-statement",
+    title: "Operator clarification",
+    reference: "local://operator-note",
+    contentSha256: null,
+    observedAt: fixedAt,
+    claimState: "observed",
+    notes: "A separately reviewed operator clarification."
+  });
+  profile.authorization.sourceRefs = ["z-operator-note", "program-rules"];
+  profile.authorization.contacts.unshift({
+    name: "Backup security contact",
+    role: "Backup escalation contact",
+    channel: "platform://backup-inbox",
+    purpose: "Receive escalation when the primary contact is unavailable.",
+    sourceRefs: ["z-operator-note"]
+  });
+  createReviewedProgramProfile(id, answerEnvelope(id, profile), { paths, now: fixedAt });
+
+  const unchanged = resumeProgramProfile(id, { paths }).answers;
+  unchanged.metadata.updatedAt = "2026-10-14T12:01:00.000Z";
+  applyProgramProfileAnswers(id, unchanged, { paths, now: unchanged.metadata.updatedAt });
+  const current = resumeProgramProfile(id, { paths });
+  assert.equal(current.profile.authorization.operatorConfirmed, true);
+  assert.equal(current.answers.answers["authority-operator-confirmed"], true);
+  assert.equal(current.profile.attestation.attestedRevision, 3);
+});
+
+test("clearing one answer is stale-base protected and restores its unanswered default", (t) => {
+  const { paths } = fixture(t);
+  const id = "answer-clear";
+  createReviewedProgramProfile(id, answerEnvelope(id, completeProfile(id)), { paths, now: fixedAt });
+  const base = resumeProgramProfile(id, { paths });
+  const cleared = clearProgramProfileAnswer(id, "identity-objective", {
+    paths,
+    now: "2026-10-14T12:01:00.000Z",
+    expectedRevision: base.summary.revision,
+    expectedProfileSha256: base.summary.profileSha256
+  });
+  assert.equal(cleared.updated, true);
+  assert.equal(cleared.cleared, true);
+  assert.equal(cleared.revision, base.summary.revision + 1);
+  const current = resumeProgramProfile(id, { paths });
+  assert.equal(current.profile.identity.objective, "Operator input required.");
+  assert.equal(Object.hasOwn(current.answers.answers, "identity-objective"), false);
+  assert.equal(current.profile.attestation.attestedRevision, null);
+
+  assert.throws(() => clearProgramProfileAnswer(id, "identity-depth", {
+    paths,
+    expectedRevision: base.summary.revision,
+    expectedProfileSha256: base.summary.profileSha256
+  }), /revision changed/u);
+  const repeated = clearProgramProfileAnswer(id, "identity-objective", {
+    paths,
+    expectedRevision: current.summary.revision,
+    expectedProfileSha256: current.summary.profileSha256
+  });
+  assert.equal(repeated.updated, false);
+  assert.equal(repeated.revision, current.summary.revision);
 });
 
 test("answer updates bind the exact base and require chronologically fresh re-attestation", (t) => {
   const { home, paths } = fixture(t);
   const id = "answer-replay-binding";
-  createProgramProfile(id, completeProfile(id), { paths, now: fixedAt });
+  createReviewedProgramProfile(id, completeProfile(id), { paths, now: fixedAt });
   const revisionOne = resumeProgramProfile(id, { paths });
   assert.equal(revisionOne.answers.apiVersion, "gate.dev/program-profile-answers/v2");
-  assert.equal(revisionOne.answers.metadata.baseRevision, 1);
+  assert.equal(revisionOne.answers.metadata.baseRevision, 2);
   assert.equal(revisionOne.answers.metadata.baseProfileSha256, revisionOne.summary.profileSha256);
 
   const firstWriter = structuredClone(revisionOne.answers);
@@ -594,11 +831,11 @@ test("answer updates bind the exact base and require chronologically fresh re-at
     paths,
     now: "2026-10-14T12:01:00.000Z"
   });
-  assert.equal(firstResult.revision, 2);
+  assert.equal(firstResult.revision, 3);
   assert.equal(firstResult.ready, true);
 
   const current = resumeProgramProfile(id, { paths });
-  assert.equal(current.answers.metadata.baseRevision, 2);
+  assert.equal(current.answers.metadata.baseRevision, 3);
   assert.equal(current.answers.metadata.baseProfileSha256, current.summary.profileSha256);
   const directory = path.join(home, "programs", id);
   const stateFiles = ["program-profile.json", "answers.json", "state-binding.json"];
@@ -683,10 +920,10 @@ test("new answer confirmation invalidates attestation even when a parent answer 
   };
   const initial = answerEnvelope(id, profile);
   delete initial.answers["web-api-entry-points"];
-  const created = createProgramProfile(id, initial, { paths, now: fixedAt });
+  const created = createReviewedProgramProfile(id, initial, { paths, now: fixedAt });
   assert.equal(created.ready, false);
   const revisionOne = resumeProgramProfile(id, { paths });
-  assert.equal(revisionOne.profile.attestation.attestedRevision, 1);
+  assert.equal(revisionOne.profile.attestation.attestedRevision, 2);
   assert.equal(Object.hasOwn(revisionOne.answers.answers, "web-api-entry-points"), false);
 
   const confirmed = structuredClone(revisionOne.answers);
@@ -703,13 +940,69 @@ test("new answer confirmation invalidates attestation even when a parent answer 
   assert.equal(Object.hasOwn(revisionTwo.answers.answers, "web-api-entry-points"), true);
 });
 
+test("a recommendation update uses the ordinary substantive-change path and clears prior attestation", (t) => {
+  const { paths } = fixture(t);
+  const id = "recommendation-invalidates-attestation";
+  const initial = answerEnvelope(id, completeProfile(id));
+  delete initial.answers["accounts-identity-provider-notes"];
+  const created = createReviewedProgramProfile(id, initial, { paths, now: fixedAt });
+  assert.equal(created.ready, true);
+  const current = resumeProgramProfile(id, { paths });
+  assert.equal(current.profile.attestation.attestedRevision, 2);
+
+  const questionnaire = programProfileQuestionnaireBinding({ repo });
+  const recommendations = {
+    $schema: "https://gate.local/schemas/bug-bounty-program-profile-recommendations.schema.json",
+    apiVersion: "gate.dev/program-profile-recommendations/v1",
+    kind: "BugBountyProgramProfileRecommendations",
+    metadata: {
+      programId: id,
+      createdAt: "2026-10-14T12:01:00.000Z",
+      questionnaireId: questionnaire.id,
+      questionnaireVersion: questionnaire.version,
+      questionnaireSha256: questionnaire.sha256,
+      baseRevision: current.profile.metadata.revision,
+      baseProfileSha256: current.summary.profileSha256
+    },
+    proposals: {
+      "accounts-identity-provider-notes": {
+        value: "Use the source-recorded identity flow and dedicated researcher account.",
+        provenance: "local-derived",
+        basis: {
+          summary: "Use the private reviewed identity-provider note.",
+          claimState: "observed",
+          sourceRefs: []
+        }
+      }
+    }
+  };
+  const updated = applyProgramProfileRecommendations(id, recommendations, {
+    paths,
+    now: "2026-10-14T12:02:00.000Z"
+  });
+  assert.equal(updated.appliedCount, 1);
+  assert.equal(updated.ready, false);
+  const stored = resumeProgramProfile(id, { paths });
+  assert.equal(stored.profile.attestation.attestedAt, null);
+  assert.equal(stored.profile.attestation.attestedRevision, null);
+  for (const questionId of [
+    "attestation-operator",
+    "attestation-answers-complete",
+    "attestation-sources-reviewed",
+    "attestation-scope-reviewed",
+    "attestation-at"
+  ]) {
+    assert.equal(Object.hasOwn(stored.answers.answers, questionId), false, questionId);
+  }
+});
+
 test("interactive resume opens the exact false attestation answer", { timeout: 5000 }, async (t) => {
   const { paths } = fixture(t);
   const id = "false-attestation-resume";
   const profile = completeProfile(id);
   profile.attestation.answersComplete = false;
   profile.attestation.attestedRevision = null;
-  createProgramProfile(id, profile, { paths, now: fixedAt });
+  createReviewedProgramProfile(id, profile, { paths, now: fixedAt });
 
   const verification = verifyProgramProfile(id, { paths, now: fixedAt });
   assert.ok(verification.blockers.some(({ path: profilePath }) => profilePath === "attestation.answersComplete"));
@@ -748,13 +1041,13 @@ test("answer provenance time cannot make expired authorization verify as current
   const answers = answerEnvelope(id, profile);
   answers.metadata.updatedAt = "2026-01-15T00:00:00.000Z";
 
-  const created = createProgramProfile(id, answers, { paths, now: fixedAt });
+  const created = createReviewedProgramProfile(id, answers, { paths, now: fixedAt });
   assert.equal(created.ready, false);
   const stored = readJson(path.join(home, "programs", id, "program-profile.json"));
   const storedAnswers = readJson(path.join(home, "programs", id, "answers.json"));
-  assert.equal(stored.metadata.createdAt, fixedAt);
+  assert.equal(stored.metadata.createdAt, "2026-10-14T11:59:59.999Z");
   assert.equal(stored.metadata.updatedAt, fixedAt);
-  assert.equal(storedAnswers.metadata.updatedAt, "2026-01-15T00:00:00.000Z");
+  assert.equal(storedAnswers.metadata.updatedAt, fixedAt);
   const verification = verifyProgramProfile(id, { paths, now: fixedAt });
   assert.ok(verification.blockers.some(({ code }) => code === "authorization-expired"));
 });
@@ -773,7 +1066,7 @@ test("empty and placeholder required answers keep an applicable module blocked t
     }
   };
 
-  const created = createProgramProfile(id, profile, { paths, now: fixedAt });
+  const created = createReviewedProgramProfile(id, profile, { paths, now: fixedAt });
   assert.equal(created.ready, false);
   const stored = readJson(path.join(home, "programs", id, "program-profile.json"));
   assert.notEqual(stored.metadata.status, "ready-to-materialize");
@@ -796,6 +1089,23 @@ test("empty and placeholder required answers keep an applicable module blocked t
   ));
 });
 
+test("empty required core lists remain unresolved in normalized questionnaire progress", (t) => {
+  const { paths } = fixture(t);
+  const id = "empty-required-core-lists";
+  const answers = answerEnvelope(id, completeProfile(id));
+  answers.answers["identity-deliverables"] = [];
+  answers.answers["limits-windows"] = [];
+
+  const created = createReviewedProgramProfile(id, answers, { paths, now: fixedAt });
+  assert.equal(created.ready, false);
+  const current = resumeProgramProfile(id, { paths });
+  assert.equal(current.profile.questionnaire.sectionStatus["identity-objectives"], "in-progress");
+  assert.equal(current.profile.questionnaire.sectionStatus["limits-schedule"], "in-progress");
+  assert.equal(current.profile.metadata.status, "draft");
+  assert.deepEqual(current.profile.questionnaire.applicableModules, []);
+  assert.equal(current.profile.questionnaire.sectionStatus["workflow-coverage"], "complete");
+});
+
 test("invisible-only required core text is rejected before persistence", (t) => {
   const { paths } = fixture(t);
   const id = "invisible-core-answer";
@@ -803,7 +1113,7 @@ test("invisible-only required core text is rejected before persistence", (t) => 
   profile.identity.objective = "\u200b\u200d";
 
   assert.throws(
-    () => createProgramProfile(id, profile, { paths, now: fixedAt }),
+    () => createReviewedProgramProfile(id, profile, { paths, now: fixedAt }),
     /validation failed|direction-formatting|must match pattern/u
   );
   assert.equal(fs.existsSync(path.join(paths.programs, id)), false);
@@ -812,7 +1122,7 @@ test("invisible-only required core text is rejected before persistence", (t) => 
 test("case-bound compilation rejects a profile revision selected before the compile lock", (t) => {
   const { home, paths } = fixture(t);
   const id = "case-bound-compilation";
-  createProgramProfile(id, completeProfile(id), { paths, now: fixedAt });
+  createReviewedProgramProfile(id, completeProfile(id), { paths, now: fixedAt });
   const selected = resumeProgramProfile(id, { paths });
 
   applyProgramProfileAnswers(id, {
@@ -843,7 +1153,7 @@ test("compilation is deterministic, lossless across every policy matrix, and kee
   const { home, paths } = fixture(t);
   const id = "matrix-canary";
   const profile = completeProfile(id, { ready: false, unresolvedActions: true });
-  createProgramProfile(id, profile, { paths, now: fixedAt });
+  createReviewedProgramProfile(id, profile, { paths, now: fixedAt });
 
   const provider = providerProfile({ observe: { execute: "deny" } });
   const providerFile = path.join(path.dirname(home), "provider.json");
@@ -940,7 +1250,7 @@ test("compilation uses one exact decision instant at authorization and provider 
   const profile = completeProfile(id);
   profile.authorization.validFrom = effectiveAt;
   profile.authorization.validUntil = expiresAt;
-  createProgramProfile(id, profile, { paths, now: effectiveAt });
+  createReviewedProgramProfile(id, profile, { paths, now: effectiveAt });
 
   const provider = providerProfile();
   provider.metadata.destination = "local";
@@ -1001,7 +1311,7 @@ test("provider compatibility evaluates requested assistance modes only", (t) => 
   const id = "requested-modes";
   const profile = completeProfile(id);
   profile.executionPolicy.requestedAssistanceModes = ["plan", "analyze"];
-  createProgramProfile(id, profile, { paths, now: fixedAt });
+  createReviewedProgramProfile(id, profile, { paths, now: fixedAt });
   const providerFile = path.join(root, "provider.json");
   writeJson(providerFile, providerProfile({
     observe: { execute: "deny", report: "deny", retest: "deny" },
@@ -1045,7 +1355,7 @@ test("provider compatibility evaluates requested assistance modes only", (t) => 
 test("provider template sentinels cannot establish model routing", (t) => {
   const { paths } = fixture(t);
   const id = "provider-template-sentinels";
-  createProgramProfile(id, completeProfile(id), { paths, now: fixedAt });
+  createReviewedProgramProfile(id, completeProfile(id), { paths, now: fixedAt });
 
   const untouched = readJson(path.join(repo, "templates", "provider-capability-profile.json"));
   assert.throws(
@@ -1074,7 +1384,7 @@ test("provider context windows and cumulative run-token ceilings are separate fa
   const id = "separate-token-ceilings";
   const profile = completeProfile(id);
   profile.executionPolicy.phases[0].limits.maxTokens = 1000;
-  createProgramProfile(id, profile, { paths, now: fixedAt });
+  createReviewedProgramProfile(id, profile, { paths, now: fixedAt });
   const provider = providerProfile();
   provider.metadata.destination = "local";
 
@@ -1099,7 +1409,7 @@ test("provider context windows and cumulative run-token ceilings are separate fa
 test("provider context accounting is unknown unless current metadata binds a conservative counter", (t) => {
   const { paths } = fixture(t);
   const id = "unknown-context-accounting";
-  createProgramProfile(id, completeProfile(id), { paths, now: fixedAt });
+  createReviewedProgramProfile(id, completeProfile(id), { paths, now: fixedAt });
   const provider = providerProfile();
   provider.metadata.destination = "local";
   provider.contextWindow = null;
@@ -1135,7 +1445,7 @@ test("the compact packet uses a UTF-8-byte upper bound at exact provider context
   const id = "provider-context-boundary";
   const profile = completeProfile(id);
   profile.identity.objective = "a1b2c3d4".repeat(1000);
-  createProgramProfile(id, profile, { paths, now: fixedAt });
+  createReviewedProgramProfile(id, profile, { paths, now: fixedAt });
   const provider = providerProfile();
   provider.metadata.destination = "local";
   provider.contextWindow.reservedOutputTokens = 1000;
@@ -1183,7 +1493,7 @@ test("global action ceilings compile to conservative and phase-scoped executable
     assetRefs: ["secondary-web"],
     actions: ["observe"]
   });
-  createProgramProfile(id, profile, { paths, now: fixedAt });
+  createReviewedProgramProfile(id, profile, { paths, now: fixedAt });
   const compiled = compileProgramProfile(id, {}, { paths, now: fixedAt });
   const directory = path.join(home, "programs", id, "compiled", compiled.compilationId);
   const techniques = readJson(path.join(directory, "technique-matrix.json"));
@@ -1229,7 +1539,7 @@ test("source-backed conditional decisions are complete but never compile as exec
     }
   };
 
-  const created = createProgramProfile(id, profile, { paths, now: fixedAt });
+  const created = createReviewedProgramProfile(id, profile, { paths, now: fixedAt });
   assert.equal(created.ready, true);
   const verification = verifyProgramProfile(id, { paths, now: fixedAt });
   assert.equal(verification.ready, true);
@@ -1277,7 +1587,7 @@ test("applicable module ceilings constrain every compiled surface and denied win
     }
   };
 
-  const created = createProgramProfile(id, profile, { paths, now: fixedAt });
+  const created = createReviewedProgramProfile(id, profile, { paths, now: fixedAt });
   assert.equal(created.ready, true);
   const verification = verifyProgramProfile(id, { paths, now: fixedAt });
   assert.equal(verification.ready, true);
@@ -1355,7 +1665,7 @@ test("an allowed and conditional module keep requested provider checks while blo
   };
   profile.executionPolicy.requestedAssistanceModes = ["plan"];
 
-  createProgramProfile(id, profile, { paths, now: fixedAt });
+  createReviewedProgramProfile(id, profile, { paths, now: fixedAt });
   const verification = verifyProgramProfile(id, { paths, now: fixedAt });
   assert.equal(verification.ready, true);
   assert.deepEqual(verification.allowedActions, []);
@@ -1405,7 +1715,7 @@ test("an open-ended reusable program profile requires a finite downstream engage
   profile.authorization.validFrom = null;
   profile.authorization.validUntil = null;
 
-  const created = createProgramProfile(id, profile, { paths, now: fixedAt });
+  const created = createReviewedProgramProfile(id, profile, { paths, now: fixedAt });
   assert.equal(created.ready, true);
   const verification = verifyProgramProfile(id, { paths, now: fixedAt });
   assert.equal(verification.ready, true);
@@ -1431,7 +1741,7 @@ test("content-backed sources require digests while operator statements may remai
   const missing = fixture(t);
   const incomplete = completeProfile("missing-source-digest");
   incomplete.sources[0].contentSha256 = null;
-  const created = createProgramProfile("missing-source-digest", incomplete, { paths: missing.paths, now: fixedAt });
+  const created = createReviewedProgramProfile("missing-source-digest", incomplete, { paths: missing.paths, now: fixedAt });
   assert.equal(created.ready, false);
   const rejected = verifyProgramProfile("missing-source-digest", { paths: missing.paths, now: fixedAt });
   assert.ok(rejected.blockers.some(({ code }) => code === "source-content-digest-missing"));
@@ -1448,7 +1758,7 @@ test("content-backed sources require digests while operator statements may remai
     claimState: "observed",
     notes: "This source records the local operator's objective only."
   });
-  const acceptedResult = createProgramProfile("operator-source-null-digest", complete, { paths: accepted.paths, now: fixedAt });
+  const acceptedResult = createReviewedProgramProfile("operator-source-null-digest", complete, { paths: accepted.paths, now: fixedAt });
   assert.equal(acceptedResult.ready, true);
 });
 
@@ -1459,7 +1769,7 @@ test("source, authorization, and attestation timestamps cannot claim future or i
   futureProfile.sources[0].observedAt = "2099-01-01T00:00:00.000Z";
   futureProfile.authorization.lastVerifiedAt = "2099-01-01T00:00:00.000Z";
   futureProfile.attestation.attestedAt = "2099-01-01T00:00:00.000Z";
-  assert.equal(createProgramProfile(futureId, futureProfile, { paths: future.paths, now: fixedAt }).ready, false);
+  assert.equal(createReviewedProgramProfile(futureId, futureProfile, { paths: future.paths, now: fixedAt }).ready, false);
   const futureCodes = new Set(verifyProgramProfile(futureId, { paths: future.paths, now: fixedAt }).blockers.map(({ code }) => code));
   for (const code of [
     "source-observation-in-future",
@@ -1473,7 +1783,7 @@ test("source, authorization, and attestation timestamps cannot claim future or i
   orderedProfile.sources[0].observedAt = "2026-10-14T11:00:00.000Z";
   orderedProfile.authorization.lastVerifiedAt = "2026-10-14T11:30:00.000Z";
   orderedProfile.attestation.attestedAt = "2026-10-14T11:15:00.000Z";
-  assert.equal(createProgramProfile(orderedId, orderedProfile, { paths: ordered.paths, now: fixedAt }).ready, false);
+  assert.equal(createReviewedProgramProfile(orderedId, orderedProfile, { paths: ordered.paths, now: fixedAt }).ready, false);
   const orderedCodes = new Set(verifyProgramProfile(orderedId, { paths: ordered.paths, now: fixedAt }).blockers.map(({ code }) => code));
   assert.equal(orderedCodes.has("operator-attestation-predates-authorization-verification"), true);
 
@@ -1483,7 +1793,7 @@ test("source, authorization, and attestation timestamps cannot claim future or i
   sourceOrderProfile.sources[0].observedAt = "2026-10-14T11:00:00.000Z";
   sourceOrderProfile.authorization.lastVerifiedAt = "2026-10-14T10:00:00.000Z";
   sourceOrderProfile.attestation.attestedAt = "2026-10-14T09:00:00.000Z";
-  assert.equal(createProgramProfile(sourceOrderId, sourceOrderProfile, { paths: sourceOrder.paths, now: fixedAt }).ready, false);
+  assert.equal(createReviewedProgramProfile(sourceOrderId, sourceOrderProfile, { paths: sourceOrder.paths, now: fixedAt }).ready, false);
   const sourceOrderCodes = new Set(verifyProgramProfile(sourceOrderId, { paths: sourceOrder.paths, now: fixedAt }).blockers.map(({ code }) => code));
   assert.equal(sourceOrderCodes.has("authorization-verification-predates-source"), true);
   assert.equal(sourceOrderCodes.has("operator-attestation-predates-source"), true);
@@ -1494,7 +1804,7 @@ test("packet classification cannot understate an architecture data flow", (t) =>
   const lowId = "low-release-classification";
   const low = completeProfile(lowId);
   low.dataEvidence.classification = "public";
-  assert.equal(createProgramProfile(lowId, low, { paths, now: fixedAt }).ready, false);
+  assert.equal(createReviewedProgramProfile(lowId, low, { paths, now: fixedAt }).ready, false);
   assert.ok(verifyProgramProfile(lowId, { paths, now: fixedAt }).blockers.some(
     ({ code }) => code === "data-release-classification-too-low"
   ));
@@ -1502,7 +1812,7 @@ test("packet classification cannot understate an architecture data flow", (t) =>
   const unknownId = "unknown-flow-classification";
   const unknown = completeProfile(unknownId);
   unknown.architecture.dataFlows[0].dataClassification = "unknown";
-  assert.equal(createProgramProfile(unknownId, unknown, { paths, now: fixedAt }).ready, false);
+  assert.equal(createReviewedProgramProfile(unknownId, unknown, { paths, now: fixedAt }).ready, false);
   assert.ok(verifyProgramProfile(unknownId, { paths, now: fixedAt }).blockers.some(
     ({ code }) => code === "data-flow-classification-unknown"
   ));
@@ -1513,7 +1823,7 @@ test("profile inputs and private state fail closed on links and remain owner-onl
   const id = "link-canary";
   const oldUmask = process.umask(0);
   try {
-    createProgramProfile(id, completeProfile(id), { paths, now: fixedAt });
+    createReviewedProgramProfile(id, completeProfile(id), { paths, now: fixedAt });
     compileProgramProfile(id, {}, { paths, now: fixedAt });
   } finally {
     process.umask(oldUmask);
@@ -1541,7 +1851,8 @@ for (const entrypoint of ["answers", "resume", "compile"]) {
   test(`dead process locks and interrupted publications recover through ${entrypoint}`, (t) => {
     const { home, paths } = fixture(t);
     const id = "state-recovery";
-    createProgramProfile(id, completeProfile(id), { paths, now: fixedAt });
+    createReviewedProgramProfile(id, completeProfile(id), { paths, now: fixedAt });
+    const baseRevision = resumeProgramProfile(id, { paths }).summary.revision;
     const directory = path.join(home, "programs", id);
     const transactionRoot = path.join(directory, ".transactions");
     const abandonedDirectory = path.join(transactionRoot, `txn-${"a".repeat(24)}`);
@@ -1568,7 +1879,7 @@ for (const entrypoint of ["answers", "resume", "compile"]) {
       kind: "ProgramProfileStateTransaction",
       id: transactionId,
       profileId: id,
-      revision: 1,
+      revision: baseRevision,
       createdAt: fixedAt,
       next
     });
@@ -1588,12 +1899,12 @@ for (const entrypoint of ["answers", "resume", "compile"]) {
     const recoveryOptions = {
       paths,
       now: "2026-10-14T12:01:00.000Z",
-      expectedRevision: 1,
+      expectedRevision: baseRevision,
       expectedProfileSha256: next.profileSha256
     };
     if (entrypoint === "resume") {
       const resumed = resumeProgramProfile(id, recoveryOptions);
-      assert.equal(resumed.profile.metadata.revision, 1);
+      assert.equal(resumed.profile.metadata.revision, baseRevision);
       assert.equal(resumed.answers.metadata.programId, id);
     } else if (entrypoint === "compile") {
       const compiled = compileProgramProfile(id, {}, recoveryOptions);
@@ -1601,12 +1912,12 @@ for (const entrypoint of ["answers", "resume", "compile"]) {
       assert.equal(compiled.targetContact, false);
     } else {
       const recovered = applyProgramProfileAnswers(id, {}, recoveryOptions);
-      assert.equal(recovered.revision, 2);
+      assert.equal(recovered.revision, baseRevision + 1);
     }
     assert.equal(fs.existsSync(path.join(directory, ".profile.lock")), false);
     assert.deepEqual(fs.readdirSync(transactionRoot), []);
     const binding = readJson(path.join(directory, "state-binding.json"));
-    assert.equal(binding.revision, entrypoint === "answers" ? 2 : 1);
+    assert.equal(binding.revision, entrypoint === "answers" ? baseRevision + 1 : baseRevision);
     assert.equal(binding.profileSha256, crypto.createHash("sha256").update(fs.readFileSync(path.join(directory, "program-profile.json"))).digest("hex"));
     assert.equal(binding.answersSha256, crypto.createHash("sha256").update(fs.readFileSync(path.join(directory, "answers.json"))).digest("hex"));
     assert.equal(verifyProgramProfile(id, { paths, now: "2026-10-14T12:01:00.000Z" }).ready, true);
@@ -1617,7 +1928,7 @@ test("a process-and-boot-matched live profile lock is never reclaimed", (t) => {
   if (process.platform !== "linux") return t.skip("process start and boot identities use Linux procfs");
   const { home, paths } = fixture(t);
   const id = "live-lock";
-  createProgramProfile(id, completeProfile(id), { paths, now: fixedAt });
+  createReviewedProgramProfile(id, completeProfile(id), { paths, now: fixedAt });
   const processStat = fs.readFileSync(`/proc/${process.pid}/stat`, "utf8");
   const processStartTicks = processStat.slice(processStat.lastIndexOf(")") + 2).trim().split(/\s+/u)[19];
   const directory = path.join(home, "programs", id);
@@ -1642,7 +1953,7 @@ test("literal secrets are rejected before persistence while symbolic references 
   const bad = completeProfile("secret-rejected");
   bad.identity.objective = `Do the assessment with Authorization: ${secretCanary}`;
   assert.throws(
-    () => createProgramProfile("secret-rejected", bad, { paths: rejected.paths, now: fixedAt }),
+    () => createReviewedProgramProfile("secret-rejected", bad, { paths: rejected.paths, now: fixedAt }),
     /credential|secret-value-or-invalid-reference/u
   );
   const rejectedBytes = allFiles(rejected.home).map((file) => fs.readFileSync(file, "utf8")).join("\n");
@@ -1653,7 +1964,7 @@ test("literal secrets are rejected before persistence while symbolic references 
   const symbolic = completeProfile(id);
   process.env.GATE_PROFILE_TEST_CREDENTIAL = secretCanary;
   t.after(() => { delete process.env.GATE_PROFILE_TEST_CREDENTIAL; });
-  createProgramProfile(id, symbolic, { paths: accepted.paths, now: fixedAt });
+  createReviewedProgramProfile(id, symbolic, { paths: accepted.paths, now: fixedAt });
   const compiled = compileProgramProfile(id, {}, { paths: accepted.paths, now: fixedAt });
   assert.equal(compiled.ok, true);
   const retained = allFiles(path.join(accepted.home, "programs")).map((file) => fs.readFileSync(file, "utf8")).join("\n");
@@ -1685,14 +1996,14 @@ test("nested credential aliases reject literal values and legacy profiles cannot
     const profile = completeProfile(id);
     profile.techniquePolicy.techniques[0].parameters = { [key]: value };
     assert.throws(
-      () => createProgramProfile(id, profile, { paths, now: fixedAt }),
+      () => createReviewedProgramProfile(id, profile, { paths, now: fixedAt }),
       /credential|symbolic secret reference|secret-value-or-invalid-reference/u,
       key
     );
   }
 
   const legacyId = "legacy-secret";
-  createProgramProfile(legacyId, completeProfile(legacyId), { paths, now: fixedAt });
+  createReviewedProgramProfile(legacyId, completeProfile(legacyId), { paths, now: fixedAt });
   const directory = path.join(home, "programs", legacyId);
   const profileFile = path.join(directory, "program-profile.json");
   const legacy = readJson(profileFile);
@@ -1721,21 +2032,21 @@ test("credential-bearing URLs and terminal control text are rejected before pers
   const credentialUrl = completeProfile("url-secret-rejected");
   credentialUrl.authorization.programUrl = `https://example.invalid/program?session_token=${urlToken}`;
   assert.throws(
-    () => createProgramProfile("url-secret-rejected", credentialUrl, { paths, now: fixedAt }),
+    () => createReviewedProgramProfile("url-secret-rejected", credentialUrl, { paths, now: fixedAt }),
     /credential|secret-value-or-invalid-reference/u
   );
 
   const userInfoUrl = completeProfile("userinfo-rejected");
   userInfoUrl.authorization.programUrl = "https://operator:private-value@example.invalid/program";
   assert.throws(
-    () => createProgramProfile("userinfo-rejected", userInfoUrl, { paths, now: fixedAt }),
+    () => createReviewedProgramProfile("userinfo-rejected", userInfoUrl, { paths, now: fixedAt }),
     /URL user information|credential|secret-value-or-invalid-reference/u
   );
 
   const terminalControl = completeProfile("terminal-control-rejected");
   terminalControl.identity.objective = "Copy this payload\u001b]52;c;dGVzdA==\u0007";
   assert.throws(
-    () => createProgramProfile("terminal-control-rejected", terminalControl, { paths, now: fixedAt }),
+    () => createReviewedProgramProfile("terminal-control-rejected", terminalControl, { paths, now: fixedAt }),
     /pattern|terminal control|direction-formatting/u
   );
 
@@ -1744,7 +2055,7 @@ test("credential-bearing URLs and terminal control text are rejected before pers
     [`session_token=${urlToken}`]: "benign"
   };
   assert.throws(
-    () => createProgramProfile("secret-key-rejected", secretKey, { paths, now: fixedAt }),
+    () => createReviewedProgramProfile("secret-key-rejected", secretKey, { paths, now: fixedAt }),
     /credential|secret-value-or-invalid-reference/u
   );
 
@@ -1753,7 +2064,7 @@ test("credential-bearing URLs and terminal control text are rejected before pers
     ["safe\u001b]52;c;payload\u0007"]: "benign"
   };
   assert.throws(
-    () => createProgramProfile("control-key-rejected", controlKey, { paths, now: fixedAt }),
+    () => createReviewedProgramProfile("control-key-rejected", controlKey, { paths, now: fixedAt }),
     /terminal control|direction-formatting/u
   );
 
@@ -1770,7 +2081,7 @@ test("imported source text is inert and target details do not cross events or ob
   const policyFile = path.join(repo, "policies", "engagements.json");
   const policyBefore = fs.readFileSync(policyFile);
   const id = "inert-source";
-  createProgramProfile(id, completeProfile(id, { sourceNotes: injection }), { paths, now: fixedAt });
+  createReviewedProgramProfile(id, completeProfile(id, { sourceNotes: injection }), { paths, now: fixedAt });
   const result = compileProgramProfile(id, {}, { paths, now: fixedAt });
 
   assert.equal(fs.existsSync(marker), false);
@@ -1798,7 +2109,7 @@ test("imported source text is inert and target details do not cross events or ob
 test("questionnaire order preserves final attestation after applicable module answers", (t) => {
   const { paths } = fixture(t);
   const id = "ordered-policy";
-  createProgramProfile(id, {}, { paths, now: fixedAt });
+  createReviewedProgramProfile(id, {}, { paths, now: fixedAt });
   const profile = completeProfile(id);
   profile.questionnaire.applicableModules = ["web-api"];
   profile.modules["web-api"] = {
@@ -1819,7 +2130,10 @@ test("questionnaire order preserves final attestation after applicable module an
       : "2026-10-14T12:01:00.000Z";
     cumulative.metadata.updatedAt = appliedAt;
     cumulative.answers[question.id] = envelope.answers[question.id];
-    applyProgramProfileAnswers(id, cumulative, { paths, now: appliedAt });
+    const applyAnswer = question.id === "authority-operator-confirmed"
+      ? applyProgramProfileAuthorityConfirmation
+      : applyProgramProfileAnswers;
+    applyAnswer(id, cumulative, { paths, now: appliedAt });
   }
   const stored = readJson(path.join(paths.programs, id, "program-profile.json"));
   assert.equal(stored.identity.objective, profile.identity.objective);
@@ -1848,7 +2162,7 @@ test("model routing requires a current destination matching the recorded release
     const id = `destination-policy-${index++}`;
     const profile = completeProfile(id);
     profile.dataEvidence.allowedDestinations = destinations;
-    createProgramProfile(id, profile, { paths, now: fixedAt });
+    createReviewedProgramProfile(id, profile, { paths, now: fixedAt });
     const provider = providerProfile();
     if (destination !== undefined) provider.metadata.destination = destination;
     const compilation = compileProgramProfile(id, { providerProfile: provider }, { paths, now: fixedAt });
@@ -1871,7 +2185,7 @@ test("provider preflight includes requested conditional actions without admittin
   profile.executionPolicy.requestedAssistanceModes = ["plan"];
   profile.executionPolicy.phases[0].actions = ["observe", "fuzz"];
   profile.executionPolicy.phases[0].conditions = ["Use the named test account only."];
-  createProgramProfile(id, profile, { paths, now: fixedAt });
+  createReviewedProgramProfile(id, profile, { paths, now: fixedAt });
   const provider = providerProfile({ fuzz: { plan: "deny" } });
   provider.metadata.destination = "local";
   const compiled = compileProgramProfile(id, { providerProfile: provider }, { paths, now: fixedAt });

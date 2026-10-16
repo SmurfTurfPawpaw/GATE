@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="robots" content="noindex, nofollow, noarchive">
+    <title>GATE · Program profile</title>
+    <link rel="stylesheet" href="/profile-ui/styles.css">
+    <script src="/profile-ui/app.js" type="module"></script>
+  </head>
+  <body>
+    <div class="ambient ambient-one" aria-hidden="true"></div>
+    <div class="ambient ambient-two" aria-hidden="true"></div>
+    <header class="topbar">
+      <a class="brand" href="#workspace" aria-label="GATE program profile home">
+        <span class="brand-mark" aria-hidden="true">G</span>
+        <span class="brand-word">GATE</span>
+        <span class="brand-context">Program Profile</span>
+      </a>
+      <div class="topbar-status">
+        <span class="privacy-pill"><span class="pulse-dot" aria-hidden="true"></span>Private · local only</span>
+        <span id="save-state" class="save-state" role="status" aria-live="polite">Connecting…</span>
+      </div>
+    </header>
+
+    <main id="workspace" class="workspace" tabindex="-1">
+      <aside class="sidebar" aria-label="Profile sections">
+        <div class="profile-summary">
+          <p class="eyebrow">Selected profile</p>
+          <h1 id="profile-title">Loading profile…</h1>
+          <div class="profile-meta">
+            <span id="profile-status" class="status-badge">Loading</span>
+            <span id="profile-revision">Revision —</span>
+          </div>
+          <div class="progress-copy">
+            <span id="progress-label">0 of 0 answered</span>
+            <strong id="progress-percent">0%</strong>
+          </div>
+          <div class="progress-track" aria-hidden="true"><span id="progress-bar"></span></div>
+        </div>
+
+        <nav id="section-nav" class="section-nav" aria-label="Questionnaire progress"></nav>
+
+        <div class="recommend-all-card">
+          <p class="eyebrow">Smart start</p>
+          <strong>Let GATE fill supported answers</strong>
+          <p id="recommendation-count">Checking reviewed recommendations…</p>
+          <button id="recommend-all" class="button button-secondary button-wide" type="button">Use supported recommendations</button>
+          <p class="microcopy">Source facts and operator confirmations stay unresolved.</p>
+        </div>
+      </aside>
+
+      <section class="question-stage" aria-labelledby="question-title">
+        <div class="question-toolbar">
+          <div>
+            <p id="question-section" class="eyebrow">Loading</p>
+            <p id="question-position" class="question-position">Question —</p>
+          </div>
+          <div class="toolbar-actions">
+            <button id="previous-question" class="icon-button" type="button" aria-label="Previous question">←</button>
+            <button id="next-question" class="icon-button" type="button" aria-label="Next question">→</button>
+          </div>
+        </div>
+
+        <article id="question-card" class="question-card" aria-busy="true">
+          <div class="question-heading">
+            <div id="question-flags" class="question-flags"></div>
+            <h2 id="question-title">Opening your private profile…</h2>
+            <p id="question-why" class="question-why"></p>
+          </div>
+
+          <div id="source-review" class="source-review" hidden></div>
+          <form id="answer-form" novalidate>
+            <div id="answer-control" class="answer-control"></div>
+            <p id="answer-error" class="answer-error" role="alert" hidden></p>
+          </form>
+        </article>
+
+        <footer class="question-actions">
+          <button id="back-button" class="button button-ghost" type="button">Back</button>
+          <div class="primary-actions">
+            <button id="leave-unresolved" class="button button-ghost" type="button">Skip for now</button>
+            <button id="use-recommendation" class="button button-secondary" type="button" hidden>Use recommendation</button>
+            <button id="save-continue" class="button button-primary" type="submit" form="answer-form">Save &amp; continue</button>
+          </div>
+        </footer>
+        <p class="keyboard-help">Tip: <kbd>Alt</kbd> + <kbd>←</kbd>/<kbd>→</kbd> moves between questions. Answers save only when you choose Save.</p>
+      </section>
+
+      <aside class="context-panel" aria-label="Question guidance">
+        <section class="context-card recommendation-card">
+          <p class="eyebrow">GATE recommendation</p>
+          <h3 id="recommendation-title">Reviewing the evidence</h3>
+          <p id="recommendation-summary">GATE will recommend an answer only when a reviewed preference or validated local proposal supports one.</p>
+          <div id="recommendation-value" class="recommendation-value" hidden></div>
+          <p id="recommendation-basis" class="basis"></p>
+        </section>
+
+        <section class="context-card">
+          <p class="eyebrow">What happens here</p>
+          <ul class="assurance-list">
+            <li>Your answer stays under <code>GATE_HOME</code>.</li>
+            <li>The form never contacts the program or target.</li>
+            <li>Authority and attestations always need your explicit answer.</li>
+            <li>A stale tab cannot overwrite a newer revision.</li>
+          </ul>
+        </section>
+
+        <section class="context-card compact-card">
+          <p class="eyebrow">Current answer</p>
+          <p id="answer-state">Not answered yet</p>
+        </section>
+      </aside>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+    <noscript>This local profile form requires JavaScript. Return to the GATE terminal wizard if JavaScript is unavailable.</noscript>
+  </body>
+</html>
