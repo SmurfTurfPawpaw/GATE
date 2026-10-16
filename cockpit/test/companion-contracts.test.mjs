@@ -4,7 +4,6 @@ import test from "node:test";
 import {
   CompanionContractError,
   acceptedReceipt,
-  normalizeDecisionRequest,
   normalizeMessageRequest,
   normalizeQuestionResponse,
   sanitizeActivityEvent
@@ -50,23 +49,7 @@ test("message contract rejects unknown fields, control characters, oversize text
     "Review https://example.test/program and continue.");
 });
 
-test("decision and local question replies use exact replay-bound contracts", () => {
-  assert.deepEqual(normalizeDecisionRequest({
-    apiVersion: "gate.local-decision-request/v1",
-    requestId,
-    decisionId: "dec_0123456789abcdef",
-    decisionRevision: 2,
-    snapshotGeneratedAt: generatedAt,
-    choice: "recommended-depth"
-  }), {
-    apiVersion: "gate.local-decision-request/v1",
-    requestId,
-    decisionId: "dec_0123456789abcdef",
-    decisionRevision: 2,
-    snapshotGeneratedAt: generatedAt,
-    choice: "recommended-depth"
-  });
-
+test("local question replies use exact replay-bound contracts", () => {
   const response = normalizeQuestionResponse({
     apiVersion: "gate.local-question-response/v1",
     requestId,

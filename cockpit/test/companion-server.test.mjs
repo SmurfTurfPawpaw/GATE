@@ -24,30 +24,9 @@ function request({ port, pathname = "/", method = "GET", headers = {}, body = ""
   });
 }
 
-function snapshot(overrides = {}) {
-  const generatedAt = new Date().toISOString();
-  return {
-    schema: "gate.public-cockpit/v1",
-    mode: "observed",
-    snapshot: {
-      generatedAt,
-      validUntil: new Date(Date.now() + 60_000).toISOString()
-    },
-    decision: {
-      state: "waiting",
-      id: "dec_0123456789abcdef",
-      revision: 3,
-      expiresAt: new Date(Date.now() + 60_000).toISOString(),
-      choices: ["recommended-depth", "pause"]
-    },
-    ...overrides
-  };
-}
-
 class FakeAdapter extends EventEmitter {
   activityStore = new ActivityStore();
   messages = [];
-  decisions = [];
   questions = [];
   closed = false;
   sessionRevision = 41;
@@ -56,7 +35,6 @@ class FakeAdapter extends EventEmitter {
   constructor() { super(); }
 
   async sendMessage(value) { this.messages.push(value); }
-  async sendDecision(value) { this.decisions.push(value); }
   async answerQuestion(value) { this.questions.push(value); }
   privateState() {
     return {
@@ -100,8 +78,7 @@ async function post(started, pathname, value, auth = credentials(started)) {
 
 test("loopback companion injects its bridge before the public app without embedding capabilities", async (t) => {
   const adapter = new FakeAdapter();
-  const current = snapshot();
-  const started = await startCompanionServer({ adapter, snapshotProvider: async () => current });
+  const started = await startCompanionServer({ adapter });
   t.after(() => started.close());
   assert.match(started.url, /^http:\/\/127\.0\.0\.1:\d+\/#session=[A-Za-z0-9_-]+&csrf=[A-Za-z0-9_-]+$/u);
 
@@ -115,8 +92,7 @@ test("loopback companion injects its bridge before the public app without embedd
 
 test("message submission requires the local session, same-origin CSRF, and exact idempotency", async (t) => {
   const adapter = new FakeAdapter();
-  const current = snapshot();
-  const started = await startCompanionServer({ adapter, snapshotProvider: async () => current });
+  const started = await startCompanionServer({ adapter });
   t.after(() => started.close());
   const value = {
     apiVersion: "gate.local-message-request/v1",
@@ -148,38 +124,9 @@ test("message submission requires the local session, same-origin CSRF, and exact
   assert.equal(adapter.messages.length, 1);
 });
 
-test("decision submission is bound to the current id, revision, choice, and expiry", async (t) => {
+test("private chat works independently of public snapshots", async (t) => {
   const adapter = new FakeAdapter();
-  const current = snapshot();
-  const started = await startCompanionServer({ adapter, snapshotProvider: async () => current });
-  t.after(() => started.close());
-  const value = {
-    apiVersion: "gate.local-decision-request/v1",
-    requestId: "request-87654321",
-    decisionId: current.decision.id,
-    decisionRevision: current.decision.revision,
-    snapshotGeneratedAt: current.snapshot.generatedAt,
-    choice: "recommended-depth"
-  };
-  assert.equal((await post(started, "/api/decision", value)).status, 202);
-  assert.equal(adapter.decisions.length, 1);
-  assert.equal((await post(started, "/api/decision", value)).status, 202);
-  assert.equal(adapter.decisions.length, 1);
-  const consumed = await post(started, "/api/decision", { ...value, requestId: "request-87654329" });
-  assert.equal(consumed.status, 409);
-  assert.equal(JSON.parse(consumed.body).error.code, "decision-consumed");
-  assert.equal(adapter.decisions.length, 1);
-  assert.equal((await post(started, "/api/decision", {
-    ...value,
-    requestId: "request-87654322",
-    decisionRevision: 2
-  })).status, 409);
-});
-
-test("private chat works on preview while public decisions still require a fresh observed snapshot", async (t) => {
-  const adapter = new FakeAdapter();
-  let current = snapshot({ mode: "preview" });
-  const started = await startCompanionServer({ adapter, snapshotProvider: async () => current });
+  const started = await startCompanionServer({ adapter });
   t.after(() => started.close());
   const value = {
     apiVersion: "gate.local-message-request/v1",
@@ -190,28 +137,13 @@ test("private chat works on preview while public decisions still require a fresh
   assert.equal((await post(started, "/api/message", value)).status, 202);
   assert.equal(adapter.messages.length, 1);
 
-  const decision = {
-    apiVersion: "gate.local-decision-request/v1",
-    requestId: "request-abcdefgi",
-    decisionId: current.decision.id,
-    decisionRevision: current.decision.revision,
-    snapshotGeneratedAt: current.snapshot.generatedAt,
-    choice: "recommended-depth"
-  };
-  assert.equal((await post(started, "/api/decision", decision)).status, 409);
-  current = snapshot();
-  current.snapshot.validUntil = "2020-01-01T00:00:00Z";
-  assert.equal((await post(started, "/api/decision", {
-    ...decision,
-    requestId: "request-abcdefgj",
-    snapshotGeneratedAt: current.snapshot.generatedAt
-  })).status, 409);
-  assert.equal(adapter.decisions.length, 0);
+
+  assert.equal((await post(started, "/api/decision", {})).status, 405);
 });
 
 test("native question replies are bound to the private session and idempotent", async (t) => {
   const adapter = new FakeAdapter();
-  const started = await startCompanionServer({ adapter, snapshotProvider: async () => snapshot({ mode: "preview" }) });
+  const started = await startCompanionServer({ adapter });
   t.after(() => started.close());
   const value = {
     apiVersion: "gate.local-question-response/v1",
@@ -232,8 +164,7 @@ test("native question replies are bound to the private session and idempotent", 
 
 test("private state and event stream require the fragment-derived session capability", async (t) => {
   const adapter = new FakeAdapter();
-  const current = snapshot();
-  const started = await startCompanionServer({ adapter, snapshotProvider: async () => current });
+  const started = await startCompanionServer({ adapter });
   t.after(() => started.close());
   const auth = credentials(started);
   const missing = await request({
@@ -257,7 +188,6 @@ test("private fleet projection requires the fragment session and stays on its re
   const unavailable = createUnavailableFleetProvider({ now: () => Date.parse("2026-10-16T14:40:00.000Z") });
   const started = await startCompanionServer({
     adapter,
-    snapshotProvider: async () => snapshot({ mode: "preview" }),
     fleetProvider: async () => {
       providerCalls += 1;
       return unavailable();
@@ -321,15 +251,13 @@ test("private fleet projection requires the fragment session and stays on its re
     }
   });
   assert.equal(providerCalls, 1);
-  assert.equal(adapter.messages.length + adapter.decisions.length + adapter.questions.length, 0);
+  assert.equal(adapter.messages.length + adapter.questions.length, 0);
 });
 
 test("authenticated event streams remain open beyond the ordinary request timeout", async (t) => {
   const adapter = new FakeAdapter();
-  const current = snapshot();
   const started = await startCompanionServer({
     adapter,
-    snapshotProvider: async () => current,
     requestTimeoutMs: 50
   });
   t.after(() => started.close());
@@ -370,8 +298,7 @@ test("authenticated event streams remain open beyond the ordinary request timeou
 
 test("foreign Host, Origin, and cross-site browser requests fail closed", async (t) => {
   const adapter = new FakeAdapter();
-  const current = snapshot();
-  const started = await startCompanionServer({ adapter, snapshotProvider: async () => current });
+  const started = await startCompanionServer({ adapter });
   t.after(() => started.close());
   assert.equal((await request({
     port: started.port,

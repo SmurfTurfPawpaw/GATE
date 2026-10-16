@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 import { CodexCompanionAdapter } from "./app-server.mjs";
 import { createGateFleetProvider, gateFleetInternals } from "./gate-fleet.mjs";
-import { createFileSnapshotProvider, startCompanionServer } from "./server.mjs";
+import { startCompanionServer } from "./server.mjs";
 
 const COCKPIT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -18,8 +18,6 @@ function usage() {
 Options:
   --cwd PATH         Dedicated Codex thread working directory (default: GATE_REPO,
                      integrated GATE checkout)
-  --snapshot PATH    Reviewed gate.public-cockpit/v1 snapshot
-                     (default: cockpit/data/status.json)
   --gate-observer URL
                      Exact loopback GATE /api/status endpoint
                      (default: ${gateFleetInternals.DEFAULT_OBSERVER_URL})
@@ -41,7 +39,6 @@ function defaultCodexCwd() {
 function parseArguments(argv) {
   const values = {
     cwd: defaultCodexCwd(),
-    snapshot: path.join(COCKPIT_ROOT, "data", "status.json"),
     gateObserver: gateFleetInternals.DEFAULT_OBSERVER_URL,
     host: "127.0.0.1",
     port: 0,
@@ -54,13 +51,12 @@ function parseArguments(argv) {
     if (argument === "--help") return { help: true };
     if (argument === "--persistent") { values.ephemeral = false; continue; }
     if (argument === "--open") { values.open = true; continue; }
-    if (!["--cwd", "--snapshot", "--gate-observer", "--host", "--port", "--thread-id"].includes(argument)) {
+    if (!["--cwd", "--gate-observer", "--host", "--port", "--thread-id"].includes(argument)) {
       throw new Error(`unknown option: ${argument}`);
     }
     const value = argv[++index];
     if (!value) throw new Error(`${argument} requires a value`);
     if (argument === "--cwd") values.cwd = path.resolve(value);
-    if (argument === "--snapshot") values.snapshot = path.resolve(value);
     if (argument === "--gate-observer") values.gateObserver = value;
     if (argument === "--host") values.host = value;
     if (argument === "--port") values.port = Number(value);
@@ -136,7 +132,6 @@ async function main() {
       adapter,
       host: options.host,
       port: options.port,
-      snapshotProvider: createFileSnapshotProvider(options.snapshot),
       fleetProvider
     });
   } catch (error) {

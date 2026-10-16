@@ -9,7 +9,6 @@ import {
   CompanionContractError,
   MAX_BODY_BYTES,
   acceptedReceipt,
-  normalizeDecisionRequest,
   normalizeMessageRequest,
   normalizeQuestionResponse
 } from "./contracts.mjs";
@@ -17,7 +16,6 @@ import { createUnavailableFleetProvider } from "./gate-fleet.mjs";
 
 const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_MAX_REQUESTS = 20_000;
-const DEFAULT_SNAPSHOT_MAX_AGE_MS = 5 * 60_000;
 const MAX_STATIC_ASSET_BYTES = 1024 * 1024;
 const MAX_SNAPSHOT_BYTES = 64 * 1024;
 const CSP = [
@@ -179,20 +177,6 @@ export function createFileSnapshotProvider(snapshotPath) {
   return provider;
 }
 
-function validateObservedSnapshot(snapshot, generatedAt, now = Date.now()) {
-  if (!record(snapshot) || snapshot.schema !== "gate.public-cockpit/v1" || snapshot.mode !== "observed"
-      || snapshot.snapshot?.generatedAt !== generatedAt) {
-    throw new CompanionContractError(409, "snapshot-changed", "The cockpit changed. Reload it before continuing.");
-  }
-  const produced = Date.parse(snapshot.snapshot.generatedAt);
-  const expires = Date.parse(snapshot.snapshot.validUntil);
-  if (!Number.isFinite(produced) || !Number.isFinite(expires) || produced > now + 300_000 || expires < now
-      || produced >= expires || expires - produced > 900_000) {
-    throw new CompanionContractError(409, "snapshot-expired", "The cockpit snapshot expired. Reload it before continuing.");
-  }
-  return snapshot;
-}
-
 function validateLocalSession(adapter, revision) {
   const state = adapter.privateState();
   if (state?.apiVersion !== "gate.local-companion-state/v1" || state.connected !== true
@@ -200,19 +184,6 @@ function validateLocalSession(adapter, revision) {
     throw new CompanionContractError(409, "session-changed", "The local companion session changed. Reload the cockpit.");
   }
   return state;
-}
-
-function validateDecision(snapshot, request, now = Date.now()) {
-  const decision = snapshot.decision;
-  if (!record(decision) || decision.state !== "waiting" || decision.id !== request.decisionId
-      || decision.revision !== request.decisionRevision || !Array.isArray(decision.choices)
-      || !decision.choices.includes(request.choice)) {
-    throw new CompanionContractError(409, "decision-changed", "That decision changed. Reload the cockpit before choosing.");
-  }
-  const expiresAt = Date.parse(decision.expiresAt);
-  if (!Number.isFinite(expiresAt) || expiresAt < now) {
-    throw new CompanionContractError(409, "decision-expired", "That decision expired. Reload the cockpit.");
-  }
 }
 
 class SubmissionLedger {
@@ -240,20 +211,6 @@ class SubmissionLedger {
   }
 }
 
-class DecisionLedger {
-  #entries = new Map();
-
-  run(key, action) {
-    if (this.#entries.has(key)) {
-      throw new CompanionContractError(409, "decision-consumed", "That decision was already answered. Reload the cockpit.");
-    }
-    const promise = Promise.resolve().then(action);
-    this.#entries.set(key, promise);
-    promise.catch(() => this.#entries.delete(key));
-    return promise;
-  }
-}
-
 export async function startCompanionServer(options = {}) {
   const host = options.host || "127.0.0.1";
   if (!isLoopbackHost(host)) throw new Error("cockpit companion must bind to an explicit loopback address");
@@ -275,13 +232,12 @@ export async function startCompanionServer(options = {}) {
   const fleetProvider = options.fleetProvider || createUnavailableFleetProvider();
   if (typeof fleetProvider !== "function") throw new Error("cockpit fleet provider must be a function");
   const adapter = options.adapter;
-  if (!adapter || typeof adapter.sendMessage !== "function" || typeof adapter.sendDecision !== "function"
+  if (!adapter || typeof adapter.sendMessage !== "function"
       || typeof adapter.answerQuestion !== "function" || typeof adapter.privateState !== "function"
       || !adapter.activityStore) throw new Error("cockpit companion adapter is required");
   const sessionToken = randomToken();
   const csrfToken = randomToken();
   const ledger = new SubmissionLedger(options.ledgerLimit);
-  const decisionLedger = new DecisionLedger();
   const streams = new Set();
   let expectedHost;
   let origin;
@@ -379,7 +335,7 @@ export async function startCompanionServer(options = {}) {
       request.once("close", () => { stream.close(); streams.delete(stream); });
       return;
     }
-    if (method !== "POST" || !["/api/message", "/api/decision", "/api/question"].includes(pathname)) {
+    if (method !== "POST" || !["/api/message", "/api/question"].includes(pathname)) {
       return json(response, 405, { ok: false, error: { code: "method-rejected", message: "That local cockpit action is unavailable." } }, method, { Allow: "GET, HEAD, POST" });
     }
     if (request.headers.origin !== origin || !sameToken(request.headers["x-gate-csrf"], csrfToken)) {
@@ -393,19 +349,6 @@ export async function startCompanionServer(options = {}) {
         normalized = normalizeMessageRequest(body);
         validateLocalSession(adapter, normalized.sessionRevision);
         receipt = await ledger.run(normalized.requestId, normalized, () => adapter.sendMessage(normalized));
-      } else if (pathname === "/api/decision") {
-        normalized = normalizeDecisionRequest(body);
-        const snapshot = validateObservedSnapshot(await snapshotProvider(), normalized.snapshotGeneratedAt);
-        validateDecision(snapshot, normalized);
-        const internalDecision = Object.freeze({
-          ...normalized,
-          campaign: snapshot.decision.campaign,
-          prompt: snapshot.decision.prompt
-        });
-        const decisionKey = `${normalized.decisionId}:${normalized.decisionRevision}`;
-        receipt = await ledger.run(normalized.requestId, normalized, () => (
-          decisionLedger.run(decisionKey, () => adapter.sendDecision(internalDecision))
-        ));
       } else {
         normalized = normalizeQuestionResponse(body);
         validateLocalSession(adapter, normalized.sessionRevision);
@@ -453,10 +396,8 @@ export async function startCompanionServer(options = {}) {
 export const companionServerInternals = Object.freeze({
   CSP,
   DEFAULT_MAX_REQUESTS,
-  DEFAULT_SNAPSHOT_MAX_AGE_MS,
   MAX_SNAPSHOT_BYTES,
   STATIC_ROUTES,
-  DecisionLedger,
   SubmissionLedger,
   hostHeader,
   isLoopbackAddress,
@@ -464,7 +405,5 @@ export const companionServerInternals = Object.freeze({
   preloadStatic,
   publicError,
   sameToken,
-  validateDecision,
   validateLocalSession,
-  validateObservedSnapshot
 });

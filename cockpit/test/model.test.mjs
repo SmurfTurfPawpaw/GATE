@@ -15,16 +15,6 @@ async function fixture() {
   return JSON.parse(await readFile(new URL("../data/status.json", import.meta.url), "utf8"));
 }
 
-async function observedFixture() {
-  const value = await fixture();
-  value.mode = "observed";
-  value.snapshot.generatedAt = "2026-10-16T11:55:00Z";
-  value.snapshot.validUntil = "2026-10-16T12:10:00Z";
-  value.campaigns.forEach((campaign) => { campaign.freshness = "current"; });
-  value.decision.expiresAt = "2026-10-16T12:05:00Z";
-  return value;
-}
-
 test("accepts the exact gate.public-cockpit/v1 fixture", async () => {
   const parsed = parsePublicSnapshot(await fixture(), { now });
   assert.equal(parsed.kind, "available");
@@ -40,16 +30,12 @@ test("preview is an explicit non-expiring, never-observed union", async () => {
   const preview = await fixture();
   assert.equal(parsePublicSnapshot(preview, { now }).mode, "preview");
 
+  const observed = { ...preview, mode: "observed" };
+  assert.equal(parsePublicSnapshot(observed, { now }).kind, "unavailable");
   preview.snapshot.validUntil = "2026-10-16T12:10:00Z";
   assert.equal(parsePublicSnapshot(preview, { now }).kind, "unavailable");
 
-  const observed = await observedFixture();
-  observed.snapshot.validUntil = null;
-  assert.equal(parsePublicSnapshot(observed, { now }).kind, "unavailable");
 
-  const mismatchedFreshness = await observedFixture();
-  mismatchedFreshness.campaigns[0].freshness = "preview";
-  assert.equal(parsePublicSnapshot(mismatchedFreshness, { now }).kind, "unavailable");
 });
 
 test("fails closed when any unknown key is present", async () => {
@@ -94,15 +80,6 @@ test("display projection contains allowlisted labels and strips payload canaries
   assert.equal(serialized.includes("How deeply should Codex explore the current lead?"), true);
   assert.equal(serialized.includes("choose-depth"), true);
   assert.equal(serialized.includes("privatePrompt"), false);
-});
-
-test("stale snapshots fail closed without campaign or activity projection", async () => {
-  const parsed = parsePublicSnapshot(await observedFixture(), { now: new Date("2026-10-16T12:11:00Z") });
-  assert.deepEqual(parsed, { kind: "unavailable", reason: "stale" });
-  const display = toDisplayModel(parsed);
-  assert.deepEqual(display, { kind: "unavailable", reason: "stale" });
-  assert.equal("campaigns" in display, false);
-  assert.equal("activity" in display, false);
 });
 
 test("unavailable token usage requires null and never implies zero", async () => {
@@ -150,25 +127,14 @@ test("decision choices are bounded enums with one in-list recommendation", async
   assert.equal(parsePublicSnapshot(clear, { now }).kind, "available");
 });
 
-test("observed snapshots have a short TTL and bounded decision expiry", async () => {
-  const long = await observedFixture();
-  long.snapshot.validUntil = "2026-10-16T12:11:00Z";
-  assert.equal(parsePublicSnapshot(long, { now }).kind, "unavailable");
-
-  const badDecision = await observedFixture();
-  badDecision.decision.expiresAt = "2026-10-16T12:11:00Z";
-  assert.equal(parsePublicSnapshot(badDecision, { now }).kind, "unavailable");
-});
-
 test("bridge, messages, and receipts use exact bounded contracts", async () => {
-  const { validateDecisionBridge, validateBridgeReceipt, validateOperatorMessage } = await import("../assets/model.js");
-  const submitDecision = async () => undefined;
+  const { validateLocalBridge, validateBridgeReceipt, validateOperatorMessage } = await import("../assets/model.js");
   const submitMessage = async () => undefined;
   const submitQuestion = async () => undefined;
-  const bridge = { apiVersion: "gate.local-cockpit-bridge/v1", submitDecision, submitMessage, submitQuestion };
-  assert.equal(validateDecisionBridge(bridge), bridge);
-  assert.equal(validateDecisionBridge({ ...bridge, endpoint: "CANARY" }), null);
-  assert.equal(validateDecisionBridge({ apiVersion: bridge.apiVersion, submitDecision, submitMessage }), null);
+  const bridge = { apiVersion: "gate.local-cockpit-bridge/v1", submitMessage, submitQuestion };
+  assert.equal(validateLocalBridge(bridge), bridge);
+  assert.equal(validateLocalBridge({ ...bridge, endpoint: "CANARY" }), null);
+  assert.equal(validateLocalBridge({ apiVersion: bridge.apiVersion, submitMessage }), null);
 
   assert.deepEqual(validateOperatorMessage("  hello\r\nGiovanni  "), { valid: true, message: "hello\nGiovanni", length: 14, bytes: 14 });
   assert.equal(validateOperatorMessage("Review https://example.test/program").valid, true);

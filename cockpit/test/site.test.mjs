@@ -24,30 +24,55 @@ async function artifactFiles(root, directory = root) {
   return files.sort();
 }
 
-test("all browser assets and navigation are relative for a GitHub Pages subpath", async () => {
-  const html = await read("index.html");
-  const references = [...html.matchAll(/(?:src|href)="([^"]+)"/g)].map((match) => match[1]);
+function documentModel(html) {
+  const root = { tag: "document", attributes: {}, children: [], text: "" };
+  const stack = [root];
+  const voids = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
+  for (const token of html.matchAll(/<!--[\s\S]*?-->|<![^>]*>|<\/[^>]+>|<[a-z][^>]*>|[^<]+/gi)) {
+    const value = token[0];
+    if (value.startsWith("<!")) continue;
+    if (value.startsWith("</")) { stack.pop(); continue; }
+    if (!value.startsWith("<")) { stack.at(-1).text += value; continue; }
+    const tag = /^<([^\s/>]+)/.exec(value)[1].toLowerCase();
+    const attributes = {};
+    for (const attribute of value.slice(tag.length + 1, -1).matchAll(/([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g)) {
+      const name = attribute[1].toLowerCase();
+      if (!(name in attributes)) attributes[name] = attribute[2] ?? attribute[3] ?? attribute[4] ?? "";
+    }
+    const element = { tag, attributes, children: [], text: "" };
+    stack.at(-1).children.push(element);
+    if (!voids.has(tag)) stack.push(element);
+  }
+  const all = [];
+  const visit = element => { all.push(element); element.children.forEach(visit); };
+  visit(root);
+  return { all, byId: id => all.find(element => element.attributes.id === id) };
+}
+
+test("active document assets resolve within a Pages subpath", async () => {
+  const { all } = documentModel(await read("index.html"));
+  const base = new URL("https://preview.invalid/GATE/");
+  const references = all.flatMap(element => ["src", "href"].filter(key => key in element.attributes).map(key => element.attributes[key]));
   assert.ok(references.length >= 5);
   for (const reference of references) {
-    if (reference.startsWith("#")) continue;
-    assert.match(reference, /^\.\//, `expected relative reference, received ${reference}`);
-    assert.doesNotMatch(reference, /^\//);
-    assert.doesNotMatch(reference, /^https?:/);
+    const resolved = new URL(reference, base);
+    assert.equal(resolved.origin, base.origin);
+    assert.ok(resolved.pathname.startsWith(base.pathname));
   }
-
-
+  assert.equal(all.some(element => element.tag === "base"), false);
 });
 
-test("page has no third-party assets and declares a restrictive CSP and noindex", async () => {
-  const html = await read("index.html");
-  assert.doesNotMatch(html, /https?:\/\//);
-  assert.match(html, /default-src 'none'/);
-  assert.match(html, /script-src 'self'/);
-  assert.match(html, /connect-src 'self'/);
-  assert.match(html, /base-uri 'none'/);
-  assert.match(html, /name="robots" content="noindex, nofollow, noarchive, nosnippet"/);
-  assert.doesNotMatch(html, /<script(?![^>]*src=)/);
-  assert.doesNotMatch(html, /<style[\s>]/);
+test("active document declares restrictive CSP and robots directives", async () => {
+  const { all } = documentModel(await read("index.html"));
+  const policy = all.find(element => element.tag === "meta" && element.attributes["http-equiv"]?.toLowerCase() === "content-security-policy");
+  assert.ok(policy);
+  const directives = new Map(policy.attributes.content.split(";").map(part => part.trim().split(/\s+/)).filter(parts => parts[0]).map(([name, ...values]) => [name, values]));
+  for (const [name, values] of [["default-src", ["'none'"]], ["script-src", ["'self'"]], ["connect-src", ["'self'"]], ["base-uri", ["'none'"]]]) {
+    assert.deepEqual(directives.get(name), values);
+  }
+  const robots = all.find(element => element.tag === "meta" && element.attributes.name === "robots");
+  assert.deepEqual(new Set(robots.attributes.content.split(/,\s*/)), new Set(["noindex", "nofollow", "noarchive", "nosnippet"]));
+  assert.equal(all.some(element => element.tag === "style" || element.tag === "script" && !element.attributes.src), false);
 });
 
 test("Pages build excludes every private companion and observer module", async () => {
@@ -74,15 +99,12 @@ test("public snapshot names the exact repository version", async () => {
   assert.equal(snapshot.gate.version, repositoryPackage.version);
 });
 
-test("preview honesty and disabled composer are visible before JavaScript", async () => {
-  const html = await read("index.html");
-  assert.match(html, /PREVIEW · NOT LIVE/);
-  assert.match(html, /id="message-input"[^>]*disabled/);
-  assert.match(html, /id="message-send"[^>]*disabled/);
-  assert.ok(html.indexOf('id="decision-panel"') < html.indexOf('class="metric-grid"'));
-  assert.doesNotMatch(html, /decision-panel[^>]*hidden/);
-
-
+test("preview and disabled composer are present in active markup before JavaScript", async () => {
+  const { all, byId } = documentModel(await read("index.html"));
+  assert.equal(byId("mode-banner").children.some(element => element.tag === "strong" && element.text === "PREVIEW · NOT LIVE"), true);
+  for (const id of ["message-input", "message-send"]) assert.ok("disabled" in byId(id).attributes);
+  assert.equal("hidden" in byId("decision-panel").attributes, false);
+  assert.ok(all.indexOf(byId("decision-panel")) < all.findIndex(element => element.attributes.class === "metric-grid"));
 });
 
 test("robots policy requests no crawling", async () => {
@@ -164,7 +186,7 @@ test("local startup without fleet telemetry renders native choices and submits s
   let submitted;
   page.context.GATE_PUBLIC_COCKPIT_BRIDGE = {
     apiVersion: "gate.local-cockpit-bridge/v1",
-    submitDecision() {}, submitMessage() {},
+    submitMessage() {},
     async submitQuestion(request) {
       submitted = request;
       return { apiVersion: "gate.local-cockpit-receipt/v1", requestId: request.requestId, status: "accepted" };
@@ -212,7 +234,7 @@ test("publication boundaries reject private canaries and preserve validated snap
     invalid.privateCanary = "PRIVATE_CANARY";
     const companion = await startCompanionServer({
       snapshotProvider: provider,
-      adapter: { sendMessage() {}, sendDecision() {}, answerQuestion() {}, privateState() {}, activityStore: {} }
+      adapter: { sendMessage() {}, answerQuestion() {}, privateState() {}, activityStore: {} }
     });
     try {
       const endpoint = new URL("/data/status.json", companion.url);
@@ -231,5 +253,36 @@ test("publication boundaries reject private canaries and preserve validated snap
     await assert.rejects(execute(process.execPath, [path.join(root, "scripts/build-site.mjs")]), /invalid/);
   } finally {
     await rm(temporary, { recursive: true, force: true });
+  }
+});
+
+test("private drafts survive invalid, missing, and expired preview refreshes", async () => {
+  for (const response of [
+    async () => { throw new Error("missing"); },
+    async () => new Response("{", { headers: { "content-type": "application/json" } }),
+    async () => {
+      const expired = JSON.parse(await read("data/status.json"));
+      expired.snapshot.validUntil = "2020-01-01T00:00:00Z";
+      return new Response(JSON.stringify(expired), { headers: { "content-type": "application/json" } });
+    }
+  ]) {
+    const page = await browser(JSON.parse(await read("data/status.json")));
+    page.context.GATE_PUBLIC_COCKPIT_BRIDGE = {
+      apiVersion: "gate.local-cockpit-bridge/v1",
+      submitMessage() {}, submitQuestion() {}
+    };
+    page.events["gate:companion-private-state"]({ detail: {
+      apiVersion: "gate.local-companion-state/v1", sessionRevision: 1, stateRevision: 1,
+      observedAt: new Date().toISOString(), connected: true, turn: "idle", tokens: null,
+      conversation: [], pendingQuestions: []
+    } });
+    page.elements.get("message-input").value = "Keep my unsent draft";
+    page.context.fetch = response;
+    await page.events["gate:companion-snapshot"]();
+    assert.equal(page.elements.get("message-input").value, "Keep my unsent draft");
+    assert.equal(page.elements.get("message-input").disabled, false);
+    page.events["gate:companion-connection"]({ detail: { connected: false } });
+    await page.events["gate:companion-snapshot"]();
+    assert.equal(page.elements.get("message-input").value, "Keep my unsent draft");
   }
 });

@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 
 export const LOCAL_BRIDGE_VERSION = "gate.local-cockpit-bridge/v1";
 export const LOCAL_MESSAGE_VERSION = "gate.local-message-request/v1";
-export const LOCAL_DECISION_VERSION = "gate.local-decision-request/v1";
 export const LOCAL_QUESTION_VERSION = "gate.local-question-response/v1";
 export const LOCAL_RECEIPT_VERSION = "gate.local-cockpit-receipt/v1";
 export const LOCAL_EVENT_VERSION = "gate.local-cockpit-event/v1";
@@ -11,8 +10,6 @@ export const MAX_MESSAGE_CHARACTERS = 1_000;
 export const MAX_BODY_BYTES = 16 * 1024;
 
 const REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/u;
-const DECISION_ID = /^dec_[a-f0-9]{16}$/u;
-const CHOICE_ID = /^[a-z][a-z0-9-]{0,63}$/u;
 const QUESTION_TOKEN = /^q_[A-Za-z0-9_-]{32,128}$/u;
 const CONTROL_CHARACTERS = /[\u0000-\u0009\u000B\u000C\u000E-\u001F\u007F-\u009F\u202A-\u202E\u2066-\u2069]/u;
 const SECRET_ASSIGNMENT = /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|private[_-]?key|session[_-]?(?:id|key|token))\s*[:=]\s*\S+/iu;
@@ -54,21 +51,9 @@ function exactKeys(value, expected) {
     && actual.every((key, index) => key === sortedExpected[index]);
 }
 
-function validTimestamp(value) {
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u.test(value)) return false;
-  return Number.isFinite(Date.parse(value));
-}
-
 function requestId(value) {
   if (typeof value !== "string" || !REQUEST_ID.test(value)) {
     throw new CompanionContractError(400, "request-invalid", "The local companion rejected an invalid request.");
-  }
-  return value;
-}
-
-function observedSnapshotTimestamp(value) {
-  if (!validTimestamp(value)) {
-    throw new CompanionContractError(400, "snapshot-invalid", "Reload the cockpit before sending that request.");
   }
   return value;
 }
@@ -112,33 +97,6 @@ export function normalizeMessageRequest(value) {
     requestId: requestId(value.requestId),
     sessionRevision: sessionRevision(value.sessionRevision),
     message
-  });
-}
-
-export function normalizeDecisionRequest(value) {
-  if (!exactKeys(value, [
-    "apiVersion",
-    "requestId",
-    "decisionId",
-    "decisionRevision",
-    "snapshotGeneratedAt",
-    "choice"
-  ]) || value.apiVersion !== LOCAL_DECISION_VERSION) {
-    throw new CompanionContractError(400, "decision-request-invalid", "Reload the cockpit before sending that choice.");
-  }
-  if (typeof value.decisionId !== "string" || !DECISION_ID.test(value.decisionId)
-      || !Number.isSafeInteger(value.decisionRevision) || value.decisionRevision < 1
-      || value.decisionRevision > 2_147_483_647
-      || typeof value.choice !== "string" || !CHOICE_ID.test(value.choice)) {
-    throw new CompanionContractError(400, "decision-request-invalid", "Reload the cockpit before sending that choice.");
-  }
-  return Object.freeze({
-    apiVersion: LOCAL_DECISION_VERSION,
-    requestId: requestId(value.requestId),
-    decisionId: value.decisionId,
-    decisionRevision: value.decisionRevision,
-    snapshotGeneratedAt: observedSnapshotTimestamp(value.snapshotGeneratedAt),
-    choice: value.choice
   });
 }
 
@@ -206,6 +164,5 @@ export function sanitizeActivityEvent(value, sequence, at = new Date()) {
 export const companionContractInternals = Object.freeze({
   EVENT_CATEGORIES: Object.freeze([...EVENT_CATEGORIES]),
   EVENT_STATES: Object.freeze([...EVENT_STATES]),
-  exactKeys,
-  validTimestamp
+  exactKeys
 });

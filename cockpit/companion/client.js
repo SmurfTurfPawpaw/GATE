@@ -143,7 +143,6 @@ async function streamEvents() {
 if (tokenPattern.test(session || "") && tokenPattern.test(csrf || "")) {
   const bridge = Object.freeze({
     apiVersion: "gate.local-cockpit-bridge/v1",
-    submitDecision: (request) => post("./api/decision", request),
     submitMessage: (request) => post("./api/message", request),
     submitQuestion: (request) => post("./api/question", request)
   });

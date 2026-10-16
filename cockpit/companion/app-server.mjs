@@ -344,10 +344,6 @@ export class CodexCompanionAdapter extends EventEmitter {
     });
   }
 
-  sendDecision(request) {
-    const decisionText = `Apply cockpit choice "${request.choice}" for ${request.prompt} in ${request.campaign} (decision ${request.decisionId}, revision ${request.decisionRevision}).`;
-    return this.sendMessage({ ...request, message: decisionText });
-  }
 
   answerQuestion(response) {
     return this.#serialize(async () => {

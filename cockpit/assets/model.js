@@ -11,10 +11,9 @@ const ACTIVITY_KEYS = ["at", "campaign", "category", "completed", "total", "resu
 
 const STAGES = new Set(["intake", "mapping", "testing", "validating", "reporting", "paused", "complete"]);
 const ATTENTION = new Set(["steady", "watch", "response-needed"]);
-const FRESHNESS = new Set(["preview", "current", "delayed"]);
+const FRESHNESS = new Set(["preview"]);
 const CODEX_STATES = new Set(["working", "waiting", "idle"]);
 const TOKEN_STATES = new Set(["available", "unavailable"]);
-const MODES = new Set(["preview", "observed"]);
 const ACTIONS = new Set(["profiling", "mapping-surface", "running-tests", "reviewing-evidence", "awaiting-reply", "preparing-report", "idle"]);
 const DECISION_STATES = new Set(["clear", "waiting"]);
 const PROMPTS = new Set(["choose-depth", "confirm-priority", "select-next-step"]);
@@ -113,20 +112,13 @@ export function parsePublicSnapshot(input, options = {}) {
 
   if (!exactKeys(input, ROOT_KEYS)) return unavailable("invalid");
   if (input.schema !== SCHEMA) return unavailable("invalid");
-  if (!MODES.has(input.mode)) return unavailable("invalid");
+  if (input.mode !== "preview") return unavailable("invalid");
   if (!exactKeys(input.site, SITE_KEYS) || !safeVersion(input.site.version)) return unavailable("invalid");
   if (!exactKeys(input.gate, GATE_KEYS) || !safeVersion(input.gate.version)) return unavailable("invalid");
   if (!exactKeys(input.snapshot, SNAPSHOT_KEYS)) return unavailable("invalid");
 
   const generatedAt = timestamp(input.snapshot.generatedAt);
-  const validUntil = input.snapshot.validUntil === null ? null : timestamp(input.snapshot.validUntil);
-  if (generatedAt === null || generatedAt > now + 300_000) return unavailable("invalid");
-  if (input.mode === "preview") {
-    if (input.snapshot.validUntil !== null) return unavailable("invalid");
-  } else {
-    if (validUntil === null || generatedAt >= validUntil || validUntil - generatedAt > 900_000) return unavailable("invalid");
-    if (now > validUntil) return unavailable("stale");
-  }
+  if (generatedAt === null || generatedAt > now + 300_000 || input.snapshot.validUntil !== null) return unavailable("invalid");
   if (options.minimumGeneratedAt !== undefined) {
     const minimumGeneratedAt = timestamp(options.minimumGeneratedAt);
     if (minimumGeneratedAt === null || generatedAt < minimumGeneratedAt) return unavailable("invalid");
@@ -156,7 +148,6 @@ export function parsePublicSnapshot(input, options = {}) {
     if (!ATTENTION.has(item.attention) || !FRESHNESS.has(item.freshness) || !CODEX_STATES.has(item.codex) || !ACTIONS.has(item.currentAction)) {
       return unavailable("invalid");
     }
-    if ((input.mode === "preview") !== (item.freshness === "preview")) return unavailable("invalid");
     aliases.add(item.alias);
     campaigns.push(Object.freeze({ ...item }));
   }
@@ -170,14 +161,13 @@ export function parsePublicSnapshot(input, options = {}) {
       return unavailable("invalid");
     }
   } else {
-    const decisionExpiry = input.decision.expiresAt === null ? null : timestamp(input.decision.expiresAt);
     if (!/^dec_[a-f0-9]{16}$/.test(input.decision.id) || !boundedInteger(input.decision.revision, 1, 999_999)
       || !aliases.has(input.decision.campaign) || !PROMPTS.has(input.decision.prompt)
       || !Array.isArray(input.decision.choices) || input.decision.choices.length < 2 || input.decision.choices.length > 3
       || new Set(input.decision.choices).size !== input.decision.choices.length
       || input.decision.choices.some((choice) => !CHOICES.has(choice))
       || !input.decision.choices.includes(input.decision.recommended)) return unavailable("invalid");
-    if (input.mode === "preview" ? input.decision.expiresAt !== null : decisionExpiry === null || decisionExpiry <= generatedAt || decisionExpiry > validUntil) {
+    if (input.decision.expiresAt !== null) {
       return unavailable("invalid");
     }
   }
@@ -234,7 +224,7 @@ export async function readPublicSnapshotResponse(response, options = {}) {
 }
 
 export function toDisplayModel(snapshot) {
-  if (!snapshot || snapshot.kind !== "available") return unavailable(snapshot?.reason === "stale" ? "stale" : "invalid");
+  if (!snapshot || snapshot.kind !== "available") return unavailable("invalid");
 
   const campaigns = snapshot.campaigns.map((campaign) => Object.freeze({
     alias: campaign.alias,
@@ -288,10 +278,9 @@ export function toDisplayModel(snapshot) {
   });
 }
 
-export function validateDecisionBridge(value) {
-  if (!exactKeys(value, ["apiVersion", "submitDecision", "submitMessage", "submitQuestion"])) return null;
+export function validateLocalBridge(value) {
+  if (!exactKeys(value, ["apiVersion", "submitMessage", "submitQuestion"])) return null;
   if (value.apiVersion !== "gate.local-cockpit-bridge/v1"
-    || typeof value.submitDecision !== "function"
     || typeof value.submitMessage !== "function"
     || typeof value.submitQuestion !== "function") return null;
   return value;
@@ -574,7 +563,7 @@ export function validateLocalFleet(value, options = {}) {
 
 export const publicCockpitModel = Object.freeze({
   schema: SCHEMA,
-  modes: Object.freeze([...MODES]),
+  modes: Object.freeze(["preview"]),
   stages: Object.freeze([...STAGES]),
   attention: Object.freeze([...ATTENTION]),
   freshness: Object.freeze([...FRESHNESS]),

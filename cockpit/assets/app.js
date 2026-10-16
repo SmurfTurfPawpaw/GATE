@@ -3,7 +3,7 @@ import {
   readPublicSnapshotResponse,
   toDisplayModel,
   validateBridgeReceipt,
-  validateDecisionBridge,
+  validateLocalBridge,
   validateLocalActivityEvent,
   validateLocalCompanionState,
   validateLocalFleet,
@@ -35,15 +35,12 @@ const elements = {
 let latestGeneratedAt;
 let currentDisplay;
 let submitting = false;
-let expiryTimer;
-let decisionExpiryTimer;
 let localState;
 let localFleet;
 let localTransportConnected = null;
 let localActivity = [];
 let questionReceiptStatus = "";
 let messageReceiptStatus = "";
-const acknowledgedDecisions = new Set();
 const acknowledgedQuestions = new Set();
 const nativeSelections = new Map();
 
@@ -112,16 +109,8 @@ function renderTokenRail(usage, options = {}) {
     : `Awaiting token telemetry · ${campaignSummary}`;
 }
 
-function actionable(model = currentDisplay) {
-  return model?.mode === "observed" && Date.now() <= Date.parse(model.validUntil);
-}
-
-function decisionActionable(model = currentDisplay) {
-  return actionable(model) && model?.decision?.state === "waiting" && Date.now() <= Date.parse(model.decision.expiresAt);
-}
-
 function exactBridge() {
-  return validateDecisionBridge(globalThis.GATE_PUBLIC_COCKPIT_BRIDGE);
+  return validateLocalBridge(globalThis.GATE_PUBLIC_COCKPIT_BRIDGE);
 }
 
 function localReady() {
@@ -132,18 +121,11 @@ function requestId() {
   return `req_${globalThis.crypto.randomUUID()}`;
 }
 
-function decisionKey(decision) {
-  return `${decision.id}:${decision.revision}`;
-}
-
 function setMode(mode) {
   clear(elements.modeBanner);
   if (mode === "preview") {
     elements.modeBanner.className = "mode-banner mode-preview";
     elements.modeBanner.append(node("strong", "", "PREVIEW · NOT LIVE"), node("span", "", "Example data for interface review. Interaction requires the local companion."));
-  } else if (mode === "observed") {
-    elements.modeBanner.className = "mode-banner mode-observed";
-    elements.modeBanner.append(node("strong", "", "OBSERVED SNAPSHOT"), node("span", "", "Bounded operational signals. Raw activity remains private."));
   } else if (mode === "local") {
     elements.modeBanner.className = "mode-banner mode-local";
     elements.modeBanner.append(node("strong", "", "LOCAL COMPANION · PRIVATE"), node("span", "", "Dedicated Codex session with a separate read-only GATE fleet signal."));
@@ -173,17 +155,15 @@ function renderBridgeState(connected, mode = currentDisplay?.mode) {
     : mode === "preview" ? "Preview only. Start the private local companion to talk with Codex." : "View only. Reply in Codex while the local companion is unavailable.";
 }
 
-function renderUnavailable(reason) {
-  clearTimeout(expiryTimer);
-  clearTimeout(decisionExpiryTimer);
+function renderUnavailable() {
   currentDisplay = undefined;
   elements.decisionPanel.hidden = false;
   setMode("unavailable");
   elements.siteVersion.textContent = "v—";
   elements.gateVersion.textContent = "v—";
   elements.snapshotState.className = "snapshot-state state-unavailable";
-  elements.snapshotLabel.textContent = reason === "stale" ? "Stale · withheld" : "Unavailable";
-  elements.snapshotTime.textContent = reason === "stale" ? "Stale snapshot withheld" : "Snapshot unavailable";
+  elements.snapshotLabel.textContent = "Unavailable";
+  elements.snapshotTime.textContent = "Snapshot unavailable";
   setProgress(null);
   elements.overallTitle.textContent = "OVERALL PROGRESS";
   elements.currentAction.textContent = "Operational state withheld";
@@ -201,7 +181,7 @@ function renderUnavailable(reason) {
   elements.blockerCount.textContent = "—";
   elements.blockerSummary.textContent = "Need resolution";
   elements.freshnessValue.textContent = "—";
-  elements.freshnessSummary.textContent = reason === "stale" ? "Expired" : "Unavailable";
+  elements.freshnessSummary.textContent = "Unavailable";
   elements.questionMetricLabel.textContent = "NEEDS GIOVANNI";
   elements.questionCount.textContent = "—";
   elements.questionSummary.textContent = "Queue unavailable";
@@ -209,15 +189,14 @@ function renderUnavailable(reason) {
 
   clear(elements.campaignList);
   const empty = node("div", "empty-state");
-  empty.append(node("span", "", "—"), node("p", "", reason === "stale" ? "The public snapshot expired. Campaign state is withheld." : "No valid public snapshot is available."));
+  empty.append(node("span", "", "—"), node("p", "", "No valid public snapshot is available."));
   elements.campaignList.append(empty);
   clear(elements.conversation);
   elements.conversation.append(node("div", "conversation-empty", "Decision state withheld until a valid snapshot arrives."));
   clear(elements.choiceList);
-  elements.messageInput.value = "";
   elements.messageInput.disabled = true;
   elements.messageSend.disabled = true;
-  elements.messageCount.textContent = "0 / 1000";
+  updateComposer();
   elements.messageStatus.textContent = "Composer unavailable without the private local companion.";
   renderBridgeState(false);
   clear(elements.activityFeed);
@@ -261,37 +240,7 @@ function campaignCard(campaign) {
   return article;
 }
 
-async function submitChoice(choice) {
-  const bridge = exactBridge();
-  if (!bridge || !decisionActionable() || submitting || acknowledgedDecisions.has(decisionKey(currentDisplay.decision))) return;
-  const snapshotGeneratedAt = currentDisplay.generatedAt;
-  const id = requestId();
-  submitting = true;
-  const buttons = elements.choiceList.querySelectorAll("button");
-  buttons.forEach((button) => { button.disabled = true; });
-  elements.bridgeNote.textContent = "Sending through the operator bridge…";
-  try {
-    const receipt = await bridge.submitDecision(Object.freeze({
-      apiVersion: "gate.local-decision-request/v1",
-      requestId: id,
-      decisionId: currentDisplay.decision.id,
-      decisionRevision: currentDisplay.decision.revision,
-      snapshotGeneratedAt,
-      choice: choice.value
-    }));
-    if (!validateBridgeReceipt(receipt, id) || currentDisplay?.generatedAt !== snapshotGeneratedAt || !actionable()) throw new Error("invalid receipt");
-    acknowledgedDecisions.add(decisionKey(currentDisplay.decision));
-    elements.bridgeNote.textContent = "Local companion accepted the choice. Delivery to Codex is not confirmed here.";
-  } catch {
-    elements.bridgeNote.textContent = "No valid local receipt was received. Reply in Codex.";
-    buttons.forEach((button) => { button.disabled = false; });
-  } finally {
-    submitting = false;
-  }
-}
-
 function renderDecision(model) {
-  clearTimeout(decisionExpiryTimer);
   clear(elements.conversation);
   clear(elements.choiceList);
   const bridge = exactBridge(model);
@@ -307,28 +256,14 @@ function renderDecision(model) {
   const codexMessage = node("div", "message message-codex");
   codexMessage.append(node("small", "", `CODEX · ${model.decision.campaign}`), node("p", "", model.decision.prompt));
   elements.conversation.append(codexMessage);
-  if (acknowledgedDecisions.has(decisionKey(model.decision))) {
-    const receipt = node("div", "message message-operator");
-    receipt.append(node("small", "", "LOCAL RECEIPT"), node("p", "", "The local companion accepted a response for this decision."));
-    elements.conversation.append(receipt);
-    elements.bridgeNote.textContent = "Local acceptance is recorded in this browser session. Codex delivery is not confirmed here.";
-    configureComposer(model, bridge);
-    return;
-  }
   model.decision.choices.forEach((choice) => {
     const button = node("button", `choice-button${choice.recommended ? " recommended" : ""}`);
     button.type = "button";
-    button.disabled = !bridge || !decisionActionable(model);
+    button.disabled = true;
     button.append(node("span", "", choice.label));
     if (choice.recommended) button.append(node("small", "", "Recommended"));
-    button.addEventListener("click", () => submitChoice(choice));
     elements.choiceList.append(button);
   });
-  if (bridge && !decisionActionable(model)) {
-    elements.bridgeNote.textContent = "This decision expired. The composer remains available through the local companion.";
-  } else if (model.mode === "observed") {
-    decisionExpiryTimer = globalThis.setTimeout(() => renderDecision(currentDisplay), Math.max(0, Date.parse(model.decision.expiresAt) - Date.now()) + 25);
-  }
   configureComposer(model, bridge);
 }
 
@@ -716,14 +651,13 @@ function activityLine(entry, latest) {
 }
 
 function renderAvailable(model) {
-  clearTimeout(expiryTimer);
   currentDisplay = model;
   setMode(model.mode);
   elements.siteVersion.textContent = `v${model.siteVersion}`;
   elements.gateVersion.textContent = `v${model.gateVersion}`;
   elements.snapshotState.className = `snapshot-state state-${model.mode}`;
-  elements.snapshotLabel.textContent = model.mode === "preview" ? "PREVIEW · NOT LIVE" : "Observed · bounded";
-  elements.snapshotTime.textContent = model.mode === "preview" ? "Design preview · example data" : `Observed ${formatSnapshotTime(model.generatedAt)}`;
+  elements.snapshotLabel.textContent = "PREVIEW · NOT LIVE";
+  elements.snapshotTime.textContent = "Design preview · example data";
   setProgress(model.aggregate.overallProgress);
   elements.overallTitle.textContent = "OVERALL PROGRESS";
 
@@ -748,8 +682,8 @@ function renderAvailable(model) {
   elements.learningSummary.textContent = "Retained";
   elements.blockerCount.textContent = String(model.aggregate.blockerCount);
   elements.blockerSummary.textContent = "Need resolution";
-  elements.freshnessValue.textContent = model.mode === "preview" ? "Preview" : "Observed";
-  elements.freshnessSummary.textContent = model.mode === "preview" ? "Example data" : formatSnapshotTime(model.generatedAt);
+  elements.freshnessValue.textContent = "Preview";
+  elements.freshnessSummary.textContent = "Example data";
   const waiting = model.decision.state === "waiting" ? 1 : 0;
   elements.questionMetricLabel.textContent = "NEEDS GIOVANNI";
   elements.questionCount.textContent = String(waiting);
@@ -773,9 +707,6 @@ function renderAvailable(model) {
   } else {
     model.activity.forEach((entry, index) => elements.activityFeed.append(activityLine(entry, index === 0)));
   }
-  if (model.mode === "observed") {
-    expiryTimer = globalThis.setTimeout(() => renderUnavailable("stale"), Math.max(0, Date.parse(model.validUntil) - Date.now()) + 25);
-  }
   if (localReady()) renderLocalMode();
 }
 
@@ -787,14 +718,14 @@ async function refresh() {
     const parsed = await readPublicSnapshotResponse(response, { minimumGeneratedAt: latestGeneratedAt });
     const display = toDisplayModel(parsed);
     if (display.kind !== "available") {
-      renderUnavailable(display.reason);
+      renderUnavailable();
       return;
     }
     if (currentDisplay && display.generatedAt === currentDisplay.generatedAt && display.mode === currentDisplay.mode) return;
     latestGeneratedAt = display.generatedAt;
     renderAvailable(display);
   } catch {
-    renderUnavailable("invalid");
+    renderUnavailable();
   }
 }
 
@@ -816,7 +747,7 @@ globalThis.addEventListener("gate:companion-private-state", (event) => {
   localTransportConnected = next.connected;
   if (localReady()) renderLocalMode();
   else if (currentDisplay?.kind === "available") renderAvailable(currentDisplay);
-  else renderUnavailable("invalid");
+  else renderUnavailable();
 });
 globalThis.addEventListener("gate:companion-activity", (event) => {
   const next = validateLocalActivityEvent(event.detail);

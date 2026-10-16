@@ -36,12 +36,6 @@ npm run cockpit -- --gate-observer http://127.0.0.1:43173/api/status
 
 The source option accepts only HTTP on `127.0.0.1` or `::1`, with the exact `/api/status` path and no credentials, query, fragment, redirect, or public host. The observer request has a 3.5-second deadline, a 2,000,000-byte response limit, and a two-second cache.
 
-An observed public snapshot is optional. Supply one only when you want the checked-in fixed decision actions or are reviewing a separate public snapshot producer:
-
-```sh
-npm run cockpit -- --snapshot /private/path/to/observed-status.json
-```
-
 The command prints `GATE // Welcome, Giovanni.` and one private URL such as:
 
 ```text
@@ -50,13 +44,13 @@ http://127.0.0.1:43127/#session=…&csrf=…
 
 Keep the terminal open. The session and CSRF capabilities exist only for that process and URL fragment. The default thread is ephemeral and dedicated to this companion. Use `--persistent` to let Codex persist a newly created thread, or `--thread-id ID` to resume a dedicated thread explicitly.
 
-The checked-in `cockpit/data/status.json` is a presentation preview. Static GitHub Pages and a normal preview server remain read-only because neither has the private bridge or capabilities. Through the loopback companion, private conversation, native Codex questions, and the local GATE fleet work independently of that preview snapshot. A reviewed producer must write a fresh `mode: "observed"` snapshot only when public Pages should show live metrics or the companion should accept a checked-in fixed decision; the companion checks the exact decision ID, revision, choice, and expiry for every such choice.
+The checked-in `cockpit/data/status.json` is a presentation preview. Static GitHub Pages and a normal preview server remain read-only because neither has the private bridge or capabilities. Through the loopback companion, private conversation, native Codex questions, and the local GATE fleet work independently of that preview snapshot. Public snapshots accept only preview mode; example decisions are disabled. Private choices use native Codex questions.
 
 ## What is working
 
 The companion currently provides:
 
-- an exact `gate.local-cockpit-bridge/v1` browser adapter exposing `submitDecision`, `submitMessage`, and `submitQuestion`;
+- an exact `gate.local-cockpit-bridge/v1` browser adapter exposing `submitMessage` and `submitQuestion`;
 - idempotent receipts that say only that the local companion accepted a request;
 - Codex app-server initialization, dedicated thread start or resume, `turn/start`, and `turn/steer`;
 - bounded native `item/tool/requestUserInput` choice capture and response in the adapter API;
@@ -92,8 +86,8 @@ Do not place this listener behind a tunnel, port forward, public reverse proxy, 
 
 ## Public snapshot integration
 
-A reviewed GATE-to-public-snapshot producer is required before public Pages can claim live campaign percentages, tests, blockers, learnings, or checked-in fixed decisions. It is not required for the private conversation, local fleet projection, categorical activity, companion-thread token counters, turn state, or bounded native Codex questions. `npm run cockpit:build` recreates `cockpit/_site` from exactly `.nojekyll`, `index.html`, `robots.txt`, `assets/app.js`, `assets/favicon.svg`, `assets/model.js`, `assets/styles.css`, and `data/status.json`. It rejects linked or changing source files and excludes `companion/`, including the observer client and private endpoints.
+Public snapshots are static examples and cannot accept operator choices or claim live operational state. `npm run cockpit:build` recreates `cockpit/_site` from exactly `.nojekyll`, `index.html`, `robots.txt`, `assets/app.js`, `assets/favicon.svg`, `assets/model.js`, `assets/styles.css`, and `data/status.json`. It rejects linked or changing source files and excludes `companion/`, including the observer client and private endpoints.
 
-The Pages workflow deploys that allowlisted artifact at `https://smurfturfpawpaw.github.io/GATE/` after GitHub Pages is configured to use GitHub Actions. The page stays an explicit `PREVIEW · NOT LIVE` until a separate reviewed producer supplies a fresh public-safe observed snapshot. Serving it under a path such as `giovannicallebaut.com/bugbounty/` requires that site's host or proxy; a project Pages workflow cannot claim that path by itself.
+The Pages workflow deploys that allowlisted artifact at `https://smurfturfpawpaw.github.io/GATE/` after GitHub Pages is configured to use GitHub Actions. The page stays an explicit `PREVIEW · NOT LIVE` and does not accept observed snapshots. Serving it under a path such as `giovannicallebaut.com/bugbounty/` requires that site's host or proxy; a project Pages workflow cannot claim that path by itself.
 
 If a Codex turn fails while thread startup succeeds, refresh the Codex CLI login and restart the companion. The browser receives only a categorical failed event; authentication diagnostics remain in the launching terminal or Codex login flow.

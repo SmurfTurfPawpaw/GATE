@@ -567,8 +567,6 @@ body > footer { display: flex; justify-content: space-between; gap: 1rem; paddin
 .mode-banner strong { color: var(--ink); font: 800 0.66rem/1 ui-monospace, "SFMono-Regular", Consolas, monospace; letter-spacing: 0.13em; }
 .mode-preview { border-color: rgba(246, 200, 115, 0.36); background: rgba(49, 37, 15, 0.52); }
 .mode-preview strong { color: var(--amber); }
-.mode-observed { border-color: rgba(124, 242, 173, 0.24); }
-.mode-observed strong { color: var(--green); }
 .mode-local { border-color: rgba(105, 219, 228, 0.32); background: rgba(10, 35, 36, 0.5); }
 .mode-local strong { color: var(--cyan); }
 .mode-unavailable { border-color: rgba(255, 143, 135, 0.26); }
