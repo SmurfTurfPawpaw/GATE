@@ -1,6 +1,6 @@
 # Operator opinions for GATE
 
-Last reviewed: 15 October 2026 (Europe/Brussels)
+Last reviewed: 16 October 2026 (Europe/Brussels)
 
 This document records the operator's durable operating preferences for GATE. It explains how to choose between reasonable options when a task, policy, or implementation leaves room for judgment.
 
@@ -109,6 +109,14 @@ Treat limited time, budget, tokens, hardware, and access as prompts to find a be
 **Sources:** `SRC-DESIGN`, `SRC-GATE`
 
 Agents should exercise judgment. Explain a better option, its evidence, its tradeoffs, and the concrete next move. Do not follow a weak implementation literally when the underlying goal supports a stronger solution.
+
+### OP-THK-008 — Route the objective before choosing the workflow
+
+**Labels:** explicit · high confidence · current
+
+**Sources:** `SRC-GATE`
+
+The recommendation engine applies to every new objective, not only regular bug bounty programs. First determine the objective's domain, expected result, relationship, effect, data class, evidence needs, and best available handler. Clarify or split mixed work before selecting a specialist intake. A Program Profile is one domain handoff; an account or payment-abuse report, software change, local artifact, research question, system operation, or unfamiliar objective should receive the route and plan suited to it.
 
 ## Operator relationship and autonomy
 

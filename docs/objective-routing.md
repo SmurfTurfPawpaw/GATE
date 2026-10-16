@@ -33,13 +33,13 @@ If the objective spans independently actionable outcomes, classify its domain as
 
 `ObjectiveRoutingProposal/v1` is a categorical, maximum-64-KiB envelope. It contains:
 
-- a random opaque objective handle with at least 128 bits of entropy, never a hex-encoded target or identifier;
+- a cryptographically random opaque objective handle, never a hex-encoded target or identifier;
 - the exact route-catalog SHA-256 digest;
 - the five dimensions and bounded signals;
 - provenance, claim state, a registered categorical basis code, and opaque source references;
 - explicit answers or answer recommendations for registered choice questions.
 
-The proposal has no free-text field and no field for the raw objective. JSON Schema rejects extra fields, including a free-text basis summary. The statement, target, account, contact, authorization text, source body, private path, URL, credential, command, and tool arguments therefore cannot be represented in this envelope. Keep the original statement in the current conversation only when its data classification permits that provider, or in a future private objective record under `GATE_HOME`. Secret values remain outside model input and belong in the existing secret-reference path.
+The proposal has no free-text field and no dedicated field for the raw objective. JSON Schema rejects extra fields, including a free-text basis summary. Producers must also generate objective handles and opaque source references randomly and must never encode the statement, target, account, contact, authorization text, source body, private path, URL, credential, command, or tool arguments into them. Keep the original statement in the current conversation only when its data classification permits that provider, or in a future private objective record under `GATE_HOME`. Secret values remain outside model input and belong in the existing secret-reference path.
 
 The proposal is bound to `objectiveCanonicalSha256(catalog)`. A catalog change makes an older proposal stale. The resolver also returns a digest of the exact proposal and a digest of its recommendation. The recommendation never echoes the proposal's caller-controlled objective handle. It carries a full-length, domain-separated SHA-256 projection instead, while the proposal digest preserves deterministic internal binding. The proposal timestamp is normalized to fixed UTC millisecond form before output, so extra fractional digits cannot become an output channel.
 

@@ -56,9 +56,11 @@ unset GATE_CASE
 npm run dashboard
 ```
 
-Open <http://127.0.0.1:4173> and keep the terminal running. The startup terminal and each browser case terminal greet the operator using `operator.displayName` from the merged configuration. The tracked default is `Giovanni`.
+Open <http://127.0.0.1:4173> and keep the terminal running. The startup terminal and selected case detail greet the operator using `operator.displayName` from the merged configuration. The tracked default is `Giovanni`.
 
-The cockpit shows at most 32 terminal-style case cards from a discovery window of 1,024 entries. Scan metadata reports lower-bound omissions and incomplete coverage. Retrieve a known omitted case with `gate case show ID --json` or `gate --case ID status --summary --json`; removing `--summary` does not bypass fleet or recent-history bounds. The activity, workflow, active-execution, and offline-analysis panels outside the cards describe only base/unassigned state. Case terminals render only structured lifecycle metadata. They are not interactive PTYs and never show raw stdout or stderr, argv, commands, targets, evidence, or private paths. Active fresh work uses an indeterminate animation because GATE has no defensible percentage unless a producer supplies actual completed and total counts. Press `0` to focus cases, `[` or `]` to move between them, `?` for all shortcuts, `R` to refresh, and `P` to pause or resume polling. Stop the observer with `Ctrl+C`.
+The cockpit uses a compact table for concurrent campaigns. It shows at most 32 case rows from a discovery window of 1,024 entries, plus a separately bounded set of current Program Profile setup rows that are not represented in the current bounded case projection. When the case scan is partial, an off-projection current case may still exist. Select a row to open the single live-activity or setup-detail panel. Setup rows expose only pseudonymous progress, blocker, next-section, readiness, and freshness metadata. Recommendation mode is nullable and appears only when a reviewed producer supplies it; learning count remains unavailable on a setup-only row because learning attribution is case-backed. Case rows and details include the operator-controlled case display name, so keep sensitive selectors out of that name. The remaining content is allowlisted lifecycle data. Apart from that display name, neither view is an interactive PTY or shows raw stdout or stderr, argv, commands, exact target selectors, answers, sources, evidence, or private paths.
+
+Fleet summary cards show exact counts only when both scans are complete and valid. A `+` suffix means the value is a lower bound from the visible rows; an em dash means no trustworthy fleet observation is available. Scan text keeps omissions, invalid entries, partial coverage, and a failed setup scan visible. Active fresh work uses an indeterminate animation because GATE has no defensible percentage unless a producer supplies actual completed and total counts. Retrieve a known omitted case with `gate case show ID --json` or `gate --case ID status --summary --json`; removing `--summary` does not bypass fleet or recent-history bounds. Press `0` to focus the fleet, `1` to open the selected detail, `2` to open System health, arrow keys or `[` and `]` to change campaigns, `?` for all shortcuts, `R` to refresh, and `P` to pause or resume polling. Stop the observer with `Ctrl+C`.
 
 Use the bounded agent-readable views in terminals and Codex sessions:
 
@@ -69,18 +71,40 @@ Use the bounded agent-readable views in terminals and Codex sessions:
 
 Token data is labelled `exact`, `estimated`, or `unavailable`. Missing telemetry is never reported as zero. Host-wide Codex session telemetry has no trustworthy case identity, so a case reports token attribution as unavailable until a reviewed producer writes canonical token records into that case.
 
-## 3. Create a case and start a map-first assessment
+## 3. Route a new objective
 
-Create and complete one private Program Profile first. The interactive command resumes safely if the interview is not finished in one sitting:
+Start with the outcome, even when it is not a bug bounty program. Ask the agent to use the [`gate-objective-router` skill](skills/gate-objective-router/SKILL.md). It derives a categorical proposal from conversation material permitted for the configured provider, writes only that bounded proposal to a private file outside the repository, and runs the following command. The file must be owned by the current user with exact mode `0600` on POSIX or WSL2; native Windows ACL ownership is not verified.
 
 ```bash
-./bin/gate.mjs bounty profile create example-program
-# If you stop before the interview is complete:
+unset GATE_CASE
+./bin/gate.mjs objective recommend \
+  --proposal "$GATE_HOME/input/objective-routing.json" --json
+```
+
+The operator does not have to design the workflow or write raw JSON. The agent recommends the route, evidence plan, capabilities, and bounded next actions, then asks no more than one to three registered choices when material facts remain unresolved. Unknown or mixed work is clarified or split first. For example, a report about unexplained meal-delivery orders and payment activity routes to a security-incident investigation; it does not become a bug bounty Program Profile unless a separate authorized bounty objective is established.
+
+The command is deterministic and planning-only. Its categorical schema provides no dedicated field for the raw objective or exact private values; the agent must also generate opaque handles and references instead of encoding private values into them. The output projects caller-controlled metadata, does not persist or dispatch the objective, and always carries `executionAuthority: false`. The selected domain workflow owns its later evidence, access, authorization, confirmation, and execution steps. See [Objective routing](docs/objective-routing.md) for the exact envelope and current limits.
+
+## 4. Create a case and start a map-first assessment
+
+Create one private Program Profile, then use the local browser wizard for the normal choice-first flow:
+
+```bash
+unset GATE_CASE
+./bin/gate.mjs bounty profile create example-program --apply-recommended --json
+./bin/gate.mjs bounty profile ui example-program --open
+```
+
+The initialization command applies only eligible reviewed deterministic preferences. The UI command binds an ephemeral server to loopback, prints its private session URL, optionally opens it on the same laptop, and remains attached until you press `Ctrl+C`. It edits exactly one profile through native fields, guided contacts and sources, section navigation, and per-question or bulk recommendations. Existing explicit answers win; unsupported, unverified, source-missing, authority-confirmation, and attestation questions remain for review. Keep the printed session URL private. The aggregate cockpit is a separate read-only service.
+
+If you prefer the numbered terminal fallback, or want to resume without the browser:
+
+```bash
 ./bin/gate.mjs bounty profile resume example-program
 ./bin/gate.mjs bounty profile verify example-program --json
 ```
 
-Follow the [Program Profile intake](docs/bug-bounty-program-profile.md) for the preferred choice-first skill, terminal wizard, or headless answers file. The profile must be current and ready before case creation.
+Follow the [Program Profile intake](docs/bug-bounty-program-profile.md) for the browser form, preferred Codex-native choice skill, terminal fallback, and headless answer and recommendation envelopes. The profile must be current and ready before case creation.
 
 Create an immutable case for that exact profile. Add `--project my-project` only when a registered managed project is already available and this case needs its provenance for offline analysis:
 
@@ -106,7 +130,9 @@ ASSESSMENT_ID="assessment-$(date -u +%Y%m%d-%H%M%S)"
 ./bin/gate.mjs workflow status "$ASSESSMENT_ID" --json
 ```
 
-The selected case places events, engagements, workflows, execution state, offline-analysis state, evidence, token records, and private learning under `GATE_HOME/cases/example-web/state`. Its immutable scope binds one Program Profile and an optional managed project by digest. If a bound source record changes, the case becomes stale; create a new case rather than rewriting its scope.
+The target-specific Program Profile remains in GATE's shared private profile registry. The selected case places campaign execution observations, events, engagements, workflows, execution state, offline-analysis state, evidence, token records, and private learning under `GATE_HOME/cases/example-web/state`; its immutable scope binds that Program Profile and an optional managed project by digest. If a bound source record changes, the case becomes stale; create a new case rather than rewriting its scope.
+
+For parallel programs, follow the [campaign acceptance and GATE improvement checklist](docs/campaign-acceptance.md). It verifies that profile intake, case state, live activity, resources, and learning stay correctly attributed while reusable improvements move through a separate sanitized and reviewed path.
 
 Setup and shared-registry commands reject `--case`, `GATE_CASE`, and `--unassigned`. This includes `bootstrap`, `doctor`, `validate`, `up`, project, case, workspace, upstream, tool, publication, Program Profile intake, and `analysis capability`. Run those from a separate terminal with `GATE_CASE` unset, as the cockpit example does. Plain `gate status` aggregates the bounded case fleet, `gate --unassigned status` reads only base state, and `gate --case ID status` reads one case. Events and private learning without a selector also use base state.
 
@@ -118,7 +144,7 @@ Follow the [end-to-end penetration-testing workflow](docs/pentest-workflow.md) t
 
 A compiled Program Profile supports planning, and the case preserves its exact identity. Neither replaces the exact engagement, reviewed plan, operator receipt, workflow admission, or execution confirmation required for active target contact.
 
-## 4. Analyze a saved Windows artifact offline
+## 5. Analyze a saved Windows artifact offline
 
 The implemented offline lane inspects PE resources without executing the supplied file or giving the adapter network access.
 
@@ -174,7 +200,7 @@ Review the returned digest, limits, evidence paths, and `confirmationRequired`, 
 
 Dynamic Windows execution still needs a resettable Windows Sandbox or VM.
 
-## 5. Prepare active target contact
+## 6. Prepare active target contact
 
 Active work starts with an exact engagement, written authorization where applicable, a bounded plan, a real No Mistakes review, and the operator receipt for that plan digest. Bind the engagement when creating the workflow:
 
@@ -334,7 +360,7 @@ chmod 600 "$GATE_HOME/input/active-surface-test-review.json"
 
 Replace every example ID and digest with the plan and evidence results. A failed, blocked, or ambiguous run needs the matching review disposition and rationale; do not reuse the successful example. A target-contact phase reaches `tested` only after its required evidence exists and a reviewed cycle is bound to the successfully completed execution's result evidence added after completion; no reservation may remain pending.
 
-## 6. Record and apply adaptive learning
+## 7. Record and apply adaptive learning
 
 Use the private workflow journal for immediate test feedback and the learning ledger for reusable behavior changes. Store input files under `GATE_HOME`, keep them owner-only, and substitute IDs and digests returned by your own workflow.
 
