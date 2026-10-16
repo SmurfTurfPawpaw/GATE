@@ -22,7 +22,7 @@ codex login status >/dev/null 2>&1 || codex login
 npm run cockpit
 ```
 
-The Codex working directory defaults to `GATE_REPO` when that environment variable is set. Otherwise the integrated GATE checkout is selected; the legacy sibling `../GATE` lookup and current directory remain fallbacks for a standalone copy. Override it when needed:
+The Codex working directory defaults to `GATE_REPO` when that environment variable is set. Otherwise the integrated GATE checkout is selected. Override it when needed:
 
 ```sh
 npm run cockpit -- --cwd /path/to/GATE

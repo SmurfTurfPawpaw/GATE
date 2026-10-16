@@ -12,17 +12,12 @@ import { createFileSnapshotProvider, startCompanionServer } from "./server.mjs";
 
 const COCKPIT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-function isGateRepository(directory) {
-  return fs.existsSync(path.join(directory, "AGENTS.md"))
-    && fs.existsSync(path.join(directory, "bin", "gate.mjs"));
-}
-
 function usage() {
   return `Usage: node cockpit/companion/cli.mjs [options]
 
 Options:
   --cwd PATH         Dedicated Codex thread working directory (default: GATE_REPO,
-                     integrated GATE checkout, sibling ../GATE, or current directory)
+                     integrated GATE checkout)
   --snapshot PATH    Reviewed gate.public-cockpit/v1 snapshot
                      (default: cockpit/data/status.json)
   --gate-observer URL
@@ -40,13 +35,7 @@ Options:
 function defaultCodexCwd() {
   const configured = process.env.GATE_REPO?.trim();
   if (configured) return path.resolve(configured);
-  const current = process.cwd();
-  const integrated = path.resolve(COCKPIT_ROOT, "..");
-  if (isGateRepository(integrated)) return integrated;
-  if (isGateRepository(current)) return current;
-  const sibling = path.resolve(current, "..", "GATE");
-  if (isGateRepository(sibling)) return sibling;
-  return current;
+  return path.resolve(COCKPIT_ROOT, "..");
 }
 
 function parseArguments(argv) {

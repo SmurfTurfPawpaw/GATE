@@ -101,10 +101,10 @@ function renderTokenRail(usage, options = {}) {
 
   const host = options.host;
   const campaign = options.campaign;
-  const hostSummary = host?.availability !== "unavailable" && host?.total !== null
+  const hostSummary = host && host.availability !== "unavailable" && host?.total !== null
     ? `host ${tokenNumber(host.total)} · ${host.availability}`
     : "host unavailable";
-  const campaignSummary = campaign?.availability !== "unavailable" && campaign?.total !== null
+  const campaignSummary = campaign && campaign.availability !== "unavailable" && campaign?.total !== null
     ? `${tokenNumber(campaign.total)}${campaign.availability === "partial" ? "+" : ""} case-bound · ${campaign.availability}`
     : "Awaiting attribution";
   elements.tokenAttribution.textContent = available

@@ -1,3 +1,4 @@
+import { parsePublicSnapshot } from "../assets/model.js";
 import { lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,7 +38,11 @@ const sourceBytes = new Map(sourceEntries);
 const repositoryPackage = await readStableRegularFile(path.join(repositoryRoot, "package.json"));
 const publicSnapshot = sourceBytes.get("data/status.json");
 const gateVersion = JSON.parse(repositoryPackage.toString("utf8")).version;
-const snapshotVersion = JSON.parse(publicSnapshot.toString("utf8")).gate?.version;
+const snapshot = JSON.parse(publicSnapshot.toString("utf8"));
+if (publicSnapshot.length > 65_536 || parsePublicSnapshot(snapshot).kind !== "available") {
+  throw new Error("public cockpit snapshot is invalid");
+}
+const snapshotVersion = snapshot.gate.version;
 if (typeof gateVersion !== "string" || snapshotVersion !== gateVersion) {
   throw new Error(`public cockpit GATE version ${snapshotVersion ?? "missing"} does not match package version ${gateVersion ?? "missing"}`);
 }

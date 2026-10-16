@@ -1,3 +1,4 @@
+import { parsePublicSnapshot } from "../assets/model.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
@@ -162,7 +163,7 @@ function preloadStatic(root) {
 
 export function createFileSnapshotProvider(snapshotPath) {
   const absolute = path.resolve(snapshotPath);
-  return async () => {
+  const readBytes = async () => {
     const bytes = secureRead(path.dirname(absolute), path.basename(absolute), MAX_SNAPSHOT_BYTES);
     let value;
     try {
@@ -170,9 +171,12 @@ export function createFileSnapshotProvider(snapshotPath) {
     } catch {
       throw new Error("cockpit snapshot is invalid");
     }
-    if (!record(value)) throw new Error("cockpit snapshot is invalid");
-    return value;
+    if (parsePublicSnapshot(value).kind !== "available") throw new Error("cockpit snapshot is invalid");
+    return bytes;
   };
+  const provider = async () => JSON.parse((await readBytes()).toString("utf8"));
+  provider.readBytes = readBytes;
+  return provider;
 }
 
 function validateObservedSnapshot(snapshot, generatedAt, now = Date.now()) {
@@ -310,6 +314,9 @@ export async function startCompanionServer(options = {}) {
     }
     if ((method === "GET" || method === "HEAD") && pathname === "/data/status.json") {
       try {
+        if (snapshotProvider.readBytes) {
+          return send(response, 200, await snapshotProvider.readBytes(), "application/json; charset=utf-8", method);
+        }
         return json(response, 200, await snapshotProvider(), method);
       } catch {
         return json(response, 503, { error: "snapshot unavailable" }, method);
