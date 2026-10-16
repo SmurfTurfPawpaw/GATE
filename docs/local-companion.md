@@ -44,7 +44,7 @@ http://127.0.0.1:43127/#session=…&csrf=…
 
 Keep the terminal open. The session and CSRF capabilities exist only for that process and URL fragment. The default thread is ephemeral and dedicated to this companion. Use `--persistent` to let Codex persist a newly created thread, or `--thread-id ID` to resume a dedicated thread explicitly.
 
-The checked-in `cockpit/data/status.json` is a presentation preview. Static GitHub Pages and a normal preview server remain read-only because neither has the private bridge or capabilities. Through the loopback companion, private conversation, native Codex questions, and the local GATE fleet work independently of that preview snapshot. Public snapshots accept only preview mode; example decisions are disabled. Private choices use native Codex questions.
+The checked-in `cockpit/data/status.json` is a presentation preview. Static GitHub Pages and a normal preview server remain read-only because neither has the private bridge or capabilities. Through the loopback companion, private conversation, native Codex questions, and the local GATE fleet work independently of that preview snapshot. Missing or invalid preview data does not clear an unsent local message. Public snapshots accept only preview mode; example decisions are disabled. Private choices use native Codex questions.
 
 ## What is working
 
@@ -87,6 +87,8 @@ Do not place this listener behind a tunnel, port forward, public reverse proxy, 
 ## Public snapshot integration
 
 Public snapshots are static examples and cannot accept operator choices or claim live operational state. `npm run cockpit:build` recreates `cockpit/_site` from exactly `.nojekyll`, `index.html`, `robots.txt`, `assets/app.js`, `assets/favicon.svg`, `assets/model.js`, `assets/styles.css`, and `data/status.json`. It rejects linked or changing source files and excludes `companion/`, including the observer client and private endpoints.
+
+Before copying or serving the checked-in snapshot, both the builder and the companion's file provider validate the bytes against the strict public contract in `cockpit/assets/model.js` (`parsePublicSnapshot`), rejecting unknown fields and snapshots larger than 65,536 bytes. They publish the exact bytes that passed validation. The builder also requires the snapshot's GATE version to match `package.json`; invalid data aborts the build, while the companion returns an unavailable response. Schema validation is not a substitute for reviewing sample values for sensitive content.
 
 The Pages workflow deploys that allowlisted artifact at `https://smurfturfpawpaw.github.io/GATE/` after GitHub Pages is configured to use GitHub Actions. The page stays an explicit `PREVIEW · NOT LIVE` and does not accept observed snapshots. Serving it under a path such as `giovannicallebaut.com/bugbounty/` requires that site's host or proxy; a project Pages workflow cannot claim that path by itself.
 
