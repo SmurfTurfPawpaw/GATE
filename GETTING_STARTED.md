@@ -104,7 +104,7 @@ If you prefer the numbered terminal fallback, or want to resume without the brow
 ./bin/gate.mjs bounty profile verify example-program --json
 ```
 
-The terminal keeps structured private fields out of raw prose entry. At a contact prompt, press Enter or choose `1` to hand the same saved draft to the guided loopback form at that contact question, choose `2` to save and stop, or choose `A` only when you deliberately want the advanced JSON fallback. Use `skip` to leave any unresolved question for later without inventing an answer. If an already-running terminal does not show these choices, enter `quit`, update GATE, and resume the existing draft instead of recreating it.
+For contact entry choices, deferral, and recovery from an older running terminal, see the [browser wizard and terminal fallback](docs/bug-bounty-program-profile.md#browser-wizard-and-terminal-fallback).
 
 Follow the [Program Profile intake](docs/bug-bounty-program-profile.md) for the browser form, preferred Codex-native choice skill, terminal fallback, and headless answer and recommendation envelopes. The profile must be current and ready before case creation.
 
