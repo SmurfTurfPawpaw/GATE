@@ -1960,3 +1960,30 @@ test("schema-defined execution termination reasons survive observer and dashboar
     assert.equal(dashboard.execution.recent[0].terminationReason, expected);
   }
 });
+
+test("complete registry coverage cannot make unobserved case activity counts exact", () => {
+  const exactScan = { discovered: 1, scanned: 1, omitted: 0, invalid: 0, complete: true, truncated: false };
+  const profileSetupScan = { availability: "available", discovered: 0, scanned: 0, omitted: 0, invalid: 0, complete: true, truncated: false };
+  const missingRuntime = caseFixture({ runtimeHealth: { status: "unavailable", reason: "runtime-observation-failed" } });
+  const running = caseFixture({ id: "running-case", runtime: statusFixture() });
+  for (const rows of [[missingRuntime], [running, missingRuntime]]) {
+    const count = rows.length;
+    const projected = projectSnapshot(statusFixture({
+      cases: rows, caseScan: { ...exactScan, discovered: count, scanned: count }, profileSetups: [], profileSetupScan
+    }), paths).status;
+    const dashboard = sanitizeStatusPayload(projected);
+    assert.equal(dashboard.caseScan.complete, true);
+    assert.equal(dashboard.cases.filter((item) => item.runtimeHealth.status === "unavailable").length, 1);
+    const summary = fleetSummaryPresentation(dashboard);
+    assert.equal(summary.availability, "lower-bound");
+    assert.equal(summary.activeLabel, count === 1 ? "0+" : "1+");
+    assert.equal(summary.waitingLabel, "0+");
+    assert.ok(summary.attentionLabel.endsWith("+"));
+    assert.equal(dashboard.cases.length, count);
+  }
+  const observed = sanitizeStatusPayload(projectSnapshot(statusFixture({
+    cases: [running], caseScan: exactScan, profileSetups: [], profileSetupScan
+  }), paths).status);
+  assert.equal(fleetSummaryPresentation(observed).availability, "exact");
+  assert.equal(fleetSummaryPresentation(observed).activeLabel, "1");
+});

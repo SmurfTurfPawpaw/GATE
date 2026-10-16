@@ -203,3 +203,48 @@ test("contact add and remove preserve empty row indices and neighboring contacts
     }
   }
 });
+
+test("editing a decision rationale preserves commas within each condition", () => {
+  const conditions = ["If errors rise, stop", "Keep proof minimal, then clean up"];
+  const decision = { disposition: "conditional", claimState: "observed", sourceRefs: ["rules"], rationale: "Before", conditions };
+  const editor = control("authority-safe-harbor", decision);
+  labelled(editor.root, "Rationale").value = "After";
+  assert.deepEqual(editor.read(), { ...decision, rationale: "After" });
+  labelled(editor.root, "Conditions").value = "If errors rise, stop\r\nKeep proof minimal, then clean up\n";
+  assert.deepEqual(editor.read().conditions, conditions);
+});
+
+test("action and coverage matrix edits retain complete comma-containing conditions", () => {
+  const conditions = ["If errors rise, stop"];
+  const decision = { disposition: "conditional", claimState: "observed", sourceRefs: ["rules"], rationale: "Before", conditions };
+  for (const [id, keys] of [["actions-all", semantics.actions], ["coverage-all-domains", semantics.coverageDomains]]) {
+    const editor = control(id, Object.fromEntries(keys.map((key) => [key, decision])));
+    labelled(editor.root, "Rationale").value = "After";
+    for (const entry of Object.values(editor.read())) assert.deepEqual(entry.conditions, conditions);
+  }
+});
+
+test("object-list edits preserve condition prose and asset override conditions", () => {
+  const conditions = ["If errors rise, stop"];
+  const decision = { disposition: "conditional", claimState: "observed", sourceRefs: ["rules"], rationale: "Before", conditions };
+  const examples = [
+    ["actions-techniques", { ...decision, id: "timing", name: "Timing", action: "observe", parameters: {} }],
+    ["execution-phase-policies", { id: "phase-one", phaseId: "active-surface-validation", assetRefs: ["asset-one"], actions: ["observe"], allowedToolIds: ["httpx"], deniedToolIds: [], conditions, claimState: "observed", sourceRefs: ["rules"], limits: {} }],
+    ["scope-assets", { ...decision, id: "asset-one", selector: { type: "domain", value: "example.test" }, actionOverrides: { observe: decision }, limitOverrides: {} }]
+  ];
+  for (const [id, record] of examples) {
+    const editor = control(id, [record]);
+    editor.root.querySelector('[data-field-path="id"]').value = "edited";
+    const saved = editor.read()[0];
+    assert.deepEqual(saved.conditions, conditions);
+    if (id === "scope-assets") assert.deepEqual(saved.actionOverrides.observe.conditions, conditions);
+  }
+});
+
+test("account edits preserve comma-containing symbolic file references", () => {
+  const secretRefs = ["file://credentials/account,primary", "env://SECONDARY_ACCOUNT"];
+  const account = { id: "account-one", persona: "Tester", role: "Member", environment: "Test", secretRefs, sourceRefs: ["rules"] };
+  const editor = control("accounts-personas", [account]);
+  editor.root.querySelector('[data-field-path="persona"]').value = "Changed";
+  assert.deepEqual(editor.read(), [{ ...account, persona: "Changed" }]);
+});

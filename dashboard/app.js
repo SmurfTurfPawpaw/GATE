@@ -521,7 +521,8 @@ export function fleetSummaryPresentation(statusView = {}) {
     visible: currentCases.length + currentSetups.length
   };
   const observed = typeof statusView.observedAt === "string" && Number.isFinite(Date.parse(statusView.observedAt));
-  const exact = observed && caseScanIsExact(statusView.caseScan, cases.length) &&
+  const exact = observed && cases.every((item) => item.runtimeHealth?.status === "available") &&
+    caseScanIsExact(statusView.caseScan, cases.length) &&
     profileSetupScanIsExact(statusView.profileSetupScan, setups.length, cases.length);
   const available = observed && statusView.caseScan && statusView.profileSetupScan &&
     statusView.caseScan.availability !== "unavailable" && statusView.profileSetupScan.availability !== "unavailable" &&

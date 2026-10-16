@@ -416,7 +416,7 @@ function lines(value) {
 }
 
 function readLines(value) {
-  return value.split(/\r?\n|,/u).map((item) => item.trim()).filter(Boolean);
+  return value.split(/\r?\n/u).map((item) => item.trim()).filter(Boolean);
 }
 
 function renderStringList(question) {
