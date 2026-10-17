@@ -99,12 +99,21 @@ test("public snapshot names the exact repository version", async () => {
   assert.equal(snapshot.gate.version, repositoryPackage.version);
 });
 
-test("preview and disabled composer are present in active markup before JavaScript", async () => {
+test("concise preview puts disabled steering first and keeps exactly four metrics", async () => {
   const { all, byId } = documentModel(await read("index.html"));
   assert.equal(byId("mode-banner").children.some(element => element.tag === "strong" && element.text === "PREVIEW · NOT LIVE"), true);
   for (const id of ["message-input", "message-send"]) assert.ok("disabled" in byId(id).attributes);
   assert.equal("hidden" in byId("decision-panel").attributes, false);
   assert.ok(all.indexOf(byId("decision-panel")) < all.findIndex(element => element.attributes.class === "metric-grid"));
+  const metrics = all.find(element => element.attributes.class === "metric-grid");
+  assert.equal(metrics.children.filter(element => element.attributes.class?.includes("metric-card")).length, 4);
+  for (const id of ["running-count", "question-count", "blocker-count", "token-usage"]) assert.ok(byId(id));
+  for (const id of ["token-rail-scope", "overall-progress", "learning-count", "freshness-value", "snapshot-time"]) {
+    assert.equal(byId(id), undefined);
+  }
+  assert.equal(all.some(element => element.attributes.class?.includes("terminal-controls")), false);
+  assert.equal(all.some(element => element.attributes.class?.includes("terminal-command")), false);
+  assert.equal(all.some(element => element.attributes.class?.includes("boundary-note")), false);
 });
 
 test("robots policy requests no crawling", async () => {
@@ -164,20 +173,22 @@ async function browser(snapshot) {
   return { elements, events, requests, context };
 }
 
-test("public preview renders campaigns and unavailable provenance without enabling writes", async () => {
+test("public preview renders campaigns and token budget without enabling writes", async () => {
   const snapshot = JSON.parse(await read("data/status.json"));
   const { elements, requests } = await browser(snapshot);
   assert.deepEqual(requests, ["./data/status.json"]);
   assert.equal(elements.get("campaign-list").children.length, snapshot.campaigns.length);
   assert.match(elements.get("mode-banner").textContent, /PREVIEW/);
-  assert.match(elements.get("token-attribution").textContent, /Awaiting attribution/);
+  assert.match(elements.get("token-usage").textContent, /18\.4K \/ 50K/);
+  assert.equal(elements.get("running-count").textContent, "1");
   assert.equal(elements.get("message-input").disabled, true);
   assert.equal(elements.get("message-send").disabled, true);
 });
 
 test("invalid public data renders unavailable without throwing", async () => {
   const { elements } = await browser({ privateCanary: "must not render" });
-  assert.equal(elements.get("token-provenance").textContent, "UNAVAILABLE");
+  assert.equal(elements.get("token-usage").textContent, "—");
+  assert.equal(elements.get("running-count").textContent, "—");
   assert.equal(elements.get("message-send").disabled, true);
 });
 
@@ -206,8 +217,8 @@ test("local startup without fleet telemetry renders native choices and submits s
     }] }]
   } });
   assert.match(page.elements.get("conversation").textContent, /Ready to continue/);
-  assert.equal(page.elements.get("token-provenance").textContent, "UNAVAILABLE");
-  assert.match(page.elements.get("token-attribution").textContent, /Awaiting attribution/);
+  assert.equal(page.elements.get("token-usage").textContent, "—");
+  assert.match(page.elements.get("token-summary").textContent, /unavailable/i);
   const group = page.elements.get("choice-list").children[0];
   group.children[1].children[1].listeners.click();
   await page.elements.get("choice-list").children.at(-1).listeners.click();

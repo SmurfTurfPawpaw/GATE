@@ -81,7 +81,7 @@ Use the bounded agent-readable views in terminals and Codex sessions:
 ./bin/gate.mjs tool list --summary --limit 10 --cursor 0 --json
 ```
 
-The sticky token rail keeps the active session or host input, cached input, output, total, provenance, and available estimated cost visible. Host-wide Codex session telemetry has no trustworthy case identity, so it stays separate from canonical case totals. Missing telemetry and missing case attribution are shown as `unavailable` and `Awaiting attribution`, never as zero.
+The compact Tokens card keeps the active dedicated-session or case-bound total and its provenance visible. Host-wide Codex session telemetry has no trustworthy case identity, so it stays separate from canonical case totals. Missing telemetry and missing case attribution are shown as `unavailable` and `Awaiting attribution`, never as zero.
 
 ## 3. Route a new objective
 

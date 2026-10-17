@@ -22,7 +22,7 @@ test("accepts the exact gate.public-cockpit/v1 fixture", async () => {
   assert.equal(parsed.campaigns.length, 2);
   assert.equal(toDisplayModel(parsed).waitingCount, 1);
   assert.equal(toDisplayModel(parsed).mode, "preview");
-  assert.equal(toDisplayModel(parsed).siteVersion, "0.2.0");
+  assert.equal(toDisplayModel(parsed).siteVersion, "0.3.0");
   assert.equal(toDisplayModel(parsed).gateVersion, "0.1.2");
 });
 
