@@ -547,7 +547,6 @@ export function createOidcVerifier(configuration, options = {}) {
       controller.abort();
       rejectTimeout(new Error("JWKS request timed out"));
     }, config.jwksTimeoutMs);
-    timer.unref?.();
     const operation = async () => {
       const response = injectedFetch
         ? await fetchImpl(config.jwks.raw, {

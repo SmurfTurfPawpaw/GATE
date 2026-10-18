@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync, sign } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 
 import { createOidcVerifier, OidcVerificationError } from "../auth.mjs";
@@ -228,6 +229,29 @@ test("bounds the complete JWKS request duration", async (t) => {
     });
     await rejectsCode(verify.verify(makeToken()), "jwks-fetch-failed");
   });
+});
+
+test("JWKS deadline settles verification without other event-loop handles", () => {
+  // The verification deadline contract requires a rejection, even when no
+  // socket or server keeps Node alive. Premature process exit must not pass.
+  const result = spawnSync(process.execPath, ["--input-type=module", "--eval", `
+    import { createOidcVerifier } from ${JSON.stringify(new URL("../auth.mjs", import.meta.url).href)};
+    const verifier = createOidcVerifier({
+      issuer: ${JSON.stringify(ISSUER)}, audience: ${JSON.stringify(AUDIENCE)},
+      operatorSubject: ${JSON.stringify(SUBJECT)}, jwksUrl: ${JSON.stringify(JWKS_URL)},
+      jwksTimeoutMs: 10
+    }, { fetch: async () => new Promise(() => {}), clock: () => ${NOW_MS} });
+    try {
+      await verifier.verify(${JSON.stringify(makeToken())});
+      process.exitCode = 1;
+    } catch (error) {
+      if (error.code !== "jwks-fetch-failed") throw error;
+      console.log("verification timed out");
+    }
+  `], { encoding: "utf8", timeout: 5_000 });
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), "verification timed out");
 });
 
 test("production transport rejects insecure and private JWKS URLs before fetch", async (t) => {
