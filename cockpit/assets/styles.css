@@ -183,6 +183,13 @@ main {
 }
 
 .mode-local strong { color: var(--green); }
+.mode-remote {
+  border-color: rgba(105, 219, 228, 0.24);
+}
+
+.mode-remote strong { color: var(--cyan); }
+.mode-remote-connecting strong { color: var(--amber); }
+.mode-remote-offline strong { color: var(--red); }
 .mode-unavailable strong { color: var(--red); }
 
 main {
@@ -261,6 +268,25 @@ main {
 .connection-state.connected i {
   background: var(--green);
   box-shadow: 0 0 12px rgba(124, 242, 173, 0.65);
+}
+
+.connection-state.connecting {
+  color: var(--amber);
+  border-color: rgba(246, 200, 115, 0.25);
+}
+
+.connection-state.connecting i {
+  background: var(--amber);
+  box-shadow: 0 0 10px rgba(246, 200, 115, 0.45);
+  animation: connection-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes connection-pulse {
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .connection-state.connecting i { animation: none; }
 }
 
 .conversation {

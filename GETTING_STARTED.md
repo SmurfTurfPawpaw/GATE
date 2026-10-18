@@ -74,6 +74,8 @@ Fleet summary cards distinguish exact counts, lower bounds (`+`), and unavailabl
 
 The public Pages site is a separate, non-interactive design preview. Its checked-in data is explicitly labeled `PREVIEW · NOT LIVE`; the build excludes the local companion, observer responses, capabilities, prompts, targets, and private state.
 
+To steer a dedicated laptop Codex thread from another device, use the separate [remote cockpit bridge](docs/remote-cockpit.md). It needs an authenticated HTTPS coordinator on an always-on host and an outbound signed runner on the laptop. It does not attach to this cloud chat and it does not make the Pages preview interactive. Finish the coordinator, identity, storage, and runner readiness checks before describing it as live.
+
 Use the bounded agent-readable views in terminals and Codex sessions:
 
 ```bash
@@ -107,7 +109,7 @@ unset GATE_CASE
 ./bin/gate.mjs bounty profile ui example-program --open
 ```
 
-The initialization command applies only eligible reviewed deterministic preferences. The UI command binds an ephemeral server to loopback, prints its private session URL, optionally opens it on the same laptop, and remains attached until you press `Ctrl+C`. It edits exactly one profile through native fields, guided contacts and sources, section navigation, and per-question or bulk recommendations. Existing explicit answers win; unsupported, unverified, source-missing, authority-confirmation, and attestation questions remain for review. Keep the printed session URL private. The aggregate cockpit is a separate read-only service.
+The initialization command applies only eligible reviewed deterministic preferences. The UI command binds an ephemeral server to loopback, prints its private session URL, optionally opens it on the same laptop, and remains attached until you press `Ctrl+C`. It edits exactly one profile through native fields, guided contacts and sources, section navigation, and per-question or bulk recommendations. Existing explicit answers win; unsupported, unverified, source-missing, authority-confirmation, and attestation questions remain for review. Keep the printed session URL private. The aggregate observer is a separate read-only service; see [Open the cockpit](#2-open-the-cockpit) for the interactive companion.
 
 If you prefer the numbered terminal fallback, or want to resume without the browser:
 
@@ -546,5 +548,6 @@ The legacy `learn --cause ... --change ...` command remains available for a simp
 - Publication commands perform read-only exact-head preflight. Merge, deploy, and publish mutation require a trusted adapter.
 - Workflow test feedback is journal-bound and does not launch or authorize execution. Learning promotion binds an attestation to the exact candidate digest and Git head but does not invoke No Mistakes or cryptographically verify external authenticity; execution adapters remain separate.
 - Aggregate dashboard token totals depend on local Codex usage records and do not include account quota or billing data. Per-case attribution is unavailable without case-bound records.
+- The remote cockpit code still needs an operator-provided HTTPS/OIDC coordinator deployment, durable volume, and enrolled laptop runner. One coordinator and runner instance serves one operator/case/session binding; concurrent cases use separate instances and hostnames in this release.
 
 See [Current limits](README.md#current-limits) for the complete boundary list.

@@ -1,0 +1,25 @@
+{
+  "apiVersion": "gate.remote-server-config/v1",
+  "origin": "https://gate-case.example.test",
+  "host": "127.0.0.1",
+  "port": 43180,
+  "operatorId": "operator-subject-001",
+  "caseId": "example-case",
+  "sessionRevision": 1,
+  "databasePath": "/var/lib/gate-remote/example-case/bridge.sqlite",
+  "identityAssertionHeader": "x-gate-oidc-assertion",
+  "oidc": {
+    "issuer": "https://identity.example.test",
+    "audience": "gate-case.example.test",
+    "operatorSubject": "operator-subject-001",
+    "jwksUrl": "https://identity.example.test/.well-known/jwks.json",
+    "clockSkewSeconds": 30,
+    "maxTokenLifetimeSeconds": 3600,
+    "jwksCacheMs": 300000,
+    "jwksTimeoutMs": 3000
+  },
+  "runner": {
+    "id": "runner-example-001",
+    "publicKeyPath": "/var/lib/gate-remote/example-case/runner-public.pem"
+  }
+}

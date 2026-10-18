@@ -259,6 +259,22 @@ python3 -m http.server 4174 --bind 127.0.0.1 -d cockpit/_site
 
 Open `http://127.0.0.1:4174/`. This is a static `PREVIEW · NOT LIVE`; it has no companion bridge, private API, observer response, or runtime state.
 
+### Optional authenticated remote cockpit
+
+Remote steering uses a separate case-bound coordinator and an outbound laptop runner. It does not expose the observer or local companion and it does not change the Pages preview. Prepare the HTTPS/OIDC gateway, owner-only coordinator state, runner key, persistent laptop thread/journal records, and one authenticated owner-only `CODEX_HOME` directly under each case journal by following [Remote cockpit bridge](remote-cockpit.md) and the [provider-neutral deployment scaffold](../deploy/remote/README.md). The runner pins the reviewed Codex CLI/app-server `0.159.2` protocol, never inherits the normal interactive Codex home, and stops before thread creation if effective configuration exposes MCP, legacy `notify`, app, plug-in, hook, browser/computer-use, or other disabled external tool paths.
+
+After private configuration is complete, the two process entrypoints are:
+
+```bash
+# Always-on coordinator host, still bound to loopback behind the gateway:
+npm run cockpit:remote:server -- --config /absolute/private/server.json
+
+# Operator laptop, with the owner-only runner environment already loaded:
+npm run cockpit:remote:runner
+```
+
+One coordinator and runner instance owns one operator/case/session binding in this release. Give concurrent cases separate hostnames, databases, keys, journal directories, and process instances. The bridge controls its own dedicated Codex app-server thread, not the current cloud chat.
+
 The startup banner and browser case terminals use `operator.displayName` from the merged configuration. The tracked default is `Giovanni`. To use another local display name without changing the repository, place an overlay at `$HOME/.config/gate/config.json`:
 
 ```json

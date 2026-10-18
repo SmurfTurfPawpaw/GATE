@@ -10,9 +10,74 @@ const MAX_PROTOCOL_LINE_BYTES = 4 * 1024 * 1024;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const MAX_CONVERSATION_ENTRIES = 48;
 const MAX_VISIBLE_MESSAGE_CHARACTERS = 4_000;
+const HISTORY_UNAVAILABLE_NOTICE = "Some earlier conversation was not returned by Codex app-server after restart.";
+const HISTORY_MESSAGE_OMITTED_NOTICE = "One or more messages were omitted because they exceeded cockpit display limits or could not be displayed safely.";
+const HISTORY_TRUNCATED_NOTICE = "Earlier messages were omitted to fit the cockpit history limit.";
+export const REMOTE_READ_ONLY_EXECUTION_POSTURE = "remote-read-only";
+export const REMOTE_CODEX_APP_SERVER_VERSION = "0.159.2";
+const REMOTE_APPROVAL_POLICY = "never";
+const REMOTE_THREAD_SANDBOX = "read-only";
+const REMOTE_TURN_SANDBOX_POLICY = Object.freeze({ type: "readOnly", networkAccess: false });
+const REMOTE_DISABLED_FEATURES = Object.freeze([
+  "apps",
+  "browser_use",
+  "browser_use_external",
+  "browser_use_full_cdp_access",
+  "code_mode",
+  "code_mode_host",
+  "computer_use",
+  "enable_mcp_apps",
+  "hooks",
+  "image_generation",
+  "in_app_browser",
+  "in_app_local_automation",
+  "memories",
+  "multi_agent",
+  "multi_agent_v2",
+  "plugins",
+  "remote_plugin",
+  "skill_mcp_dependency_install",
+  "token_budget",
+  "tool_suggest"
+]);
+const REMOTE_APP_SERVER_ARGS = Object.freeze([
+  "app-server",
+  "--stdio",
+  "--strict-config",
+  ...REMOTE_DISABLED_FEATURES.flatMap((feature) => ["--disable", feature]),
+  "-c",
+  'web_search="disabled"',
+  "-c",
+  "tools.web_search=false",
+  "-c",
+  "notify=[]",
+  "-c",
+  "orchestrator.mcp.enabled=false"
+]);
 
 function record(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function assertRemoteToolBoundary(value) {
+  const config = value?.config;
+  const features = config?.features;
+  if (!record(config) || !record(features)
+      || !record(config.mcp_servers) || Object.keys(config.mcp_servers).length !== 0
+      || !Array.isArray(config.notify) || config.notify.length !== 0
+      || config.web_search !== "disabled"
+      || config.orchestrator?.mcp?.enabled !== false
+      || REMOTE_DISABLED_FEATURES.some((feature) => features[feature] !== false)) {
+    throw new Error("Codex app-server did not confirm the remote tool boundary");
+  }
+}
+
+function assertRemoteAppServerVersion(value) {
+  const prefix = `gate-cockpit/${REMOTE_CODEX_APP_SERVER_VERSION}`;
+  if (typeof value?.userAgent !== "string"
+      || (value.userAgent !== prefix && !value.userAgent.startsWith(`${prefix} `))) {
+    throw new Error(`remote Codex requires app-server ${REMOTE_CODEX_APP_SERVER_VERSION}`);
+  }
 }
 
 function tokenCount(value) {
@@ -66,6 +131,72 @@ function visibleAssistantMessage(item) {
     : text;
 }
 
+function historyTimestamp(turn, fallback) {
+  const seconds = Number.isSafeInteger(turn?.completedAt) && turn.completedAt >= 0
+    ? turn.completedAt
+    : Number.isSafeInteger(turn?.startedAt) && turn.startedAt >= 0
+      ? turn.startedAt
+      : null;
+  if (seconds === null || seconds > 8_640_000_000_000) return fallback;
+  const value = new Date(seconds * 1_000);
+  return Number.isFinite(value.getTime()) ? value.toISOString() : fallback;
+}
+
+function visibleUserMessage(item) {
+  if (item?.type !== "userMessage" || !Array.isArray(item.content)) return null;
+  const textParts = item.content.filter((part) => part?.type === "text" && typeof part.text === "string")
+    .map((part) => part.text);
+  const text = boundedText(textParts.join("\n"), MAX_VISIBLE_MESSAGE_CHARACTERS);
+  if (!text) return null;
+  return containsLikelyCredential(text)
+    ? "An operator message was withheld because it may contain a credential. Review it in the local Codex session."
+    : text;
+}
+
+function historyConversation(result, observedAt = new Date().toISOString()) {
+  const turns = result?.thread?.turns;
+  const entries = [];
+  let historyUnavailable = !Array.isArray(turns) || turns.length === 0
+    || typeof result?.turnsBackwardsCursor === "string"
+    || typeof result?.itemsBackwardsCursor === "string"
+    || typeof result?.initialTurnsPage?.backwardsCursor === "string"
+    || typeof result?.initialTurnsPage?.nextCursor === "string";
+  let messageOmitted = false;
+  for (const turn of Array.isArray(turns) ? turns : []) {
+    if (turn?.itemsView !== undefined && turn.itemsView !== "full") historyUnavailable = true;
+    if (!Array.isArray(turn?.items)) {
+      historyUnavailable = true;
+      continue;
+    }
+    const at = historyTimestamp(turn, observedAt);
+    for (const item of turn.items) {
+      if (item?.type === "userMessage") {
+        const text = visibleUserMessage(item);
+        const hasUnsupportedContent = Array.isArray(item.content)
+          && item.content.some((part) => part?.type !== "text");
+        if (hasUnsupportedContent) messageOmitted = true;
+        if (text) entries.push(Object.freeze({ role: "operator", text, at }));
+        else messageOmitted = true;
+      } else if (item?.type === "agentMessage") {
+        const text = visibleAssistantMessage(item);
+        if (text) entries.push(Object.freeze({ role: "codex", text, at }));
+        else messageOmitted = true;
+      }
+    }
+  }
+  let truncated = false;
+  const notices = [];
+  if (historyUnavailable) notices.push(HISTORY_UNAVAILABLE_NOTICE);
+  if (messageOmitted) notices.push(HISTORY_MESSAGE_OMITTED_NOTICE);
+  if (entries.length + notices.length > MAX_CONVERSATION_ENTRIES) truncated = true;
+  if (truncated) notices.push(HISTORY_TRUNCATED_NOTICE);
+  const retained = entries.slice(-Math.max(0, MAX_CONVERSATION_ENTRIES - notices.length));
+  return Object.freeze([
+    ...notices.map((text) => Object.freeze({ role: "codex", text, at: retained[0]?.at ?? observedAt })),
+    ...retained
+  ]);
+}
+
 function sanitizeQuestionRequest(params) {
   if (!record(params) || !Array.isArray(params.questions)
       || params.questions.length < 1 || params.questions.length > 3) return null;
@@ -106,6 +237,7 @@ export class JsonLineAppServer extends EventEmitter {
   #closed = false;
   #requestTimeoutMs;
   #spawnProcess;
+  #environment;
 
   constructor(options = {}) {
     super();
@@ -114,6 +246,9 @@ export class JsonLineAppServer extends EventEmitter {
       throw new Error("app-server request timeout must be between 1000 and 300000 milliseconds");
     }
     this.#spawnProcess = options.spawnProcess || ((command, args, spawnOptions) => spawn(command, args, spawnOptions));
+    this.#environment = options.environment === undefined
+      ? process.env
+      : Object.freeze({ ...options.environment });
     this.command = options.command || "codex";
     this.args = Object.freeze(options.args || ["app-server", "--stdio"]);
     this.cwd = path.resolve(options.cwd || process.cwd());
@@ -124,7 +259,7 @@ export class JsonLineAppServer extends EventEmitter {
     if (this.#closed) throw new Error("app-server transport is closed");
     const child = this.#spawnProcess(this.command, [...this.args], {
       cwd: this.cwd,
-      env: process.env,
+      env: this.#environment,
       shell: false,
       windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"]
@@ -260,26 +395,68 @@ export class CodexCompanionAdapter extends EventEmitter {
   #sessionRevision = crypto.randomInt(1, 2_147_483_648);
   #stateRevision = 0;
   #busyWithoutTurnId = false;
+  #executionPosture;
+  #codexHome;
+  #beforeThreadCreate;
+  #afterThreadCreate;
+  #beforeFirstTurn;
+  #firstTurnPrepared;
+  #transportClosed = false;
 
   constructor(options = {}) {
     super();
     this.cwd = path.resolve(options.cwd || process.cwd());
     this.ephemeral = options.ephemeral !== false;
     this.resumeThreadId = options.threadId || null;
+    if (options.executionPosture !== undefined && options.executionPosture !== REMOTE_READ_ONLY_EXECUTION_POSTURE) {
+      throw new Error("unsupported Codex execution posture");
+    }
+    this.#executionPosture = options.executionPosture ?? null;
+    this.#codexHome = null;
+    for (const [name, callback] of [
+      ["beforeThreadCreate", options.beforeThreadCreate],
+      ["afterThreadCreate", options.afterThreadCreate],
+      ["beforeFirstTurn", options.beforeFirstTurn]
+    ]) {
+      if (callback !== undefined && typeof callback !== "function") {
+        throw new Error(`${name} must be a function`);
+      }
+      if (callback !== undefined && this.#executionPosture !== REMOTE_READ_ONLY_EXECUTION_POSTURE) {
+        throw new Error(`${name} requires the remote Codex posture`);
+      }
+    }
+    this.#beforeThreadCreate = options.beforeThreadCreate ?? null;
+    this.#afterThreadCreate = options.afterThreadCreate ?? null;
+    this.#beforeFirstTurn = options.beforeFirstTurn ?? null;
+    this.#firstTurnPrepared = this.resumeThreadId !== null;
+    if (this.#executionPosture === REMOTE_READ_ONLY_EXECUTION_POSTURE) {
+      const configuredHome = options.codexHome ?? options.environment?.CODEX_HOME;
+      if (typeof configuredHome !== "string" || !path.isAbsolute(configuredHome)) {
+        throw new Error("remote Codex requires an absolute dedicated Codex home");
+      }
+      if (options.args !== undefined) throw new Error("remote Codex app-server arguments are fixed");
+      this.#codexHome = path.resolve(configuredHome);
+    }
     this.#activity = options.activityStore || new ActivityStore();
     this.#transport = options.transport || new JsonLineAppServer({
       cwd: this.cwd,
       command: options.command,
-      args: options.args,
+      args: this.#executionPosture === REMOTE_READ_ONLY_EXECUTION_POSTURE
+        ? REMOTE_APP_SERVER_ARGS
+        : options.args,
+      environment: options.environment,
       spawnProcess: options.spawnProcess,
       requestTimeoutMs: options.requestTimeoutMs
     });
     this.#transport.on("notification", (method, params) => this.#notification(method, params));
     this.#transport.on("request", (request) => this.#serverRequest(request));
     this.#transport.on("closed", () => {
+      if (this.#transportClosed) return;
+      this.#transportClosed = true;
       if (this.#connected) this.#activity.append({ category: "waiting", state: "blocked" });
       this.#connected = false;
       this.#changed();
+      this.emit("closed");
     });
   }
 
@@ -287,28 +464,74 @@ export class CodexCompanionAdapter extends EventEmitter {
     return this.#activity;
   }
 
+  // The remote runner binds this opaque identifier through its owner-only
+  // creating/provisional/used lifecycle. It is deliberately absent from
+  // privateState() and every browser contract.
+  get threadId() {
+    return this.#threadId;
+  }
+
   async connect() {
     if (this.#connected) return;
     await this.#transport.start();
-    await this.#transport.request("initialize", {
-      clientInfo: { name: "gate-cockpit", title: "GATE Local Cockpit", version: "0.3.0" },
+    const initialized = await this.#transport.request("initialize", {
+      clientInfo: this.#executionPosture === REMOTE_READ_ONLY_EXECUTION_POSTURE
+        ? { name: "gate-cockpit", title: "GATE Remote Cockpit", version: "0.4.0" }
+        : { name: "gate-cockpit", title: "GATE Local Cockpit", version: "0.3.0" },
       capabilities: { experimentalApi: true }
     });
     this.#transport.notify("initialized", {});
+    if (this.#executionPosture === REMOTE_READ_ONLY_EXECUTION_POSTURE) {
+      assertRemoteAppServerVersion(initialized);
+      if (typeof initialized?.codexHome !== "string" || !path.isAbsolute(initialized.codexHome)
+          || path.resolve(initialized.codexHome) !== this.#codexHome) {
+        throw new Error("Codex app-server did not use the dedicated remote Codex home");
+      }
+      const effectiveConfig = await this.#transport.request("config/read", {
+        cwd: this.cwd,
+        includeLayers: false
+      });
+      assertRemoteToolBoundary(effectiveConfig);
+    }
+    const posture = this.#executionPosture === REMOTE_READ_ONLY_EXECUTION_POSTURE
+      ? { approvalPolicy: REMOTE_APPROVAL_POLICY, sandbox: REMOTE_THREAD_SANDBOX }
+      : {};
+    if (!this.resumeThreadId && this.#beforeThreadCreate) await this.#beforeThreadCreate();
     const result = this.resumeThreadId
-      ? await this.#transport.request("thread/resume", { threadId: this.resumeThreadId, cwd: this.cwd })
+      ? await this.#transport.request("thread/resume", { threadId: this.resumeThreadId, cwd: this.cwd, ...posture })
       : await this.#transport.request("thread/start", {
         cwd: this.cwd,
         ephemeral: this.ephemeral,
-        threadSource: "gate-cockpit"
+        threadSource: "gate-cockpit",
+        ...(this.#executionPosture === REMOTE_READ_ONLY_EXECUTION_POSTURE
+          ? { environments: [], dynamicTools: [], selectedCapabilityRoots: [] }
+          : {}),
+        ...posture
       });
+    if (this.#executionPosture === REMOTE_READ_ONLY_EXECUTION_POSTURE
+        && (result?.approvalPolicy !== REMOTE_APPROVAL_POLICY
+          || result?.sandbox?.type !== "readOnly"
+          || result.sandbox.networkAccess === true
+          || !Array.isArray(result?.thread?.environments)
+          || result.thread.environments.length !== 0)) {
+      throw new Error("Codex app-server did not confirm the remote read-only posture");
+    }
     const threadId = result?.thread?.id;
     if (typeof threadId !== "string" || threadId.length < 8) throw new Error("Codex app-server did not return a thread");
+    if (this.resumeThreadId && threadId !== this.resumeThreadId) {
+      throw new Error("Codex app-server resumed a different thread");
+    }
     this.#threadId = threadId;
     const status = result.thread.status;
     const activeTurn = Array.isArray(result.thread.turns)
       ? result.thread.turns.findLast((turn) => turn?.status === "inProgress" && typeof turn.id === "string")
       : null;
+    if (this.#executionPosture === REMOTE_READ_ONLY_EXECUTION_POSTURE
+        && (status?.type === "active" || activeTurn)) {
+      throw new Error("The resumed Codex thread has an active turn with unknown posture");
+    }
+    if (!this.resumeThreadId && this.#afterThreadCreate) await this.#afterThreadCreate(threadId);
+    if (this.resumeThreadId) this.#conversation = [...historyConversation(result)];
     this.#activeTurnId = activeTurn?.id || null;
     this.#busyWithoutTurnId = status?.type === "active" && !this.#activeTurnId;
     this.#connected = true;
@@ -323,6 +546,10 @@ export class CodexCompanionAdapter extends EventEmitter {
       if (this.#busyWithoutTurnId) throw new Error("The resumed Codex thread is busy in another client");
       const input = [{ type: "text", text: request.message }];
       let result;
+      if (!this.#firstTurnPrepared) {
+        if (this.#beforeFirstTurn) await this.#beforeFirstTurn(this.#threadId);
+        this.#firstTurnPrepared = true;
+      }
       if (this.#activeTurnId) {
         result = await this.#transport.request("turn/steer", {
           threadId: this.#threadId,
@@ -334,7 +561,14 @@ export class CodexCompanionAdapter extends EventEmitter {
         result = await this.#transport.request("turn/start", {
           threadId: this.#threadId,
           clientUserMessageId: request.requestId,
-          input
+          input,
+          ...(this.#executionPosture === REMOTE_READ_ONLY_EXECUTION_POSTURE
+            ? {
+                approvalPolicy: REMOTE_APPROVAL_POLICY,
+                sandboxPolicy: REMOTE_TURN_SANDBOX_POLICY,
+                environments: []
+              }
+            : {})
         });
         if (typeof result?.turn?.id === "string") this.#activeTurnId = result.turn.id;
       }
@@ -362,8 +596,8 @@ export class CodexCompanionAdapter extends EventEmitter {
         }
         answers[question.id] = { answers: [selected] };
       }
-      this.#questions.delete(response.questionToken);
       this.#transport.respond(pending.requestId, { answers });
+      this.#questions.delete(response.questionToken);
       this.#activity.append({ category: "waiting", state: "completed" });
       this.#changed();
     });
@@ -423,7 +657,9 @@ export class CodexCompanionAdapter extends EventEmitter {
   #pushConversation(role, text) {
     this.#conversation.push(Object.freeze({ role, text, at: new Date().toISOString() }));
     if (this.#conversation.length > MAX_CONVERSATION_ENTRIES) {
-      this.#conversation.splice(0, this.#conversation.length - MAX_CONVERSATION_ENTRIES);
+      const retained = this.#conversation.slice(-(MAX_CONVERSATION_ENTRIES - 1));
+      this.#conversation.splice(0, this.#conversation.length,
+        Object.freeze({ role: "codex", text: HISTORY_TRUNCATED_NOTICE, at: retained[0].at }), ...retained);
     }
   }
 
@@ -506,6 +742,9 @@ export class CodexCompanionAdapter extends EventEmitter {
     if (assistantMessage) {
       this.#pushConversation("codex", assistantMessage);
       this.#changed();
+    } else if (method === "item/completed" && item?.type === "agentMessage") {
+      this.#pushConversation("codex", HISTORY_MESSAGE_OMITTED_NOTICE);
+      this.#changed();
     }
     const category = itemCategory(item?.type);
     if (!category) return;
@@ -520,9 +759,22 @@ export const appServerInternals = Object.freeze({
   DEFAULT_REQUEST_TIMEOUT_MS,
   MAX_CONVERSATION_ENTRIES,
   MAX_PROTOCOL_LINE_BYTES,
+  HISTORY_MESSAGE_OMITTED_NOTICE,
+  HISTORY_TRUNCATED_NOTICE,
+  HISTORY_UNAVAILABLE_NOTICE,
+  REMOTE_APPROVAL_POLICY,
+  REMOTE_APP_SERVER_ARGS,
+  REMOTE_CODEX_APP_SERVER_VERSION,
+  REMOTE_DISABLED_FEATURES,
+  REMOTE_READ_ONLY_EXECUTION_POSTURE,
+  REMOTE_THREAD_SANDBOX,
+  REMOTE_TURN_SANDBOX_POLICY,
+  assertRemoteAppServerVersion,
+  assertRemoteToolBoundary,
   boundedText,
   completedState,
   estimatedThreadCost,
+  historyConversation,
   itemCategory,
   sanitizeQuestionRequest,
   visibleAssistantMessage

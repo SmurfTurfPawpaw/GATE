@@ -1,0 +1,37 @@
+[Unit]
+Description=GATE remote cockpit coordinator for %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gate-remote
+Group=gate-remote
+WorkingDirectory=/opt/gate
+ExecStart=/opt/nodejs/node-v24.19.0-linux-x64/bin/node /opt/gate/cockpit/remote/server-cli.mjs --config /var/lib/gate-remote/%i/server.json
+Restart=on-failure
+RestartSec=5s
+UMask=0077
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/gate-remote/%i
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
