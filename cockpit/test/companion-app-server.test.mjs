@@ -252,11 +252,26 @@ test("remote lifecycle callbacks fail closed before their corresponding app-serv
   }), /requires the remote Codex posture/u);
 });
 
-test("remote app-server launch arguments disable every non-host tool source", () => {
-  const args = appServerInternals.REMOTE_APP_SERVER_ARGS;
+test("remote app-server launch arguments disable every non-host tool source", async () => {
+  let args;
+  const adapter = new CodexCompanionAdapter({
+    codexHome: REMOTE_CODEX_HOME,
+    executionPosture: "remote-read-only",
+    spawnProcess: (_command, actualArgs) => {
+      args = actualArgs;
+      throw new Error("launch captured");
+    }
+  });
+  await assert.rejects(adapter.connect(), /launch captured/u);
   assert.equal(appServerInternals.REMOTE_CODEX_APP_SERVER_VERSION, "0.159.2");
   assert.deepEqual(args.slice(0, 3), ["app-server", "--stdio", "--strict-config"]);
-  for (const feature of appServerInternals.REMOTE_DISABLED_FEATURES) {
+  for (const feature of [
+    "apps", "browser_use", "browser_use_external", "browser_use_full_cdp_access",
+    "code_mode", "code_mode_host", "computer_use", "enable_mcp_apps", "hooks",
+    "image_generation", "in_app_browser", "in_app_local_automation", "memories",
+    "multi_agent", "multi_agent_v2", "plugins", "remote_plugin",
+    "skill_mcp_dependency_install", "token_budget", "tool_suggest"
+  ]) {
     const index = args.findIndex((value, position) => value === "--disable" && args[position + 1] === feature);
     assert.notEqual(index, -1, `missing disabled feature ${feature}`);
   }

@@ -644,6 +644,36 @@ test("conversation projection marks multibyte truncation within its byte envelop
   assert.ok([...state.conversation[0].text].length <= 1_000);
 });
 
+test("remote projection bounds multiline replies and preserves question answer identities", () => {
+  const pending = {
+    token: `q_${"Q".repeat(43)}`,
+    questions: [{
+      id: "next_step", header: "Next", question: "Choose.",
+      options: [
+        { label: "Continue (Recommended)", description: "Proceed.", recommended: true },
+        { label: "Pause", description: "Wait.", recommended: false }
+      ]
+    }]
+  };
+  const project = (pendingQuestions) => projectRemoteState(localState({
+    conversation: [{ role: "codex", text: Array(25).fill("line").join("\n"), at: new Date(NOW - 1).toISOString() }],
+    pendingQuestions
+  }), { sessionRevision: SESSION_REVISION, now: NOW });
+  const ordinary = project([pending]);
+  assert.equal(ordinary.conversation[0].text.split("\n").length, 24);
+  assert.match(ordinary.conversation[0].text, /truncated this message/u);
+  assert.deepEqual(ordinary.pendingQuestions, [pending]);
+  for (const [field, lines] of [["header", 2], ["question", 13], ["label", 3], ["description", 7]]) {
+    const oversized = structuredClone(pending);
+    const destination = ["label", "description"].includes(field)
+      ? oversized.questions[0].options[0] : oversized.questions[0];
+    destination[field] = Array(lines).fill("x").join("\n");
+    const state = project([oversized]);
+    assert.deepEqual(state.pendingQuestions, []);
+    assert.match(state.conversation.at(-1).text, /questions omitted.*answer locally/u);
+  }
+});
+
 test("durable remote projection revisions advance when local revisions reset after restart", async (t) => {
   const directory = ownerDirectory(t);
   const keys = crypto.generateKeyPairSync("ed25519");

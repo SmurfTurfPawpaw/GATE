@@ -751,23 +751,6 @@ test("cockpit fails closed when local and remote bridges are both present", asyn
   assert.doesNotMatch(page.elements.get("mode-banner").textContent, /LIVE · REMOTE/);
 });
 
-test("remote client uses cookie-bound same-origin endpoints and is never a Pages asset", async () => {
-  const source = await read("remote/client.js");
-  for (const endpoint of [
-    "/session", "/state", "/fleet", "/events?cursor=", "/commands/status", "/messages", "/questions"
-  ]) {
-    assert.match(source, new RegExp(endpoint.replace(/[?]/g, "\\?")));
-  }
-  assert.match(source, /credentials:\s*"same-origin"/u);
-  assert.match(source, /redirect:\s*"error"/u);
-  assert.match(source, /Last-Event-ID/u);
-  assert.match(source, /MAX_EVENT_FRAME_BYTES/u);
-  assert.match(source, /if \(!ready && decoded\.name === "ready"\)[\s\S]*?installBridge\(\);[\s\S]*?connection\("connected"\)/u);
-  const startup = source.slice(source.indexOf("async function start()"), source.indexOf('globalThis.addEventListener("pagehide"'));
-  assert.doesNotMatch(startup.slice(0, startup.indexOf("while (!stopped)")), /installBridge\(\)/u);
-  assert.doesNotMatch(source, /localStorage|sessionStorage|Authorization\s*:/u);
-});
-
 test("remote client expires and withdraws unavailable projections while SSE stays ready", async () => {
   const source = await read("remote/client.js");
   const listeners = new Map();

@@ -339,10 +339,11 @@ class RunnerJournal {
   }
 }
 
-function boundedRemoteText(value, maximumCharacters, maximumBytes, truncatedSuffix = "") {
+function boundedRemoteText(value, maximumCharacters, maximumBytes, truncatedSuffix, maximumLines) {
   if (typeof value !== "string") return value;
   const normalized = value.normalize("NFC");
-  if ([...normalized].length <= maximumCharacters && Buffer.byteLength(normalized, "utf8") <= maximumBytes) {
+  if ([...normalized].length <= maximumCharacters && Buffer.byteLength(normalized, "utf8") <= maximumBytes
+      && normalized.split("\n").length <= maximumLines) {
     return normalized;
   }
   const suffixCharacters = [...truncatedSuffix].length;
@@ -352,9 +353,12 @@ function boundedRemoteText(value, maximumCharacters, maximumBytes, truncatedSuff
   let result = "";
   let characters = 0;
   let bytes = 0;
+  let lines = truncatedSuffix.split("\n").length;
   for (const character of normalized) {
     const nextBytes = Buffer.byteLength(character, "utf8");
-    if (characters >= prefixCharacterLimit || bytes + nextBytes > prefixByteLimit) break;
+    if (characters >= prefixCharacterLimit || bytes + nextBytes > prefixByteLimit
+        || (character === "\n" && lines >= maximumLines)) break;
+    if (character === "\n") lines += 1;
     result += character;
     characters += 1;
     bytes += nextBytes;
@@ -370,7 +374,7 @@ function cloneConversation(value) {
     role: entry?.role,
     text: containsLikelyRemoteCredential(entry?.text)
       ? WITHHELD_REMOTE_CONTENT
-      : boundedRemoteText(entry?.text, 1_000, 2_000, TRUNCATED_REMOTE_CONTENT),
+      : boundedRemoteText(entry?.text, 1_000, 2_000, TRUNCATED_REMOTE_CONTENT, 24),
     at: entry?.at
   }));
   if (omitted > 0) {
@@ -383,26 +387,36 @@ function cloneConversation(value) {
   return projected;
 }
 
+function questionFitsRemoteText(pending) {
+  const fits = (value, characters, bytes, lines) => typeof value === "string"
+    && [...value.normalize("NFC")].length <= characters
+    && Buffer.byteLength(value.normalize("NFC"), "utf8") <= bytes
+    && value.split("\n").length <= lines;
+  return Array.isArray(pending?.questions) && pending.questions.every((question) =>
+    fits(question?.header, 24, 96, 1) && fits(question?.question, 500, 2_000, 12)
+    && Array.isArray(question?.options) && question.options.every((option) =>
+      fits(option?.label, 100, 400, 2) && fits(option?.description, 300, 1_200, 6)));
+}
+
 function clonePendingQuestions(value) {
   if (!Array.isArray(value)) return [];
-  return value.filter((pending) => {
-    if (!Array.isArray(pending?.questions)) return true;
+  return value.filter(questionFitsRemoteText).filter((pending) => {
     return !pending.questions.some((question) => containsLikelyRemoteCredential(question?.header)
       || containsLikelyRemoteCredential(question?.question)
       || (Array.isArray(question?.options) && question.options.some((option) =>
         containsLikelyRemoteCredential(option?.label) || containsLikelyRemoteCredential(option?.description))));
   }).slice(0, MAX_PROJECTED_PENDING_QUESTIONS).map((pending) => ({
     token: pending?.token,
-    questions: Array.isArray(pending?.questions) ? pending.questions.map((question) => ({
+    questions: pending.questions.map((question) => ({
       id: question?.id,
-      header: boundedRemoteText(question?.header, 24, 96),
-      question: boundedRemoteText(question?.question, 500, 2_000),
-      options: Array.isArray(question?.options) ? question.options.map((option) => ({
-        label: boundedRemoteText(option?.label, 100, 400),
-        description: boundedRemoteText(option?.description, 300, 1_200),
+      header: question?.header,
+      question: question?.question,
+      options: question.options.map((option) => ({
+        label: option?.label,
+        description: option?.description,
         recommended: option?.recommended
-      })) : []
-    })) : []
+      }))
+    }))
   }));
 }
 
@@ -429,7 +443,13 @@ export function projectRemoteState(privateState, {
     runner: { state: "connected", observedAt },
     codex: { state: codexState },
     tokens: privateState.tokens ?? null,
-    conversation: cloneConversation(privateState.conversation),
+    conversation: cloneConversation([
+      ...(Array.isArray(privateState.conversation) ? privateState.conversation : []),
+      ...(Array.isArray(privateState.pendingQuestions)
+        && privateState.pendingQuestions.some((pending) => !questionFitsRemoteText(pending))
+        ? [{ role: "codex", text: "[Oversized questions omitted from remote cockpit; answer locally]", at: observedAt }]
+        : [])
+    ]),
     pendingQuestions: clonePendingQuestions(privateState.pendingQuestions)
   });
 }
