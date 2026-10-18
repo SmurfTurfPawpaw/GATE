@@ -109,7 +109,7 @@ unset GATE_CASE
 ./bin/gate.mjs bounty profile ui example-program --open
 ```
 
-The initialization command applies only eligible reviewed deterministic preferences. The UI command binds an ephemeral server to loopback, prints its private session URL, optionally opens it on the same laptop, and remains attached until you press `Ctrl+C`. It edits exactly one profile through native fields, guided contacts and sources, section navigation, and per-question or bulk recommendations. Existing explicit answers win; unsupported, unverified, source-missing, authority-confirmation, and attestation questions remain for review. Keep the printed session URL private. The aggregate cockpit is a separate read-only service.
+The initialization command applies only eligible reviewed deterministic preferences. The UI command binds an ephemeral server to loopback, prints its private session URL, optionally opens it on the same laptop, and remains attached until you press `Ctrl+C`. It edits exactly one profile through native fields, guided contacts and sources, section navigation, and per-question or bulk recommendations. Existing explicit answers win; unsupported, unverified, source-missing, authority-confirmation, and attestation questions remain for review. Keep the printed session URL private. The aggregate observer is a separate read-only service; see [Open the cockpit](#2-open-the-cockpit) for the interactive companion.
 
 If you prefer the numbered terminal fallback, or want to resume without the browser:
 
