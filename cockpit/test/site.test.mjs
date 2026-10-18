@@ -751,6 +751,49 @@ test("cockpit fails closed when local and remote bridges are both present", asyn
   assert.doesNotMatch(page.elements.get("mode-banner").textContent, /LIVE · REMOTE/);
 });
 
+test("remote client withdraws live state on departure and reloads cached restorations", async () => {
+  const source = await read("remote/client.js");
+  const listeners = new Map();
+  const signals = [];
+  let reloads = 0;
+  const context = {
+    ...model,
+    AbortController, CustomEvent, Date, Event, Intl, Promise, Response, TextDecoder, TextEncoder,
+    console, crypto: globalThis.crypto,
+    document: { readyState: "loading", addEventListener() {} },
+    location: { reload() { reloads += 1; } },
+    queueMicrotask, setTimeout, clearTimeout,
+    setInterval: () => 1, clearInterval() {},
+    addEventListener(name, callback) { listeners.set(name, callback); },
+    dispatchEvent(event) { signals.push(event); return true; }
+  };
+  context.globalThis = context;
+  vm.createContext(context);
+  vm.runInContext(source.slice(source.indexOf("const API")), context);
+  vm.runInContext(`
+    session = Object.freeze({
+      apiVersion: "gate.remote-cockpit-session/v1", sessionRevision: 5,
+      csrf: "${"a".repeat(43)}", expiresAt: "2099-01-01T00:00:00.000Z", caseId: "alpha-case"
+    });
+    installBridge();
+  `, context);
+  const at = new Date().toISOString();
+  assert.equal(vm.runInContext("acceptState", context)(remoteState(at)), true);
+  assert.equal(vm.runInContext("acceptFleet", context)(remoteFleet(at)), true);
+  assert.ok(context.GATE_REMOTE_COCKPIT_BRIDGE);
+  listeners.get("pageshow")({ persisted: false });
+  assert.equal(reloads, 0);
+  listeners.get("pagehide")(new Event("pagehide"));
+  assert.equal(context.GATE_REMOTE_COCKPIT_BRIDGE, undefined);
+  assert.equal(signals.at(-1).type, "gate:remote-connection");
+  assert.equal(signals.at(-1).detail.state, "offline");
+  assert.equal(signals.at(-2).type, "gate:remote-projection-unavailable");
+  assert.equal(signals.at(-2).detail.projection, "state");
+  listeners.get("pageshow")({ persisted: true });
+  assert.equal(reloads, 1);
+  assert.equal(context.GATE_REMOTE_COCKPIT_BRIDGE, undefined);
+});
+
 test("remote client expires and withdraws unavailable projections while SSE stays ready", async () => {
   const source = await read("remote/client.js");
   const listeners = new Map();

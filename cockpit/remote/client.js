@@ -523,6 +523,12 @@ globalThis.addEventListener("pagehide", () => {
   streamAbort?.abort();
   clearTimers();
   clearBridge();
+  projectionUnavailable("state");
+  connection("offline");
+});
+
+globalThis.addEventListener("pageshow", (event) => {
+  if (event.persisted) globalThis.location.reload();
 });
 
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start, { once: true });
