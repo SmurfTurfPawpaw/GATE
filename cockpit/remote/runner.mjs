@@ -527,7 +527,6 @@ async function defaultDelay(milliseconds, signal) {
       resolve();
     };
     const timer = setTimeout(finish, milliseconds);
-    timer.unref?.();
     const abort = () => {
       clearTimeout(timer);
       finish();
@@ -969,7 +968,6 @@ export class RemoteCockpitRunner {
     else signal?.addEventListener("abort", abort, { once: true });
     this.#currentFetchController = controller;
     const timer = setTimeout(() => controller.abort(), this.#configuration.requestTimeoutMs);
-    timer.unref?.();
     try {
       let response;
       try {
