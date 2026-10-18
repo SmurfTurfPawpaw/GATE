@@ -291,7 +291,7 @@ export class CodexCompanionAdapter extends EventEmitter {
     if (this.#connected) return;
     await this.#transport.start();
     await this.#transport.request("initialize", {
-      clientInfo: { name: "gate-cockpit", title: "GATE Local Cockpit", version: "0.2.0" },
+      clientInfo: { name: "gate-cockpit", title: "GATE Local Cockpit", version: "0.3.0" },
       capabilities: { experimentalApi: true }
     });
     this.#transport.notify("initialized", {});
