@@ -269,7 +269,7 @@ The startup banner and browser case terminals use `operator.displayName` from th
 }
 ```
 
-Browser case terminals show sanitized structured lifecycle state rather than a shell. They never expose raw PTY data, stdout or stderr, argv, commands, targets, evidence, or private paths. Their spinner and progress bar remain indeterminate while active unless a producer supplies a trustworthy completed and total count. The cockpit's compact Tokens card keeps the relevant total visible and labels its provenance. Host-wide usage remains separate; a case shows `Awaiting attribution` until canonical case-bound token records exist.
+Browser case terminals show sanitized structured lifecycle state rather than a shell. They never expose raw PTY data, stdout or stderr, argv, commands, targets, evidence, or private paths. Their spinner and progress bar remain indeterminate while active unless a producer supplies a trustworthy completed and total count. See the [companion display rules](local-companion.md#what-is-working) for compact status and token attribution.
 
 Run the smoke suite after a runtime, dependency, or host change:
 

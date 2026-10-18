@@ -48,6 +48,10 @@ The checked-in `cockpit/data/status.json` is a presentation preview. Static GitH
 
 ## What is working
 
+The cockpit puts **Steer GATE** conversation and choices first, followed by **Running**, **Needs you**, **Blocked**, and **Tokens**, the project fleet, and live activity. Site and GATE versions remain visible. In local mode, Running counts active fleet workflows, Needs you combines native questions with fleet attention, and Blocked counts profile setup blockers. Unavailable counts use `—`; lower bounds use `+`.
+
+The Tokens card prefers the case-bound fleet total and labels its exact, estimated, or partial provenance, with the dedicated-session total alongside when available. Without available fleet tokens it shows the exact dedicated-session total, or marks telemetry unavailable. Detailed input, cached-input, output, reasoning, and cost fields remain in the private API rather than separate visible counters. Host-wide usage stays separate from case attribution; case rows without canonical token data show `Awaiting attribution`. The public preview shows only an example token budget.
+
 The companion currently provides:
 
 - an exact `gate.local-cockpit-bridge/v1` browser adapter exposing `submitMessage` and `submitQuestion`;
@@ -61,7 +65,7 @@ The companion currently provides:
 
 Private operator messages may include URLs and project context. They are limited to 1,000 characters and must not contain credentials or secrets. Native Codex questions are rendered as bounded one-to-three-choice controls, with the recommended option identified explicitly.
 
-The fleet projection shows at most 32 current case rows and 32 current Program Profile rows under process-local `Campaign N` aliases. It carries scan completeness alongside every aggregate. Exact counts appear only when both source scans are complete and every visible case runtime is available; partial coverage uses lower bounds, and unavailable scans never relabel cached rows as current. Case workflow, supervised-run, and offline-analysis counts stay separate. Program Profile answered/total progress is determinate; case completion percentages are unavailable by contract. Per-case canonical token totals preserve exact versus estimated availability, while the fleet total becomes partial or unavailable when any visible total is missing. Host-wide observer input, cached input, output, and total counters are a separate projection and are never substituted for case-bound usage. The cockpit renders missing case data as `Awaiting attribution`.
+The fleet projection shows at most 32 current case rows and 32 current Program Profile rows under process-local `Campaign N` aliases. It carries scan completeness alongside every aggregate. Exact counts appear only when both source scans are complete and every visible case runtime is available; partial coverage uses lower bounds, and unavailable scans never relabel cached rows as current. Case workflow, supervised-run, and offline-analysis counts stay separate. Program Profile answered/total progress is determinate; case completion percentages are unavailable by contract. Per-case canonical token totals preserve exact versus estimated availability, while the fleet total becomes partial or unavailable when any visible total is missing. Host-wide observer input, cached input, output, and total counters are a separate projection and are never substituted for case-bound usage.
 
 The generated protocol for Codex CLI 0.159.2 was used to bind `initialize`, `thread/start|resume`, `turn/start|steer`, `turn/started|completed`, `item/started|completed`, `thread/tokenUsage/updated`, and `item/tool/requestUserInput`. Regenerate it for review after a Codex CLI upgrade:
 
