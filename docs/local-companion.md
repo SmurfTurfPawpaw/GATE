@@ -44,6 +44,8 @@ http://127.0.0.1:43127/#session=…&csrf=…
 
 Keep the terminal open. The session and CSRF capabilities exist only for that process and URL fragment. The default thread is ephemeral and dedicated to this companion. Use `--persistent` to let Codex persist a newly created thread, or `--thread-id ID` to resume a dedicated thread explicitly.
 
+Resuming restores the bounded operator and final Codex messages returned by app-server, with notices when history is unavailable, unsafe, unsupported, or too large to display. The adapter retains at most 48 conversation entries including notices; the browser displays the latest 12. This is a recent conversation view, not a complete transcript.
+
 The checked-in `cockpit/data/status.json` is a presentation preview. Static GitHub Pages and a normal preview server remain read-only because neither has the private bridge or capabilities. Through the loopback companion, private conversation, native Codex questions, and the local GATE fleet work independently of that preview snapshot. Missing or invalid preview data does not clear an unsent local message. Public snapshots accept only preview mode; example decisions are disabled. Private choices use native Codex questions.
 
 ## What is working
