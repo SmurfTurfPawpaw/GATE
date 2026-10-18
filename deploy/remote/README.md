@@ -140,7 +140,7 @@ set +a
 npm run cockpit:remote:runner
 ```
 
-Run that command from the reviewed GATE checkout that contains `package.json`. The runner is an operator-attended foreground process in this release. A closed terminal, logout or WSL shutdown, laptop sleep or reboot, or lost network stops live steering; the coordinator remains reachable but must show the runner and its projections as stale or unavailable. When the laptop returns, reload the same environment and start the runner again. Its owner-only journal and thread record preserve the case binding, but an ambiguous or failed command must be reconciled before manual retry.
+Run that command from the reviewed GATE checkout that contains `package.json`. For foreground-process lifetime, automatic transient retries, and when to restart manually, follow [Configuration and entrypoints](../../docs/remote-cockpit.md#configuration-and-entrypoints). Reconcile an ambiguous or failed command before manual retry.
 
 No laptop service definition is supplied. Do not use an unconditional shell or service restart loop: permanent authentication, signature, session-revision, Codex-boundary, and configuration failures deliberately stop the runner. Any future supervised wrapper must distinguish permanent from transient exits, keep all state owner-only, send a clean termination signal, and enforce one process per journal.
 
