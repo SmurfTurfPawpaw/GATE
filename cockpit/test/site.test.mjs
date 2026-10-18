@@ -104,16 +104,25 @@ test("concise preview puts disabled steering first and keeps exactly four metric
   assert.equal(byId("mode-banner").children.some(element => element.tag === "strong" && element.text === "PREVIEW · NOT LIVE"), true);
   for (const id of ["message-input", "message-send"]) assert.ok("disabled" in byId(id).attributes);
   assert.equal("hidden" in byId("decision-panel").attributes, false);
-  assert.ok(all.indexOf(byId("decision-panel")) < all.findIndex(element => element.attributes.class === "metric-grid"));
-  const metrics = all.find(element => element.attributes.class === "metric-grid");
-  assert.equal(metrics.children.filter(element => element.attributes.class?.includes("metric-card")).length, 4);
-  for (const id of ["running-count", "question-count", "blocker-count", "token-usage"]) assert.ok(byId(id));
-  for (const id of ["token-rail-scope", "overall-progress", "learning-count", "freshness-value", "snapshot-time"]) {
-    assert.equal(byId(id), undefined);
-  }
-  assert.equal(all.some(element => element.attributes.class?.includes("terminal-controls")), false);
-  assert.equal(all.some(element => element.attributes.class?.includes("terminal-command")), false);
-  assert.equal(all.some(element => element.attributes.class?.includes("boundary-note")), false);
+  const visible = element => !("hidden" in element.attributes) && element.attributes["aria-hidden"] !== "true";
+  const text = element => visible(element)
+    ? [element.text, ...element.children.map(text)].join(" ").replace(/\s+/g, " ").trim()
+    : "";
+  const main = all.find(element => element.tag === "main");
+  const sections = [];
+  const visit = element => {
+    if (!visible(element)) return;
+    if (element.tag === "section") sections.push(element);
+    element.children.forEach(visit);
+  };
+  visit(main);
+  const name = element => element.attributes["aria-label"] || text(byId(element.attributes["aria-labelledby"]));
+  assert.deepEqual(sections.map(name), ["Steer GATE", "Current status", "Fleet", "Live activity"]);
+  const metrics = sections[1].children.filter(visible);
+  assert.deepEqual(metrics.map(metric => text(metric.children.find(element => element.tag === "small"))),
+    ["RUNNING", "NEEDS YOU", "BLOCKED", "TOKENS"]);
+  assert.deepEqual(all.filter(element => /^h[1-6]$/.test(element.tag) && visible(element)).map(text),
+    ["Steer GATE", "Fleet", "Live activity"]);
 });
 
 test("robots policy requests no crawling", async () => {
@@ -224,6 +233,27 @@ test("local startup without fleet telemetry renders native choices and submits s
   await page.elements.get("choice-list").children.at(-1).listeners.click();
   assert.equal(submitted.answers.depth, "Focused");
   assert.equal(submitted.sessionRevision, 1);
+  const status = page.elements.get("message-status");
+  assert.match(status.textContent, /accepted the choices/);
+  for (const accepted of [false, true]) {
+    let finish;
+    page.context.GATE_PUBLIC_COCKPIT_BRIDGE.submitMessage = request => new Promise(resolve => {
+      finish = () => resolve(accepted
+        ? { apiVersion: "gate.local-cockpit-receipt/v1", requestId: request.requestId, status: "accepted" }
+        : null);
+    });
+    page.elements.get("message-input").value = "Continue please";
+    const submission = page.elements.get("message-composer").listeners.submit({ preventDefault() {} });
+    page.events["gate:companion-connection"]({ detail: { connected: true } });
+    assert.match(status.textContent, /Requesting local companion acceptance/);
+    finish();
+    await submission;
+    const result = status.textContent;
+    assert.match(result, accepted ? /accepted the message/ : /No valid local receipt/);
+    page.events["gate:companion-connection"]({ detail: { connected: true } });
+    assert.equal(status.textContent, result);
+    assert.equal(page.elements.get("message-input").value, accepted ? "" : "Continue please");
+  }
 });
 
 test("publication boundaries reject private canaries and preserve validated snapshot bytes", async () => {

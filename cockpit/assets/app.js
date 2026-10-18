@@ -33,8 +33,7 @@ let localState;
 let localFleet;
 let localTransportConnected = null;
 let localActivity = [];
-let questionReceiptStatus = "";
-let messageReceiptStatus = "";
+let interactionStatus = "";
 const acknowledgedQuestions = new Set();
 const nativeSelections = new Map();
 
@@ -196,7 +195,7 @@ function configureComposer(model, bridge) {
   elements.messageInput.disabled = !enabled;
   elements.messageInput.placeholder = enabled ? "Write a short message…" : "Local companion required";
   elements.messageStatus.textContent = enabled
-    ? messageReceiptStatus || "Ready."
+    ? interactionStatus || "Ready."
     : model.mode === "preview" ? "Available in the private local companion." : "Companion unavailable.";
   updateComposer();
 }
@@ -215,9 +214,9 @@ async function submitMessage(event) {
   const sessionRevision = localState?.sessionRevision;
   const id = requestId();
   submitting = true;
-  messageReceiptStatus = "";
+  interactionStatus = "Requesting local companion acceptance…";
   updateComposer();
-  elements.messageStatus.textContent = "Requesting local companion acceptance…";
+  elements.messageStatus.textContent = interactionStatus;
   try {
     const receipt = await bridge.submitMessage(Object.freeze({
       apiVersion: "gate.local-message-request/v1",
@@ -227,11 +226,11 @@ async function submitMessage(event) {
     }));
     if (!validateBridgeReceipt(receipt, id) || localState?.sessionRevision !== sessionRevision || !localReady()) throw new Error("invalid receipt");
     elements.messageInput.value = "";
-    messageReceiptStatus = "Local companion accepted the message. Delivery to Codex is not confirmed here.";
-    elements.messageStatus.textContent = messageReceiptStatus;
+    interactionStatus = "Local companion accepted the message. Delivery to Codex is not confirmed here.";
+    elements.messageStatus.textContent = interactionStatus;
   } catch {
-    messageReceiptStatus = "No valid local receipt was received. Your message remains in the composer.";
-    elements.messageStatus.textContent = messageReceiptStatus;
+    interactionStatus = "No valid local receipt was received. Your message remains in the composer.";
+    elements.messageStatus.textContent = interactionStatus;
   } finally {
     submitting = false;
     updateComposer();
@@ -262,8 +261,8 @@ async function submitNativeQuestion(pending) {
   const id = requestId();
   const answers = { ...selectionsFor(pending) };
   submitting = true;
+  interactionStatus = "Sending choices…";
   renderLocalMode();
-  elements.messageStatus.textContent = "Sending choices…";
   try {
     const receipt = await bridge.submitQuestion(Object.freeze({
       apiVersion: "gate.local-question-response/v1",
@@ -274,9 +273,9 @@ async function submitNativeQuestion(pending) {
     }));
     if (!validateBridgeReceipt(receipt, id) || localState?.sessionRevision !== sessionRevision) throw new Error("invalid receipt");
     acknowledgedQuestions.add(pending.token);
-    questionReceiptStatus = "Local companion accepted the choices. Codex will continue in the dedicated thread.";
+    interactionStatus = "Local companion accepted the choices. Codex will continue in the dedicated thread.";
   } catch {
-    questionReceiptStatus = "No valid local receipt was received. Your choices remain selected.";
+    interactionStatus = "No valid local receipt was received. Your choices remain selected.";
   } finally {
     submitting = false;
     renderLocalMode();
@@ -499,7 +498,6 @@ function renderLocalMode() {
   renderLocalConversation();
   renderBridgeState(true, "local");
   configureComposer(currentDisplay || { mode: "preview" }, exactBridge());
-  if (questionReceiptStatus) elements.messageStatus.textContent = questionReceiptStatus;
   clear(elements.activityFeed);
   const events = [...localActivity].sort((left, right) => right.sequence - left.sequence).slice(0, 24);
   if (events.length === 0) {
@@ -603,8 +601,7 @@ globalThis.addEventListener("gate:companion-private-state", (event) => {
     localActivity = [];
     acknowledgedQuestions.clear();
     nativeSelections.clear();
-    questionReceiptStatus = "";
-    messageReceiptStatus = "";
+    interactionStatus = "";
   }
   localState = next;
   localTransportConnected = next.connected;
@@ -633,7 +630,7 @@ globalThis.addEventListener("gate:companion-connection", (event) => {
   else if (currentDisplay?.kind === "available") renderAvailable(currentDisplay);
 });
 elements.messageInput.addEventListener("input", () => {
-  messageReceiptStatus = "";
+  interactionStatus = "";
   updateComposer();
 });
 elements.messageComposer.addEventListener("submit", submitMessage);
