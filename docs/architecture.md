@@ -1,6 +1,6 @@
 # GATE architecture
 
-GATE is a personal, single-operator control plane for software delivery and evidence-led security work. It composes pinned upstream tools and adds only the coordination that those tools do not provide: a shared policy model, a private project registry, immutable per-program cases, a reviewed managed-tool runtime, a project-bound offline-analysis lane, a verified Treehouse lease bridge, a read-only observer, a local interactive cockpit, a static public preview, a publication authority, an active-security authority, and durable learning. This document describes the target architecture; [README.md](../README.md#current-limits) identifies which v0.1 paths are wired today.
+GATE is a personal, single-operator control plane for software delivery and evidence-led security work. It composes pinned upstream tools and adds only the coordination that those tools do not provide: a shared policy model, a private project registry, immutable per-program cases, a reviewed managed-tool runtime, a project-bound offline-analysis lane, a verified Treehouse lease bridge, a read-only observer, local and remote interactive cockpit paths, a static public preview, a publication authority, an active-security authority, and durable learning. This document describes the target architecture; [README.md](../README.md#current-limits) identifies which v0.1 paths are wired today.
 
 The version-controlled repository contains the reusable distribution. Live sessions, target details, raw evidence, credential references, and private learning stay outside Git under `GATE_HOME`. Credential values should remain in an OS secret store or narrowly permissioned file outside broad agent-writable roots.
 
@@ -8,6 +8,7 @@ The version-controlled repository contains the reusable distribution. Live sessi
 
 - The laptop is the default execution environment.
 - Concurrent bug-program work uses separate case state directories with immutable scope bindings.
+- Remote cockpit delivery uses one case-bound coordinator and one outbound laptop runner per instance; the public Pages preview never becomes its transport.
 - Codex CLI is the primary runtime harness. Firstmate does not currently support Codex App as a runtime backend.
 - A person must be able to bootstrap, inspect, start, stop, and reset GATE without an AI.
 - Upstream projects remain pinned dependencies. GATE does not combine their source trees.
@@ -44,6 +45,19 @@ flowchart TD
     E --> L[Learning candidates]
     L --> N
 ```
+
+Remote interaction follows a separate authenticated delivery path while Codex and GATE execution stay on the laptop:
+
+```mermaid
+flowchart LR
+    O[Operator browser] -->|HTTPS| I[TLS and OIDC gateway]
+    I --> C[Case-bound coordinator and durable queue]
+    R[Laptop runner] -->|outbound signed HTTPS| I
+    R --> D[Dedicated Codex app-server thread]
+    R --> V[Bounded observer projection]
+```
+
+The coordinator never connects inbound to the laptop. The runner leases bounded commands and uploads only the remote protocol projection; it does not forward raw execution state. See [Remote cockpit bridge](remote-cockpit.md).
 
 Concurrent bug-program work is partitioned before operational records are written:
 
@@ -105,6 +119,8 @@ The offline branch is bound to a project contract and local snapshot rather than
 | Program Profile browser wizard | One private profile's typed, choice-first intake, source review, and reviewed recommendation application over an ephemeral loopback session | Target contact, authority inference, attestation inference, or aggregate fleet monitoring |
 | Observer | Read-only compact campaign fleet, one selected structured detail, setup progress, GATE activity, derived agent/task, learning, status, and token views | Execution, Program Profile editing, or an interactive terminal session |
 | Local cockpit companion | One capability-protected loopback operator surface, one dedicated Codex app-server thread, bounded user-visible conversation and questions, categorical activity, and a separate observer fleet projection | Hidden reasoning, raw commands or output, target authority, Program Profile private capture, public serving, or attachment to an arbitrary existing Codex thread |
+| Remote cockpit coordinator | One authenticated operator/case/session binding, durable command queue, secure browser session, event replay, and bounded runner projections | Laptop ingress, Codex credentials, raw operations or evidence, Pages interaction, execution authority, or attachment to this cloud chat |
+| Remote cockpit runner | One outbound Ed25519-authenticated coordinator connection, owner-only replay journal, and one dedicated Codex app-server thread | Browser identity, public serving, target authority, or dispatch of an unleased or digest-mismatched command |
 | Public cockpit | One static Pages preview assembled from an explicit file allowlist and opaque checked-in sample data | Local observer access, interaction, session capabilities, live campaign claims, or private runtime data |
 | Learning pipeline | Correction capture and validated memory changes | Expanding authorization or releasing data |
 
@@ -128,6 +144,8 @@ Private runtime content under `GATE_HOME`:
 - raw captures, binaries, screenshots, recordings, and tool output;
 - private learning records;
 - upstream checkouts, content-addressed managed-tool archives, staging trees, installed tool executables and receipts, private clone-bound and task-bound Treehouse roots, process state, and logs.
+
+The remote coordinator adds a separate deployment trust domain outside Git: an owner-only SQLite database and service configuration on its persistent host volume, plus in-memory browser sessions that are revoked by a service restart. The laptop runner keeps its Ed25519 private key and deduplication journal owner-only outside the repository. Only the public runner key is enrolled with the coordinator. Remote records contain bounded queued operator text, final visible replies, questions, lifecycle events, fleet/activity projections, and binding identifiers. Automatic fleet/activity data and structural state fields exclude raw evidence, dedicated target fields, raw commands and output, paths, credentials, hidden reasoning, and internal thread IDs. Operator messages, final visible replies, and rendered native questions can still mention URLs, project, target, or command context and therefore keep the coordinator database inside the sensitive-data boundary.
 
 The default is `$HOME/.local/share/gate`. `GATE_HOME` overrides it. Machine-specific settings may be placed at `$HOME/.config/gate/config.json`; v0.1 has a merge helper for that file but most commands do not yet load a complete merged provider/profile configuration. The target precedence is repository defaults, selected profile, local override, then explicit command-line arguments.
 

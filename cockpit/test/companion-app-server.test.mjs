@@ -1,9 +1,25 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import path from "node:path";
 import test from "node:test";
 
 import { CodexCompanionAdapter, appServerInternals } from "../companion/app-server.mjs";
 import { ActivityStore } from "../companion/activity.mjs";
+
+const REMOTE_CODEX_HOME = path.resolve(".gate-test-remote-codex-home");
+
+function remoteConfig(overrides = {}) {
+  return {
+    config: {
+      mcp_servers: {},
+      notify: [],
+      web_search: "disabled",
+      orchestrator: { mcp: { enabled: false } },
+      features: Object.fromEntries(appServerInternals.REMOTE_DISABLED_FEATURES.map((feature) => [feature, false])),
+      ...overrides
+    }
+  };
+}
 
 class FakeTransport extends EventEmitter {
   calls = [];
@@ -11,14 +27,21 @@ class FakeTransport extends EventEmitter {
   errors = [];
   started = false;
   usageResponse = {};
+  threadResponse = null;
+  configResponse = remoteConfig();
+  initializeResponse = {
+    userAgent: `gate-cockpit/${appServerInternals.REMOTE_CODEX_APP_SERVER_VERSION} fixture`,
+    codexHome: REMOTE_CODEX_HOME
+  };
 
   async start() { this.started = true; }
   notify(method, params) { this.calls.push({ kind: "notify", method, params }); }
   async request(method, params) {
     this.calls.push({ kind: "request", method, params });
-    if (method === "initialize") return { userAgent: "fixture" };
+    if (method === "initialize") return this.initializeResponse;
+    if (method === "config/read") return this.configResponse;
     if (method === "thread/start" || method === "thread/resume") {
-      return { thread: { id: "thread-fixture", status: { type: "idle" } } };
+      return this.threadResponse ?? { thread: { id: "thread-fixture", status: { type: "idle" } } };
     }
     if (method === "turn/start") return { turn: { id: "turn-1", status: "inProgress", items: [] } };
     if (method === "turn/steer") return { turnId: "turn-1" };
@@ -37,13 +60,19 @@ function message(messageText, id = "request-12345678") {
 test("adapter creates one isolated app-server thread and starts or steers turns", async () => {
   const transport = new FakeTransport();
   const adapter = new CodexCompanionAdapter({ transport, cwd: process.cwd() });
+  assert.equal(adapter.threadId, null);
   await adapter.connect();
+  assert.equal(adapter.threadId, "thread-fixture");
   assert.equal(transport.started, true);
   assert.deepEqual(transport.calls.slice(0, 3).map((call) => [call.kind, call.method]), [
     ["request", "initialize"],
     ["notify", "initialized"],
     ["request", "thread/start"]
   ]);
+  assert.deepEqual(transport.calls[0].params, {
+    clientInfo: { name: "gate-cockpit", title: "GATE Local Cockpit", version: "0.3.0" },
+    capabilities: { experimentalApi: true }
+  });
   assert.deepEqual(transport.calls[2].params, {
     cwd: process.cwd(),
     ephemeral: true,
@@ -60,6 +89,316 @@ test("adapter creates one isolated app-server thread and starts or steers turns"
   assert.equal(adapter.activityStore.since().filter((entry) => entry.category === "thinking" && entry.state === "started").length, 0);
   transport.emit("notification", "turn/started", { threadId: "thread-fixture", turn: { id: "turn-1" } });
   assert.equal(adapter.activityStore.since().filter((entry) => entry.category === "thinking" && entry.state === "started").length, 1);
+});
+
+test("remote adapter pins and verifies a read-only posture on thread and turn start", async () => {
+  const transport = new FakeTransport();
+  const lifecycle = [];
+  transport.threadResponse = {
+    approvalPolicy: "never",
+    sandbox: { type: "readOnly", networkAccess: false },
+    thread: { id: "thread-fixture", status: { type: "idle" }, turns: [], environments: [] }
+  };
+  const adapter = new CodexCompanionAdapter({
+    transport,
+    cwd: process.cwd(),
+    codexHome: REMOTE_CODEX_HOME,
+    executionPosture: "remote-read-only",
+    beforeThreadCreate: () => {
+      assert.equal(transport.calls.at(-1).method, "config/read");
+      lifecycle.push("creating");
+    },
+    afterThreadCreate: (threadId) => {
+      assert.equal(transport.calls.at(-1).method, "thread/start");
+      assert.equal(threadId, "thread-fixture");
+      lifecycle.push("provisional");
+    },
+    beforeFirstTurn: (threadId) => {
+      assert.equal(transport.calls.some((call) => call.method === "turn/start"), false);
+      assert.equal(threadId, "thread-fixture");
+      lifecycle.push("used");
+    }
+  });
+  await adapter.connect();
+  assert.deepEqual(lifecycle, ["creating", "provisional"]);
+  assert.deepEqual(transport.calls[0].params, {
+    clientInfo: { name: "gate-cockpit", title: "GATE Remote Cockpit", version: "0.4.0" },
+    capabilities: { experimentalApi: true }
+  });
+  assert.deepEqual(transport.calls[2], {
+    kind: "request",
+    method: "config/read",
+    params: { cwd: process.cwd(), includeLayers: false }
+  });
+  assert.deepEqual(transport.calls[3].params, {
+    cwd: process.cwd(),
+    ephemeral: true,
+    threadSource: "gate-cockpit",
+    approvalPolicy: "never",
+    sandbox: "read-only",
+    environments: [],
+    dynamicTools: [],
+    selectedCapabilityRoots: []
+  });
+  await adapter.sendMessage(message("Map the reviewed surface."));
+  assert.deepEqual(lifecycle, ["creating", "provisional", "used"]);
+  assert.deepEqual(transport.calls.at(-1).params, {
+    threadId: "thread-fixture",
+    clientUserMessageId: "request-12345678",
+    input: [{ type: "text", text: "Map the reviewed surface." }],
+    approvalPolicy: "never",
+    sandboxPolicy: { type: "readOnly", networkAccess: false },
+    environments: []
+  });
+});
+
+test("remote adapter fails closed before thread creation when external tools remain configured", async () => {
+  const configuredMcp = new FakeTransport();
+  let creationPrepared = false;
+  configuredMcp.configResponse = remoteConfig({
+    mcp_servers: { unsafe: { command: "/bin/unsafe", enabled: true } }
+  });
+  await assert.rejects(new CodexCompanionAdapter({
+    transport: configuredMcp,
+    codexHome: REMOTE_CODEX_HOME,
+    executionPosture: "remote-read-only",
+    beforeThreadCreate: () => { creationPrepared = true; }
+  }).connect(), /did not confirm the remote tool boundary/u);
+  assert.equal(creationPrepared, false);
+  assert.equal(configuredMcp.calls.some((call) => call.method === "thread/start"), false);
+
+  const legacyNotify = new FakeTransport();
+  legacyNotify.configResponse = remoteConfig({ notify: ["/bin/unsafe"] });
+  await assert.rejects(new CodexCompanionAdapter({
+    transport: legacyNotify,
+    codexHome: REMOTE_CODEX_HOME,
+    executionPosture: "remote-read-only"
+  }).connect(), /did not confirm the remote tool boundary/u);
+  assert.equal(legacyNotify.calls.some((call) => call.method === "thread/start"), false);
+
+  const enabledApps = new FakeTransport();
+  enabledApps.configResponse = remoteConfig({
+    features: {
+      ...remoteConfig().config.features,
+      apps: true
+    }
+  });
+  await assert.rejects(new CodexCompanionAdapter({
+    transport: enabledApps,
+    codexHome: REMOTE_CODEX_HOME,
+    executionPosture: "remote-read-only"
+  }).connect(), /did not confirm the remote tool boundary/u);
+  assert.equal(enabledApps.calls.some((call) => call.method === "thread/start"), false);
+
+  for (const feature of ["memories", "multi_agent_v2", "token_budget"]) {
+    assert.throws(() => appServerInternals.assertRemoteToolBoundary(remoteConfig({
+      features: {
+        ...remoteConfig().config.features,
+        [feature]: true
+      }
+    })), /did not confirm the remote tool boundary/u, feature);
+  }
+
+  const wrongHome = new FakeTransport();
+  wrongHome.initializeResponse = {
+    userAgent: `gate-cockpit/${appServerInternals.REMOTE_CODEX_APP_SERVER_VERSION} fixture`,
+    codexHome: path.resolve(".ambient-codex-home")
+  };
+  await assert.rejects(new CodexCompanionAdapter({
+    transport: wrongHome,
+    codexHome: REMOTE_CODEX_HOME,
+    executionPosture: "remote-read-only"
+  }).connect(), /did not use the dedicated remote Codex home/u);
+  assert.equal(wrongHome.calls.some((call) => call.method === "config/read"), false);
+
+  const wrongVersion = new FakeTransport();
+  wrongVersion.initializeResponse = { userAgent: "gate-cockpit/0.0.0 fixture", codexHome: REMOTE_CODEX_HOME };
+  await assert.rejects(new CodexCompanionAdapter({
+    transport: wrongVersion,
+    codexHome: REMOTE_CODEX_HOME,
+    executionPosture: "remote-read-only"
+  }).connect(), /requires app-server 0\.159\.2/u);
+  assert.equal(wrongVersion.calls.some((call) => call.method === "config/read"), false);
+});
+
+test("remote lifecycle callbacks fail closed before their corresponding app-server request", async () => {
+  const beforeCreate = new FakeTransport();
+  await assert.rejects(new CodexCompanionAdapter({
+    transport: beforeCreate,
+    codexHome: REMOTE_CODEX_HOME,
+    executionPosture: "remote-read-only",
+    beforeThreadCreate: () => { throw new Error("record unavailable"); }
+  }).connect(), /record unavailable/u);
+  assert.equal(beforeCreate.calls.some((call) => call.method === "thread/start"), false);
+
+  const beforeTurn = new FakeTransport();
+  beforeTurn.threadResponse = {
+    approvalPolicy: "never",
+    sandbox: { type: "readOnly", networkAccess: false },
+    thread: { id: "thread-fixture", status: { type: "idle" }, turns: [], environments: [] }
+  };
+  const adapter = new CodexCompanionAdapter({
+    transport: beforeTurn,
+    codexHome: REMOTE_CODEX_HOME,
+    executionPosture: "remote-read-only",
+    beforeFirstTurn: () => { throw new Error("use record unavailable"); }
+  });
+  await adapter.connect();
+  await assert.rejects(adapter.sendMessage(message("Do not dispatch this.")), /use record unavailable/u);
+  assert.equal(beforeTurn.calls.some((call) => call.method === "turn/start"), false);
+
+  assert.throws(() => new CodexCompanionAdapter({
+    beforeThreadCreate: () => {}
+  }), /requires the remote Codex posture/u);
+});
+
+test("remote app-server launch arguments disable every non-host tool source", () => {
+  const args = appServerInternals.REMOTE_APP_SERVER_ARGS;
+  assert.equal(appServerInternals.REMOTE_CODEX_APP_SERVER_VERSION, "0.159.2");
+  assert.deepEqual(args.slice(0, 3), ["app-server", "--stdio", "--strict-config"]);
+  for (const feature of appServerInternals.REMOTE_DISABLED_FEATURES) {
+    const index = args.findIndex((value, position) => value === "--disable" && args[position + 1] === feature);
+    assert.notEqual(index, -1, `missing disabled feature ${feature}`);
+  }
+  assert.ok(args.includes('web_search="disabled"'));
+  assert.ok(args.includes("tools.web_search=false"));
+  assert.ok(args.includes("notify=[]"));
+  assert.ok(args.includes("orchestrator.mcp.enabled=false"));
+  assert.throws(() => new CodexCompanionAdapter({
+    codexHome: REMOTE_CODEX_HOME,
+    executionPosture: "remote-read-only",
+    args: ["app-server", "--stdio"]
+  }), /arguments are fixed/u);
+});
+
+test("remote adapter rejects unconfirmed posture and an active resumed turn", async () => {
+  const unconfirmed = new FakeTransport();
+  unconfirmed.threadResponse = {
+    approvalPolicy: "on-request",
+    sandbox: { type: "workspaceWrite" },
+    thread: { id: "thread-fixture", status: { type: "idle" }, turns: [], environments: [] }
+  };
+  await assert.rejects(
+    new CodexCompanionAdapter({
+      transport: unconfirmed,
+      codexHome: REMOTE_CODEX_HOME,
+      executionPosture: "remote-read-only"
+    }).connect(),
+    /did not confirm the remote read-only posture/u
+  );
+
+  const active = new FakeTransport();
+  active.threadResponse = {
+    approvalPolicy: "never",
+    sandbox: { type: "readOnly", networkAccess: false },
+    thread: {
+      id: "thread-fixture",
+      status: { type: "active" },
+      environments: [],
+      turns: [{ id: "turn-existing", status: "inProgress" }]
+    }
+  };
+  const adapter = new CodexCompanionAdapter({
+    transport: active,
+    threadId: "thread-fixture",
+    codexHome: REMOTE_CODEX_HOME,
+    executionPosture: "remote-read-only"
+  });
+  await assert.rejects(adapter.connect(), /active turn with unknown posture/u);
+  assert.deepEqual(active.calls[3].params, {
+    threadId: "thread-fixture",
+    cwd: process.cwd(),
+    approvalPolicy: "never",
+    sandbox: "read-only"
+  });
+  assert.equal(active.calls.some((call) => call.method === "turn/steer"), false);
+
+  const wrongThread = new FakeTransport();
+  wrongThread.threadResponse = {
+    approvalPolicy: "never",
+    sandbox: { type: "readOnly", networkAccess: false },
+    thread: { id: "thread-different", status: { type: "idle" }, turns: [], environments: [] }
+  };
+  await assert.rejects(new CodexCompanionAdapter({
+    transport: wrongThread,
+    threadId: "thread-fixture",
+    codexHome: REMOTE_CODEX_HOME,
+    executionPosture: "remote-read-only"
+  }).connect(), /resumed a different thread/u);
+  assert.equal(wrongThread.calls.some((call) => call.method === "thread/start"), false);
+});
+
+test("resumed threads hydrate only bounded visible conversation with explicit omissions", async () => {
+  const transport = new FakeTransport();
+  transport.threadResponse = {
+    approvalPolicy: "never",
+    sandbox: { type: "readOnly", networkAccess: false },
+    turnsBackwardsCursor: "older-turns",
+    thread: {
+      id: "thread-fixture",
+      status: { type: "idle" },
+      environments: [],
+      turns: [{
+        id: "turn-history",
+        status: "completed",
+        completedAt: 1_700_000_000,
+        itemsView: "full",
+        items: [
+          { id: "user-1", type: "userMessage", content: [{ type: "text", text: "Previous request" }] },
+          { id: "agent-1", type: "agentMessage", phase: "final_answer", text: "Previous answer" },
+          { id: "agent-long", type: "agentMessage", phase: "final_answer", text: "x".repeat(4_001) },
+          { id: "reasoning-1", type: "reasoning", summary: ["CANARY_REASONING"] }
+        ]
+      }]
+    }
+  };
+  const adapter = new CodexCompanionAdapter({
+    transport,
+    threadId: "thread-fixture",
+    codexHome: REMOTE_CODEX_HOME,
+    executionPosture: "remote-read-only"
+  });
+  await adapter.connect();
+  const conversation = adapter.privateState().conversation;
+  assert.deepEqual(conversation.map((entry) => entry.text), [
+    appServerInternals.HISTORY_UNAVAILABLE_NOTICE,
+    appServerInternals.HISTORY_MESSAGE_OMITTED_NOTICE,
+    "Previous request",
+    "Previous answer"
+  ]);
+  assert.deepEqual(conversation.slice(2).map((entry) => entry.role), ["operator", "codex"]);
+  assert.equal(JSON.stringify(conversation).includes("CANARY_REASONING"), false);
+  assert.equal(conversation[2].at, "2023-11-14T22:13:20.000Z");
+
+  const many = appServerInternals.historyConversation({
+    thread: {
+      turns: [{
+        id: "turn-many",
+        status: "completed",
+        itemsView: "full",
+        items: Array.from({ length: 60 }, (_, index) => ({
+          id: `agent-${index}`,
+          type: "agentMessage",
+          text: `Message ${index}`
+        }))
+      }]
+    }
+  }, "2026-10-18T00:00:00.000Z");
+  assert.equal(many.length, appServerInternals.MAX_CONVERSATION_ENTRIES);
+  assert.equal(many[0].text, appServerInternals.HISTORY_TRUNCATED_NOTICE);
+  assert.equal(many.at(-1).text, "Message 59");
+});
+
+test("adapter emits one closed signal when its app-server transport closes", async () => {
+  const transport = new FakeTransport();
+  const adapter = new CodexCompanionAdapter({ transport });
+  let closed = 0;
+  adapter.on("closed", () => { closed += 1; });
+  await adapter.connect();
+  transport.emit("closed");
+  transport.emit("closed");
+  assert.equal(closed, 1);
+  assert.equal(adapter.privateState().connected, false);
 });
 
 test("adapter projects only categorical tool activity and aggregate tokens", async () => {
@@ -165,6 +504,26 @@ test("adapter exposes final user-visible messages but never reasoning content", 
     item: { type: "agentMessage", id: "answer-2", text: "api_key=CANARY_SECRET_123456789" }
   });
   assert.doesNotMatch(JSON.stringify(adapter.privateState()), /CANARY_SECRET/u);
+
+  transport.emit("notification", "item/completed", {
+    threadId: "thread-fixture",
+    turnId: "turn-1",
+    item: { type: "agentMessage", id: "answer-long", text: "x".repeat(4_001) }
+  });
+  assert.equal(adapter.privateState().conversation.at(-1).text,
+    appServerInternals.HISTORY_MESSAGE_OMITTED_NOTICE);
+
+  for (let index = 0; index < 50; index += 1) {
+    transport.emit("notification", "item/completed", {
+      threadId: "thread-fixture",
+      turnId: "turn-1",
+      item: { type: "agentMessage", id: `bounded-${index}`, text: `Bounded ${index}` }
+    });
+  }
+  const bounded = adapter.privateState().conversation;
+  assert.equal(bounded.length, appServerInternals.MAX_CONVERSATION_ENTRIES);
+  assert.equal(bounded[0].text, appServerInternals.HISTORY_TRUNCATED_NOTICE);
+  assert.equal(bounded.at(-1).text, "Bounded 49");
 });
 
 test("bounded non-secret request_user_input questions can be answered through the adapter", async () => {
@@ -202,6 +561,50 @@ test("bounded non-secret request_user_input questions can be answered through th
     result: { answers: { priority: { answers: ["Deep review (Recommended)"] } } }
   }]);
   assert.equal(adapter.privateState().pendingQuestions.length, 0);
+});
+
+test("a failed question response remains pending and can be retried", async () => {
+  const transport = new FakeTransport();
+  const adapter = new CodexCompanionAdapter({ transport });
+  await adapter.connect();
+  await adapter.sendMessage(message("Ask for a bounded choice."));
+  transport.emit("request", {
+    id: 54,
+    method: "item/tool/requestUserInput",
+    params: {
+      threadId: "thread-fixture",
+      turnId: "turn-1",
+      itemId: "question-retry",
+      isBlocking: true,
+      questions: [{
+        id: "priority",
+        header: "Priority",
+        question: "Which path should Codex take?",
+        options: [
+          { label: "Deep review (Recommended)", description: "Use the reviewed default." },
+          { label: "Pause", description: "Wait for operator review." }
+        ]
+      }]
+    }
+  });
+  const pending = adapter.privateState().pendingQuestions[0];
+  const originalRespond = transport.respond.bind(transport);
+  transport.respond = () => { throw new Error("transport unavailable"); };
+
+  const response = {
+    questionToken: pending.token,
+    answers: { priority: "Deep review (Recommended)" }
+  };
+  await assert.rejects(adapter.answerQuestion(response), /transport unavailable/u);
+  assert.equal(adapter.privateState().pendingQuestions.length, 1);
+
+  transport.respond = originalRespond;
+  await adapter.answerQuestion(response);
+  assert.equal(adapter.privateState().pendingQuestions.length, 0);
+  assert.deepEqual(transport.responses, [{
+    id: 54,
+    result: { answers: { priority: { answers: ["Deep review (Recommended)"] } } }
+  }]);
 });
 
 test("secret, free-form, malformed, and unrelated app-server requests stay out of the cockpit", async () => {

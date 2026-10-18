@@ -292,6 +292,179 @@ export function validateBridgeReceipt(value, requestId) {
   return Object.freeze({ apiVersion: value.apiVersion, requestId: value.requestId, status: value.status });
 }
 
+const REMOTE_REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/u;
+const REMOTE_COMMAND_ID = /^cmd_[A-Za-z0-9_-]{16,128}$/u;
+const REMOTE_CSRF = /^[A-Za-z0-9_-]{43}$/u;
+const REMOTE_CASE_ID = /^[a-z][a-z0-9-]{1,62}$/u;
+const REMOTE_RUNNER_STATES = new Set(["connected", "stale", "offline"]);
+const REMOTE_CODEX_STATES = new Set(["idle", "working", "waiting", "offline"]);
+const REMOTE_CONNECTION_STATES = new Set(["connecting", "connected", "offline", "revoked"]);
+const REMOTE_COMMAND_STATES = new Set(["queued", "leased", "accepted", "running", "completed", "failed", "expired", "cancelled"]);
+const LOCAL_SECRET_PATTERNS = Object.freeze([
+  /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|private[_-]?key|session[_-]?(?:id|key|token))\s*[:=]\s*\S+/iu,
+  /\bbearer\s+[A-Za-z0-9._~+/-]{16,}={0,2}\b/iu,
+  /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/u
+]);
+const REMOTE_SECRET_PATTERNS = Object.freeze([
+  /["']?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|private[_-]?key|session[_-]?(?:id|key|token)|aws[_-]?(?:access[_-]?key[_-]?id|secret[_-]?access[_-]?key)|authorization|cookie|secret)["']?\s*[:=]\s*(?:"[^"\r\n]+"|'[^'\r\n]+'|\S+)/iu,
+  /\b(?:bearer|basic)\s+[A-Za-z0-9._~+/-]{12,}={0,2}\b/iu,
+  /-----BEGIN (?:(?:[A-Z0-9][A-Z0-9 -]* )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----/u,
+  /\b[a-z][a-z0-9+.-]{1,31}:\/\/[^\s/:@]{1,128}:[^\s/@]{1,256}@/iu,
+  /(?:^|\n)\s*(?:authorization|proxy-authorization|cookie|set-cookie)\s*:\s*[^\r\n]+/iu,
+  /(?:\b(?:github_pat_[A-Za-z0-9_]{20,255}|gh[pousr]_[A-Za-z0-9]{20,255}|glpat-[A-Za-z0-9_-]{20,255}|sk-(?:proj-|ant-api\d{2}-)?[A-Za-z0-9_-]{16,255}|(?:sk|rk)_live_[A-Za-z0-9]{16,255}|xox[baprs]-[A-Za-z0-9-]{10,255}|npm_[A-Za-z0-9]{30,255}|pypi-[A-Za-z0-9_-]{30,255}|hf_[A-Za-z0-9]{20,255}|ya29\.[A-Za-z0-9_-]{20,255}|AIza[A-Za-z0-9_-]{35}|(?:AKIA|ASIA)[A-Z0-9]{16})\b|\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b)/u
+]);
+
+function containsLikelyRemoteCredential(value) {
+  return typeof value === "string" && REMOTE_SECRET_PATTERNS.some((pattern) => pattern.test(value));
+}
+
+function containsLikelyLocalCredential(value) {
+  return typeof value === "string" && LOCAL_SECRET_PATTERNS.some((pattern) => pattern.test(value));
+}
+
+export function validateRemoteBridge(value) {
+  if (!exactKeys(value, [
+    "apiVersion", "caseId", "sessionRevision", "reconcileCommands", "submitMessage", "submitQuestion"
+  ])) return null;
+  if (value.apiVersion !== "gate.remote-cockpit-bridge/v1"
+      || typeof value.caseId !== "string" || !REMOTE_CASE_ID.test(value.caseId)
+      || !boundedInteger(value.sessionRevision, 1, 2_147_483_647)
+      || typeof value.reconcileCommands !== "function"
+      || typeof value.submitMessage !== "function"
+      || typeof value.submitQuestion !== "function") return null;
+  return value;
+}
+
+export function validateRemoteSession(value, options = {}) {
+  if (!exactKeys(value, ["apiVersion", "sessionRevision", "csrf", "expiresAt", "caseId"])
+      || value.apiVersion !== "gate.remote-cockpit-session/v1"
+      || !boundedInteger(value.sessionRevision, 1, 2_147_483_647)
+      || typeof value.csrf !== "string" || !REMOTE_CSRF.test(value.csrf)
+      || typeof value.caseId !== "string" || !REMOTE_CASE_ID.test(value.caseId)) return null;
+  const expiresAt = timestamp(value.expiresAt);
+  const now = options.now instanceof Date ? options.now.getTime() : Date.now();
+  if (expiresAt === null || expiresAt <= now) return null;
+  return Object.freeze({ ...value });
+}
+
+export function validateRemoteQueuedReceipt(value, requestId, sessionRevision, options = {}) {
+  if (!exactKeys(value, ["apiVersion", "requestId", "sessionRevision", "commandId", "sequence", "status", "acceptedAt"])
+      || value.apiVersion !== "gate.remote-cockpit-receipt/v1"
+      || value.requestId !== requestId || !REMOTE_REQUEST_ID.test(value.requestId)
+      || value.sessionRevision !== sessionRevision
+      || !REMOTE_COMMAND_ID.test(value.commandId)
+      || !boundedInteger(value.sequence, 1, Number.MAX_SAFE_INTEGER)
+      || value.status !== "queued") return null;
+  const acceptedAt = timestamp(value.acceptedAt);
+  const now = options.now instanceof Date ? options.now.getTime() : Date.now();
+  if (acceptedAt === null || acceptedAt > now + 300_000) return null;
+  return Object.freeze({ ...value });
+}
+
+export function validateRemoteCommandStatusRequest(value, options = {}) {
+  if (!exactKeys(value, ["apiVersion", "caseId", "sessionRevision", "commands"])
+      || value.apiVersion !== "gate.remote-command-status-request/v1"
+      || typeof value.caseId !== "string" || !REMOTE_CASE_ID.test(value.caseId)
+      || !boundedInteger(value.sessionRevision, 1, 2_147_483_647)
+      || options.caseId !== undefined && value.caseId !== options.caseId
+      || options.sessionRevision !== undefined && value.sessionRevision !== options.sessionRevision
+      || !Array.isArray(value.commands) || value.commands.length < 1 || value.commands.length > 16) return null;
+  const requestIds = new Set();
+  const commandIds = new Set();
+  const commands = [];
+  for (const reference of value.commands) {
+    if (!exactKeys(reference, ["requestId", "commandId"])
+        || !REMOTE_REQUEST_ID.test(reference.requestId) || !REMOTE_COMMAND_ID.test(reference.commandId)
+        || requestIds.has(reference.requestId) || commandIds.has(reference.commandId)) return null;
+    requestIds.add(reference.requestId);
+    commandIds.add(reference.commandId);
+    commands.push(Object.freeze({ ...reference }));
+  }
+  return Object.freeze({ ...value, commands: Object.freeze(commands) });
+}
+
+export function validateRemoteCommandStatusResponse(value, request) {
+  const expected = validateRemoteCommandStatusRequest(request);
+  if (!expected || !exactKeys(value, ["apiVersion", "caseId", "sessionRevision", "commands"])
+      || value.apiVersion !== "gate.remote-command-status-response/v1"
+      || value.caseId !== expected.caseId || value.sessionRevision !== expected.sessionRevision
+      || !Array.isArray(value.commands) || value.commands.length > expected.commands.length) return null;
+  const expectedPairs = new Set(expected.commands.map((reference) => `${reference.requestId}\0${reference.commandId}`));
+  const seen = new Set();
+  const commands = [];
+  for (const status of value.commands) {
+    const key = `${status?.requestId}\0${status?.commandId}`;
+    if (!exactKeys(status, ["requestId", "commandId", "state"])
+        || !expectedPairs.has(key) || seen.has(key) || !REMOTE_COMMAND_STATES.has(status.state)) return null;
+    seen.add(key);
+    commands.push(Object.freeze({ ...status }));
+  }
+  return Object.freeze({ ...value, commands: Object.freeze(commands) });
+}
+
+export async function readRemoteJsonResponse(response, maximumBytes) {
+  if (!response || response.ok !== true || response.redirected === true
+      || !boundedInteger(maximumBytes, 1, 2 * 1024 * 1024)) return null;
+  const contentType = response.headers?.get?.("content-type") ?? "";
+  if (!/^application\/json(?:\s*;|$)/iu.test(contentType)) return null;
+  const contentLength = response.headers?.get?.("content-length");
+  if (contentLength !== null) {
+    if (!/^\d+$/u.test(contentLength)) return null;
+    const declared = Number(contentLength);
+    if (!Number.isSafeInteger(declared) || declared > maximumBytes) return null;
+  }
+  let text;
+  try {
+    text = await response.text();
+  } catch {
+    return null;
+  }
+  if (new TextEncoder().encode(text).byteLength > maximumBytes) return null;
+  try {
+    const value = JSON.parse(text);
+    return record(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+export function parseRemoteSseFrame(frame, maximumBytes = 136 * 1024) {
+  if (typeof frame !== "string" || !boundedInteger(maximumBytes, 1, 160 * 1024)
+      || new TextEncoder().encode(frame).byteLength > maximumBytes) return null;
+  let id = null;
+  let name = "message";
+  let eventSeen = false;
+  let data = null;
+  for (const rawLine of frame.replace(/\r\n/gu, "\n").split("\n")) {
+    if (rawLine === "" || rawLine.startsWith(":") || rawLine.startsWith("retry:")) continue;
+    if (rawLine.startsWith("id: ")) {
+      const candidate = rawLine.slice(4);
+      if (id !== null || !/^(?:0|[1-9]\d{0,15})$/u.test(candidate)) return null;
+      id = Number(candidate);
+      if (!Number.isSafeInteger(id)) return null;
+      continue;
+    }
+    if (rawLine.startsWith("event: ")) {
+      if (eventSeen) return null;
+      eventSeen = true;
+      name = rawLine.slice(7);
+      continue;
+    }
+    if (rawLine.startsWith("data: ")) {
+      if (data !== null) return null;
+      data = rawLine.slice(6);
+      continue;
+    }
+    return null;
+  }
+  if (data === null || !new Set(["ready", "resync", "activity", "command", "state", "fleet", "revoked"]).has(name)) return null;
+  if (name === "ready" ? id !== null : id === null) return null;
+  let value;
+  try { value = JSON.parse(data); } catch { return null; }
+  if (!record(value)) return null;
+  return Object.freeze({ id, name, value });
+}
+
 export function validateOperatorMessage(value) {
   if (typeof value !== "string") return Object.freeze({ valid: false });
   const message = value.normalize("NFC").replace(/\r\n?/g, "\n").trim();
@@ -299,12 +472,18 @@ export function validateOperatorMessage(value) {
   const bytes = new TextEncoder().encode(message).byteLength;
   if (length < 1 || length > 1_000 || bytes > 4_096 || message.split("\n").length > 12
     || /[\u0000-\u0009\u000B\u000C\u000E-\u001F\u007F-\u009F\u202A-\u202E\u2066-\u2069]/u.test(message)
-    || /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|private[_-]?key|session[_-]?(?:id|key|token))\s*[:=]\s*\S+/iu.test(message)
-    || /\bbearer\s+[A-Za-z0-9._~+/-]{16,}={0,2}\b/iu.test(message)
-    || /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/u.test(message)) {
+    || containsLikelyLocalCredential(message)) {
     return Object.freeze({ valid: false });
   }
   return Object.freeze({ valid: true, message, length, bytes });
+}
+
+export function validateRemoteOperatorMessage(value) {
+  const result = validateOperatorMessage(value);
+  if (!result.valid || containsLikelyRemoteCredential(result.message)) {
+    return Object.freeze({ valid: false });
+  }
+  return result;
 }
 
 const LOCAL_TURNS = new Set(["idle", "working", "waiting"]);
@@ -331,6 +510,20 @@ function safeLocalText(value, maximum, maximumBytes = maximum * 4) {
   return typeof value === "string" && [...value].length >= 1 && [...value].length <= maximum
     && new TextEncoder().encode(value).byteLength <= maximumBytes
     && !/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u202A-\u202E\u2066-\u2069]/u.test(value);
+}
+
+function safeRemoteProjectionText(value, maximumLines) {
+  return value === value.normalize("NFC").replace(/\r\n?/gu, "\n").trim()
+    && value.split("\n").length <= maximumLines
+    && !containsLikelyRemoteCredential(value);
+}
+
+function boundedProjection(value) {
+  try {
+    return new TextEncoder().encode(JSON.stringify(value)).byteLength <= 128 * 1024;
+  } catch {
+    return false;
+  }
 }
 
 function validateTokenCost(value) {
@@ -437,6 +630,57 @@ export function validateLocalCompanionState(value, options = {}) {
   });
 }
 
+export function validateRemoteState(value, options = {}) {
+  if (!exactKeys(value, [
+    "apiVersion", "sessionRevision", "stateRevision", "observedAt", "validUntil", "runner", "codex", "tokens", "conversation", "pendingQuestions"
+  ]) || value.apiVersion !== "gate.remote-cockpit-state/v1"
+      || !exactKeys(value.runner, ["state", "observedAt"])
+      || !REMOTE_RUNNER_STATES.has(value.runner.state)
+      || !exactKeys(value.codex, ["state"])
+      || !REMOTE_CODEX_STATES.has(value.codex.state)) return null;
+  if (options.sessionRevision !== undefined && value.sessionRevision !== options.sessionRevision) return null;
+  const observedAt = timestamp(value.observedAt);
+  const validUntil = timestamp(value.validUntil);
+  const runnerObservedAt = timestamp(value.runner.observedAt);
+  if (observedAt === null || validUntil === null || runnerObservedAt === null
+      || runnerObservedAt > observedAt || validUntil <= observedAt || validUntil > observedAt + 300_000) return null;
+
+  const common = validateLocalCompanionState({
+    apiVersion: "gate.local-companion-state/v1",
+    sessionRevision: value.sessionRevision,
+    stateRevision: value.stateRevision,
+    observedAt: value.observedAt,
+    connected: value.runner.state === "connected",
+    turn: value.codex.state === "offline" ? "idle" : value.codex.state,
+    tokens: value.tokens,
+    conversation: value.conversation,
+    pendingQuestions: value.pendingQuestions
+  }, options);
+  if (!common) return null;
+  if (!common.conversation.every((entry) => safeRemoteProjectionText(entry.text, 24))
+      || !common.pendingQuestions.every((pending) => pending.questions.every((question) =>
+        safeRemoteProjectionText(question.header, 1)
+          && safeRemoteProjectionText(question.question, 12)
+          && question.options.every((option) => safeRemoteProjectionText(option.label, 2)
+            && safeRemoteProjectionText(option.description, 6))))
+      || !boundedProjection(value)) return null;
+  return Object.freeze({
+    ...value,
+    runner: Object.freeze({ ...value.runner }),
+    codex: Object.freeze({ ...value.codex }),
+    tokens: common.tokens,
+    conversation: common.conversation,
+    pendingQuestions: common.pendingQuestions
+  });
+}
+
+export const validateRemoteCompanionState = validateRemoteState;
+
+export function remoteStateIsFresh(value, options = {}) {
+  const now = options.now instanceof Date ? options.now.getTime() : Date.now();
+  return Boolean(value && timestamp(value.validUntil) !== null && now < timestamp(value.validUntil));
+}
+
 export function validateLocalActivityEvent(value) {
   if (!exactKeys(value, ["apiVersion", "sequence", "at", "category", "state", "completed", "total", "tokens"])
     || value.apiVersion !== "gate.local-cockpit-event/v1" || !boundedInteger(value.sequence, 1, 2_147_483_647)
@@ -449,6 +693,37 @@ export function validateLocalActivityEvent(value) {
     || !boundedInteger(value.tokens.total, 0, 1_000_000_000)
     || !(value.tokens.contextWindow === null || boundedInteger(value.tokens.contextWindow, 1, 1_000_000_000)))) return null;
   return Object.freeze({ ...value, tokens: value.tokens === null ? null : Object.freeze({ ...value.tokens }) });
+}
+
+export function validateRemoteActivityEvent(value) {
+  if (!record(value) || value.apiVersion !== "gate.remote-cockpit-event/v1") return null;
+  const local = validateLocalActivityEvent({ ...value, apiVersion: "gate.local-cockpit-event/v1" });
+  return local && boundedProjection(value) ? Object.freeze({ ...local, apiVersion: value.apiVersion }) : null;
+}
+
+export function validateRemoteConnection(value, options = {}) {
+  if (!exactKeys(value, ["apiVersion", "state", "at"])
+      || value.apiVersion !== "gate.remote-cockpit-connection/v1"
+      || !REMOTE_CONNECTION_STATES.has(value.state)) return null;
+  const at = timestamp(value.at);
+  const now = options.now instanceof Date ? options.now.getTime() : Date.now();
+  if (at === null || at > now + 300_000) return null;
+  return Object.freeze({ ...value });
+}
+
+export function validateRemoteCommandEvent(value, options = {}) {
+  if (!exactKeys(value, ["apiVersion", "sequence", "at", "requestId", "commandId", "state"])
+      || value.apiVersion !== "gate.remote-command-event/v1"
+      || !boundedInteger(value.sequence, 1, Number.MAX_SAFE_INTEGER)
+      || !REMOTE_REQUEST_ID.test(value.requestId)
+      || !REMOTE_COMMAND_ID.test(value.commandId)
+      || !REMOTE_COMMAND_STATES.has(value.state)) return null;
+  const at = timestamp(value.at);
+  const now = options.now instanceof Date ? options.now.getTime() : Date.now();
+  const acceptedAt = options.acceptedAt === undefined ? null : timestamp(options.acceptedAt);
+  if (at === null || at > now + 300_000
+      || (options.acceptedAt !== undefined && (acceptedAt === null || at < acceptedAt))) return null;
+  return Object.freeze({ ...value });
 }
 
 function validateFleetMetric(value) {
@@ -559,6 +834,22 @@ export function validateLocalFleet(value, options = {}) {
     summary: Object.freeze(summary),
     campaigns: Object.freeze(campaigns)
   });
+}
+
+export function validateRemoteFleet(value, options = {}) {
+  if (!record(value) || value.apiVersion !== "gate.remote-fleet/v1") return null;
+  if (!exactKeys(value, [
+    "apiVersion", "sessionRevision", "revision", "observedAt", "receivedAt", "connection", "sourceFreshness", "coverage", "summary", "campaigns"
+  ]) || !boundedInteger(value.sessionRevision, 1, 2_147_483_647)
+      || options.sessionRevision !== undefined && value.sessionRevision !== options.sessionRevision) return null;
+  const { sessionRevision, ...withoutSession } = value;
+  const local = validateLocalFleet({ ...withoutSession, apiVersion: "gate.local-fleet/v1" }, options);
+  return local && boundedProjection(value) ? Object.freeze({ ...local, apiVersion: value.apiVersion, sessionRevision }) : null;
+}
+
+export function validateRemoteRevocation(value) {
+  if (!exactKeys(value, ["apiVersion"]) || value.apiVersion !== "gate.remote-revocation/v1") return null;
+  return Object.freeze({ ...value });
 }
 
 export const publicCockpitModel = Object.freeze({

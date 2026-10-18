@@ -3,9 +3,12 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   hasAvailableFleetMetric,
+  parseRemoteSseFrame,
   parsePublicSnapshot,
   publicCockpitModel,
   readPublicSnapshotResponse,
+  readRemoteJsonResponse,
+  remoteStateIsFresh,
   toDisplayModel
 } from "../assets/model.js";
 
@@ -22,7 +25,7 @@ test("accepts the exact gate.public-cockpit/v1 fixture", async () => {
   assert.equal(parsed.campaigns.length, 2);
   assert.equal(toDisplayModel(parsed).waitingCount, 1);
   assert.equal(toDisplayModel(parsed).mode, "preview");
-  assert.equal(toDisplayModel(parsed).siteVersion, "0.3.0");
+  assert.equal(toDisplayModel(parsed).siteVersion, "0.4.0");
   assert.equal(toDisplayModel(parsed).gateVersion, "0.1.2");
 });
 
@@ -128,7 +131,7 @@ test("decision choices are bounded enums with one in-list recommendation", async
 });
 
 test("bridge, messages, and receipts use exact bounded contracts", async () => {
-  const { validateLocalBridge, validateBridgeReceipt, validateOperatorMessage } = await import("../assets/model.js");
+  const { validateLocalBridge, validateBridgeReceipt, validateOperatorMessage, validateRemoteOperatorMessage } = await import("../assets/model.js");
   const submitMessage = async () => undefined;
   const submitQuestion = async () => undefined;
   const bridge = { apiVersion: "gate.local-cockpit-bridge/v1", submitMessage, submitQuestion };
@@ -138,8 +141,20 @@ test("bridge, messages, and receipts use exact bounded contracts", async () => {
 
   assert.deepEqual(validateOperatorMessage("  hello\r\nGiovanni  "), { valid: true, message: "hello\nGiovanni", length: 14, bytes: 14 });
   assert.equal(validateOperatorMessage("Review https://example.test/program").valid, true);
-  for (const invalid of ["", "x".repeat(1_001), `${"a\n".repeat(12)}b`, "bad\u0000text", "bad\u202Etext", "api_key=CANARY_CREDENTIAL_123456789", "Bearer abcdefghijklmnopqrstuvwxyz", "😀".repeat(1_001)]) {
+  for (const invalid of [
+    "", "x".repeat(1_001), `${"a\n".repeat(12)}b`, "bad\u0000text", "bad\u202Etext",
+    "api_key=CANARY_CREDENTIAL_123456789", "password=fixture",
+    "Bearer abcdefghijklmnopqrstuvwxyz", "-----BEGIN OPENSSH PRIVATE KEY-----", "😀".repeat(1_001)
+  ]) {
     assert.equal(validateOperatorMessage(invalid).valid, false);
+  }
+  for (const invalid of [
+    "Basic abcdefghijklmnopqrstuvwxyz",
+    `ghp_${"A".repeat(36)}`,
+    "https://fixture-user:fixture-password@example.test/path",
+    `Cookie: session=${"a".repeat(32)}`
+  ]) {
+    assert.equal(validateRemoteOperatorMessage(invalid).valid, false);
   }
 
   const requestId = "req_123";
@@ -257,4 +272,177 @@ test("fleet attention remains unavailable while private state arrives before fle
   assert.equal(hasAvailableFleetMetric(null), false);
   assert.equal(hasAvailableFleetMetric({ value: null, precision: "unavailable" }), false);
   assert.equal(hasAvailableFleetMetric({ value: 0, precision: "exact" }), true);
+});
+
+function remoteState(overrides = {}) {
+  return {
+    apiVersion: "gate.remote-cockpit-state/v1",
+    sessionRevision: 9,
+    stateRevision: 4,
+    observedAt: "2026-10-16T12:00:00.000Z",
+    validUntil: "2026-10-16T12:05:00.000Z",
+    runner: { state: "connected", observedAt: "2026-10-16T12:00:00.000Z" },
+    codex: { state: "waiting" },
+    tokens: null,
+    conversation: [{ role: "codex", text: "Choose a path.", at: "2026-10-16T12:00:00.000Z" }],
+    pendingQuestions: [],
+    ...overrides
+  };
+}
+
+function unavailableRemoteFleet(overrides = {}) {
+  const unavailable = () => ({ value: null, precision: "unavailable" });
+  const scan = (profile = false) => ({
+    availability: "unavailable", discovered: null, scanned: null, omitted: null, invalid: null,
+    discoveredAtLeast: false, omittedAtLeast: false, complete: false, truncated: true,
+    ...(profile ? { visible: null, representedByCases: null } : {})
+  });
+  return {
+    apiVersion: "gate.remote-fleet/v1", sessionRevision: 9, revision: 1,
+    observedAt: null, receivedAt: "2026-10-16T12:00:00.000Z",
+    connection: "unavailable", sourceFreshness: "unavailable",
+    coverage: { state: "unavailable", cases: scan(), profiles: scan(true) },
+    summary: {
+      campaigns: unavailable(), active: unavailable(), waiting: unavailable(), attention: unavailable(),
+      profileAnswers: { answered: null, total: null, precision: "unavailable" },
+      runningExecutions: unavailable(), activeWorkflows: unavailable(), runningAnalyses: unavailable(), setupBlockers: unavailable(),
+      campaignTokens: { availability: "unavailable", total: null },
+      hostTokens: {
+        availability: "unavailable", input: null, cachedInput: null, output: null, total: null,
+        cost: { availability: "unavailable", amountMicros: null, unit: null }
+      }
+    },
+    campaigns: [],
+    ...overrides
+  };
+}
+
+test("remote live contracts are exact, session-bound, and freshness-bounded", async () => {
+  const {
+    validateRemoteActivityEvent,
+    validateRemoteBridge,
+    validateRemoteCommandEvent,
+    validateRemoteCommandStatusRequest,
+    validateRemoteCommandStatusResponse,
+    validateRemoteConnection,
+    validateRemoteFleet,
+    validateRemoteQueuedReceipt,
+    validateRemoteSession,
+    validateRemoteState
+  } = await import("../assets/model.js");
+  const submitMessage = async () => undefined;
+  const submitQuestion = async () => undefined;
+  const reconcileCommands = async () => undefined;
+  const bridge = {
+    apiVersion: "gate.remote-cockpit-bridge/v1", caseId: "alpha-case", sessionRevision: 9,
+    reconcileCommands, submitMessage, submitQuestion
+  };
+  assert.equal(validateRemoteBridge(bridge), bridge);
+  assert.equal(validateRemoteBridge({ ...bridge, caseId: "INVALID CASE" }), null);
+  assert.equal(validateRemoteBridge({ ...bridge, endpoint: "CANARY" }), null);
+
+  const session = {
+    apiVersion: "gate.remote-cockpit-session/v1", sessionRevision: 9,
+    csrf: "a".repeat(43), expiresAt: "2026-10-16T13:00:00.000Z", caseId: "alpha-case"
+  };
+  assert.equal(validateRemoteSession(session, { now })?.caseId, "alpha-case");
+  assert.equal(validateRemoteSession({ ...session, csrf: "short" }, { now }), null);
+  assert.equal(validateRemoteSession({ ...session, extra: true }, { now }), null);
+
+  const state = remoteState();
+  assert.equal(validateRemoteState(state, { now, sessionRevision: 9 })?.codex.state, "waiting");
+  assert.equal(validateRemoteState(state, { now, sessionRevision: 8 }), null);
+  assert.equal(validateRemoteState({ ...state, privateReasoning: "CANARY" }, { now }), null);
+  assert.equal(validateRemoteState({ ...state, validUntil: "2026-10-16T12:05:00.001Z" }, { now }), null);
+  assert.equal(remoteStateIsFresh(state, { now: new Date("2026-10-16T12:04:59.000Z") }), true);
+  assert.equal(remoteStateIsFresh(state, { now: new Date("2026-10-16T12:05:00.000Z") }), false);
+  assert.equal(remoteStateIsFresh(state, { now: new Date("2026-10-16T12:05:00.001Z") }), false);
+
+  const fleet = unavailableRemoteFleet();
+  assert.equal(validateRemoteFleet(fleet, { now, sessionRevision: 9 })?.sessionRevision, 9);
+  assert.equal(validateRemoteFleet(fleet, { now, sessionRevision: 10 }), null);
+  assert.equal(validateRemoteFleet({ ...fleet, privateCase: "CANARY" }, { now }), null);
+
+  const activity = {
+    apiVersion: "gate.remote-cockpit-event/v1", sequence: 12, at: "2026-10-16T12:00:00.000Z",
+    category: "testing", state: "progress", completed: 1, total: 2, tokens: null
+  };
+  assert.equal(validateRemoteActivityEvent(activity)?.sequence, 12);
+  assert.equal(validateRemoteActivityEvent({ ...activity, output: "CANARY" }), null);
+
+  assert.equal(validateRemoteConnection({
+    apiVersion: "gate.remote-cockpit-connection/v1", state: "connected", at: "2026-10-16T12:00:00.000Z"
+  }, { now })?.state, "connected");
+  assert.equal(validateRemoteConnection({
+    apiVersion: "gate.remote-cockpit-connection/v1", state: "unknown", at: "2026-10-16T12:00:00.000Z"
+  }, { now }), null);
+
+  const requestId = "req_00000000-0000-4000-8000-000000000000";
+  const receipt = {
+    apiVersion: "gate.remote-cockpit-receipt/v1", requestId, sessionRevision: 9,
+    commandId: `cmd_${"a".repeat(36)}`, sequence: 3, status: "queued", acceptedAt: "2026-10-16T12:00:00.000Z"
+  };
+  assert.equal(validateRemoteQueuedReceipt(receipt, requestId, 9, { now })?.status, "queued");
+  assert.equal(validateRemoteQueuedReceipt({ ...receipt, delivered: true }, requestId, 9, { now }), null);
+  const command = {
+    apiVersion: "gate.remote-command-event/v1", sequence: 13, at: "2026-10-16T12:00:01.000Z",
+    requestId, commandId: receipt.commandId, state: "running"
+  };
+  assert.equal(validateRemoteCommandEvent(command, { now, acceptedAt: receipt.acceptedAt })?.state, "running");
+  assert.equal(validateRemoteCommandEvent({ ...command, at: "2026-10-16T11:59:59.000Z" }, { now, acceptedAt: receipt.acceptedAt }), null);
+
+  const statusRequest = {
+    apiVersion: "gate.remote-command-status-request/v1",
+    caseId: "alpha-case",
+    sessionRevision: 9,
+    commands: [{ requestId, commandId: receipt.commandId }]
+  };
+  assert.equal(validateRemoteCommandStatusRequest(statusRequest, {
+    caseId: "alpha-case", sessionRevision: 9
+  })?.commands.length, 1);
+  const statusResponse = {
+    apiVersion: "gate.remote-command-status-response/v1",
+    caseId: "alpha-case",
+    sessionRevision: 9,
+    commands: [{ requestId, commandId: receipt.commandId, state: "completed" }]
+  };
+  assert.equal(validateRemoteCommandStatusResponse(statusResponse, statusRequest)?.commands[0].state, "completed");
+  assert.equal(validateRemoteCommandStatusResponse({
+    ...statusResponse,
+    commands: [{ requestId, commandId: `cmd_${"b".repeat(36)}`, state: "completed" }]
+  }, statusRequest), null);
+});
+
+test("remote JSON boundary rejects redirects, types, malformed lengths, and oversized bodies", async () => {
+  const valid = new Response('{"ok":true}', { headers: { "content-type": "application/json" } });
+  assert.deepEqual(await readRemoteJsonResponse(valid, 64), { ok: true });
+  const samples = [
+    new Response('{"ok":true}', { headers: { "content-type": "text/html" } }),
+    new Response("{", { headers: { "content-type": "application/json" } }),
+    new Response('"scalar"', { headers: { "content-type": "application/json" } }),
+    new Response(" ".repeat(65), { headers: { "content-type": "application/json" } }),
+    new Response('{"ok":true}', { status: 500, headers: { "content-type": "application/json" } })
+  ];
+  for (const response of samples) assert.equal(await readRemoteJsonResponse(response, 64), null);
+  const redirected = new Response('{"ok":true}', { headers: { "content-type": "application/json" } });
+  Object.defineProperty(redirected, "redirected", { value: true });
+  assert.equal(await readRemoteJsonResponse(redirected, 64), null);
+});
+
+test("remote SSE frames use exact bounded cursor and control contracts", () => {
+  assert.deepEqual(parseRemoteSseFrame(
+    'event: ready\ndata: {"apiVersion":"gate.remote-events-ready/v1","cursor":4}'
+  ), {
+    id: null, name: "ready", value: { apiVersion: "gate.remote-events-ready/v1", cursor: 4 }
+  });
+  assert.deepEqual(parseRemoteSseFrame(
+    'id: 2\nevent: resync\ndata: {"apiVersion":"gate.remote-resync/v1","cursor":2}'
+  ), {
+    id: 2, name: "resync", value: { apiVersion: "gate.remote-resync/v1", cursor: 2 }
+  });
+  assert.equal(parseRemoteSseFrame('id: 2\nevent: ready\ndata: {"cursor":2}'), null);
+  assert.equal(parseRemoteSseFrame('event: activity\ndata: {}'), null);
+  assert.equal(parseRemoteSseFrame('id: 01\nevent: activity\ndata: {}'), null);
+  assert.equal(parseRemoteSseFrame('id: 1\nevent: activity\ndata: {}\ndata: {}'), null);
+  assert.equal(parseRemoteSseFrame(`id: 1\nevent: activity\ndata: {"x":"${"a".repeat(200)}"}`, 64), null);
 });
