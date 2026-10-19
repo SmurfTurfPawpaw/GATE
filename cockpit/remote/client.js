@@ -32,6 +32,7 @@ let bridge = null;
 let streamAbort = null;
 let pollTimer = null;
 let stateDeadlineTimer = null;
+let fleetDeadlineTimer = null;
 let lastCursor = 0;
 let latestStateRevision = -1;
 let latestFleetRevision = -1;
@@ -81,8 +82,10 @@ function connection(state) {
 function clearTimers() {
   if (pollTimer !== null) globalThis.clearInterval(pollTimer);
   if (stateDeadlineTimer !== null) globalThis.clearTimeout(stateDeadlineTimer);
+  if (fleetDeadlineTimer !== null) globalThis.clearTimeout(fleetDeadlineTimer);
   pollTimer = null;
   stateDeadlineTimer = null;
+  fleetDeadlineTimer = null;
 }
 
 function projectionUnavailable(projection) {
@@ -92,10 +95,14 @@ function projectionUnavailable(projection) {
     : latestFleet !== null;
   if (stateUnavailable) {
     if (stateDeadlineTimer !== null) globalThis.clearTimeout(stateDeadlineTimer);
+    if (fleetDeadlineTimer !== null) globalThis.clearTimeout(fleetDeadlineTimer);
     stateDeadlineTimer = null;
+    fleetDeadlineTimer = null;
     latestState = null;
     latestFleet = null;
   } else {
+    if (fleetDeadlineTimer !== null) globalThis.clearTimeout(fleetDeadlineTimer);
+    fleetDeadlineTimer = null;
     latestFleet = null;
   }
   if (!changed) return;
@@ -105,6 +112,16 @@ function projectionUnavailable(projection) {
       projection
     })
   }));
+}
+
+function scheduleFleetDeadline(value) {
+  if (fleetDeadlineTimer !== null) globalThis.clearTimeout(fleetDeadlineTimer);
+  const delay = Math.max(0, Date.parse(value.validUntil) - Date.now());
+  fleetDeadlineTimer = globalThis.setTimeout(() => {
+    fleetDeadlineTimer = null;
+    if (latestFleet !== value) return;
+    projectionUnavailable("fleet");
+  }, delay);
 }
 
 function scheduleStateDeadline(value) {
@@ -224,10 +241,22 @@ async function readFleet() {
   }
 }
 
-function acceptFleet(input) {
-  const value = validateRemoteFleet(input, {
+function acceptFleet(input, options = {}) {
+  let value = validateRemoteFleet(input, {
     sessionRevision: session.sessionRevision
   });
+  let expiredReplay = false;
+  if (!value && options.allowExpiredReplay === true) {
+    const receivedAt = typeof input?.receivedAt === "string" ? Date.parse(input.receivedAt) : NaN;
+    const validUntil = typeof input?.validUntil === "string" ? Date.parse(input.validUntil) : NaN;
+    if (!Number.isFinite(receivedAt) || !Number.isFinite(validUntil) || validUntil > Date.now()) return false;
+    value = validateRemoteFleet(input, {
+      sessionRevision: session.sessionRevision,
+      now: new Date(receivedAt)
+    });
+    if (!value) return false;
+    expiredReplay = true;
+  }
   if (!value) return false;
   if (!latestState || !remoteStateIsFresh(latestState)) {
     projectionUnavailable("state");
@@ -235,10 +264,18 @@ function acceptFleet(input) {
   }
   if (value.revision < latestFleetRevision) return true;
   if (value.revision === latestFleetRevision && latestFleet !== null) {
-    return sameProjection(value, latestFleet);
+    if (!sameProjection(value, latestFleet)) return false;
+    if (expiredReplay) projectionUnavailable("fleet");
+    return true;
+  }
+  if (expiredReplay) {
+    latestFleetRevision = value.revision;
+    projectionUnavailable("fleet");
+    return true;
   }
   latestFleetRevision = value.revision;
   latestFleet = value;
+  scheduleFleetDeadline(value);
   globalThis.dispatchEvent(new CustomEvent("gate:remote-fleet", { detail: value }));
   return true;
 }
@@ -397,7 +434,7 @@ async function dispatchFrame(decoded, options = {}) {
   } else if (decoded.name === "state") {
     if (!acceptState(decoded.value)) return false;
   } else if (decoded.name === "fleet") {
-    if (!acceptFleet(decoded.value)) return false;
+    if (!acceptFleet(decoded.value, { allowExpiredReplay: true })) return false;
   } else {
     value = validateRemoteRevocation(decoded.value);
     if (!value) return false;

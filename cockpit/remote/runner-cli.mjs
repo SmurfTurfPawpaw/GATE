@@ -11,6 +11,7 @@ import {
   REMOTE_CODEX_APP_SERVER_VERSION,
   REMOTE_READ_ONLY_EXECUTION_POSTURE
 } from "../companion/app-server.mjs";
+import { ActivityStore } from "../companion/activity.mjs";
 import { createGateFleetProvider, gateFleetInternals } from "../companion/gate-fleet.mjs";
 import { RemoteCockpitRunner } from "./runner.mjs";
 
@@ -592,19 +593,21 @@ async function run(options) {
       cwd,
       codexHome
     });
-    const resumeThreadId = threadRecord.threadId;
-    adapter = new CodexCompanionAdapter({
+    const activityStore = new ActivityStore();
+    const createAdapter = () => new CodexCompanionAdapter({
       cwd,
       ephemeral: false,
-      threadId: resumeThreadId,
+      threadId: threadRecord.threadId,
       executionPosture: REMOTE_READ_ONLY_EXECUTION_POSTURE,
       codexHome,
       command: codexLaunch.command,
       environment: codexLaunch.environment,
+      activityStore,
       beforeThreadCreate: () => threadRecord.begin(),
       afterThreadCreate: (threadId) => threadRecord.provisional(threadId),
       beforeFirstTurn: (threadId) => threadRecord.markUsed(threadId)
     });
+    adapter = createAdapter();
     runner = new RemoteCockpitRunner({
       controlPlaneUrl: options.controlPlaneUrl,
       runnerId: options.runnerId,
@@ -613,6 +616,7 @@ async function run(options) {
       privateKey,
       journalDirectory,
       adapter,
+      adapterFactory: createAdapter,
       fleetProvider
     });
     await adapter.connect();

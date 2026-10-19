@@ -1,0 +1,306 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/ctf-pilot-state.schema.json",
+  "title": "GATE private CTF pilot state",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "apiVersion", "kind", "metadata", "solving", "learning", "cockpit", "integrity"],
+  "properties": {
+    "$schema": { "const": "https://gate.local/schemas/ctf-pilot-state.schema.json" },
+    "apiVersion": { "const": "gate.dev/ctf-pilot-state/v1" },
+    "kind": { "const": "CtfPilotState" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "caseId", "revision", "updatedAt", "validUntil", "producer"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "caseId": { "$ref": "#/$defs/id" },
+        "revision": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "validUntil": { "type": "string", "format": "date-time" },
+        "producer": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "campaignId", "generation"],
+              "properties": {
+                "kind": { "const": "campaign-worker" },
+                "campaignId": { "$ref": "#/$defs/id" },
+                "generation": { "type": "string", "pattern": "^[a-f0-9]{32}$" }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "solving": { "$ref": "#/$defs/solvingAxis" },
+    "learning": { "$ref": "#/$defs/learningAxis" },
+    "cockpit": { "$ref": "#/$defs/cockpitAxis" },
+    "integrity": { "$ref": "#/$defs/integrityAxis" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$" },
+    "metric": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["availability", "value"],
+          "properties": {
+            "availability": { "const": "available" },
+            "value": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["availability", "value"],
+          "properties": {
+            "availability": { "const": "unavailable" },
+            "value": { "type": "null" }
+          }
+        }
+      ]
+    },
+    "objectiveProgress": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["availability", "completed", "total"],
+          "properties": {
+            "availability": { "const": "available" },
+            "completed": { "type": "integer", "minimum": 0, "maximum": 1000000000 },
+            "total": { "type": "integer", "minimum": 1, "maximum": 1000000000 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["availability", "completed", "total"],
+          "properties": {
+            "availability": { "const": "unavailable" },
+            "completed": { "type": "null" },
+            "total": { "type": "null" }
+          }
+        }
+      ]
+    },
+    "depth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["level", "branchesExplored", "techniquesAttempted", "deadEndsRetired"],
+      "properties": {
+        "level": { "enum": ["unavailable", "baseline", "systematic", "deep"] },
+        "branchesExplored": { "$ref": "#/$defs/metric" },
+        "techniquesAttempted": { "$ref": "#/$defs/metric" },
+        "deadEndsRetired": { "$ref": "#/$defs/metric" }
+      }
+    },
+    "efficiency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["elapsedSeconds", "activeSeconds", "tokens", "toolRuns", "requests", "retries"],
+      "properties": {
+        "elapsedSeconds": { "$ref": "#/$defs/metric" },
+        "activeSeconds": { "$ref": "#/$defs/metric" },
+        "tokens": { "$ref": "#/$defs/metric" },
+        "toolRuns": { "$ref": "#/$defs/metric" },
+        "requests": { "$ref": "#/$defs/metric" },
+        "retries": { "$ref": "#/$defs/metric" }
+      }
+    },
+    "solvingCompletion": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "reproduction", "externalAcceptance"],
+          "properties": {
+            "state": { "enum": ["complete", "incomplete", "unknown"] },
+            "reproduction": { "enum": ["confirmed", "not-confirmed", "not-applicable", "unknown"] },
+            "externalAcceptance": { "enum": ["accepted", "pending", "rejected", "not-applicable", "unknown"] }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "reproduction", "externalAcceptance"],
+          "properties": {
+            "state": { "type": "null" },
+            "reproduction": { "type": "null" },
+            "externalAcceptance": { "type": "null" }
+          }
+        }
+      ]
+    },
+    "solvingAxis": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["availability", "verdict", "now", "actionNeeded", "updatedAt", "completion", "objectives", "depth", "efficiency"],
+          "properties": {
+            "availability": { "const": "available" },
+            "verdict": { "enum": ["pass", "provisional", "fail", "blocked", "unknown"] },
+            "now": { "enum": ["idle", "intake", "mapping", "enumerating", "exploiting", "validating", "submitting", "complete", "blocked"] },
+            "actionNeeded": { "enum": ["none", "operator", "solver", "platform", "review"] },
+            "updatedAt": { "type": "string", "format": "date-time" },
+            "completion": { "$ref": "#/$defs/solvingCompletion" },
+            "objectives": { "$ref": "#/$defs/objectiveProgress" },
+            "depth": { "$ref": "#/$defs/depth" },
+            "efficiency": { "$ref": "#/$defs/efficiency" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["availability", "verdict", "now", "actionNeeded", "updatedAt", "completion", "objectives", "depth", "efficiency"],
+          "properties": {
+            "availability": { "const": "unavailable" },
+            "verdict": { "type": "null" },
+            "now": { "type": "null" },
+            "actionNeeded": { "type": "null" },
+            "updatedAt": { "type": "null" },
+            "completion": { "$ref": "#/$defs/solvingCompletion" },
+            "objectives": { "$ref": "#/$defs/objectiveProgress" },
+            "depth": { "$ref": "#/$defs/depth" },
+            "efficiency": { "$ref": "#/$defs/efficiency" }
+          }
+        }
+      ]
+    },
+    "learningStages": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["observations", "candidates", "validated", "applied", "transferred", "regressed"],
+      "properties": {
+        "observations": { "$ref": "#/$defs/metric" },
+        "candidates": { "$ref": "#/$defs/metric" },
+        "validated": { "$ref": "#/$defs/metric" },
+        "applied": { "$ref": "#/$defs/metric" },
+        "transferred": { "$ref": "#/$defs/metric" },
+        "regressed": { "$ref": "#/$defs/metric" }
+      }
+    },
+    "learningAxis": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["availability", "verdict", "now", "actionNeeded", "updatedAt", "stages"],
+          "properties": {
+            "availability": { "const": "available" },
+            "verdict": { "enum": ["pass", "provisional", "fail", "blocked", "unknown", "not-applicable"] },
+            "now": { "enum": ["observing", "extracting", "validating", "applying", "checking", "idle", "blocked"] },
+            "actionNeeded": { "enum": ["none", "operator", "solver", "platform", "review"] },
+            "updatedAt": { "type": "string", "format": "date-time" },
+            "stages": { "$ref": "#/$defs/learningStages" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["availability", "verdict", "now", "actionNeeded", "updatedAt", "stages"],
+          "properties": {
+            "availability": { "const": "unavailable" },
+            "verdict": { "type": "null" },
+            "now": { "type": "null" },
+            "actionNeeded": { "type": "null" },
+            "updatedAt": { "type": "null" },
+            "stages": { "$ref": "#/$defs/learningStages" }
+          }
+        }
+      ]
+    },
+    "signalCoverage": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["availability", "available", "total"],
+          "properties": {
+            "availability": { "const": "available" },
+            "available": { "type": "integer", "minimum": 0, "maximum": 1000000000 },
+            "total": { "type": "integer", "minimum": 1, "maximum": 1000000000 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["availability", "available", "total"],
+          "properties": {
+            "availability": { "const": "unavailable" },
+            "available": { "type": "null" },
+            "total": { "type": "null" }
+          }
+        }
+      ]
+    },
+    "cockpitAxis": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["availability", "verdict", "now", "actionNeeded", "updatedAt", "signals", "updatesPublished", "updatesMissed"],
+          "properties": {
+            "availability": { "const": "available" },
+            "verdict": { "enum": ["pass", "provisional", "fail", "blocked", "unknown"] },
+            "now": { "enum": ["collecting", "projecting", "current", "delayed", "blocked"] },
+            "actionNeeded": { "enum": ["none", "operator", "solver", "platform", "review"] },
+            "updatedAt": { "type": "string", "format": "date-time" },
+            "signals": { "$ref": "#/$defs/signalCoverage" },
+            "updatesPublished": { "$ref": "#/$defs/metric" },
+            "updatesMissed": { "$ref": "#/$defs/metric" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["availability", "verdict", "now", "actionNeeded", "updatedAt", "signals", "updatesPublished", "updatesMissed"],
+          "properties": {
+            "availability": { "const": "unavailable" },
+            "verdict": { "type": "null" },
+            "now": { "type": "null" },
+            "actionNeeded": { "type": "null" },
+            "updatedAt": { "type": "null" },
+            "signals": { "$ref": "#/$defs/signalCoverage" },
+            "updatesPublished": { "$ref": "#/$defs/metric" },
+            "updatesMissed": { "$ref": "#/$defs/metric" }
+          }
+        }
+      ]
+    },
+    "integrityAxis": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["availability", "status", "checks", "issues", "checkedAt"],
+          "properties": {
+            "availability": { "const": "available" },
+            "status": { "enum": ["consistent", "degraded"] },
+            "checks": { "$ref": "#/$defs/signalCoverage" },
+            "issues": { "$ref": "#/$defs/metric" },
+            "checkedAt": { "type": "string", "format": "date-time" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["availability", "status", "checks", "issues", "checkedAt"],
+          "properties": {
+            "availability": { "const": "unavailable" },
+            "status": { "type": "null" },
+            "checks": { "$ref": "#/$defs/signalCoverage" },
+            "issues": { "$ref": "#/$defs/metric" },
+            "checkedAt": { "type": "null" }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,188 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/campaign-state.schema.json",
+  "title": "GATE campaign replay projection",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "apiVersion",
+    "kind",
+    "campaignId",
+    "grantSha256",
+    "status",
+    "createdAt",
+    "updatedAt",
+    "journal",
+    "jobs",
+    "queue",
+    "kpis",
+    "usage",
+    "stop",
+    "capability"
+  ],
+  "properties": {
+    "$schema": { "const": "https://gate.local/schemas/campaign-state.schema.json" },
+    "apiVersion": { "const": "gate.dev/campaign-state/v1" },
+    "kind": { "const": "CampaignState" },
+    "campaignId": { "$ref": "#/$defs/id" },
+    "grantSha256": { "$ref": "#/$defs/sha256" },
+    "status": { "enum": ["paused", "running", "blocked", "stopped", "completed"] },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "journal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sequence", "headSha256"],
+      "properties": {
+        "sequence": { "type": "integer", "minimum": 1 },
+        "headSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "jobs": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "jobSha256", "authority", "status", "attempts", "updatedAt", "reason"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "kind": { "enum": ["non-contact-dry-run", "managed-adapter"] },
+          "jobSha256": { "$ref": "#/$defs/sha256" },
+          "authority": {
+            "oneOf": [
+              { "type": "null" },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id", "authoritySha256", "receiptSha256", "permitSha256"],
+                "properties": {
+                  "id": { "$ref": "#/$defs/id" },
+                  "authoritySha256": { "$ref": "#/$defs/sha256" },
+                  "receiptSha256": { "$ref": "#/$defs/sha256" },
+                  "permitSha256": { "$ref": "#/$defs/sha256" }
+                }
+              }
+            ]
+          },
+          "status": { "enum": ["queued", "running", "completed", "blocked", "failed"] },
+          "attempts": { "type": "integer", "minimum": 0 },
+          "updatedAt": { "type": "string", "format": "date-time" },
+          "reason": { "type": ["string", "null"], "maxLength": 500 }
+        }
+      }
+    },
+    "queue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "queued", "running", "completed", "blocked", "failed"],
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "queued": { "type": "integer", "minimum": 0 },
+        "running": { "type": "integer", "minimum": 0 },
+        "completed": { "type": "integer", "minimum": 0 },
+        "blocked": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "kpis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["jobsAttempted", "jobsCompleted", "hypotheses", "recoveries"],
+      "properties": {
+        "jobsAttempted": { "$ref": "#/$defs/measurement" },
+        "jobsCompleted": { "$ref": "#/$defs/measurement" },
+        "hypotheses": { "$ref": "#/$defs/measurement" },
+        "recoveries": { "$ref": "#/$defs/measurement" }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reserved", "observed"],
+      "properties": {
+        "reserved": { "$ref": "#/$defs/usageValues" },
+        "observed": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["wallMinutes", "requests", "inputTokens", "outputTokens", "totalTokens", "spend", "evidenceBytes"],
+          "properties": {
+            "wallMinutes": { "$ref": "#/$defs/measurement" },
+            "requests": { "$ref": "#/$defs/measurement" },
+            "inputTokens": { "$ref": "#/$defs/measurement" },
+            "outputTokens": { "$ref": "#/$defs/measurement" },
+            "totalTokens": { "$ref": "#/$defs/measurement" },
+            "spend": { "$ref": "#/$defs/measurement" },
+            "evidenceBytes": { "$ref": "#/$defs/measurement" }
+          }
+        }
+      }
+    },
+    "stop": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["condition", "reason", "at"],
+          "properties": {
+            "condition": { "type": "string", "minLength": 1, "maxLength": 80 },
+            "reason": { "type": "string", "minLength": 1, "maxLength": 500 },
+            "at": { "type": "string", "format": "date-time" }
+          }
+        }
+      ]
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nonContactDryRun", "managedAdapterDispatch", "reason"],
+      "properties": {
+        "nonContactDryRun": { "const": "available" },
+        "managedAdapterDispatch": { "const": "confirmed-dedicated-lab-only" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 500 }
+      }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "usageValues": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["wallMinutes", "requests", "inputTokens", "outputTokens", "totalTokens", "spend", "evidenceBytes"],
+      "properties": {
+        "wallMinutes": { "type": "number", "minimum": 0 },
+        "requests": { "type": "number", "minimum": 0 },
+        "inputTokens": { "type": "number", "minimum": 0 },
+        "outputTokens": { "type": "number", "minimum": 0 },
+        "totalTokens": { "type": "number", "minimum": 0 },
+        "spend": { "type": "number", "minimum": 0 },
+        "evidenceBytes": { "type": "number", "minimum": 0 }
+      }
+    },
+    "measurement": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["availability", "value"],
+          "properties": {
+            "availability": { "enum": ["exact", "estimated"] },
+            "value": { "type": "number", "minimum": 0 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["availability", "value"],
+          "properties": {
+            "availability": { "const": "unavailable" },
+            "value": { "type": "null" }
+          }
+        }
+      ]
+    }
+  }
+}

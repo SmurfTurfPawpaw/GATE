@@ -86,6 +86,12 @@
         "effectiveStopsSha256": { "$ref": "#/$defs/sha256" }
       }
     },
+    "labCampaign": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/labCampaignBinding" }
+      ]
+    },
     "operation": {
       "type": "object",
       "additionalProperties": false,
@@ -217,6 +223,40 @@
     "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "path": { "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^/[^\\u0000\\r\\n]*$" },
     "evidenceRef": { "type": "string", "pattern": "^private://evidence/execution-xrun_[a-f0-9]{32}-(?:stdout\\.bin|stderr\\.bin|result\\.json)$" },
+    "labCampaignBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorityId", "authoritySha256", "receiptSha256", "capabilityId", "capabilitySha256",
+        "campaignId", "grantSha256", "engagementId", "workflowInstanceId", "phaseId",
+        "phaseAttemptId", "admissionSha256", "authorityReceiptSha256", "origin", "pathPrefix",
+        "requestUrl", "requestUrlSha256", "allowedIp", "operationSha256", "argvSha256", "boundsSha256", "expiresAt"
+      ],
+      "properties": {
+        "authorityId": { "$ref": "#/$defs/id" },
+        "authoritySha256": { "$ref": "#/$defs/sha256" },
+        "receiptSha256": { "$ref": "#/$defs/sha256" },
+        "capabilityId": { "type": "string", "pattern": "^lcap_[a-f0-9]{32}$" },
+        "capabilitySha256": { "$ref": "#/$defs/sha256" },
+        "campaignId": { "$ref": "#/$defs/id" },
+        "grantSha256": { "$ref": "#/$defs/sha256" },
+        "engagementId": { "$ref": "#/$defs/id" },
+        "workflowInstanceId": { "$ref": "#/$defs/id" },
+        "phaseId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,79}$" },
+        "phaseAttemptId": { "type": "string", "pattern": "^wpa_[a-f0-9]{32}$" },
+        "admissionSha256": { "$ref": "#/$defs/sha256" },
+        "authorityReceiptSha256": { "$ref": "#/$defs/sha256" },
+        "origin": { "type": "string", "format": "uri", "maxLength": 500 },
+        "pathPrefix": { "type": "string", "format": "uri", "maxLength": 500 },
+        "requestUrl": { "type": "string", "format": "uri", "maxLength": 1000 },
+        "requestUrlSha256": { "$ref": "#/$defs/sha256" },
+        "allowedIp": { "type": "string", "minLength": 2, "maxLength": 45, "pattern": "^[0-9A-Fa-f:.]+$" },
+        "operationSha256": { "$ref": "#/$defs/sha256" },
+        "argvSha256": { "$ref": "#/$defs/sha256" },
+        "boundsSha256": { "$ref": "#/$defs/sha256" },
+        "expiresAt": { "type": "string", "format": "date-time" }
+      }
+    },
     "selector": {
       "type": "object",
       "additionalProperties": false,
@@ -319,6 +359,17 @@
                 "allowedIp": { "type": "string", "minLength": 2, "maxLength": 45, "pattern": "^[0-9A-Fa-f:.]+$" },
                 "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 15 },
                 "maxResponseBytes": { "type": "integer", "minimum": 1024, "maximum": 1048576 }
+              }
+            },
+            {
+              "type": "object", "additionalProperties": false,
+              "required": ["kind", "method", "allowedIp", "timeoutSeconds", "maxResponseBytes"],
+              "properties": {
+                "kind": { "const": "http-fetch" },
+                "method": { "enum": ["GET", "HEAD"] },
+                "allowedIp": { "type": "string", "minLength": 2, "maxLength": 45, "pattern": "^[0-9A-Fa-f:.]+$" },
+                "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 15 },
+                "maxResponseBytes": { "type": "integer", "minimum": 1024, "maximum": 131072 }
               }
             }
           ]

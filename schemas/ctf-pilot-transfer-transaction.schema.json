@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/ctf-pilot-transfer-transaction.schema.json",
+  "title": "GATE private CTF pilot transfer transaction",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "apiVersion",
+    "kind",
+    "caseId",
+    "createdAt",
+    "receiptFileDigest",
+    "receiptSha256",
+    "priorStateSha256",
+    "nextStateSha256"
+  ],
+  "properties": {
+    "$schema": { "const": "https://gate.local/schemas/ctf-pilot-transfer-transaction.schema.json" },
+    "apiVersion": { "const": "gate.dev/ctf-pilot-transfer-transaction/v1" },
+    "kind": { "const": "CtfPilotTransferTransaction" },
+    "caseId": { "$ref": "#/$defs/id" },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "receiptFileDigest": { "$ref": "#/$defs/digest" },
+    "receiptSha256": { "$ref": "#/$defs/digest" },
+    "priorStateSha256": { "$ref": "#/$defs/digest" },
+    "nextStateSha256": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$" },
+    "digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

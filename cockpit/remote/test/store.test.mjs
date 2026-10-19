@@ -61,11 +61,13 @@ function fleetProjection(revision = 1, overrides = {}) {
     ...(profile ? { visible: 1, representedByCases: 1 } : {})
   });
   return {
-    apiVersion: "gate.remote-fleet/v1",
+    apiVersion: "gate.remote-fleet/v2",
     sessionRevision,
     revision,
+    selectionEpoch: "0".repeat(32),
     observedAt: "2026-10-18T12:00:00.000Z",
     receivedAt: "2026-10-18T12:00:00.000Z",
+    validUntil: "2026-10-18T12:00:15.000Z",
     connection: "connected",
     sourceFreshness: "current",
     coverage: { state: "exact", cases: scan(), profiles: scan(true) },
@@ -79,6 +81,7 @@ function fleetProjection(revision = 1, overrides = {}) {
       activeWorkflows: metric(1),
       runningAnalyses: metric(),
       setupBlockers: metric(),
+      blockers: metric(),
       campaignTokens: { availability: "exact", total: 100 },
       hostTokens: {
         availability: "exact",

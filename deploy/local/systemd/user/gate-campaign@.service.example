@@ -1,0 +1,28 @@
+[Unit]
+Description=GATE campaign worker (%i)
+Documentation=https://github.com/SmurfTurfPawpaw/GATE
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/gate/gate.env
+EnvironmentFile=%h/.config/gate/campaign-%i.env
+Environment=NODE_OPTIONS=
+Environment=PATH=/usr/bin:/bin
+WorkingDirectory=@GATE_WORKDIR@
+ExecStart=@NODE@ @GATE_BIN@ campaign worker ${GATE_CAMPAIGN}
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGTERM
+TimeoutStopSec=30s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+RestrictSUIDSGID=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

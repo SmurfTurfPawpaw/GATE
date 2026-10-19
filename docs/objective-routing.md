@@ -2,7 +2,7 @@
 
 GATE routes a new objective before it opens a domain-specific intake. This keeps a bug bounty Program Profile focused on bug bounty terms while still giving software work, incident investigation, research, local artifacts, system operations, communications, and unfamiliar requests a common recommendation step.
 
-The v0.1 core is deliberately small. A reviewed skill derives a categorical proposal from conversation material allowed by the data policy. A pure resolver binds that proposal to the exact route catalog and returns a deterministic, sanitized recommendation. It does not persist an objective, dispatch Firstmate, create a Program Profile or case, contact a target, send a message, operate a system, or grant execution authority.
+The v0.2 core is deliberately small. A reviewed skill derives a categorical proposal from conversation material allowed by the data policy. A pure resolver binds that proposal to the exact route catalog and returns a deterministic, sanitized recommendation. It does not persist an objective, dispatch Firstmate, create a Program Profile or case, contact a target, send a message, operate a system, or grant execution authority.
 
 ## Route from dimensions, not keywords
 
@@ -95,7 +95,7 @@ An objective about unexplained meal-delivery orders paid without the reported pe
 
 The route first recommends a category-only evidence checklist. After the operator explicitly selects both a supported relationship and accessible-record basis, it can plan to preserve those records locally, correlate order, payment, account-change, session, device, notification, and destination timestamps, compare competing explanations, and identify the smallest missing observation. A `report-only` or third-party/unknown selection keeps record-dependent actions blocked. It asks whose records are involved, which records can be accessed, and whether the first result should explain the event, stop ongoing loss, or prepare a report.
 
-The route is `planning-only` in v0.1. It does not infer access to another person's records, contact the delivery platform, test its application, or turn an allegation into target authority. If a separate authorized bug bounty objective emerges, that new objective can route into Program Profile intake.
+The route is `planning-only` in v0.2. It does not infer access to another person's records, contact the delivery platform, test its application, or turn an allegation into target authority. If a separate authorized bug bounty objective emerges, that new objective can route into Program Profile intake.
 
 ## Current API and limits
 

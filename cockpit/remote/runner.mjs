@@ -46,6 +46,7 @@ const WITHHELD_REMOTE_CONTENT = "[Content withheld from remote cockpit]";
 const TRUNCATED_REMOTE_CONTENT = "\n[Remote cockpit truncated this message]";
 const MAX_PROJECTED_CONVERSATION_ENTRIES = 12;
 const MAX_PROJECTED_PENDING_QUESTIONS = 1;
+const LEASE_RECOVERY_SKEW_MS = 5 * 60_000;
 
 const DEFAULTS = Object.freeze({
   requestTimeoutMs: 15_000,
@@ -54,6 +55,7 @@ const DEFAULTS = Object.freeze({
   projectionIntervalMs: 2_000,
   fleetIntervalMs: 5_000,
   stateTtlMs: 30_000,
+  adapterConnectTimeoutMs: 15_000,
   backoffBaseMs: 500,
   backoffMaxMs: 30_000
 });
@@ -186,6 +188,10 @@ class RunnerJournal {
 
   get(commandId) {
     return this.#entries.get(commandId) ?? null;
+  }
+
+  get hasUnresolvedCommand() {
+    return [...this.#entries.values()].some((entry) => entry.terminalState === null);
   }
 
   accept(commandId, payloadSha256, at) {
@@ -460,8 +466,10 @@ export function projectRemoteFleet(localFleet, { sessionRevision, revision = loc
     apiVersion: REMOTE_FLEET_VERSION,
     sessionRevision,
     revision,
+    selectionEpoch: localFleet.selectionEpoch,
     observedAt: localFleet.observedAt,
     receivedAt: localFleet.receivedAt,
+    validUntil: localFleet.validUntil,
     connection: localFleet.connection,
     sourceFreshness: localFleet.sourceFreshness,
     coverage: localFleet.coverage,
@@ -602,15 +610,46 @@ function retryableCycleError(error) {
   ]).has(error.code);
 }
 
+function compatibleAdapter(value) {
+  return value && typeof value.privateState === "function" && typeof value.sendMessage === "function"
+    && typeof value.answerQuestion === "function" && value.activityStore
+    && typeof value.activityStore.since === "function";
+}
+
+function offlineAdapterState(previous = null) {
+  return Object.freeze({
+    apiVersion: "gate.local-companion-state/v1",
+    sessionRevision: Number.isSafeInteger(previous?.sessionRevision) ? previous.sessionRevision : 1,
+    stateRevision: Number.isSafeInteger(previous?.stateRevision) ? previous.stateRevision : 0,
+    observedAt: typeof previous?.observedAt === "string" ? previous.observedAt : new Date(0).toISOString(),
+    connected: false,
+    turn: "idle",
+    tokens: null,
+    conversation: Array.isArray(previous?.conversation) ? previous.conversation : [],
+    pendingQuestions: []
+  });
+}
+
 export class RemoteCockpitRunner {
   #active = false;
   #activityCursor = 0;
   #adapter;
   #adapterClosedListener = null;
+  #adapterConnectGeneration = 0;
+  #adapterFactory;
+  #adapterLastState = null;
+  #adapterLastConnectedState = null;
+  #adapterNextAttemptAt = Number.NEGATIVE_INFINITY;
+  #adapterConnecting = null;
+  #adapterRecoveryCandidate = null;
+  #adapterRecoveryFailure = null;
+  #adapterRecoveryFailures = 0;
+  #adapterRecoveryPromise = null;
   #adapterUnavailable = false;
   #clock;
   #closeAdapter;
   #configuration;
+  #conversationDispatchBlocked = false;
   #currentFetchController = null;
   #delay;
   #executing = false;
@@ -621,6 +660,8 @@ export class RemoteCockpitRunner {
   #lastFleetAt = Number.NEGATIVE_INFINITY;
   #lastHeartbeatAt = Number.NEGATIVE_INFINITY;
   #lastStateAt = Number.NEGATIVE_INFINITY;
+  #leaseSuppressedUntil = Number.NEGATIVE_INFINITY;
+  #projectionLifecycleRevision = 0;
   #random;
   #runPromise = null;
   #signer;
@@ -633,9 +674,7 @@ export class RemoteCockpitRunner {
     const caseId = identifier(options.caseId, CASE_ID, "case identifier");
     const sessionRevision = integer(options.sessionRevision, 1, 2_147_483_647, "session revision");
     const adapter = options.adapter;
-    if (!adapter || typeof adapter.privateState !== "function" || typeof adapter.sendMessage !== "function"
-        || typeof adapter.answerQuestion !== "function" || !adapter.activityStore
-        || typeof adapter.activityStore.since !== "function") {
+    if (!compatibleAdapter(adapter)) {
       throw new TypeError("runner adapter is incompatible");
     }
     this.#clock = options.clock ?? Date.now;
@@ -643,10 +682,12 @@ export class RemoteCockpitRunner {
     this.#fetch = options.fetch ?? globalThis.fetch;
     this.#delay = options.delay ?? defaultDelay;
     this.#fleetProvider = options.fleetProvider ?? null;
+    this.#adapterFactory = options.adapterFactory ?? null;
     this.#closeAdapter = options.closeAdapter !== false;
     if (typeof this.#clock !== "function" || typeof this.#random !== "function"
         || typeof this.#fetch !== "function" || typeof this.#delay !== "function"
-        || !(this.#fleetProvider === null || typeof this.#fleetProvider === "function")) {
+        || !(this.#fleetProvider === null || typeof this.#fleetProvider === "function")
+        || !(this.#adapterFactory === null || typeof this.#adapterFactory === "function")) {
       throw new TypeError("runner dependency is invalid");
     }
     const controlPlaneOrigin = normalizeOrigin(options.controlPlaneUrl);
@@ -666,6 +707,8 @@ export class RemoteCockpitRunner {
         100, 300_000, "fleet interval"),
       stateTtlMs: integer(options.stateTtlMs ?? DEFAULTS.stateTtlMs, 1_000, 300_000,
         "state projection lifetime"),
+      adapterConnectTimeoutMs: integer(options.adapterConnectTimeoutMs ?? DEFAULTS.adapterConnectTimeoutMs,
+        250, 120_000, "adapter connect timeout"),
       backoffBaseMs: integer(options.backoffBaseMs ?? DEFAULTS.backoffBaseMs, 10, 60_000, "backoff base"),
       backoffMaxMs: integer(options.backoffMaxMs ?? DEFAULTS.backoffMaxMs, 10, 300_000, "backoff maximum")
     };
@@ -686,13 +729,8 @@ export class RemoteCockpitRunner {
       caseId,
       sessionRevision
     });
-    if (typeof adapter.on === "function") {
-      this.#adapterClosedListener = () => {
-        this.#adapterUnavailable = true;
-        if (!this.#executing) this.#currentFetchController?.abort();
-      };
-      adapter.on("closed", this.#adapterClosedListener);
-    }
+    this.#conversationDispatchBlocked = this.#journal.hasUnresolvedCommand;
+    this.#attachAdapterClosedListener(adapter);
   }
 
   get running() {
@@ -710,20 +748,41 @@ export class RemoteCockpitRunner {
   async stop() {
     if (this.#stopRequested) return this.#runPromise;
     this.#stopRequested = true;
+    this.#adapterConnectGeneration += 1;
     this.#stopController.abort();
     if (!this.#executing) this.#currentFetchController?.abort();
+    if (this.#adapterConnecting && typeof this.#adapterConnecting.close === "function") {
+      void Promise.resolve(this.#adapterConnecting.close()).catch(() => {});
+    }
+    if (this.#adapterRecoveryCandidate && typeof this.#adapterRecoveryCandidate.close === "function") {
+      void Promise.resolve(this.#adapterRecoveryCandidate.close()).catch(() => {});
+    }
     if (this.#runPromise) await this.#runPromise;
   }
 
   async #loop() {
-    let connected = false;
     try {
-      if (typeof this.#adapter.connect === "function") {
-        await this.#adapter.connect();
-        connected = true;
+      try {
+        if (typeof this.#adapter.connect === "function") {
+          await this.#adapter.connect();
+        }
+        const initialState = this.#readAdapterState();
+        if (!record(initialState) || initialState.connected !== true
+            || this.#adapterLastConnectedState !== initialState) {
+          this.#markAdapterUnavailable(this.#adapter, true);
+        } else {
+          this.#adapterUnavailable = false;
+          this.#adapterLastState = initialState;
+        }
+      } catch {
+        // A local conversation adapter may be unavailable at process start.
+        // Keep the signed observer/fleet channel alive, but do not attempt an
+        // automatic replacement without a trusted connected-idle snapshot.
+        this.#markAdapterUnavailable(this.#adapter, true);
       }
       while (!this.#stopRequested) {
         try {
+          await this.#adoptRecoveredAdapter();
           await this.#cycle();
           this.#failureCount = 0;
           if (!this.#stopRequested) {
@@ -731,8 +790,11 @@ export class RemoteCockpitRunner {
           }
         } catch (error) {
           if (this.#stopRequested) break;
-          if (this.#adapterUnavailable) {
-            fail("adapter-unavailable", "The local Codex companion is unavailable.");
+          if (error instanceof RemoteRunnerError && error.code === "adapter-unavailable") {
+            this.#markAdapterUnavailable();
+            this.#failureCount = 0;
+            await this.#delay(this.#configuration.pollIntervalMs, this.#stopController.signal);
+            continue;
           }
           if (!retryableCycleError(error)) throw error;
           this.#failureCount += 1;
@@ -749,22 +811,23 @@ export class RemoteCockpitRunner {
         }
       }
     } finally {
-      if (this.#adapterClosedListener) {
-        if (typeof this.#adapter.off === "function") this.#adapter.off("closed", this.#adapterClosedListener);
-        else if (typeof this.#adapter.removeListener === "function") {
-          this.#adapter.removeListener("closed", this.#adapterClosedListener);
-        }
-        this.#adapterClosedListener = null;
+      this.#adapterConnectGeneration += 1;
+      this.#detachAdapterClosedListener(this.#adapter);
+      if (this.#adapterConnecting && typeof this.#adapterConnecting.close === "function") {
+        try { await Promise.resolve(this.#adapterConnecting.close()); } catch {}
       }
-      if (this.#closeAdapter && (connected || typeof this.#adapter.connect !== "function")
-          && typeof this.#adapter.close === "function") {
+      this.#adapterConnecting = null;
+      if (this.#adapterRecoveryCandidate && typeof this.#adapterRecoveryCandidate.close === "function") {
+        try { await Promise.resolve(this.#adapterRecoveryCandidate.close()); } catch {}
+      }
+      this.#adapterRecoveryCandidate = null;
+      if (this.#closeAdapter && typeof this.#adapter.close === "function") {
         try { await this.#adapter.close(); } catch {}
       }
     }
   }
 
   async #cycle() {
-    const privateState = this.#requireAdapterState();
     const current = nowMilliseconds(this.#clock);
     if (current - this.#lastHeartbeatAt >= this.#configuration.heartbeatIntervalMs) {
       await this.#postAck("/heartbeat", {
@@ -776,14 +839,15 @@ export class RemoteCockpitRunner {
       this.#lastHeartbeatAt = current;
     }
     if (current - this.#lastStateAt >= this.#configuration.projectionIntervalMs) {
-      const projection = projectRemoteState(privateState, {
+      const projection = projectRemoteState(this.#stateForProjection(), {
         sessionRevision: this.#configuration.sessionRevision,
         stateRevision: this.#journal.nextProjectionRevision("state"),
         now: current,
         ttlMs: this.#configuration.stateTtlMs
       });
+      const lifecycleRevision = this.#projectionLifecycleRevision;
       await this.#postAck("/state", projection);
-      this.#lastStateAt = current;
+      if (lifecycleRevision === this.#projectionLifecycleRevision) this.#lastStateAt = current;
     }
     if (this.#fleetProvider && current - this.#lastFleetAt >= this.#configuration.fleetIntervalMs) {
       const projection = projectRemoteFleet(await this.#fleetProvider(), {
@@ -794,13 +858,16 @@ export class RemoteCockpitRunner {
       this.#lastFleetAt = current;
     }
     await this.#uploadActivity();
-    this.#requireAdapterState();
+    this.#scheduleAdapterRecovery(current);
+    if (!this.#conversationAvailable() || current < this.#leaseSuppressedUntil) return;
     const command = await this.#lease();
-    if (command) await this.#execute(command);
+    if (command && this.#conversationAvailable()) await this.#execute(command);
+    else if (command) this.#holdLeasedCommand(command);
   }
 
   async #uploadActivity() {
-    const events = this.#adapter.activityStore.since(this.#activityCursor).slice(0, MAX_ACTIVITY_PER_CYCLE);
+    const selectedAdapter = this.#adapter;
+    const events = selectedAdapter.activityStore.since(this.#activityCursor).slice(0, MAX_ACTIVITY_PER_CYCLE);
     for (const local of events) {
       const at = new Date(local.at);
       const event = sanitizeRemoteActivityEvent({
@@ -837,14 +904,19 @@ export class RemoteCockpitRunner {
   }
 
   async #execute(command) {
+    if (!this.#conversationAvailable()) return;
     this.#executing = true;
     const acceptedAt = new Date(nowMilliseconds(this.#clock)).toISOString();
+    let acceptedDurably = false;
+    let terminalRecorded = false;
     try {
       const accepted = this.#journal.accept(command.commandId, command.payloadSha256, acceptedAt);
+      acceptedDurably = true;
       await this.#transition(command, "accepted");
       if (accepted.replayed) {
         await this.#transition(command, "failed");
         if (accepted.entry.terminalState === null) this.#journal.terminal(command.commandId, "failed");
+        terminalRecorded = true;
         return;
       }
       const running = await this.#transition(command, "running");
@@ -861,6 +933,7 @@ export class RemoteCockpitRunner {
             ? this.#adapter.sendMessage(command.payload)
             : this.#adapter.answerQuestion(command.payload);
           await Promise.race([delivery, renewal]);
+          this.#readAdapterState();
         } catch (error) {
           if (error instanceof RemoteRunnerError
               && new Set(["adapter-unavailable", "lease-renewal-failed"]).has(error.code)) throw error;
@@ -875,17 +948,25 @@ export class RemoteCockpitRunner {
         // committed this terminal state.
         await this.#transition(command, terminal);
         this.#journal.terminal(command.commandId, terminal);
+        terminalRecorded = true;
       } finally {
         renewalController.abort();
         await Promise.allSettled([renewal]);
       }
+    } catch (error) {
+      if (acceptedDurably && !terminalRecorded) {
+        if (!this.#conversationDispatchBlocked) this.#projectionLifecycleRevision += 1;
+        this.#conversationDispatchBlocked = true;
+        this.#lastStateAt = Number.NEGATIVE_INFINITY;
+      }
+      throw error;
     } finally {
       this.#executing = false;
     }
   }
 
   #adapterStateAvailable() {
-    if (this.#adapterUnavailable) return false;
+    if (this.#adapterUnavailable || this.#conversationDispatchBlocked) return false;
     try {
       return this.#adapter.privateState()?.connected === true;
     } catch {
@@ -893,14 +974,226 @@ export class RemoteCockpitRunner {
     }
   }
 
-  #requireAdapterState() {
-    if (this.#adapterUnavailable) fail("adapter-unavailable", "The local Codex companion is unavailable.");
+  #readAdapterState() {
     let state;
     try { state = this.#adapter.privateState(); } catch {}
-    if (!record(state) || state.connected !== true) {
-      fail("adapter-unavailable", "The local Codex companion is unavailable.");
+    if (record(state)) {
+      this.#adapterLastState = state;
+      this.#rememberConnectedState(state);
     }
     return state;
+  }
+
+  #rememberConnectedState(state) {
+    if (!record(state) || state.connected !== true) return;
+    try {
+      projectRemoteState(state, {
+        sessionRevision: this.#configuration.sessionRevision,
+        stateRevision: 1,
+        now: nowMilliseconds(this.#clock),
+        ttlMs: this.#configuration.stateTtlMs
+      });
+      this.#adapterLastConnectedState = state;
+    } catch {
+      // An unprojectable state cannot establish a safe recovery point.
+    }
+  }
+
+  #stateForProjection() {
+    const state = this.#readAdapterState();
+    if (!this.#adapterUnavailable && !this.#conversationDispatchBlocked
+        && record(state) && state.connected === true) {
+      return state;
+    }
+    if (!record(state) || state.connected !== true) this.#markAdapterUnavailable();
+    return offlineAdapterState(this.#adapterLastState);
+  }
+
+  #conversationAvailable() {
+    if (this.#adapterUnavailable || this.#conversationDispatchBlocked) return false;
+    const state = this.#readAdapterState();
+    if (!record(state) || state.connected !== true) {
+      this.#markAdapterUnavailable();
+      return false;
+    }
+    return true;
+  }
+
+  #markAdapterUnavailable(adapter = this.#adapter, forceDispatchBlock = false) {
+    if (adapter !== this.#adapter) return;
+    const wasUnavailable = this.#adapterUnavailable;
+    const wasDispatchBlocked = this.#conversationDispatchBlocked;
+    const state = this.#readAdapterState();
+    if (record(state)) this.#adapterLastState = state;
+    this.#adapterUnavailable = true;
+    this.#lastStateAt = Number.NEGATIVE_INFINITY;
+    const currentPending = record(state) && Array.isArray(state.pendingQuestions) ? state.pendingQuestions : null;
+    const trustedPending = Array.isArray(this.#adapterLastConnectedState?.pendingQuestions)
+      ? this.#adapterLastConnectedState.pendingQuestions : null;
+    if (forceDispatchBlock || this.#executing || !record(state) || state.turn !== "idle"
+        || !Array.isArray(currentPending) || currentPending.length !== 0
+        || this.#adapterLastConnectedState?.turn !== "idle"
+        || !Array.isArray(trustedPending) || trustedPending.length !== 0) {
+      this.#conversationDispatchBlocked = true;
+    }
+    if (!wasUnavailable || wasDispatchBlocked !== this.#conversationDispatchBlocked) {
+      this.#projectionLifecycleRevision += 1;
+    }
+  }
+
+  #holdLeasedCommand(command) {
+    const leaseExpiry = Date.parse(command?.lease?.expiresAt);
+    if (Number.isFinite(leaseExpiry)) {
+      this.#leaseSuppressedUntil = Math.max(this.#leaseSuppressedUntil,
+        leaseExpiry + LEASE_RECOVERY_SKEW_MS);
+    }
+  }
+
+  #attachAdapterClosedListener(adapter) {
+    if (typeof adapter.on !== "function") return;
+    this.#adapterClosedListener = () => this.#markAdapterUnavailable(adapter);
+    adapter.on("closed", this.#adapterClosedListener);
+  }
+
+  #detachAdapterClosedListener(adapter) {
+    if (!this.#adapterClosedListener) return;
+    if (typeof adapter.off === "function") adapter.off("closed", this.#adapterClosedListener);
+    else if (typeof adapter.removeListener === "function") {
+      adapter.removeListener("closed", this.#adapterClosedListener);
+    }
+    this.#adapterClosedListener = null;
+  }
+
+  #recoveryWait() {
+    const exponent = Math.min(30, Math.max(0, this.#adapterRecoveryFailures - 1));
+    const ceiling = Math.min(this.#configuration.backoffMaxMs,
+      this.#configuration.backoffBaseMs * (2 ** exponent));
+    const random = this.#random();
+    if (typeof random !== "number" || !Number.isFinite(random) || random < 0 || random >= 1) {
+      throw new TypeError("runner random source must return a number from zero up to one");
+    }
+    return Math.max(1, Math.min(this.#configuration.backoffMaxMs,
+      Math.round(ceiling * (0.75 + random * 0.5))));
+  }
+
+  #recordAdapterRecoveryFailure() {
+    this.#adapterRecoveryFailures += 1;
+    this.#adapterNextAttemptAt = nowMilliseconds(this.#clock) + this.#recoveryWait();
+  }
+
+  #scheduleAdapterRecovery(current) {
+    if (!this.#adapterUnavailable || this.#conversationDispatchBlocked || this.#adapterFactory === null
+        || this.#adapterRecoveryPromise || this.#adapterRecoveryCandidate
+        || current < this.#adapterNextAttemptAt || this.#stopRequested) return;
+    const generation = ++this.#adapterConnectGeneration;
+    this.#adapterRecoveryPromise = this.#recoverAdapter(generation)
+      .catch((error) => { this.#adapterRecoveryFailure = error; })
+      .finally(() => { this.#adapterRecoveryPromise = null; });
+  }
+
+  async #recoverAdapter(generation) {
+    let candidate;
+    let expired = false;
+    let timer;
+    const closeCandidate = async () => {
+      if (candidate && candidate !== this.#adapter && typeof candidate.close === "function") {
+        try { await Promise.resolve(candidate.close()); } catch {}
+      }
+    };
+    try {
+      const attempt = (async () => {
+        candidate = await this.#adapterFactory();
+        if (!compatibleAdapter(candidate) || candidate === this.#adapter) {
+          throw new TypeError("replacement runner adapter is incompatible");
+        }
+        if (expired || this.#stopRequested || generation !== this.#adapterConnectGeneration) {
+          await closeCandidate();
+          return null;
+        }
+        this.#adapterConnecting = candidate;
+        if (typeof candidate.connect === "function") await candidate.connect();
+        if (expired || this.#stopRequested || generation !== this.#adapterConnectGeneration) {
+          await closeCandidate();
+          return null;
+        }
+        const state = candidate.privateState();
+        if (!record(state) || state.connected !== true) {
+          throw new Error("replacement runner adapter is unavailable");
+        }
+        projectRemoteState(state, {
+          sessionRevision: this.#configuration.sessionRevision,
+          stateRevision: 1,
+          now: nowMilliseconds(this.#clock),
+          ttlMs: this.#configuration.stateTtlMs
+        });
+        return candidate;
+      })();
+      const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          expired = true;
+          reject(new Error("replacement runner adapter connection timed out"));
+        }, this.#configuration.adapterConnectTimeoutMs);
+        timer.unref?.();
+      });
+      const connectedCandidate = await Promise.race([attempt, timeout]);
+      clearTimeout(timer);
+      if (connectedCandidate === null) return;
+      if (this.#stopRequested || generation !== this.#adapterConnectGeneration || expired) {
+        await closeCandidate();
+        return;
+      }
+      this.#adapterRecoveryCandidate = connectedCandidate;
+      this.#adapterRecoveryFailure = null;
+    } catch {
+      expired = true;
+      clearTimeout(timer);
+      await closeCandidate();
+      if (!this.#stopRequested && generation === this.#adapterConnectGeneration) {
+        this.#recordAdapterRecoveryFailure();
+      }
+    } finally {
+      if (this.#adapterConnecting === candidate) this.#adapterConnecting = null;
+    }
+  }
+
+  async #adoptRecoveredAdapter() {
+    if (this.#adapterRecoveryFailure) {
+      const error = this.#adapterRecoveryFailure;
+      this.#adapterRecoveryFailure = null;
+      if (error instanceof TypeError && /random source/u.test(error.message)) throw error;
+    }
+    const candidate = this.#adapterRecoveryCandidate;
+    if (!candidate) return;
+    let state;
+    try { state = candidate.privateState(); } catch {}
+    if (this.#stopRequested || this.#conversationDispatchBlocked || !record(state) || state.connected !== true) {
+      if (typeof candidate.close === "function") {
+        try { await Promise.resolve(candidate.close()); } catch {}
+      }
+      if (!this.#stopRequested && !this.#conversationDispatchBlocked) this.#recordAdapterRecoveryFailure();
+      this.#adapterRecoveryCandidate = null;
+      return;
+    }
+    const previous = this.#adapter;
+    if (candidate.activityStore !== previous.activityStore
+        && previous.activityStore.since(this.#activityCursor).length > 0) {
+      return;
+    }
+    this.#adapterRecoveryCandidate = null;
+    this.#detachAdapterClosedListener(previous);
+    this.#adapter = candidate;
+    this.#attachAdapterClosedListener(candidate);
+    this.#adapterLastState = state;
+    this.#rememberConnectedState(state);
+    this.#adapterUnavailable = false;
+    this.#projectionLifecycleRevision += 1;
+    this.#adapterRecoveryFailures = 0;
+    this.#adapterNextAttemptAt = Number.NEGATIVE_INFINITY;
+    if (candidate.activityStore !== previous.activityStore) this.#activityCursor = 0;
+    this.#lastStateAt = Number.NEGATIVE_INFINITY;
+    if (this.#closeAdapter && typeof previous.close === "function") {
+      void Promise.resolve(previous.close()).catch(() => {});
+    }
   }
 
   async #renewLease(command, running, signal) {
@@ -1012,6 +1305,7 @@ export const remoteRunnerInternals = Object.freeze({
   JOURNAL_VERSION,
   LEASE_REQUEST_VERSION,
   LEASE_RESPONSE_VERSION,
+  LEASE_RECOVERY_SKEW_MS,
   MAX_RESPONSE_BYTES,
   MAX_JOURNAL_ENTRIES,
   MAX_PROJECTED_CONVERSATION_ENTRIES,

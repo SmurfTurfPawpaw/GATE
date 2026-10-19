@@ -61,7 +61,7 @@
       "actions": ["cyber.target-contact", "cyber.scan", "cyber.intercept", "cyber.authenticate", "cyber.exploit"],
       "decision": "require-receipt",
       "owner": "gate-engagement",
-      "requirements": ["valid-engagement", "no-mistakes-plan-review", "operator-plan-receipt", "matching-plan-digest", "scope-check", "reviewed-scope-aware-adapter", "audit-log"]
+      "requirements": ["valid-engagement", "no-mistakes-plan-review", "operator-plan-receipt", "matching-plan-digest", "scope-check", "reviewed-scope-aware-adapter", "per-manifest-confirmation-or-confirmed-dedicated-lab-authority", "single-use-execution-capability", "audit-log"]
     },
     {
       "id": "cyber-high-impact",

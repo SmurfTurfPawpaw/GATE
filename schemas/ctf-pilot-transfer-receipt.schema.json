@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/ctf-pilot-transfer-receipt.schema.json",
+  "title": "GATE private CTF pilot transfer receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "apiVersion",
+    "kind",
+    "metadata",
+    "learningDigest",
+    "sourceTask",
+    "distinctTask",
+    "appliedChangeDigest",
+    "validationEvidenceDigest"
+  ],
+  "properties": {
+    "$schema": { "const": "https://gate.local/schemas/ctf-pilot-transfer-receipt.schema.json" },
+    "apiVersion": { "const": "gate.dev/ctf-pilot-transfer-receipt/v1" },
+    "kind": { "const": "CtfPilotTransferReceipt" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "caseId", "recordedAt"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^transfer-[a-f0-9]{32}$" },
+        "caseId": { "$ref": "#/$defs/id" },
+        "recordedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "learningDigest": { "$ref": "#/$defs/digest" },
+    "sourceTask": { "$ref": "#/$defs/taskBinding" },
+    "distinctTask": { "$ref": "#/$defs/taskBinding" },
+    "appliedChangeDigest": { "$ref": "#/$defs/digest" },
+    "validationEvidenceDigest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$" },
+    "digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "taskBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pseudonym", "digest"],
+      "properties": {
+        "pseudonym": { "$ref": "#/$defs/id" },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    }
+  }
+}

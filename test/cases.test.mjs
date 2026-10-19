@@ -320,6 +320,37 @@ function mode(file) {
   return fs.statSync(file).mode & 0o777;
 }
 
+function ctfPilotState(caseId, revision = 1) {
+  const metric = (value) => ({ availability: "available", value });
+  const updatedAt = new Date().toISOString();
+  const validUntil = new Date(Date.parse(updatedAt) + 180_000).toISOString();
+  return {
+    $schema: "https://gate.local/schemas/ctf-pilot-state.schema.json",
+    apiVersion: "gate.dev/ctf-pilot-state/v1",
+    kind: "CtfPilotState",
+    metadata: { id: "pilot-alpha", caseId, revision, updatedAt, validUntil, producer: null },
+    solving: {
+      availability: "available", verdict: "provisional", now: "enumerating", actionNeeded: "none", updatedAt,
+      completion: { state: "incomplete", reproduction: "not-confirmed", externalAcceptance: "pending" },
+      objectives: { availability: "available", completed: 1, total: 3 },
+      depth: { level: "systematic", branchesExplored: metric(4), techniquesAttempted: metric(3), deadEndsRetired: metric(1) },
+      efficiency: { elapsedSeconds: metric(300), activeSeconds: metric(240), tokens: metric(2000), toolRuns: metric(4), requests: metric(12), retries: metric(0) }
+    },
+    learning: {
+      availability: "available", verdict: "provisional", now: "validating", actionNeeded: "review", updatedAt,
+      stages: { observations: metric(3), candidates: metric(2), validated: metric(1), applied: metric(0), transferred: metric(0), regressed: metric(0) }
+    },
+    cockpit: {
+      availability: "available", verdict: "provisional", now: "current", actionNeeded: "none", updatedAt,
+      signals: { availability: "available", available: 7, total: 8 }, updatesPublished: metric(4), updatesMissed: metric(0)
+    },
+    integrity: {
+      availability: "available", status: "consistent",
+      checks: { availability: "available", available: 5, total: 5 }, issues: metric(0), checkedAt: updatedAt
+    }
+  };
+}
+
 test("case creation binds ready authority and isolates mutable state while sharing registries", (t) => {
   const { root, paths } = fixture(t);
   const program = createReadyProgram("case-program", paths);
@@ -388,6 +419,21 @@ test("case creation binds ready authority and isolates mutable state while shari
     assert.equal(mode(alpha.paths.stateHome), 0o700);
     assert.equal(mode(path.join(paths.cases, "alpha-case", "scope.json")), 0o600);
   }
+
+  const pilotInput = path.join(alpha.paths.stateHome, "pilot-update.json");
+  fs.writeFileSync(pilotInput, `${JSON.stringify(ctfPilotState("alpha-case"), null, 2)}\n`, { mode: 0o600 });
+  const updatedPilot = invoke([
+    "--case", "alpha-case", "ctf", "pilot", "update", "--file", pilotInput, "--json"
+  ], paths.home);
+  assert.equal(updatedPilot.status, 0, updatedPilot.stderr);
+  const updatedProjection = JSON.parse(updatedPilot.stdout);
+  assert.equal(updatedProjection.availability, "available");
+  assert.equal(updatedProjection.solving.verdict, "provisional");
+  assert.equal(Object.hasOwn(updatedProjection, "caseId"), false);
+
+  const pilotStatus = invoke(["--case", "alpha-case", "ctf", "pilot", "status", "--json"], paths.home);
+  assert.equal(pilotStatus.status, 0, pilotStatus.stderr);
+  assert.equal(JSON.parse(pilotStatus.stdout).revision, 1);
 });
 
 test("stale cases remain observable and revocable while new admission stays blocked", async (t) => {

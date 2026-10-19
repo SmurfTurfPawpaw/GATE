@@ -68,6 +68,37 @@ Enroll one Ed25519 public key in the coordinator and keep its private key in an 
 
 Commands are durable and case-bound. Request IDs are idempotent within the exact operator subject, case ID, and session revision rather than the ephemeral browser-cookie session: after a refresh, retrying the same ID and payload returns the original receipt, while changing the payload is a conflict. The browser keeps a bounded tab-session retry index containing only that case and revision, request IDs, question tokens, and SHA-256 payload digests; operator messages and answer text are never written to browser storage. The refreshed session can therefore recover the original ID when the operator retries the same payload, while a different case or revision cannot reuse it. The refreshed session can also replay that scope's existing lifecycle events. The original browser-session ID remains recorded as command provenance, but it is neither the deduplication key nor an event-visibility boundary. Every refresh still verifies a fresh OIDC assertion, revokes the replaced page session, and issues a new CSRF proof. The browser receives a queued receipt rather than a claim that Codex completed the work. The runner reports `accepted`, `running`, and a terminal `completed` or `failed` command transition. Here, `completed` means the local `CodexCompanionAdapter` accepted the message, steer, or question response; it does not mean the Codex turn finished. Turn progress and the final visible reply arrive separately through state and activity projections. A `running` command whose lease is abandoned becomes `failed`; its delivery outcome is unknown and the coordinator never dispatches it again. Expiry, lease identity, payload digests, session revision, and the runner's owner-only journal prevent an old or replayed command from being silently dispatched as new work. Rotating the session revision invalidates stale browser and runner state.
 
+Runner telemetry and conversation delivery have separate lifecycles. If the
+dedicated Codex app-server is unavailable at startup or closes later, the
+runner process keeps sending signed
+heartbeats, explicit `codex.state=offline` state projections, and observer
+fleet/campaign projections. It clears unanswerable pending questions and
+withholds stale session-token totals. The cockpit labels this state `LIVE ·
+FLEET · CODEX OFFLINE`, keeps current campaign and pilot KPIs visible, and
+disables message and question submission. The runner does not call the lease
+endpoint while conversation delivery is unavailable or quarantined.
+
+An idle loss can reconnect automatically with bounded exponential backoff and
+a bounded create/connect attempt, but only by resuming the exact already-used
+thread from its owner-only record. The last readable adapter state must have
+been `idle` with no pending question, the runner journal must contain no
+unresolved accepted command, and the replacement must pass the complete remote
+state projection contract before adoption. A newly created `provisional`
+thread cannot be resumed automatically because it has not crossed the durable
+first-turn boundary; the runner keeps telemetry live and leaves conversation
+offline instead of starting a different thread. Startup failure has no trusted
+connected-idle snapshot, so it also stays conversation-offline until the
+operator restores or reconciles that exact adapter boundary.
+
+Loss during delivery, a `working` or `waiting` turn, an uncertain terminal
+transition, or an unresolved journal entry quarantines conversation dispatch.
+That hold survives runner restart. A coordinator transition to `failed` after
+lease abandonment still means delivery outcome unknown; it does not clear the
+local hold. Reconcile the surviving journal and exact thread before following
+the rotation procedure below. A command leased during the close race is not
+accepted or delivered, and further leases remain suppressed through its
+server lease deadline plus the protocol's maximum accepted clock-skew margin.
+
 The runner has one conversation-only posture. It pins Codex app-server thread creation, resume, and every turn to approval policy `never` and sandbox mode `read-only`, verifies that app-server reports those effective settings, and disables network and environment access. It will not attach remote steering to a turn that was already active when the thread was resumed because that turn's original posture cannot be proven. Thread creation supplies empty dynamic-tool, selected-capability-root, and environment lists. The app-server process receives fixed flags that disable apps, plug-ins, hooks, browser and computer use, code mode, image generation, memories and history-notes tooling, both multi-agent implementations, tool suggestion, web search, orchestrator MCP, local shell and unified execution, filesystem and image inspection, skill search, worktrees, and workspace-dependency tools. It also replaces the legacy out-of-sandbox `notify` command with an empty list. Before any thread is created or resumed, the adapter reads the effective configuration for the selected checkout and fails closed unless every fixed disable is effective, legacy `notify` is empty, and the MCP server map is empty. The dedicated thread can exchange bounded messages and native choices; it cannot inspect or edit the checkout, run tests, or invoke a local tool.
 
 The loopback local companion keeps its normal locally configured posture. The remote child receives only a small operating-system, path, locale, home, and Codex-home environment allowlist; ambient API keys, repository tokens, proxy credentials, runner configuration, and language-loader variables are omitted. It uses a required owner-only Codex home directly under that case's runner journal instead of inheriting the interactive Codex home. Authenticate that dedicated home explicitly; environment-only API keys are intentionally unavailable.
@@ -150,9 +181,26 @@ npm run cockpit:remote:runner
 
 Install that exact release with the pinned artifact integrity and protected Node path in [Install the protected remote Codex release](setup.md#install-the-protected-remote-codex-release) before running these commands. The runner drops writable or unprotected `PATH` entries and selects Codex only from the remaining protected directories. The selected executable's resolved real path and every ancestor directory must be administrator-owned and non-writable by the operator. A user-owned installation cannot supply that executable; startup fails if no protected Codex executable is available. The dedicated `CODEX_HOME` remains owner-only and writable because it stores this thread's login and state; it is separate from the protected executable prefix. Load the case-bound `runner/runner.env` generated by `remote init`; the public template is only a variable-shape reference and must not replace it.
 
-The supplied runner entrypoint is operator-attended and foreground-only. Closing its terminal, ending the login or WSL session, shutting down WSL, sleeping or rebooting the laptop, or losing network access interrupts live steering. The coordinator may remain reachable, but its runner and projections must become stale or unavailable. A running runner retries transient coordinator request failures with bounded exponential backoff and jitter, including HTTP 429 and 5xx responses; a network interruption alone does not require restarting it. If the runner process exited, load the same owner-only runner environment and run the same command after the laptop and network return; the journal and boundary-bound thread record are designed to resume the existing runner state. Check the cockpit for an ambiguous or failed command before retrying it.
+The runner can remain foreground-attended with the command above, or run under
+the reviewed `gate-remote-runner@.service` user unit described in
+[persistent local services](../deploy/local/systemd/README.md). The unit loads
+an owner-only copy of the generated case-bound environment and calls this same
+runner entrypoint. It restarts abnormal process termination but leaves a clean
+exit or permanent identity, signature, session-revision, boundary, or
+configuration rejection stopped for review. The runner itself retries
+transient coordinator failures with bounded exponential backoff and jitter,
+including HTTP 429 and 5xx responses. Never run a foreground process and a
+service against the same journal.
 
-This release does not include a laptop runner service. Do not wrap it in an unconditional restart loop: a permanent identity, signature, session-revision, boundary, or configuration rejection is supposed to stop instead of retrying forever. A later host-specific service must preserve the exact environment and state ownership, stop cleanly, distinguish permanent from transient exits, and never run two processes against one journal.
+The service removes the open-terminal dependency inside a running Linux or
+WSL2 instance. It cannot keep Windows awake, resume through laptop sleep, or
+start a stopped WSL distribution. Enable systemd and user lingering in WSL2;
+use a deliberate Windows Task Scheduler entry if that distribution must start
+after Windows boot. Until the laptop, WSL distribution, network, and runner are
+back, the coordinator can remain reachable but the runner and its projections
+become stale or unavailable. The journal and boundary-bound thread record are
+designed to resume the existing runner state after a restart. Check the cockpit
+for an ambiguous or failed command before retrying it.
 
 The exact non-secret shapes, key-generation steps, and optional hardened systemd coordinator unit are under [`deploy/remote`](../deploy/remote/README.md). A provider-specific Cloudflare Tunnel and Access bundle for a Linux VPS is under [`deploy/remote/cloudflare-vps`](../deploy/remote/cloudflare-vps/README.md). They are templates rather than a deployment: every example identity, host, path, and case must be replaced, provider credentials stay outside Git, and the readiness checks still have to pass on the actual host. Both reviewed bundles support exactly one case on a VPS; use another VPS for every concurrent case.
 
@@ -166,6 +214,7 @@ A deployment is ready only when all of these are observed:
 - `/readyz` reports ready from the platform health path;
 - a request receives a durable `queued` receipt, its dispatch lifecycle reaches a terminal state, and the separate state/activity stream later shows the expected Codex turn result;
 - the enrolled runner is visible as current, not stale or offline;
+- stopping only the dedicated Codex app-server leaves observer fleet telemetry current, shows Codex offline, and prevents command leasing until a reviewed idle replacement resumes;
 - state expires when runner updates stop instead of remaining falsely live;
 - restarting the coordinator preserves queued state and restarting the runner preserves its deduplication journal;
 - the runner rejects an ambient Codex home and stops before thread creation when effective MCP or external-tool configuration is present;

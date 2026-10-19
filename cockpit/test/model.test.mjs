@@ -25,8 +25,8 @@ test("accepts the exact gate.public-cockpit/v1 fixture", async () => {
   assert.equal(parsed.campaigns.length, 2);
   assert.equal(toDisplayModel(parsed).waitingCount, 1);
   assert.equal(toDisplayModel(parsed).mode, "preview");
-  assert.equal(toDisplayModel(parsed).siteVersion, "0.4.1");
-  assert.equal(toDisplayModel(parsed).gateVersion, "0.1.3");
+  assert.equal(toDisplayModel(parsed).siteVersion, "0.5.0");
+  assert.equal(toDisplayModel(parsed).gateVersion, "0.2.0");
 });
 
 test("preview is an explicit non-expiring, never-observed union", async () => {
@@ -298,14 +298,15 @@ function unavailableRemoteFleet(overrides = {}) {
     ...(profile ? { visible: null, representedByCases: null } : {})
   });
   return {
-    apiVersion: "gate.remote-fleet/v1", sessionRevision: 9, revision: 1,
+    apiVersion: "gate.remote-fleet/v2", sessionRevision: 9, revision: 1, selectionEpoch: "0".repeat(32),
     observedAt: null, receivedAt: "2026-10-16T12:00:00.000Z",
+    validUntil: "2026-10-16T12:00:15.000Z",
     connection: "unavailable", sourceFreshness: "unavailable",
     coverage: { state: "unavailable", cases: scan(), profiles: scan(true) },
     summary: {
       campaigns: unavailable(), active: unavailable(), waiting: unavailable(), attention: unavailable(),
       profileAnswers: { answered: null, total: null, precision: "unavailable" },
-      runningExecutions: unavailable(), activeWorkflows: unavailable(), runningAnalyses: unavailable(), setupBlockers: unavailable(),
+      runningExecutions: unavailable(), activeWorkflows: unavailable(), runningAnalyses: unavailable(), setupBlockers: unavailable(), blockers: unavailable(),
       campaignTokens: { availability: "unavailable", total: null },
       hostTokens: {
         availability: "unavailable", input: null, cachedInput: null, output: null, total: null,

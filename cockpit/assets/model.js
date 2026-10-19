@@ -502,7 +502,22 @@ const LOCAL_FLEET_STAGES = new Set([
 const LOCAL_FLEET_STATES = new Set(["queued", "running", "waiting", "blocked", "succeeded", "failed", "cancelled", "unknown", "idle"]);
 const LOCAL_FLEET_ATTENTION = new Set(["steady", "watch", "response-needed"]);
 const LOCAL_FLEET_FRESHNESS = new Set(["current", "delayed", "unknown"]);
+const LOCAL_FLEET_EVENT_CATEGORIES = new Set(["campaign", "workflow", "execution", "test", "evidence", "learning", "analysis", "tool", "operator", "system", "other"]);
+const LOCAL_FLEET_EVENT_STATUSES = new Set(["queued", "running", "waiting", "blocked", "succeeded", "failed", "cancelled", "unknown"]);
 const LOCAL_FLEET_TOKEN_AVAILABILITY = new Set(["exact", "estimated", "partial", "unavailable"]);
+const PILOT_REASONS = new Set(["not-case-scoped", "missing", "invalid", "expired", "worker-unavailable"]);
+const PILOT_ACTIONS = new Set(["none", "operator", "solver", "platform", "review"]);
+const PILOT_DEPTH = new Set(["unavailable", "baseline", "systematic", "deep"]);
+const PILOT_SOLVING_VERDICTS = new Set(["pass", "provisional", "fail", "blocked", "unknown"]);
+const PILOT_SOLVING_NOW = new Set(["idle", "intake", "mapping", "enumerating", "exploiting", "validating", "submitting", "complete", "blocked"]);
+const PILOT_LEARNING_VERDICTS = new Set(["pass", "provisional", "fail", "blocked", "unknown", "not-applicable"]);
+const PILOT_LEARNING_NOW = new Set(["observing", "extracting", "validating", "applying", "checking", "idle", "blocked"]);
+const PILOT_COCKPIT_VERDICTS = new Set(["pass", "provisional", "fail", "blocked", "unknown"]);
+const PILOT_COCKPIT_NOW = new Set(["collecting", "projecting", "current", "delayed", "blocked"]);
+const PILOT_INTEGRITY = new Set(["consistent", "degraded"]);
+const PILOT_COMPLETION_STATES = new Set(["complete", "incomplete", "unknown"]);
+const PILOT_REPRODUCTION = new Set(["confirmed", "not-confirmed", "not-applicable", "unknown"]);
+const PILOT_EXTERNAL_ACCEPTANCE = new Set(["accepted", "pending", "rejected", "not-applicable", "unknown"]);
 const TOKEN_PROVENANCE = new Set(["exact", "estimated", "unavailable"]);
 const TOKEN_COST_UNITS = new Set(["USD", "credits"]);
 
@@ -757,18 +772,309 @@ function validateFleetTokens(value, allowPartial = false) {
   return boundedInteger(value.total, 0, Number.MAX_SAFE_INTEGER) ? Object.freeze({ ...value }) : null;
 }
 
+function unavailablePilotMetric() {
+  return Object.freeze({ availability: "unavailable", value: null });
+}
+
+function unavailablePilot(reason = "missing") {
+  const axis = () => ({ availability: "unavailable", verdict: null, now: null, actionNeeded: null, updatedAt: null });
+  return Object.freeze({
+    availability: "unavailable", reason, observedAt: null, validUntil: null,
+    solving: Object.freeze({
+      ...axis(), completion: Object.freeze({ state: null, reproduction: null, externalAcceptance: null }),
+      objectives: Object.freeze({ availability: "unavailable", completed: null, total: null }),
+      depth: Object.freeze({ level: "unavailable", branchesExplored: unavailablePilotMetric(), techniquesAttempted: unavailablePilotMetric(), deadEndsRetired: unavailablePilotMetric() }),
+      efficiency: Object.freeze(Object.fromEntries(["elapsedSeconds", "activeSeconds", "tokens", "toolRuns", "requests", "retries"].map((key) => [key, unavailablePilotMetric()])))
+    }),
+    learning: Object.freeze({ ...axis(), stages: Object.freeze(Object.fromEntries(["observations", "candidates", "validated", "applied", "transferred", "regressed"].map((key) => [key, unavailablePilotMetric()]))) }),
+    cockpit: Object.freeze({ ...axis(), signals: Object.freeze({ availability: "unavailable", available: null, total: null }), updatesPublished: unavailablePilotMetric(), updatesMissed: unavailablePilotMetric() }),
+    integrity: Object.freeze({ availability: "unavailable", status: null, checks: Object.freeze({ availability: "unavailable", available: null, total: null }), issues: unavailablePilotMetric(), checkedAt: null })
+  });
+}
+
+export function unavailablePilotProjection(reason = "missing") {
+  return PILOT_REASONS.has(reason) ? unavailablePilot(reason) : unavailablePilot("invalid");
+}
+
+function validatePilotMetric(value) {
+  if (!exactKeys(value, ["availability", "value"])) return null;
+  if (value.availability === "unavailable" && value.value === null) return unavailablePilotMetric();
+  return value.availability === "available" && boundedInteger(value.value, 0, Number.MAX_SAFE_INTEGER)
+    ? Object.freeze({ ...value }) : null;
+}
+
+function pilotLearningStagesAreConsistent(stages) {
+  const value = key => stages[key].availability === "available" ? stages[key].value : null;
+  const exceeds = (left, right) => left !== null && right !== null && left > right;
+  return !exceeds(value("candidates"), value("observations"))
+    && !exceeds(value("validated"), value("candidates"))
+    && !exceeds(value("applied"), value("validated"))
+    && !exceeds(value("transferred"), value("applied"))
+    && !exceeds(value("regressed"), value("applied"));
+}
+
+function validatePilotCoverage(value) {
+  if (!exactKeys(value, ["availability", "available", "total"])) return null;
+  if (value.availability === "unavailable" && value.available === null && value.total === null) return Object.freeze({ ...value });
+  return value.availability === "available" && boundedInteger(value.available, 0, 1_000_000_000)
+    && boundedInteger(value.total, 1, 1_000_000_000) && value.available <= value.total ? Object.freeze({ ...value }) : null;
+}
+
+function validatePilotAxis(value, verdicts, stages) {
+  if (!record(value)) return null;
+  if (value.availability === "unavailable") {
+    return value.verdict === null && value.now === null && value.actionNeeded === null && value.updatedAt === null
+      ? Object.freeze({ availability: "unavailable", verdict: null, now: null, actionNeeded: null, updatedAt: null }) : null;
+  }
+  return value.availability === "available" && verdicts.has(value.verdict) && stages.has(value.now)
+    && PILOT_ACTIONS.has(value.actionNeeded) && timestamp(value.updatedAt) !== null
+    ? Object.freeze({ availability: "available", verdict: value.verdict, now: value.now, actionNeeded: value.actionNeeded, updatedAt: value.updatedAt }) : null;
+}
+
+export function validatePilotProjection(value, options = {}) {
+  if (!exactKeys(value, ["availability", "reason", "observedAt", "validUntil", "solving", "learning", "cockpit", "integrity"])) return null;
+  if (value.availability === "unavailable") {
+    if (!PILOT_REASONS.has(value.reason) || value.observedAt !== null || value.validUntil !== null) return null;
+  } else {
+    const observedAt = timestamp(value.observedAt);
+    const validUntil = timestamp(value.validUntil);
+    const now = options.now instanceof Date ? options.now.getTime() : null;
+    if (value.availability !== "available" || value.reason !== null || observedAt === null || validUntil === null
+        || validUntil <= observedAt || validUntil - observedAt > 180_000
+        || now !== null && now >= validUntil) return null;
+  }
+  if (!exactKeys(value.solving, ["availability", "verdict", "now", "actionNeeded", "updatedAt", "completion", "objectives", "depth", "efficiency"])
+      || !exactKeys(value.learning, ["availability", "verdict", "now", "actionNeeded", "updatedAt", "stages"])
+      || !exactKeys(value.cockpit, ["availability", "verdict", "now", "actionNeeded", "updatedAt", "signals", "updatesPublished", "updatesMissed"])
+      || !exactKeys(value.integrity, ["availability", "status", "checks", "issues", "checkedAt"])) return null;
+  const solvingAxis = validatePilotAxis(value.solving, PILOT_SOLVING_VERDICTS, PILOT_SOLVING_NOW);
+  const learningAxis = validatePilotAxis(value.learning, PILOT_LEARNING_VERDICTS, PILOT_LEARNING_NOW);
+  const cockpitAxis = validatePilotAxis(value.cockpit, PILOT_COCKPIT_VERDICTS, PILOT_COCKPIT_NOW);
+  const objectives = value.solving.objectives;
+  const completion = value.solving.completion;
+  if (!solvingAxis || !learningAxis || !cockpitAxis || !exactKeys(objectives, ["availability", "completed", "total"])
+      || !exactKeys(completion, ["state", "reproduction", "externalAcceptance"])) return null;
+  const completionProjection = solvingAxis.availability === "unavailable"
+    ? completion.state === null && completion.reproduction === null && completion.externalAcceptance === null
+      ? Object.freeze({ ...completion }) : null
+    : PILOT_COMPLETION_STATES.has(completion.state) && PILOT_REPRODUCTION.has(completion.reproduction)
+      && PILOT_EXTERNAL_ACCEPTANCE.has(completion.externalAcceptance) ? Object.freeze({ ...completion }) : null;
+  const objectiveProjection = objectives.availability === "unavailable" && objectives.completed === null && objectives.total === null
+    ? Object.freeze({ ...objectives })
+    : objectives.availability === "available" && boundedInteger(objectives.completed, 0, 1_000_000_000)
+      && boundedInteger(objectives.total, 1, 1_000_000_000) && objectives.completed <= objectives.total
+      ? Object.freeze({ ...objectives }) : null;
+  if (!completionProjection || !objectiveProjection || !exactKeys(value.solving.depth, ["level", "branchesExplored", "techniquesAttempted", "deadEndsRetired"])
+      || !PILOT_DEPTH.has(value.solving.depth.level)
+      || !exactKeys(value.solving.efficiency, ["elapsedSeconds", "activeSeconds", "tokens", "toolRuns", "requests", "retries"])
+      || !exactKeys(value.learning.stages, ["observations", "candidates", "validated", "applied", "transferred", "regressed"])) return null;
+  const projectMetricMap = (source, keys) => {
+    const output = {};
+    for (const key of keys) {
+      output[key] = validatePilotMetric(source[key]);
+      if (!output[key]) return null;
+    }
+    return Object.freeze(output);
+  };
+  const depth = projectMetricMap(value.solving.depth, ["branchesExplored", "techniquesAttempted", "deadEndsRetired"]);
+  const efficiency = projectMetricMap(value.solving.efficiency, ["elapsedSeconds", "activeSeconds", "tokens", "toolRuns", "requests", "retries"]);
+  const learningStages = projectMetricMap(value.learning.stages, ["observations", "candidates", "validated", "applied", "transferred", "regressed"]);
+  const signals = validatePilotCoverage(value.cockpit.signals);
+  const updatesPublished = validatePilotMetric(value.cockpit.updatesPublished);
+  const updatesMissed = validatePilotMetric(value.cockpit.updatesMissed);
+  const checks = validatePilotCoverage(value.integrity.checks);
+  const issues = validatePilotMetric(value.integrity.issues);
+  if (!depth || !efficiency || !learningStages || !pilotLearningStagesAreConsistent(learningStages) ||
+      !signals || !updatesPublished || !updatesMissed || !checks || !issues) return null;
+  let integrity;
+  if (value.integrity.availability === "unavailable" && value.integrity.status === null && value.integrity.checkedAt === null) {
+    integrity = Object.freeze({ availability: "unavailable", status: null, checks, issues, checkedAt: null });
+  } else if (value.integrity.availability === "available" && PILOT_INTEGRITY.has(value.integrity.status) && timestamp(value.integrity.checkedAt) !== null) {
+    integrity = Object.freeze({ ...value.integrity, checks, issues });
+  } else return null;
+  const observedMillis = value.observedAt === null ? null : timestamp(value.observedAt);
+  const axisTimes = [solvingAxis, learningAxis, cockpitAxis]
+    .filter((axis) => axis.availability === "available")
+    .map((axis) => timestamp(axis.updatedAt));
+  if (value.availability === "unavailable") {
+    if (solvingAxis.availability !== "unavailable" || learningAxis.availability !== "unavailable"
+        || cockpitAxis.availability !== "unavailable" || integrity.availability !== "unavailable") return null;
+  } else if (axisTimes.some((at) => at > observedMillis)
+      || integrity.availability === "available" && timestamp(integrity.checkedAt) > observedMillis) return null;
+  const objectiveComplete = objectiveProjection.availability === "available"
+    && objectiveProjection.completed === objectiveProjection.total;
+  if (solvingAxis.verdict === "pass" && !(solvingAxis.now === "complete" && solvingAxis.actionNeeded === "none"
+      && completionProjection.state === "complete" && objectiveComplete
+      && new Set(["confirmed", "not-applicable"]).has(completionProjection.reproduction)
+      && new Set(["accepted", "not-applicable"]).has(completionProjection.externalAcceptance))) return null;
+  if (learningAxis.verdict === "pass" && !(learningStages.transferred.availability === "available"
+      && learningStages.transferred.value > 0)) return null;
+  if (cockpitAxis.verdict === "pass" && !(cockpitAxis.now === "current" && cockpitAxis.actionNeeded === "none"
+      && signals.availability === "available" && signals.available === signals.total
+      && updatesMissed.availability === "available" && updatesMissed.value === 0)) return null;
+  return Object.freeze({
+    availability: value.availability, reason: value.reason, observedAt: value.observedAt, validUntil: value.validUntil,
+    solving: Object.freeze({ ...solvingAxis, completion: completionProjection, objectives: objectiveProjection, depth: Object.freeze({ level: value.solving.depth.level, ...depth }), efficiency }),
+    learning: Object.freeze({ ...learningAxis, stages: learningStages }),
+    cockpit: Object.freeze({ ...cockpitAxis, signals, updatesPublished, updatesMissed }), integrity
+  });
+}
+
+function pilotMetricValue(metric) {
+  return metric?.availability === "available" ? metric.value : null;
+}
+
+/** Build the primary CTF pilot view without inventing missing measurements. */
+export function pilotCockpitPresentation(fleet, selectedAlias = null) {
+  const unavailableSolving = () => Object.freeze({ verdict: null, now: null, actionNeeded: null, objectives: null });
+  const unavailableLearning = () => Object.freeze({
+    verdict: null, now: null, actionNeeded: null,
+    stages: Object.freeze({ observations: null, candidates: null, validated: null, applied: null, transferred: null, regressed: null })
+  });
+  const unavailableCockpit = () => Object.freeze({
+    verdict: null, now: null, actionNeeded: null, signals: null, updatesPublished: null, updatesMissed: null
+  });
+  const offline = !fleet || fleet.connection !== "connected";
+  if (offline) {
+    return Object.freeze({
+      state: "feed-unavailable",
+      title: "Pilot feed unavailable",
+      recovery: "Check the laptop observer and dedicated runner.",
+      alias: null,
+      aliases: Object.freeze([]),
+      latestEvent: null,
+      heartbeat: "offline",
+      observedAt: null,
+      solving: unavailableSolving(),
+      depth: Object.freeze({ level: null, branchesExplored: null, techniquesAttempted: null, deadEndsRetired: null }),
+      efficiency: Object.freeze({ elapsedSeconds: null, activeSeconds: null, tokens: null, toolRuns: null, requests: null, retries: null }),
+      learning: unavailableLearning(),
+      cockpit: unavailableCockpit(),
+      integrity: Object.freeze({ status: null, checks: null, issues: null }),
+      timeline: Object.freeze([])
+    });
+  }
+  const cases = Array.isArray(fleet.campaigns) ? fleet.campaigns.filter((item) => item.kind === "case") : [];
+  const aliases = Object.freeze(cases.map((item) => item.alias));
+  // A lone case is unambiguous. More than one case always requires an
+  // explicit (or previously persisted) alias so the primary panel can never
+  // drift to whichever case happens to sort first.
+  const effectiveAlias = typeof selectedAlias === "string"
+    ? selectedAlias
+    : cases.length === 1 ? cases[0].alias : null;
+  const campaign = effectiveAlias === null
+    ? null
+    : cases.find((item) => item.alias === effectiveAlias) || null;
+  if (!campaign) {
+    return Object.freeze({
+      state: cases.length === 0 ? "pilot-unavailable" : "selection-required",
+      title: cases.length === 0 ? "CTF pilot state unavailable" : "Select a case",
+      recovery: cases.length === 0
+        ? "Start a case worker so it can publish a pilot scorecard."
+        : "Choose a case to view its independent scorecard.",
+      alias: null,
+      aliases,
+      latestEvent: null,
+      heartbeat: fleet.sourceFreshness,
+      observedAt: fleet.receivedAt,
+      solving: unavailableSolving(),
+      depth: Object.freeze({ level: null, branchesExplored: null, techniquesAttempted: null, deadEndsRetired: null }),
+      efficiency: Object.freeze({ elapsedSeconds: null, activeSeconds: null, tokens: null, toolRuns: null, requests: null, retries: null }),
+      learning: unavailableLearning(),
+      cockpit: unavailableCockpit(),
+      integrity: Object.freeze({ status: null, checks: null, issues: null }),
+      timeline: Object.freeze([])
+    });
+  }
+  const pilot = campaign?.pilot;
+  if (!pilot || pilot.availability !== "available") {
+    return Object.freeze({
+      state: "pilot-unavailable",
+      title: "CTF pilot state unavailable",
+      recovery: "Start the case worker so it can publish the pilot scorecard.",
+      alias: campaign?.alias || null,
+      aliases,
+      latestEvent: campaign?.latestEvent?.availability === "available"
+        ? Object.freeze({ category: campaign.latestEvent.category, status: campaign.latestEvent.status, at: campaign.latestEvent.at }) : null,
+      heartbeat: fleet.sourceFreshness,
+      observedAt: fleet.receivedAt,
+      solving: unavailableSolving(),
+      depth: Object.freeze({ level: null, branchesExplored: null, techniquesAttempted: null, deadEndsRetired: null }),
+      efficiency: Object.freeze({ elapsedSeconds: null, activeSeconds: null, tokens: null, toolRuns: null, requests: null, retries: null }),
+      learning: unavailableLearning(),
+      cockpit: unavailableCockpit(),
+      integrity: Object.freeze({ status: null, checks: null, issues: null }),
+      timeline: Object.freeze([])
+    });
+  }
+  const timelineStages = Object.freeze(["intake", "mapping", "enumerating", "exploiting", "validating", "submitting", "complete"]);
+  const activeStage = pilot.solving.availability === "available" ? pilot.solving.now : null;
+  return Object.freeze({
+    state: "available",
+    title: "CTF pilot",
+    recovery: null,
+    alias: campaign.alias,
+    aliases,
+    latestEvent: campaign.latestEvent.availability === "available"
+      ? Object.freeze({ category: campaign.latestEvent.category, status: campaign.latestEvent.status, at: campaign.latestEvent.at }) : null,
+    heartbeat: fleet.sourceFreshness,
+    observedAt: pilot.observedAt,
+    solving: Object.freeze({
+      verdict: pilot.solving.verdict,
+      now: pilot.solving.now,
+      actionNeeded: pilot.solving.actionNeeded,
+      objectives: pilot.solving.objectives.availability === "available"
+        ? Object.freeze({ completed: pilot.solving.objectives.completed, total: pilot.solving.objectives.total }) : null
+    }),
+    depth: Object.freeze({
+      level: pilot.solving.depth.level === "unavailable" ? null : pilot.solving.depth.level,
+      branchesExplored: pilotMetricValue(pilot.solving.depth.branchesExplored),
+      techniquesAttempted: pilotMetricValue(pilot.solving.depth.techniquesAttempted),
+      deadEndsRetired: pilotMetricValue(pilot.solving.depth.deadEndsRetired)
+    }),
+    efficiency: Object.freeze(Object.fromEntries(Object.entries(pilot.solving.efficiency)
+      .map(([key, metric]) => [key, pilotMetricValue(metric)]))),
+    learning: Object.freeze({
+      verdict: pilot.learning.verdict,
+      now: pilot.learning.now,
+      actionNeeded: pilot.learning.actionNeeded,
+      stages: Object.freeze(Object.fromEntries(Object.entries(pilot.learning.stages)
+        .map(([key, metric]) => [key, pilotMetricValue(metric)])))
+    }),
+    cockpit: Object.freeze({
+      verdict: pilot.cockpit.verdict,
+      now: pilot.cockpit.now,
+      actionNeeded: pilot.cockpit.actionNeeded,
+      signals: pilot.cockpit.signals.availability === "available"
+        ? Object.freeze({ available: pilot.cockpit.signals.available, total: pilot.cockpit.signals.total }) : null,
+      updatesPublished: pilotMetricValue(pilot.cockpit.updatesPublished),
+      updatesMissed: pilotMetricValue(pilot.cockpit.updatesMissed)
+    }),
+    integrity: Object.freeze({
+      status: pilot.integrity.status,
+      checks: pilot.integrity.checks.availability === "available"
+        ? Object.freeze({ available: pilot.integrity.checks.available, total: pilot.integrity.checks.total }) : null,
+      issues: pilotMetricValue(pilot.integrity.issues)
+    }),
+    timeline: Object.freeze(timelineStages.map((stage) => Object.freeze({ stage, current: stage === activeStage })))
+  });
+}
+
 export function validateLocalFleet(value, options = {}) {
   if (!exactKeys(value, [
-    "apiVersion", "revision", "observedAt", "receivedAt", "connection", "sourceFreshness", "coverage", "summary", "campaigns"
-  ]) || value.apiVersion !== "gate.local-fleet/v1" || !boundedInteger(value.revision, 1, 2_147_483_647)
+    "apiVersion", "revision", "selectionEpoch", "observedAt", "receivedAt", "validUntil", "connection", "sourceFreshness", "coverage", "summary", "campaigns"
+  ]) || value.apiVersion !== "gate.local-fleet/v2" || !boundedInteger(value.revision, 1, 2_147_483_647)
+      || typeof value.selectionEpoch !== "string" || !/^[a-f0-9]{32}$/u.test(value.selectionEpoch)
       || !LOCAL_FLEET_CONNECTION.has(value.connection) || !LOCAL_FLEET_SOURCE_FRESHNESS.has(value.sourceFreshness)) return null;
   const receivedAt = timestamp(value.receivedAt);
+  const validUntil = timestamp(value.validUntil);
   const now = options.now instanceof Date ? options.now.getTime() : Date.now();
-  if (receivedAt === null || receivedAt > now + 300_000) return null;
+  if (receivedAt === null || validUntil === null || receivedAt > now + 300_000
+      || validUntil <= receivedAt || validUntil - receivedAt > 15_000 || validUntil <= now) return null;
   const observedAt = value.observedAt === null ? null : timestamp(value.observedAt);
   if (value.connection === "unavailable") {
     if (observedAt !== null || value.sourceFreshness !== "unavailable") return null;
-  } else if (observedAt === null || observedAt > receivedAt + 300_000 || value.sourceFreshness === "unavailable") return null;
+  } else if (observedAt === null || observedAt > receivedAt || value.sourceFreshness === "unavailable") return null;
 
   if (!exactKeys(value.coverage, ["state", "cases", "profiles"]) || !LOCAL_FLEET_PRECISION.has(value.coverage.state)) return null;
   const casesScan = validateFleetScan(value.coverage.cases);
@@ -777,11 +1083,11 @@ export function validateLocalFleet(value, options = {}) {
 
   const summaryKeys = [
     "campaigns", "active", "waiting", "attention", "profileAnswers", "runningExecutions", "activeWorkflows",
-    "runningAnalyses", "setupBlockers", "campaignTokens", "hostTokens"
+    "runningAnalyses", "setupBlockers", "blockers", "campaignTokens", "hostTokens"
   ];
   if (!exactKeys(value.summary, summaryKeys)) return null;
   const summary = {};
-  for (const key of ["campaigns", "active", "waiting", "attention", "runningExecutions", "activeWorkflows", "runningAnalyses", "setupBlockers"]) {
+  for (const key of ["campaigns", "active", "waiting", "attention", "runningExecutions", "activeWorkflows", "runningAnalyses", "setupBlockers", "blockers"]) {
     summary[key] = validateFleetMetric(value.summary[key]);
     if (!summary[key]) return null;
   }
@@ -801,7 +1107,8 @@ export function validateLocalFleet(value, options = {}) {
   const aliases = new Set();
   const campaigns = [];
   for (const item of value.campaigns) {
-    if (!exactKeys(item, ["alias", "kind", "stage", "state", "progress", "attention", "freshness", "work", "tokens"])
+    const campaignKeys = ["alias", "kind", "stage", "state", "progress", "attention", "freshness", "work", "tokens", "pilot", "latestEvent"];
+    if (!(exactKeys(item, campaignKeys) || exactKeys(item, campaignKeys.filter((key) => key !== "pilot")))
         || typeof item.alias !== "string" || !/^Campaign [1-9]\d{0,2}$/u.test(item.alias) || aliases.has(item.alias)
         || !LOCAL_FLEET_KINDS.has(item.kind) || !LOCAL_FLEET_STAGES.has(item.stage) || !LOCAL_FLEET_STATES.has(item.state)
         || !LOCAL_FLEET_ATTENTION.has(item.attention) || !LOCAL_FLEET_FRESHNESS.has(item.freshness)) return null;
@@ -823,9 +1130,22 @@ export function validateLocalFleet(value, options = {}) {
       if (!work[key]) return null;
     }
     const tokens = validateFleetTokens(item.tokens);
-    if (!tokens) return null;
-    campaigns.push(Object.freeze({ ...item, progress, work: Object.freeze(work), tokens }));
+    const pilot = item.pilot === undefined
+      ? unavailablePilot("missing")
+      : validatePilotProjection(item.pilot, { now: new Date(now) });
+    if (!tokens || !pilot || !exactKeys(item.latestEvent, ["availability", "category", "status", "at"])) return null;
+    const latestEvent = item.latestEvent.availability === "unavailable"
+      && item.latestEvent.category === null && item.latestEvent.status === null && item.latestEvent.at === null
+      ? Object.freeze({ ...item.latestEvent })
+      : item.latestEvent.availability === "available" && LOCAL_FLEET_EVENT_CATEGORIES.has(item.latestEvent.category)
+        && LOCAL_FLEET_EVENT_STATUSES.has(item.latestEvent.status) && timestamp(item.latestEvent.at) !== null
+        ? Object.freeze({ ...item.latestEvent }) : null;
+    if (!latestEvent || latestEvent.availability === "available" && observedAt !== null
+        && timestamp(latestEvent.at) > observedAt) return null;
+    campaigns.push(Object.freeze({ ...item, progress, work: Object.freeze(work), tokens, pilot, latestEvent }));
   }
+  if (value.connection === "connected" && campaigns.some((item) => item.pilot.availability === "available"
+      && (timestamp(item.pilot.observedAt) > observedAt || validUntil > timestamp(item.pilot.validUntil)))) return null;
   if (value.connection === "unavailable" && (value.coverage.state !== "unavailable" || campaigns.length !== 0
       || Object.values(summary).some((item) => item?.precision && item.precision !== "unavailable"))) return null;
   return Object.freeze({
@@ -837,13 +1157,13 @@ export function validateLocalFleet(value, options = {}) {
 }
 
 export function validateRemoteFleet(value, options = {}) {
-  if (!record(value) || value.apiVersion !== "gate.remote-fleet/v1") return null;
+  if (!record(value) || value.apiVersion !== "gate.remote-fleet/v2") return null;
   if (!exactKeys(value, [
-    "apiVersion", "sessionRevision", "revision", "observedAt", "receivedAt", "connection", "sourceFreshness", "coverage", "summary", "campaigns"
+    "apiVersion", "sessionRevision", "revision", "selectionEpoch", "observedAt", "receivedAt", "validUntil", "connection", "sourceFreshness", "coverage", "summary", "campaigns"
   ]) || !boundedInteger(value.sessionRevision, 1, 2_147_483_647)
       || options.sessionRevision !== undefined && value.sessionRevision !== options.sessionRevision) return null;
   const { sessionRevision, ...withoutSession } = value;
-  const local = validateLocalFleet({ ...withoutSession, apiVersion: "gate.local-fleet/v1" }, options);
+  const local = validateLocalFleet({ ...withoutSession, apiVersion: "gate.local-fleet/v2" }, options);
   return local && boundedProjection(value) ? Object.freeze({ ...local, apiVersion: value.apiVersion, sessionRevision }) : null;
 }
 

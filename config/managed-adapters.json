@@ -128,6 +128,76 @@
         "output-file",
         "response-store"
       ]
+    },
+    {
+      "id": "httpx-url-fetch",
+      "version": 1,
+      "tool": {
+        "id": "httpx",
+        "version": "1.12.0",
+        "riskClass": "A1",
+        "lockEntrySha256": "238d383b8ab26c41ac374b59fd2eefe616adb48630bc5427518346891da9b148",
+        "catalogEntrySha256": "38b5530e56ef698f92ba3d5942d9bfa0cb48bfac3490ca515f323666ed66100b",
+        "executableSha256": {
+          "linux-x64": "6d78b83b4da452a7e0bd3613c4fae04cbf523209f083904b563f4d4406a680b0",
+          "linux-arm64": "28dec1033bf23c29bd2b3b0c65589f01efc8d726f3eb056ef5ce6bc19566ef7c"
+        }
+      },
+      "selectorType": "url",
+      "action": "observe",
+      "effectClass": "A1",
+      "allowedPhases": [
+        "active-surface-validation"
+      ],
+      "operation": {
+        "kind": "http-fetch",
+        "schemaVersion": 1
+      },
+      "compiler": {
+        "id": "httpx-exact-url-fetch-v1",
+        "source": "src/adapters/httpx-url-fetch.mjs",
+        "sourceSha256": "deaafcb24df1fa3b88b5b48b3d6ab077cf6153c1bca8e8ce7a3d8ca3bf7417e8"
+      },
+      "limits": {
+        "maxMinutes": 5,
+        "maxRequests": 1,
+        "maxParallel": 1,
+        "maxRatePerSecond": 2,
+        "maxTimeoutSeconds": 15,
+        "maxEvidenceBytes": 67108864
+      },
+      "allowedFeatures": [
+        "exact-url",
+        "get",
+        "head",
+        "private-response-body",
+        "approved-ip-dial",
+        "fixed-host-header",
+        "fixed-tls-sni",
+        "jsonl-output",
+        "bounded-rate",
+        "bounded-timeout",
+        "bounded-response"
+      ],
+      "forbiddenFeatures": [
+        "redirect",
+        "request-body",
+        "operator-custom-header",
+        "raw-request",
+        "headless",
+        "javascript",
+        "authentication",
+        "proxy",
+        "path-expansion",
+        "port-expansion",
+        "tls-probe",
+        "csp-probe",
+        "cloud-auth",
+        "dashboard",
+        "update",
+        "output-file",
+        "response-store"
+      ]
     }
   ]
 }

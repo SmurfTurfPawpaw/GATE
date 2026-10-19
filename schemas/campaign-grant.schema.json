@@ -1,0 +1,200 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/campaign-grant.schema.json",
+  "title": "GATE private campaign grant",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "apiVersion",
+    "kind",
+    "metadata",
+    "binding",
+    "allow",
+    "ceilings",
+    "stopConditions",
+    "grantSha256"
+  ],
+  "properties": {
+    "$schema": { "const": "https://gate.local/schemas/campaign-grant.schema.json" },
+    "apiVersion": { "const": "gate.dev/campaign-grant/v1" },
+    "kind": { "const": "CampaignGrant" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "createdAt", "expiresAt"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "expiresAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["case", "program", "source", "engagement"],
+      "properties": {
+        "case": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "scopeSha256"],
+          "properties": {
+            "id": { "$ref": "#/$defs/id" },
+            "scopeSha256": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        "program": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "profileSha256"],
+          "properties": {
+            "id": { "$ref": "#/$defs/id" },
+            "profileSha256": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "contentSha256", "projectionSha256", "snapshotSha256"],
+          "properties": {
+            "id": { "$ref": "#/$defs/sourceId" },
+            "contentSha256": { "$ref": "#/$defs/sha256" },
+            "projectionSha256": { "$ref": "#/$defs/sha256" },
+            "snapshotSha256": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        "engagement": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id"],
+              "properties": { "id": { "$ref": "#/$defs/id" } }
+            }
+          ]
+        }
+      }
+    },
+    "allow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operations", "adapterRegistrySha256", "selectors", "environment"],
+      "properties": {
+        "operations": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/operation" }
+        },
+        "adapterRegistrySha256": {
+          "oneOf": [
+            { "$ref": "#/$defs/sha256" },
+            { "type": "null" }
+          ]
+        },
+        "selectors": {
+          "type": "array",
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/selector" }
+        },
+        "environment": {
+          "enum": ["host", "rootless-container", "container", "vm", "remote-lab"]
+        }
+      }
+    },
+    "ceilings": { "$ref": "#/$defs/ceilings" },
+    "stopConditions": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "operator-stop",
+          "campaign-expiry",
+          "case-binding-change",
+          "program-profile-change",
+          "source-binding-change",
+          "engagement-invalid",
+          "scope-mismatch",
+          "adapter-contract-change",
+          "budget-exhausted",
+          "evidence-integrity-failure",
+          "unexpected-sensitive-data",
+          "target-instability",
+          "execution-ambiguity",
+          "execution-blocked",
+          "controller-recovery-required"
+        ]
+      }
+    },
+    "grantSha256": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$" },
+    "sourceId": { "$ref": "#/$defs/id" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "toolId": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "minLength": 2, "maxLength": 64 },
+    "action": {
+      "enum": [
+        "observe",
+        "scan",
+        "intercept",
+        "authenticate",
+        "fuzz",
+        "exploit-safe",
+        "exploit-stateful",
+        "persist",
+        "denial-of-service",
+        "destructive-test",
+        "data-access",
+        "data-removal",
+        "exfiltration-simulation"
+      ]
+    },
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["adapterId", "action", "toolId"],
+      "properties": {
+        "adapterId": { "$ref": "#/$defs/toolId" },
+        "action": { "$ref": "#/$defs/action" },
+        "toolId": { "$ref": "#/$defs/toolId" }
+      }
+    },
+    "selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "value"],
+      "properties": {
+        "type": { "enum": ["domain", "ip", "cidr", "url", "application", "account", "repository", "device", "path"] },
+        "value": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "^[^\\u0000\\r\\n]+$" }
+      }
+    },
+    "ceilings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxWallMinutes",
+        "maxRequests",
+        "maxRatePerSecond",
+        "maxConcurrency",
+        "maxInputTokens",
+        "maxOutputTokens",
+        "maxTotalTokens",
+        "maxSpend",
+        "maxEvidenceBytes"
+      ],
+      "properties": {
+        "maxWallMinutes": { "type": "integer", "minimum": 1, "maximum": 525600 },
+        "maxRequests": { "type": "integer", "minimum": 0, "maximum": 10000000 },
+        "maxRatePerSecond": { "type": "number", "minimum": 0, "maximum": 100000 },
+        "maxConcurrency": { "type": "integer", "minimum": 1, "maximum": 256 },
+        "maxInputTokens": { "type": "integer", "minimum": 0, "maximum": 100000000 },
+        "maxOutputTokens": { "type": "integer", "minimum": 0, "maximum": 100000000 },
+        "maxTotalTokens": { "type": "integer", "minimum": 0, "maximum": 100000000 },
+        "maxSpend": { "type": "number", "minimum": 0, "maximum": 1000000 },
+        "maxEvidenceBytes": { "type": "integer", "minimum": 0, "maximum": 10737418240 }
+      }
+    }
+  }
+}

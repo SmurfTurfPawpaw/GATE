@@ -210,13 +210,17 @@ test("private fleet projection requires the fragment session and stays on its re
   });
   assert.equal(accepted.status, 200);
   assert.equal(accepted.headers["cache-control"], "no-store, max-age=0");
-  assert.deepEqual(JSON.parse(accepted.body), {
+  const acceptedBody = JSON.parse(accepted.body);
+  assert.match(acceptedBody.fleet.selectionEpoch, /^[a-f0-9]{32}$/u);
+  assert.deepEqual(acceptedBody, {
     ok: true,
     fleet: {
-      apiVersion: "gate.local-fleet/v1",
+      apiVersion: "gate.local-fleet/v2",
       revision: 1,
+      selectionEpoch: acceptedBody.fleet.selectionEpoch,
       observedAt: null,
       receivedAt: "2026-10-16T14:40:00.000Z",
+      validUntil: "2026-10-16T14:40:15.000Z",
       connection: "unavailable",
       sourceFreshness: "unavailable",
       coverage: {
@@ -241,6 +245,7 @@ test("private fleet projection requires the fragment session and stays on its re
         activeWorkflows: { value: null, precision: "unavailable" },
         runningAnalyses: { value: null, precision: "unavailable" },
         setupBlockers: { value: null, precision: "unavailable" },
+        blockers: { value: null, precision: "unavailable" },
         campaignTokens: { availability: "unavailable", total: null },
         hostTokens: {
           availability: "unavailable", input: null, cachedInput: null, output: null, total: null,

@@ -45,6 +45,7 @@ const MAX_CASE_SCOPE_BYTES = 64 * 1024;
 const RUNTIME_PATH_KEYS = Object.freeze([
   "stateHome", "cases", "caseRoot", "caseScope", "caseBinding",
   "events", "tokens", "engagements", "authorizations", "plans", "evidence", "programs", "workflows",
+  "ctfPilotRoot", "ctfPilotState", "ctfPilotTransfers",
   "executions", "executionManifests", "executionClaims", "executionRuns", "executionStops", "executionSandboxes",
   "offlineAnalyses", "offlineAnalysisTransactions", "offlineAnalysisManifests", "offlineAnalysisCreations",
   "offlineAnalysisClaims", "offlineAnalysisPurges", "offlineAnalysisRuns", "offlineAnalysisInputs",
@@ -107,6 +108,7 @@ export function runtimePaths(options = {}) {
   const toolRuntimes = path.join(home, "tool-runtimes");
   const toolCache = path.join(home, "tool-cache");
   const programs = path.join(home, "programs");
+  const ctfPilotRoot = path.join(stateHome, "ctf-pilot");
   return {
     repo,
     home,
@@ -125,6 +127,9 @@ export function runtimePaths(options = {}) {
     evidence: path.join(stateHome, "evidence"),
     programs,
     workflows: path.join(stateHome, "workflows"),
+    ctfPilotRoot,
+    ctfPilotState: path.join(ctfPilotRoot, "state.json"),
+    ctfPilotTransfers: path.join(ctfPilotRoot, "transfers"),
     executions,
     executionManifests: path.join(executions, "manifests"),
     executionClaims: path.join(executions, "claims"),
@@ -310,6 +315,8 @@ export function ensureRuntime(paths) {
     paths.evidence,
     paths.programs,
     workflows,
+    paths.caseId ? paths.ctfPilotRoot : null,
+    paths.caseId ? paths.ctfPilotTransfers : null,
     paths.executions,
     paths.executionManifests,
     paths.executionClaims,
@@ -353,7 +360,12 @@ export function ensureRuntime(paths) {
     }
   }
 
-  const knownFiles = [paths.events, paths.tokens, paths.privateLearnings].filter(Boolean).map((file) => path.resolve(file));
+  const knownFiles = [
+    paths.events,
+    paths.tokens,
+    paths.privateLearnings,
+    paths.caseId ? paths.ctfPilotState : null
+  ].filter(Boolean).map((file) => path.resolve(file));
   for (const file of knownFiles) {
     ensureContained(file, "private file");
     securePrivateFile(file, { label: `private runtime file ${file}` });
@@ -366,6 +378,7 @@ export function ensureRuntime(paths) {
     paths.engagements,
     paths.authorizations,
     paths.plans,
+    paths.caseId ? paths.ctfPilotTransfers : null,
     paths.projects,
     paths.executionManifests,
     paths.executionClaims,

@@ -62,11 +62,13 @@ function fleetProjection(overrides = {}) {
     ...(profile ? { visible: 1, representedByCases: 1 } : {})
   });
   return {
-    apiVersion: "gate.remote-fleet/v1",
+    apiVersion: "gate.remote-fleet/v2",
     sessionRevision,
     revision: 4,
+    selectionEpoch: "0".repeat(32),
     observedAt,
     receivedAt: observedAt,
+    validUntil: "2026-10-18T12:00:15.000Z",
     connection: "connected",
     sourceFreshness: "current",
     coverage: { state: "exact", cases: scan(), profiles: scan(true) },
@@ -80,6 +82,7 @@ function fleetProjection(overrides = {}) {
       activeWorkflows: metric(1),
       runningAnalyses: metric(),
       setupBlockers: metric(),
+      blockers: metric(),
       campaignTokens: { availability: "exact", total: 100 },
       hostTokens: {
         availability: "exact",
@@ -104,9 +107,46 @@ function fleetProjection(overrides = {}) {
         runningAnalyses: metric(),
         setupBlockers: metric()
       },
-      tokens: { availability: "exact", total: 100 }
+      tokens: { availability: "exact", total: 100 },
+      latestEvent: { availability: "available", category: "campaign", status: "running", at: observedAt }
     }],
     ...overrides
+  };
+}
+
+function pilotProjection() {
+  const metric = value => ({ availability: "available", value });
+  return {
+    availability: "available", reason: null, observedAt,
+    validUntil: new Date(Date.parse(observedAt) + 180_000).toISOString(),
+    solving: {
+      availability: "available", verdict: "pass", now: "complete", actionNeeded: "none", updatedAt: observedAt,
+      completion: { state: "complete", reproduction: "confirmed", externalAcceptance: "accepted" },
+      objectives: { availability: "available", completed: 1, total: 1 },
+      depth: {
+        level: "systematic", branchesExplored: metric(7), techniquesAttempted: metric(5), deadEndsRetired: metric(2)
+      },
+      efficiency: {
+        elapsedSeconds: metric(900), activeSeconds: metric(600), tokens: metric(12_000),
+        toolRuns: metric(8), requests: metric(31), retries: metric(1)
+      }
+    },
+    learning: {
+      availability: "available", verdict: "provisional", now: "checking", actionNeeded: "review", updatedAt: observedAt,
+      stages: {
+        observations: metric(6), candidates: metric(4), validated: metric(3), applied: metric(2),
+        transferred: metric(1), regressed: metric(0)
+      }
+    },
+    cockpit: {
+      availability: "available", verdict: "pass", now: "current", actionNeeded: "none", updatedAt: observedAt,
+      signals: { availability: "available", available: 10, total: 10 },
+      updatesPublished: metric(12), updatesMissed: metric(0)
+    },
+    integrity: {
+      availability: "available", status: "consistent",
+      checks: { availability: "available", available: 6, total: 6 }, issues: metric(0), checkedAt: observedAt
+    }
   };
 }
 
@@ -284,6 +324,17 @@ test("state projections bind freshness and sanitize the bounded visible conversa
 
 test("fleet projections are exact, revision-bound, and byte bounded", () => {
   assert.equal(normalizeRemoteFleetProjection(fleetProjection()).revision, 4);
+  const withPilot = fleetProjection({
+    campaigns: [{ ...fleetProjection().campaigns[0], pilot: pilotProjection() }]
+  });
+  const normalizedPilot = normalizeRemoteFleetProjection(withPilot).campaigns[0].pilot;
+  assert.deepEqual([
+    normalizedPilot.solving.verdict,
+    normalizedPilot.learning.verdict,
+    normalizedPilot.cockpit.verdict,
+    normalizedPilot.learning.stages.transferred.value
+  ], ["pass", "provisional", "pass", 1]);
+  assert.equal(Object.hasOwn(normalizedPilot, "score"), false);
   assert.throws(() => normalizeRemoteFleetProjection(fleetProjection({ extra: true })), /invalid/u);
   assert.throws(() => normalizeRemoteFleetProjection(fleetProjection({
     campaigns: [{ ...fleetProjection().campaigns[0], path: "/CANARY_PRIVATE_PATH" }]

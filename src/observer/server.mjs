@@ -7,6 +7,7 @@ import path from "node:path";
 import { normalizeBuildIdentity, observeBuildIdentity } from "../lib/build-identity.mjs";
 import { programProfileSetupFleetStatus } from "../lib/bounty-profiles.mjs";
 import { buildStatus } from "../lib/status.mjs";
+import { ctfPilotInternals } from "../lib/ctf-pilot.mjs";
 import { sanitizeOperatorDisplayName, terminalWelcomeBanner } from "../lib/terminal-ui.mjs";
 import { assertNoLikelySecret, redactSensitiveHeaders } from "../lib/text.mjs";
 
@@ -218,6 +219,20 @@ const WORKFLOW_LANES = new Set([
 ]);
 const WORKFLOW_EFFECTS = new Set(["P0", "P1", "A1", "A2", "A3"]);
 const WORKFLOW_CONTROLS = new Set(["enforced", "measured-only", "unavailable"]);
+const CTF_PILOT_REASONS = new Set(["not-case-scoped", "missing", "invalid", "expired", "worker-unavailable"]);
+const CTF_SOLVING_VERDICTS = new Set(["pass", "provisional", "fail", "blocked", "unknown"]);
+const CTF_SOLVING_STAGES = new Set(["idle", "intake", "mapping", "enumerating", "exploiting", "validating", "submitting", "complete", "blocked"]);
+const CTF_LEARNING_VERDICTS = new Set(["pass", "provisional", "fail", "blocked", "unknown", "not-applicable"]);
+const CTF_LEARNING_STAGES = new Set(["observing", "extracting", "validating", "applying", "checking", "idle", "blocked"]);
+const CTF_COCKPIT_VERDICTS = new Set(["pass", "provisional", "fail", "blocked", "unknown"]);
+const CTF_COCKPIT_STAGES = new Set(["collecting", "projecting", "current", "delayed", "blocked"]);
+const CTF_ACTIONS = new Set(["none", "operator", "solver", "platform", "review"]);
+const CTF_DEPTH_LEVELS = new Set(["unavailable", "baseline", "systematic", "deep"]);
+const CTF_INTEGRITY = new Set(["consistent", "degraded"]);
+const CTF_COMPLETION_STATES = new Set(["complete", "incomplete", "unknown"]);
+const CTF_REPRODUCTION = new Set(["confirmed", "not-confirmed", "not-applicable", "unknown"]);
+const CTF_EXTERNAL_ACCEPTANCE = new Set(["accepted", "pending", "rejected", "not-applicable", "unknown"]);
+const CTF_PILOT_TTL_MS = 180_000;
 const MAX_TOOL_RUNTIMES = 256;
 const MAX_WORKFLOW_RECORDS = 64;
 const MAX_CASE_RECORDS = 32;
@@ -257,6 +272,186 @@ const STATIC_FILES = new Map([
 
 function object(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+
+function exactObjectKeys(value, keys) {
+  const candidate = object(value);
+  if (!candidate) return false;
+  const actual = Object.keys(candidate).sort();
+  const expected = [...keys].sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+function unavailablePilot(reason = "invalid") {
+  const metric = () => ({ availability: "unavailable", value: null });
+  const axis = () => ({ availability: "unavailable", verdict: null, now: null, actionNeeded: null, updatedAt: null });
+  return {
+    availability: "unavailable",
+    reason: CTF_PILOT_REASONS.has(reason) ? reason : "invalid",
+    observedAt: null,
+    validUntil: null,
+    solving: {
+      ...axis(),
+      completion: { state: null, reproduction: null, externalAcceptance: null },
+      objectives: { availability: "unavailable", completed: null, total: null },
+      depth: { level: "unavailable", branchesExplored: metric(), techniquesAttempted: metric(), deadEndsRetired: metric() },
+      efficiency: {
+        elapsedSeconds: metric(), activeSeconds: metric(), tokens: metric(), toolRuns: metric(), requests: metric(), retries: metric()
+      }
+    },
+    learning: {
+      ...axis(),
+      stages: { observations: metric(), candidates: metric(), validated: metric(), applied: metric(), transferred: metric(), regressed: metric() }
+    },
+    cockpit: {
+      ...axis(),
+      signals: { availability: "unavailable", available: null, total: null },
+      updatesPublished: metric(),
+      updatesMissed: metric()
+    },
+    integrity: {
+      availability: "unavailable",
+      status: null,
+      checks: { availability: "unavailable", available: null, total: null },
+      issues: metric(),
+      checkedAt: null
+    }
+  };
+}
+
+function projectPilotMetric(value) {
+  if (!exactObjectKeys(value, ["availability", "value"])) return null;
+  if (value.availability === "unavailable" && value.value === null) return { availability: "unavailable", value: null };
+  const count = nonNegativeInteger(value.value);
+  return value.availability === "available" && count !== null ? { availability: "available", value: count } : null;
+}
+
+function projectPilotCoverage(value) {
+  if (!exactObjectKeys(value, ["availability", "available", "total"])) return null;
+  if (value.availability === "unavailable" && value.available === null && value.total === null) {
+    return { availability: "unavailable", available: null, total: null };
+  }
+  const available = nonNegativeInteger(value.available);
+  const total = nonNegativeInteger(value.total);
+  return value.availability === "available" && total !== null && total > 0 && available !== null && available <= total
+    ? { availability: "available", available, total }
+    : null;
+}
+
+function projectPilotAxis(value, verdicts, stages) {
+  if (!object(value) || !new Set(["available", "unavailable"]).has(value.availability)) return null;
+  if (value.availability === "unavailable") {
+    if (value.verdict !== null || value.now !== null || value.actionNeeded !== null || value.updatedAt !== null) return null;
+    return { availability: "unavailable", verdict: null, now: null, actionNeeded: null, updatedAt: null };
+  }
+  const updatedAt = timestamp(value.updatedAt);
+  if (!verdicts.has(value.verdict) || !stages.has(value.now) || !CTF_ACTIONS.has(value.actionNeeded) || !updatedAt) return null;
+  return { availability: "available", verdict: value.verdict, now: value.now, actionNeeded: value.actionNeeded, updatedAt };
+}
+
+/** Project one private pilot record through a prose-free, identifier-free allowlist. */
+export function summarizeCtfPilot(value, options = {}) {
+  const source = object(value);
+  if (!exactObjectKeys(source, ["availability", "reason", "state"])) return unavailablePilot();
+  if (source.availability === "unavailable") {
+    return source.state === null && CTF_PILOT_REASONS.has(source.reason) ? unavailablePilot(source.reason) : unavailablePilot();
+  }
+  const state = object(source.state);
+  if (source.availability !== "available" || source.reason !== null || !state ||
+      !exactObjectKeys(state, ["$schema", "apiVersion", "kind", "metadata", "solving", "learning", "cockpit", "integrity"]) ||
+      state.$schema !== "https://gate.local/schemas/ctf-pilot-state.schema.json" ||
+      state.apiVersion !== "gate.dev/ctf-pilot-state/v1" || state.kind !== "CtfPilotState") return unavailablePilot();
+  try {
+    if (!ctfPilotInternals.stateIsConsistent(state)) return unavailablePilot();
+  } catch {
+    return unavailablePilot();
+  }
+  if (!exactObjectKeys(state.metadata, ["id", "caseId", "revision", "updatedAt", "validUntil", "producer"]) ||
+      !identifier(state.metadata.id) || !identifier(state.metadata.caseId) ||
+      nonNegativeInteger(state.metadata.revision) === null || state.metadata.revision < 1) return unavailablePilot();
+  const observedAt = timestamp(state.metadata.updatedAt);
+  const validUntil = timestamp(state.metadata.validUntil);
+  const producer = state.metadata.producer;
+  const producerValid = producer === null || exactObjectKeys(producer, ["kind", "campaignId", "generation"])
+    && producer.kind === "campaign-worker" && identifier(producer.campaignId)
+    && typeof producer.generation === "string" && /^[a-f0-9]{32}$/u.test(producer.generation);
+  if (!observedAt || !validUntil || !producerValid || Date.parse(observedAt) >= Date.parse(validUntil)
+      || Date.parse(validUntil) - Date.parse(observedAt) > CTF_PILOT_TTL_MS) return unavailablePilot();
+  const enclosingAt = options.observedAt === undefined ? null : timestamp(options.observedAt);
+  if (options.observedAt !== undefined && (!enclosingAt
+      || Date.parse(observedAt) > Date.parse(enclosingAt)
+      || Date.parse(enclosingAt) >= Date.parse(validUntil)
+      || Date.parse(enclosingAt) - Date.parse(observedAt) >= CTF_PILOT_TTL_MS)) return unavailablePilot();
+  const solvingAxis = projectPilotAxis(state.solving, CTF_SOLVING_VERDICTS, CTF_SOLVING_STAGES);
+  const learningAxis = projectPilotAxis(state.learning, CTF_LEARNING_VERDICTS, CTF_LEARNING_STAGES);
+  const cockpitAxis = projectPilotAxis(state.cockpit, CTF_COCKPIT_VERDICTS, CTF_COCKPIT_STAGES);
+  if (!observedAt || !solvingAxis || !learningAxis || !cockpitAxis ||
+      !exactObjectKeys(state.solving, ["availability", "verdict", "now", "actionNeeded", "updatedAt", "completion", "objectives", "depth", "efficiency"]) ||
+      !exactObjectKeys(state.learning, ["availability", "verdict", "now", "actionNeeded", "updatedAt", "stages"]) ||
+      !exactObjectKeys(state.cockpit, ["availability", "verdict", "now", "actionNeeded", "updatedAt", "signals", "updatesPublished", "updatesMissed"]) ||
+      !exactObjectKeys(state.integrity, ["availability", "status", "checks", "issues", "checkedAt"])) return unavailablePilot();
+
+  const completion = state.solving.availability === "unavailable"
+    && exactObjectKeys(state.solving.completion, ["state", "reproduction", "externalAcceptance"])
+    && state.solving.completion.state === null && state.solving.completion.reproduction === null
+    && state.solving.completion.externalAcceptance === null
+    ? { ...state.solving.completion }
+    : state.solving.availability === "available"
+      && exactObjectKeys(state.solving.completion, ["state", "reproduction", "externalAcceptance"])
+      && CTF_COMPLETION_STATES.has(state.solving.completion.state)
+      && CTF_REPRODUCTION.has(state.solving.completion.reproduction)
+      && CTF_EXTERNAL_ACCEPTANCE.has(state.solving.completion.externalAcceptance)
+      ? { ...state.solving.completion }
+      : null;
+  const objectives = state.solving.objectives?.availability === "unavailable"
+    && state.solving.objectives.completed === null && state.solving.objectives.total === null
+    ? { availability: "unavailable", completed: null, total: null }
+    : state.solving.objectives?.availability === "available"
+      && nonNegativeInteger(state.solving.objectives.completed) !== null
+      && nonNegativeInteger(state.solving.objectives.total) > 0
+      && state.solving.objectives.completed <= state.solving.objectives.total
+      ? { availability: "available", completed: state.solving.objectives.completed, total: state.solving.objectives.total }
+      : null;
+  if (!completion || !objectives || !exactObjectKeys(state.solving.depth, ["level", "branchesExplored", "techniquesAttempted", "deadEndsRetired"]) ||
+      !CTF_DEPTH_LEVELS.has(state.solving.depth.level) ||
+      !exactObjectKeys(state.solving.efficiency, ["elapsedSeconds", "activeSeconds", "tokens", "toolRuns", "requests", "retries"]) ||
+      !exactObjectKeys(state.learning.stages, ["observations", "candidates", "validated", "applied", "transferred", "regressed"])) return unavailablePilot();
+  const depthMetrics = Object.fromEntries(["branchesExplored", "techniquesAttempted", "deadEndsRetired"]
+    .map((key) => [key, projectPilotMetric(state.solving.depth[key])]));
+  const efficiency = Object.fromEntries(["elapsedSeconds", "activeSeconds", "tokens", "toolRuns", "requests", "retries"]
+    .map((key) => [key, projectPilotMetric(state.solving.efficiency[key])]));
+  const stages = Object.fromEntries(["observations", "candidates", "validated", "applied", "transferred", "regressed"]
+    .map((key) => [key, projectPilotMetric(state.learning.stages[key])]));
+  const signals = projectPilotCoverage(state.cockpit.signals);
+  const updatesPublished = projectPilotMetric(state.cockpit.updatesPublished);
+  const updatesMissed = projectPilotMetric(state.cockpit.updatesMissed);
+  const checks = projectPilotCoverage(state.integrity.checks);
+  const issues = projectPilotMetric(state.integrity.issues);
+  if ([...Object.values(depthMetrics), ...Object.values(efficiency), ...Object.values(stages), signals,
+    updatesPublished, updatesMissed, checks, issues].some((item) => !item)) return unavailablePilot();
+  let integrity;
+  if (state.integrity.availability === "unavailable" && state.integrity.status === null && state.integrity.checkedAt === null) {
+    integrity = { availability: "unavailable", status: null, checks, issues, checkedAt: null };
+  } else {
+    const checkedAt = timestamp(state.integrity.checkedAt);
+    if (state.integrity.availability !== "available" || !CTF_INTEGRITY.has(state.integrity.status) || !checkedAt) return unavailablePilot();
+    integrity = { availability: "available", status: state.integrity.status, checks, issues, checkedAt };
+  }
+  const axisTimes = [solvingAxis, learningAxis, cockpitAxis]
+    .filter((axis) => axis.availability === "available")
+    .map((axis) => Date.parse(axis.updatedAt));
+  if (axisTimes.some((at) => at > Date.parse(observedAt))
+      || integrity.availability === "available" && Date.parse(integrity.checkedAt) > Date.parse(observedAt)) return unavailablePilot();
+  return {
+    availability: "available",
+    reason: null,
+    observedAt,
+    validUntil,
+    solving: { ...solvingAxis, completion, objectives, depth: { level: state.solving.depth.level, ...depthMetrics }, efficiency },
+    learning: { ...learningAxis, stages },
+    cockpit: { ...cockpitAxis, signals, updatesPublished, updatesMissed },
+    integrity
+  };
 }
 
 function boundedString(value, maximum = 500) {
@@ -1253,7 +1448,8 @@ function summarizeCase(value, paths) {
       engagementScan: summarizeEngagementScan(null),
       offlineAnalysis: summarizeOfflineAnalysis(null),
       activity: [],
-      learningCount: 0
+      learningCount: 0,
+      ctfPilot: unavailablePilot("invalid")
     };
   }
   const displayName = localDisplayName(item?.displayName);
@@ -1299,7 +1495,8 @@ function summarizeCase(value, paths) {
         recent: projected.status.offlineAnalysis.recent.slice(0, 6)
       },
       activity: projected.events.events.slice(0, 20),
-      learningCount: projected.learnings.learnings.length
+      learningCount: projected.learnings.learnings.length,
+      ctfPilot: projected.status.ctfPilot
     };
   }
   return {
@@ -1322,7 +1519,8 @@ function summarizeCase(value, paths) {
     engagementScan: runtime?.engagementScan || summarizeEngagementScan(null),
     offlineAnalysis: runtime?.offlineAnalysis || summarizeOfflineAnalysis(null),
     activity: runtime?.activity || [],
-    learningCount: runtime?.learningCount ?? 0
+    learningCount: runtime?.learningCount ?? 0,
+    ctfPilot: runtime?.ctfPilot || unavailablePilot(runtimeHealth.status === "available" ? "missing" : "invalid")
   };
 }
 
@@ -1682,6 +1880,7 @@ export function projectSnapshot(rawStatus, paths) {
       engagementScan: summarizeEngagementScan(raw.engagementScan),
       offlineAnalysis,
       toolRuntimes,
+      ctfPilot: summarizeCtfPilot(raw.ctfPilot, { observedAt: generatedAt }),
       operator: {
         displayName: sanitizeOperatorDisplayName(raw.operator?.displayName)
       },
