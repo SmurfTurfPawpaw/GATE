@@ -97,6 +97,153 @@ codex login status
 
 If Codex was installed by another supported method, keep that installation and only run the verification commands. Export `GH_TOKEN` or `GITHUB_TOKEN` in each shell that performs a managed release install or [publication preflight](../README.md#preflight-an-exact-reviewed-head). Both isolate GitHub CLI configuration, so they deliberately cannot consume credentials stored only by `gh auth login`; do not save the token in this repository.
 
+### Install the protected remote Codex release
+
+The ordinary interactive Codex installation above may remain user-scoped. The remote cockpit runner has a stricter executable boundary: it accepts only Codex CLI/app-server `0.159.2` from an administrator-owned, operator-nonwritable real path. Install the exact wrapper and Linux platform package below after the protected Node 24.19.0 installation. The hard-coded SHA-512 SRI values bind the exact wrapper and selected platform artifacts; the launcher binds the npm shim to the exact protected Node executable instead of `/usr/bin/env` or an ambient Node manager.
+
+```bash
+(
+  set -euo pipefail
+  codex_version=0.159.2
+  wrapper_url="https://registry.npmjs.org/@openai/codex/-/codex-$codex_version.tgz"
+
+  case "$(uname -m)" in
+    x86_64)
+      platform_url="https://registry.npmjs.org/@openai/codex/-/codex-$codex_version-linux-x64.tgz"
+      protected_node=/opt/nodejs/node-v24.19.0-linux-x64/bin/node
+      ;;
+    aarch64|arm64)
+      platform_url="https://registry.npmjs.org/@openai/codex/-/codex-$codex_version-linux-arm64.tgz"
+      protected_node=/opt/nodejs/node-v24.19.0-linux-arm64/bin/node
+      ;;
+    *) echo "Unsupported Codex architecture: $(uname -m)" >&2; exit 1 ;;
+  esac
+
+  work=$(mktemp -d)
+  cleanup_downloads() {
+    find "$work" -xdev -mindepth 1 -delete
+    rmdir "$work"
+  }
+  trap cleanup_downloads EXIT
+  wrapper_archive="$work/codex-wrapper.tgz"
+  platform_archive="$work/codex-platform.tgz"
+  curl --fail --show-error --location --proto '=https' --tlsv1.2 \
+    "$wrapper_url" --output "$wrapper_archive"
+  curl --fail --show-error --location --proto '=https' --tlsv1.2 \
+    "$platform_url" --output "$platform_archive"
+
+  # The privileged phase copies only bounded no-follow inputs, then verifies and
+  # extracts the protected copies inside a root-only directory on /opt's filesystem.
+  sudo /bin/bash -s -- "$wrapper_archive" "$platform_archive" <<'ROOT_INSTALL'
+set -euo pipefail
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+wrapper_source=$1
+platform_source=$2
+codex_version=0.159.2
+codex_prefix="/opt/codex-$codex_version"
+wrapper_sri='sha512-SE13C3nZCYoVL569BdegoOl6vwjb7o2sXOo7ivwVzaVoY0cswwi0/6pIE0TyO/C0vIkQh3jslExitET7PBTfIg=='
+case "$(uname -m)" in
+  x86_64)
+    node_arch=x64
+    target=x86_64-unknown-linux-musl
+    platform_alias=codex-linux-x64
+    platform_sri='sha512-RrCZ1X52wpa1lOsXtCtSyhjOFdQPh7LH5Ccv8HsKmd/2UXbUwxXFqWXFK3JzatquUNGtW/TLox5Y7qVOGkV0/Q=='
+    ;;
+  aarch64|arm64)
+    node_arch=arm64
+    target=aarch64-unknown-linux-musl
+    platform_alias=codex-linux-arm64
+    platform_sri='sha512-Pm0W2PnFeTEqPx+AOIwgOVB4dBtY24cuD0tx1hjCor60CbSAT7WBPZVNUINSrTCDrMndvQC67p71ZEz+gmPPkA=='
+    ;;
+  *) echo "Unsupported Codex architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+protected_node="/opt/nodejs/node-v24.19.0-linux-$node_arch/bin/node"
+test "$("$protected_node" --version)" = v24.19.0
+test ! -e "$codex_prefix"
+
+staging=$(mktemp -d "/opt/.codex-$codex_version.stage.XXXXXXXX")
+chmod 0700 "$staging"
+cleanup_staging() {
+  if [[ -d "$staging" ]]; then
+    find "$staging" -xdev -mindepth 1 -delete
+    rmdir "$staging"
+  fi
+}
+trap cleanup_staging EXIT
+
+bounded_copy() {
+  source_file=$1
+  destination=$2
+  test -f "$source_file" && test ! -L "$source_file"
+  dd if="$source_file" of="$destination" \
+    iflag=nofollow,nonblock,count_bytes count=536870913 conv=excl status=none
+  copied_size=$(stat -c '%s' "$destination")
+  test "$copied_size" -gt 0 && test "$copied_size" -le 536870912
+}
+bounded_copy "$wrapper_source" "$staging/wrapper.tgz"
+bounded_copy "$platform_source" "$staging/platform.tgz"
+
+verify_sri() {
+  expected=$1
+  artifact=$2
+  actual=$("$protected_node" -e \
+    'const fs=require("node:fs"),c=require("node:crypto");process.stdout.write("sha512-"+c.createHash("sha512").update(fs.readFileSync(process.argv[1])).digest("base64"))' \
+    "$artifact")
+  test "$actual" = "$expected"
+}
+verify_sri "$wrapper_sri" "$staging/wrapper.tgz"
+verify_sri "$platform_sri" "$staging/platform.tgz"
+
+payload="$staging/payload"
+mkdir -p \
+  "$payload/bin" \
+  "$payload/lib/node_modules/@openai/codex" \
+  "$payload/lib/node_modules/@openai/$platform_alias"
+tar -xzf "$staging/wrapper.tgz" --strip-components=1 \
+  --no-same-owner --no-same-permissions \
+  -C "$payload/lib/node_modules/@openai/codex"
+tar -xzf "$staging/platform.tgz" --strip-components=1 \
+  --no-same-owner --no-same-permissions \
+  -C "$payload/lib/node_modules/@openai/$platform_alias"
+cat > "$payload/bin/codex" <<EOF
+#!/bin/sh
+set -eu
+codex_root=\$(CDPATH= cd -- "\${0%/*}/.." && pwd -P)
+exec "$protected_node" "\$codex_root/lib/node_modules/@openai/codex/bin/codex.js" "\$@"
+EOF
+chmod 0755 "$payload/bin/codex"
+chown -R root:root "$payload"
+chmod -R u=rwX,go=rX "$payload"
+
+protected_path="$payload/bin:/opt/nodejs/node-v24.19.0-linux-$node_arch/bin:/usr/bin:/bin"
+test "$(PATH="$protected_path" "$payload/bin/codex" --version)" = "codex-cli $codex_version"
+test -x "$payload/lib/node_modules/@openai/$platform_alias/vendor/$target/bin/codex"
+
+mv --no-target-directory "$payload" "$codex_prefix"
+protected_path="$codex_prefix/bin:/opt/nodejs/node-v24.19.0-linux-$node_arch/bin:/usr/bin:/bin"
+if ! installed_version=$(PATH="$protected_path" "$codex_prefix/bin/codex" --version) \
+    || [[ "$installed_version" != "codex-cli $codex_version" ]]; then
+  mv --no-target-directory "$codex_prefix" "$staging/rejected"
+  exit 1
+fi
+ROOT_INSTALL
+
+  # These effective-access checks intentionally run as the normal operator.
+  test ! -w "/opt/codex-$codex_version/bin/codex"
+  test ! -w "$protected_node"
+)
+```
+
+Use that same architecture-specific protected path in every runner terminal, for example on Linux x64:
+
+```bash
+export PATH=/opt/codex-0.159.2/bin:/opt/nodejs/node-v24.19.0-linux-x64/bin:/usr/bin:/bin
+```
+
+Do not replace either prefix with a symlink into a user-owned tree. The runner resolves the real Codex executable and rejects any executable or ancestor directory that the operator can write. It also drops writable or unprotected `PATH` entries before launching the shim.
+
 ## 2. Clone into the WSL filesystem
 
 Git worktrees and file watching are faster and more predictable under the WSL filesystem than under `/mnt/c`. From the Ubuntu shell:
@@ -186,6 +333,8 @@ No Mistakes reads repository controls from the fetched default branch, so a new 
 
 Use `axi run --no-publish-intent` for every run that may contain private task context. The trusted `pr.publish_intent: false` ceiling suppresses the generated Intent section, while the caller-side flag also withholds the full intent from the PR-drafting turns so they draft from the diff and commit messages. This environment sets the matching global operator default, but the explicit flag is the portable rule on another laptop or daemon.
 
+Pass both the intent and verification plan through separate bounded files when starting a run. The installed CLI reads `--intent-file` and `--verification-plan` as paths; an inline verification-plan sentence is interpreted as a filename and the handoff stops before creating a run.
+
 From Windows PowerShell, the equivalent launcher is:
 
 ```powershell
@@ -236,7 +385,7 @@ codex -C "$HOME/src/GATE" --sandbox workspace-write --ask-for-approval on-reques
 Only add private state for a task that must run GATE control commands, and expose the narrowest suitable path. Adding the whole root is a deliberate trusted-session choice:
 
 ```bash
-export GATE_HOME="${GATE_HOME:-$HOME/.local/share/gate}"
+export GATE_HOME="${GATE_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/gate}"
 codex -C "$HOME/src/GATE" --add-dir "$GATE_HOME" \
   --sandbox workspace-write --ask-for-approval on-request --search
 ```
@@ -261,19 +410,44 @@ Open `http://127.0.0.1:4174/`. This is a static `PREVIEW · NOT LIVE`; it has no
 
 ### Optional authenticated remote cockpit
 
-Remote steering uses a separate case-bound coordinator and an outbound laptop runner. It does not expose the observer or local companion and it does not change the Pages preview. Prepare the HTTPS/OIDC gateway, owner-only coordinator state, runner key, persistent laptop thread/journal records, and one authenticated owner-only `CODEX_HOME` directly under each case journal by following [Remote cockpit bridge](remote-cockpit.md) and the [provider-neutral deployment scaffold](../deploy/remote/README.md). The runner pins the reviewed Codex CLI/app-server `0.159.2` protocol, never inherits the normal interactive Codex home, and stops before thread creation if effective configuration exposes MCP, legacy `notify`, app, plug-in, hook, browser/computer-use, or other disabled external tool paths.
+Remote steering uses a separate case-bound coordinator and an outbound laptop runner. It does not expose the observer or local companion, change the Pages preview, or attach to the current chat. First create the identity-aware HTTPS application and obtain its exact origin, issuer, audience, JWKS URL, and the intended operator's stable verified subject. For Cloudflare Access, follow the ordered [Cloudflare/VPS guide](../deploy/remote/cloudflare-vps/README.md). Then prepare one local bundle from the reviewed checkout; GATE applies owner-only file and directory modes on POSIX:
+
+```bash
+./bin/gate.mjs remote init example-case \
+  --origin https://gate-case.example.test \
+  --issuer https://identity.example.test \
+  --audience gate-case.example.test \
+  --subject operator-subject-001 \
+  --jwks-url https://identity.example.test/.well-known/jwks.json \
+  --repo /absolute/path/to/example-case-work \
+  --coordinator-config-root /etc/gate-remote/example-case \
+  --coordinator-state-root /var/lib/gate-remote/example-case
+
+runner_state="${GATE_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/gate}/remote/example-case/runner"
+export PATH=/opt/codex-0.159.2/bin:/opt/nodejs/node-v24.19.0-linux-x64/bin:/usr/bin:/bin
+CODEX_HOME="$runner_state/codex-home" /opt/codex-0.159.2/bin/codex login
+./bin/gate.mjs remote doctor example-case
+```
+
+`remote init` generates the Ed25519 enrollment, coordinator configuration, runner environment, dedicated Codex home, and case manifest under `GATE_HOME`; it refuses to replace an existing bundle. The coordinator config and state roots describe the future VPS and must be absolute, normalized, non-root, and non-overlapping. `remote doctor` is read-only and checks the local files, keys, bindings, Node runtime, exact Codex CLI/app-server `0.159.2`, and dedicated login. A passing doctor still reports the external identity gateway and live round trip as unverified. It prepares no host and deploys nothing.
+
+Install only the generated coordinator configuration and runner public key under `/etc/gate-remote/example-case` as `root:gate-remote` files with mode `0640` or `0440`; the POSIX service can read but cannot change them. Create `/var/lib/gate-remote/example-case` for service-writable SQLite state only. The [provider-neutral deployment scaffold](../deploy/remote/README.md) installs an exact reviewed commit as a root-owned, read-only VPS release, atomically changes its release link, checks loopback readiness, and restores the prior link after a failed activation when host dependencies are unchanged. Units, configuration, runtimes, gateway files, and forced-interruption recovery follow the scaffold's separate administrator procedure. The optional [Cloudflare/VPS template](../deploy/remote/cloudflare-vps/README.md) supplies the reviewed route split for a named Tunnel, Access, loopback Nginx, and the coordinator. Both reviewed bundles support exactly one case per VPS because colocated instances would share the `gate-remote` UID. They are deployment instructions, not a hosted GATE service; the operator still provides a separate VPS and hostname for every concurrent case, DNS, TLS/OIDC identity configuration, persistent storage, and runner enrollment.
 
 After private configuration is complete, the two process entrypoints are:
 
 ```bash
 # Always-on coordinator host, still bound to loopback behind the gateway:
-npm run cockpit:remote:server -- --config /absolute/private/server.json
+npm run cockpit:remote:server -- --config /etc/gate-remote/example-case/server.json
 
 # Operator laptop, with the owner-only runner environment already loaded:
 npm run cockpit:remote:runner
 ```
 
-One coordinator and runner instance owns one operator/case/session binding in this release. Give concurrent cases separate hostnames, databases, keys, journal directories, and process instances. The bridge controls its own dedicated Codex app-server thread, not the current cloud chat.
+One coordinator and runner instance owns one operator/case/session binding in this release. Give concurrent cases separate VPSes, hostnames, databases, keys, journal directories, and runner processes; another port or coordinator process on the same VPS is unsupported. The bridge controls its own dedicated Codex app-server thread, not the current cloud chat.
+
+The remote runner is conversation-only. It uses a read-only sandbox and disables local filesystem, shell, image, skill, worktree, workspace-dependency, and unified-execution tools together with network, ambient credentials, environments, MCP, apps, plug-ins, hooks, and browser/computer use. The dedicated thread cannot inspect or edit a checkout, run tests, contact a target, access case authority state, or execute an active-operation manifest. It is separate from the current chat, and the typed active-target relay remains unimplemented.
+
+The remote runner also resolves exact Codex CLI/app-server `0.159.2` from a protected `PATH`. Use the pinned, integrity-checked [protected remote Codex installation](#install-the-protected-remote-codex-release), including its exact protected Node runtime. User-scoped npm prefixes, `nvm`, Volta, user-writable Homebrew trees, writable `/usr/local`, and writable directories earlier on `PATH` fail `remote doctor` and stop the runner. This is stricter than the user-scoped Codex installation permitted for the ordinary local interactive cockpit.
 
 The startup banner and browser case terminals use `operator.displayName` from the merged configuration. The tracked default is `Giovanni`. To use another local display name without changing the repository, place an overlay at `$HOME/.config/gate/config.json`:
 

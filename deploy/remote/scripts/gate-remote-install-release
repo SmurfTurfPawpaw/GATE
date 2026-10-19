@@ -1,0 +1,500 @@
+#!/bin/bash
+
+set -euo pipefail
+
+# This helper may be invoked through a narrowly delegated sudo rule. Sanitize
+# the process before argument handling or any external command, and remove the
+# control variables understood by every external tool used below. The sudoers
+# contract also uses env_reset, NOSETENV, secure_path, and an exact helper
+# digest because BASH_ENV would otherwise be consulted before this script can
+# execute its first line.
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export LC_ALL=C
+export LANG=C
+export LANGUAGE=C
+export HOME=/
+unset AWKLIBPATH AWKPATH BASH_ENV BLOCK_SIZE BLOCKSIZE CDPATH CURL_HOME
+unset DF_BLOCK_SIZE DU_BLOCK_SIZE ENV FIGNORE GLOBIGNORE GZIP GZIP_OPT IFS
+unset LD_LIBRARY_PATH LD_PRELOAD LS_BLOCK_SIZE NODE_OPTIONS POSIXLY_CORRECT
+unset PYTHONPATH QUOTING_STYLE RUBYOPT SIMPLE_BACKUP_SUFFIX TAR_OPTIONS TIME_STYLE
+unset VERSION_CONTROL XDG_CONFIG_HOME
+umask 077
+
+readonly DEPLOY_BASE=/opt/gate-remote
+readonly DEPLOY_CONFIG_BASE=/etc/gate-remote/deployments
+readonly LOCK_BASE=/run/lock/gate-remote
+readonly MAX_ARCHIVE_BYTES=$((64 * 1024 * 1024))
+readonly MAX_EXPANDED_ARCHIVE_BYTES=$((320 * 1024 * 1024))
+readonly MAX_EXPANDED_REGULAR_BYTES=$((256 * 1024 * 1024))
+readonly MAX_ARCHIVE_MEMBERS=5000
+readonly MAX_TAR_LISTING_BYTES=$((16 * 1024 * 1024))
+
+usage() {
+  printf '%s\n' \
+    'Usage: gate-remote-install-release \' \
+    '  --deployment ID \' \
+    '  --archive ABSOLUTE_PATH \' \
+    '  --archive-sha256 SHA256 \' \
+    '  --commit COMMIT_SHA \' \
+    '  --installer-sha256 SHA256 \' \
+    '  [--stage-only]' \
+    '' \
+    'Install one exact reviewed GATE source archive as an immutable remote-cockpit' \
+    'release. The root-owned deployment configuration is read from' \
+    '/etc/gate-remote/deployments/ID.conf. --stage-only installs and verifies the' \
+    'immutable release without changing current or starting the systemd service;' \
+    'use it to bootstrap the unit and case configuration on a clean host.'
+}
+
+fail() {
+  printf 'gate remote deploy: %s\n' "$*" >&2
+  exit 1
+}
+
+require_value() {
+  local option=$1
+  local value=${2-}
+  [[ -n "$value" ]] || fail "$option requires a value"
+}
+
+deployment=
+archive=
+archive_sha256=
+commit=
+installer_sha256=
+stage_only=false
+
+while (($#)); do
+  case "$1" in
+    --deployment|--archive|--archive-sha256|--commit|--installer-sha256)
+      (($# >= 2)) || fail "$1 requires a value"
+      case "$1" in
+        --deployment) deployment=$2 ;;
+        --archive) archive=$2 ;;
+        --archive-sha256) archive_sha256=$2 ;;
+        --commit) commit=$2 ;;
+        --installer-sha256) installer_sha256=$2 ;;
+      esac
+      shift 2
+      ;;
+    --stage-only)
+      stage_only=true
+      shift
+      ;;
+    --help)
+      usage
+      exit 0
+      ;;
+    *) fail "unknown argument: $1" ;;
+  esac
+done
+
+require_value --deployment "$deployment"
+require_value --archive "$archive"
+require_value --archive-sha256 "$archive_sha256"
+require_value --commit "$commit"
+require_value --installer-sha256 "$installer_sha256"
+
+[[ "$deployment" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] || fail "deployment ID is invalid"
+[[ "$archive" == /* && "$archive" != *$'\n'* && "$archive" != *$'\r'* ]] || fail "archive path must be absolute"
+[[ "$archive_sha256" =~ ^[0-9a-f]{64}$ ]] || fail "archive SHA-256 is invalid"
+[[ "$commit" =~ ^[0-9a-f]{40}$ ]] || fail "commit must be a full lowercase SHA-1"
+[[ "$installer_sha256" =~ ^[0-9a-f]{64}$ ]] || fail "installer SHA-256 is invalid"
+((EUID == 0)) || fail "installer must run as root"
+
+for command_name in awk cat chmod chown curl dd find flock gzip install ln mkdir mktemp mv readlink rm sha256sum sleep sort stat systemctl tar uniq; do
+  command -v "$command_name" >/dev/null 2>&1 || fail "required command is unavailable: $command_name"
+done
+
+[[ "$0" == /usr/local/sbin/gate-remote-install-release && -f "$0" && ! -L "$0" ]] || \
+  fail "installer must be the fixed root-owned host helper"
+for helper_directory in /usr/local /usr/local/sbin; do
+  [[ -d "$helper_directory" && ! -L "$helper_directory" ]] || \
+    fail "installer path ancestors must be real directories"
+  helper_directory_stat=$(stat -c '%u:%a' -- "$helper_directory")
+  IFS=: read -r helper_directory_uid helper_directory_mode <<< "$helper_directory_stat"
+  [[ "$helper_directory_uid" == 0 && $((8#$helper_directory_mode & 8#022)) == 0 ]] || \
+    fail "installer path ancestors must be root-owned and protected"
+done
+installer_stat=$(stat -c '%u:%a:%h' -- "$0")
+IFS=: read -r installer_uid installer_mode installer_links <<< "$installer_stat"
+[[ "$installer_uid" == 0 && "$installer_links" == 1 && $((8#$installer_mode & 8#022)) == 0 ]] || \
+  fail "installer must be root-owned, protected, and unlinked"
+actual_installer_sha256=$(sha256sum -- "$0" | awk '{print $1}')
+[[ "$actual_installer_sha256" == "$installer_sha256" ]] || fail "installed helper does not match the reviewed commit"
+
+config_file="$DEPLOY_CONFIG_BASE/$deployment.conf"
+for protected_directory in /etc/gate-remote "$DEPLOY_CONFIG_BASE"; do
+  [[ -d "$protected_directory" && ! -L "$protected_directory" ]] || \
+    fail "deployment configuration directory is not a real directory"
+  protected_uid=$(stat -c '%u' -- "$protected_directory")
+  protected_mode=$(stat -c '%a' -- "$protected_directory")
+  [[ "$protected_uid" == 0 && $((8#$protected_mode & 8#022)) == 0 ]] || \
+    fail "deployment configuration directory must be root-owned and protected"
+done
+[[ -f "$config_file" && ! -L "$config_file" ]] || fail "root-owned deployment configuration is missing"
+exec 8< "$config_file"
+config_stat=$(stat -Lc '%F:%u:%a:%h' -- /proc/self/fd/8)
+IFS=: read -r config_type config_uid config_mode config_links <<< "$config_stat"
+[[ "$config_type" == "regular file" && "$config_uid" == 0 && "$config_links" == 1 \
+  && $((8#$config_mode & 8#022)) == 0 ]] || \
+  fail "deployment configuration must be a root-owned, protected, unlinked regular file"
+
+health_port=
+authorized_commit=
+authorized_archive_sha256=
+authorized_installer_sha256=
+config_lines=0
+while IFS= read -r line <&8 || [[ -n "$line" ]]; do
+  [[ -z "$line" || "$line" == \#* ]] && continue
+  ((config_lines += 1))
+  case "$line" in
+    HEALTH_PORT=*)
+      [[ -z "$health_port" ]] || fail "deployment configuration repeats HEALTH_PORT"
+      [[ "$line" =~ ^HEALTH_PORT=([0-9]{1,5})$ ]] || fail "deployment configuration has an invalid HEALTH_PORT"
+      health_port=${BASH_REMATCH[1]}
+      ;;
+    AUTHORIZED_COMMIT=*)
+      [[ -z "$authorized_commit" ]] || fail "deployment configuration repeats AUTHORIZED_COMMIT"
+      [[ "$line" =~ ^AUTHORIZED_COMMIT=([0-9a-f]{40})$ ]] || \
+        fail "deployment configuration has an invalid AUTHORIZED_COMMIT"
+      authorized_commit=${BASH_REMATCH[1]}
+      ;;
+    AUTHORIZED_ARCHIVE_SHA256=*)
+      [[ -z "$authorized_archive_sha256" ]] || \
+        fail "deployment configuration repeats AUTHORIZED_ARCHIVE_SHA256"
+      [[ "$line" =~ ^AUTHORIZED_ARCHIVE_SHA256=([0-9a-f]{64})$ ]] || \
+        fail "deployment configuration has an invalid AUTHORIZED_ARCHIVE_SHA256"
+      authorized_archive_sha256=${BASH_REMATCH[1]}
+      ;;
+    AUTHORIZED_INSTALLER_SHA256=*)
+      [[ -z "$authorized_installer_sha256" ]] || \
+        fail "deployment configuration repeats AUTHORIZED_INSTALLER_SHA256"
+      [[ "$line" =~ ^AUTHORIZED_INSTALLER_SHA256=([0-9a-f]{64})$ ]] || \
+        fail "deployment configuration has an invalid AUTHORIZED_INSTALLER_SHA256"
+      authorized_installer_sha256=${BASH_REMATCH[1]}
+      ;;
+    *) fail "deployment configuration has an unknown or malformed field" ;;
+  esac
+done
+exec 8<&-
+[[ "$config_lines" == 4 && -n "$health_port" && -n "$authorized_commit" \
+  && -n "$authorized_archive_sha256" && -n "$authorized_installer_sha256" ]] || \
+  fail "deployment configuration must contain each required authorization field exactly once"
+((10#$health_port >= 1 && 10#$health_port <= 65535)) || fail "HEALTH_PORT is outside the valid range"
+health_port_decimal=$((10#$health_port))
+[[ "$authorized_commit" == "$commit" ]] || fail "commit is not authorized by the deployment configuration"
+[[ "$authorized_archive_sha256" == "$archive_sha256" ]] || \
+  fail "archive SHA-256 is not authorized by the deployment configuration"
+[[ "$authorized_installer_sha256" == "$installer_sha256" ]] || \
+  fail "installer SHA-256 is not authorized by the deployment configuration"
+
+deploy_root="$DEPLOY_BASE/$deployment"
+releases="$deploy_root/releases"
+current="$deploy_root/current"
+service="gate-remote@$deployment.service"
+health_url="http://127.0.0.1:$health_port/readyz"
+lock_file="$LOCK_BASE/$deployment.lock"
+
+for protected_directory in "$DEPLOY_BASE" "$deploy_root" "$releases"; do
+  if [[ ! -e "$protected_directory" && ! -L "$protected_directory" ]]; then
+    install -d -o root -g root -m 0755 -- "$protected_directory"
+  fi
+  [[ -d "$protected_directory" && ! -L "$protected_directory" ]] || fail "release directory is not a real directory"
+  protected_uid=$(stat -c '%u' -- "$protected_directory")
+  protected_mode=$(stat -c '%a' -- "$protected_directory")
+  [[ "$protected_uid" == 0 && $((8#$protected_mode & 8#022)) == 0 ]] || \
+    fail "release directory must be root-owned and protected"
+done
+
+# The persistent lock lives below a root-owned directory that other identities
+# cannot modify. Atomic mkdir and noclobber creation prevent symlink preplants;
+# opening read/write avoids truncating an existing lock inode.
+if [[ ! -e "$LOCK_BASE" && ! -L "$LOCK_BASE" ]]; then
+  mkdir -m 0700 -- "$LOCK_BASE" 2>/dev/null || true
+fi
+[[ -d "$LOCK_BASE" && ! -L "$LOCK_BASE" ]] || fail "deployment lock directory is not a real directory"
+lock_directory_stat=$(stat -c '%u:%a' -- "$LOCK_BASE")
+IFS=: read -r lock_directory_uid lock_directory_mode <<< "$lock_directory_stat"
+[[ "$lock_directory_uid" == 0 && $((8#$lock_directory_mode & 8#022)) == 0 ]] || \
+  fail "deployment lock directory must be root-owned and protected"
+if [[ ! -e "$lock_file" && ! -L "$lock_file" ]]; then
+  (set -o noclobber; : > "$lock_file") 2>/dev/null || true
+fi
+[[ -f "$lock_file" && ! -L "$lock_file" ]] || fail "deployment lock is not a regular file"
+lock_security_stat=$(stat -c '%u:%a:%h' -- "$lock_file")
+IFS=: read -r lock_uid lock_mode lock_links <<< "$lock_security_stat"
+[[ "$lock_uid" == 0 && "$lock_links" == 1 && $((8#$lock_mode & 8#022)) == 0 ]] || \
+  fail "deployment lock must be root-owned, protected, and unlinked"
+lock_path_identity=$(stat -c '%d:%i' -- "$lock_file")
+exec 9<>"$lock_file"
+lock_fd_identity=$(stat -Lc '%d:%i' -- /proc/self/fd/9)
+[[ "$lock_fd_identity" == "$lock_path_identity" ]] || fail "deployment lock changed while it was opened"
+flock -n 9 || fail "another deployment is already active for $deployment"
+
+work_directory=$(mktemp -d "$releases/.staging-$commit.XXXXXXXX")
+snapshot="$work_directory/release.tar.gz"
+expanded_snapshot="$work_directory/release.tar"
+candidate="$work_directory/tree"
+member_list="$work_directory/members"
+member_details="$work_directory/member-details"
+created_release=false
+activation_in_progress=false
+cleanup() {
+  local exit_status=$?
+  trap - EXIT
+  # A second catchable signal must not interrupt restoration. SIGKILL, kernel
+  # failure, and power loss remain explicit manual-reconciliation cases.
+  trap '' HUP INT TERM
+  if [[ "${activation_in_progress:-false}" == true ]] \
+      && declare -F restore_after_interruption >/dev/null 2>&1; then
+    printf 'gate remote deploy: interrupted activation; restoring the previous release\n' >&2
+    restore_after_interruption || \
+      printf 'gate remote deploy: interrupted activation requires manual service recovery\n' >&2
+  fi
+  rm -rf -- "$work_directory"
+  exit "$exit_status"
+}
+trap cleanup EXIT
+trap 'exit 130' HUP INT TERM
+
+# GNU dd opens the source once with O_NOFOLLOW and copies at most one byte over
+# the reviewed maximum into a new root-owned snapshot. Every later validation
+# reads only this snapshot, so a rename or rewrite of the uploader's path after
+# the open cannot change the bytes being authorized and extracted.
+if ! dd if="$archive" of="$snapshot" bs=1M \
+  iflag=nofollow,nonblock,count_bytes,fullblock \
+  oflag=nofollow \
+  count=$((MAX_ARCHIVE_BYTES + 1)) conv=excl,fsync status=none; then
+  fail "archive could not be opened once and copied safely"
+fi
+snapshot_stat=$(stat -c '%F:%s:%h:%u:%a' -- "$snapshot")
+IFS=: read -r snapshot_type snapshot_size snapshot_links snapshot_uid snapshot_mode <<< "$snapshot_stat"
+[[ "$snapshot_type" == "regular file" && "$snapshot_links" == 1 && "$snapshot_uid" == 0 \
+  && $((8#$snapshot_mode & 8#077)) == 0 ]] || fail "archive snapshot is not a protected regular file"
+((snapshot_size > 0 && snapshot_size <= MAX_ARCHIVE_BYTES)) || fail "archive size is outside the reviewed bound"
+actual_archive_sha256=$(sha256sum -- "$snapshot" | awk '{print $1}')
+[[ "$actual_archive_sha256" == "$archive_sha256" ]] || fail "archive SHA-256 does not match"
+
+bounded_command_output() {
+  local output=$1
+  local maximum=$2
+  local label=$3
+  local output_stat output_type output_size output_links output_uid output_mode
+  local -a statuses
+  shift 3
+
+  set +e
+  "$@" | dd of="$output" bs=1M \
+    iflag=count_bytes,fullblock \
+    oflag=nofollow \
+    count=$((maximum + 1)) conv=excl,fsync status=none
+  statuses=("${PIPESTATUS[@]}")
+  set -e
+
+  [[ "${statuses[1]-1}" == 0 ]] || fail "$label could not be written safely"
+  output_stat=$(stat -c '%F:%s:%h:%u:%a' -- "$output")
+  IFS=: read -r output_type output_size output_links output_uid output_mode <<< "$output_stat"
+  [[ "$output_type" == "regular file" && "$output_links" == 1 && "$output_uid" == 0 \
+    && $((8#$output_mode & 8#077)) == 0 ]] || fail "$label is not a protected regular file"
+  ((output_size > 0 && output_size <= maximum)) || fail "$label exceeds its reviewed byte bound"
+  [[ "${statuses[0]-1}" == 0 ]] || fail "$label generation failed"
+}
+
+# Bound the complete decompressed tar stream before asking tar to parse headers.
+# This caps even one enormous PAX record, not only the eventual file contents.
+bounded_command_output "$expanded_snapshot" "$MAX_EXPANDED_ARCHIVE_BYTES" \
+  "expanded archive" gzip --decompress --stdout -- "$snapshot"
+rm -f -- "$snapshot"
+
+# Tar can emit far more metadata than the compressed input size. Bound both
+# list forms while they are produced, before member-count and size validation.
+bounded_command_output "$member_list" "$MAX_TAR_LISTING_BYTES" \
+  "archive member listing" tar --restrict --quoting-style=escape -tf "$expanded_snapshot"
+member_count=0
+while IFS= read -r member || [[ -n "$member" ]]; do
+  ((member_count += 1))
+  ((member_count <= MAX_ARCHIVE_MEMBERS)) || fail "archive contains too many members"
+  [[ "$member" =~ ^[A-Za-z0-9._@+][A-Za-z0-9._@+/-]*$ ]] || fail "archive contains an unsafe member name"
+  [[ "$member" != /* && "$member" != *//* && "$member" != ".." && "$member" != ../* \
+    && "$member" != */../* && "$member" != */.. && "$member" != "." && "$member" != ./* \
+    && "$member" != */./* && "$member" != */. ]] || fail "archive member escapes the release root"
+done < "$member_list"
+((member_count > 0)) || fail "archive is empty"
+[[ -z "$(LC_ALL=C sort "$member_list" | uniq -d)" ]] || fail "archive contains duplicate members"
+bounded_command_output "$member_details" "$MAX_TAR_LISTING_BYTES" \
+  "archive detail listing" tar --restrict --numeric-owner --full-time --quoting-style=escape \
+  -tvf "$expanded_snapshot"
+if ! awk 'substr($1, 1, 1) != "-" && substr($1, 1, 1) != "d" { exit 1 }' "$member_details"; then
+  fail "archive contains links or special files"
+fi
+if ! awk -v maximum="$MAX_EXPANDED_REGULAR_BYTES" '
+  BEGIN { total = 0 }
+  substr($1, 1, 1) == "-" {
+    if ($3 !~ /^[0-9]+$/) exit 1
+    size = $3 + 0
+    if (size > maximum || total > maximum - size) exit 1
+    total += size
+  }
+' "$member_details"; then
+  fail "archive regular-file content exceeds the reviewed expanded-size bound"
+fi
+
+install -d -o root -g root -m 0700 -- "$candidate"
+tar --restrict --extract --file "$expanded_snapshot" --directory "$candidate" \
+  --no-same-owner --no-same-permissions --delay-directory-restore
+[[ -f "$candidate/package.json" && ! -L "$candidate/package.json" ]] || fail "release is missing package.json"
+[[ -f "$candidate/cockpit/remote/server-cli.mjs" && ! -L "$candidate/cockpit/remote/server-cli.mjs" ]] || \
+  fail "release is missing the remote coordinator entrypoint"
+[[ -z "$(find "$candidate" \( -type l -o -type b -o -type c -o -type p -o -type s \) -print -quit)" ]] || \
+  fail "extracted release contains a link or special file"
+
+release="$releases/$commit"
+if [[ -e "$release" || -L "$release" ]]; then
+  [[ -d "$release" && ! -L "$release" ]] || fail "existing release path is not a real directory"
+  [[ "$(cat "$release/.gate-reviewed-commit" 2>/dev/null)" == "$commit" ]] || \
+    fail "existing release has a different commit identity"
+  [[ "$(cat "$release/.gate-archive-sha256" 2>/dev/null)" == "$archive_sha256" ]] || \
+    fail "existing release has different archive bytes"
+  [[ "$(cat "$release/.gate-installer-sha256" 2>/dev/null)" == "$installer_sha256" ]] || \
+    fail "existing release was created by a different installer"
+else
+  printf '%s\n' "$commit" > "$candidate/.gate-reviewed-commit"
+  printf '%s\n' "$archive_sha256" > "$candidate/.gate-archive-sha256"
+  printf '%s\n' "$installer_sha256" > "$candidate/.gate-installer-sha256"
+  chown -R root:root -- "$candidate"
+  find "$candidate" -type d -exec chmod 0555 {} +
+  find "$candidate" -type f -exec chmod 0444 {} +
+  mv -- "$candidate" "$release"
+  created_release=true
+fi
+
+if [[ "$stage_only" == true ]]; then
+  printf 'gate remote deploy: staged %s for %s; current was not changed\n' "$commit" "$deployment"
+  exit 0
+fi
+
+previous=
+if [[ -L "$current" ]]; then
+  previous=$(readlink -- "$current")
+  [[ "$previous" =~ ^releases/[0-9a-f]{40}$ ]] || fail "current release link has an invalid target"
+elif [[ -e "$current" ]]; then
+  fail "current release path must be a managed symbolic link"
+fi
+
+activate_release() {
+  local target=$1
+  local replacement="$deploy_root/.current.$$.tmp"
+  rm -f -- "$replacement"
+  ln -s -- "$target" "$replacement"
+  mv -Tf -- "$replacement" "$current"
+}
+
+service_main_pid() {
+  local main_pid
+  systemctl is-active --quiet "$service" || return 1
+  main_pid=$(systemctl show --property=MainPID --value "$service") || return 1
+  [[ "$main_pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  printf '%s\n' "$main_pid"
+}
+
+pid_owns_health_listener() {
+  local expected_pid=$1
+  local descriptor endpoint address port_hex socket_inode state table target
+  local -A owned_socket_inodes=()
+
+  [[ "$expected_pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  for descriptor in "/proc/$expected_pid/fd/"*; do
+    [[ -e "$descriptor" ]] || continue
+    target=$(readlink -- "$descriptor" 2>/dev/null) || continue
+    if [[ "$target" =~ ^socket:\[([0-9]+)\]$ ]]; then
+      owned_socket_inodes["${BASH_REMATCH[1]}"]=1
+    fi
+  done
+  ((${#owned_socket_inodes[@]} > 0)) || return 1
+
+  for table in /proc/net/tcp /proc/net/tcp6; do
+    [[ -r "$table" ]] || continue
+    while read -r endpoint state socket_inode; do
+      [[ "$state" == 0A ]] || continue
+      address=${endpoint%:*}
+      port_hex=${endpoint##*:}
+      [[ "$port_hex" =~ ^[0-9A-Fa-f]{4}$ ]] || continue
+      ((16#$port_hex == health_port_decimal)) || continue
+      # /proc uses little-endian IPv4 words. The IPv6 value is the mapped
+      # 127.0.0.1 form; wildcard and non-loopback listeners never qualify.
+      [[ "$address" == 0100007F \
+        || "$address" == 0000000000000000FFFF00000100007F ]] || continue
+      [[ -n "${owned_socket_inodes[$socket_inode]+present}" ]] && return 0
+    done < <(awk 'NR > 1 { print $2, $4, $10 }' "$table")
+  done
+  return 1
+}
+
+ready_for_pid() {
+  local expected_pid=$1
+  local observed_pid response
+
+  observed_pid=$(service_main_pid) || return 1
+  [[ "$observed_pid" == "$expected_pid" ]] || return 1
+  pid_owns_health_listener "$expected_pid" || return 1
+  response=$(curl --disable --noproxy '*' --proto '=http' --fail --silent --show-error \
+    --connect-timeout 1 --max-time 2 "$health_url") || return 1
+  [[ "$response" == '{"ok":true,"service":"gate-remote-cockpit-ready"}' ]] || return 1
+  observed_pid=$(service_main_pid) || return 1
+  [[ "$observed_pid" == "$expected_pid" ]] || return 1
+  pid_owns_health_listener "$expected_pid"
+}
+
+wait_until_ready() {
+  local attempt main_pid
+  for ((attempt = 1; attempt <= 30; attempt += 1)); do
+    main_pid=$(service_main_pid 2>/dev/null || true)
+    if [[ -n "$main_pid" ]] && ready_for_pid "$main_pid"; then
+      sleep 1
+      ready_for_pid "$main_pid" && return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+restore_after_interruption() {
+  # The lock remains held while this runs, and cleanup ignores further
+  # catchable signals until the prior release is restarted or the first
+  # activation is stopped.
+  if [[ -n "$previous" ]]; then
+    activate_release "$previous" || return 1
+    systemctl restart "$service" || return 1
+  else
+    rm -f -- "$current" || return 1
+    systemctl stop "$service" || return 1
+  fi
+  if [[ "$created_release" == true ]]; then rm -rf -- "$release"; fi
+  activation_in_progress=false
+}
+
+activation_in_progress=true
+activate_release "releases/$commit"
+if systemctl restart "$service" && wait_until_ready; then
+  activation_in_progress=false
+  printf 'gate remote deploy: activated %s for %s\n' "$commit" "$deployment"
+  exit 0
+fi
+
+printf 'gate remote deploy: activation failed; starting rollback\n' >&2
+if [[ -n "$previous" ]]; then
+  if activate_release "$previous" && systemctl restart "$service" && wait_until_ready; then
+    activation_in_progress=false
+    if [[ "$created_release" == true ]]; then rm -rf -- "$release"; fi
+    fail "activation failed and the previous release was restored"
+  fi
+  fail "activation failed and the previous release did not recover"
+fi
+
+if rm -f -- "$current" && systemctl stop "$service"; then
+  activation_in_progress=false
+  if [[ "$created_release" == true ]]; then rm -rf -- "$release"; fi
+  fail "first activation failed; no previous release was available"
+fi
+fail "first activation failed and the unverified service could not be stopped"

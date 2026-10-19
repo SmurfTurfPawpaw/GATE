@@ -77,6 +77,7 @@ test("shared commands reject explicit and ambient case selectors before creating
     ["workspace", "status", "--json"],
     ["upstream", "list", "--json"],
     ["publication", "check", "--json"],
+    ["remote", "doctor", "selector-canary", "--json"],
     ["analysis", "capability", "--json"],
     ...["create", "resume", "status", "show", "verify"].map((action) => [
       "bounty", "profile", action, "selector-canary", "--json"

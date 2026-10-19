@@ -36,9 +36,19 @@ const REMOTE_DISABLED_FEATURES = Object.freeze([
   "multi_agent_v2",
   "plugins",
   "remote_plugin",
+  "shell_snapshot",
+  "shell_snapshot_v2",
+  "shell_tool",
+  "skill_search",
   "skill_mcp_dependency_install",
+  "sleep_tool",
   "token_budget",
-  "tool_suggest"
+  "tool_suggest",
+  "unified_exec",
+  "unified_exec_tty",
+  "view_image",
+  "workspace_dependencies",
+  "worktrees"
 ]);
 const REMOTE_APP_SERVER_ARGS = Object.freeze([
   "app-server",
@@ -435,6 +445,10 @@ export class CodexCompanionAdapter extends EventEmitter {
         throw new Error("remote Codex requires an absolute dedicated Codex home");
       }
       if (options.args !== undefined) throw new Error("remote Codex app-server arguments are fixed");
+      if (options.transport === undefined
+          && (typeof options.command !== "string" || !path.isAbsolute(options.command))) {
+        throw new Error("remote Codex requires a pinned absolute executable");
+      }
       this.#codexHome = path.resolve(configuredHome);
     }
     this.#activity = options.activityStore || new ActivityStore();
@@ -476,7 +490,7 @@ export class CodexCompanionAdapter extends EventEmitter {
     await this.#transport.start();
     const initialized = await this.#transport.request("initialize", {
       clientInfo: this.#executionPosture === REMOTE_READ_ONLY_EXECUTION_POSTURE
-        ? { name: "gate-cockpit", title: "GATE Remote Cockpit", version: "0.4.0" }
+        ? { name: "gate-cockpit", title: "GATE Remote Cockpit", version: "0.4.1" }
         : { name: "gate-cockpit", title: "GATE Local Cockpit", version: "0.3.0" },
       capabilities: { experimentalApi: true }
     });

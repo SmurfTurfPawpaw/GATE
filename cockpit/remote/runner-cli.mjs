@@ -193,6 +193,97 @@ function ownerDirectory(value) {
   return value;
 }
 
+function pathsOverlap(left, right) {
+  const normalized = (value) => {
+    const absolute = path.resolve(value);
+    return process.platform === "win32" ? absolute.toLowerCase() : absolute;
+  };
+  const first = normalized(left);
+  const second = normalized(right);
+  const contains = (parent, candidate) => {
+    const relative = path.relative(parent, candidate);
+    return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`)
+      && !path.isAbsolute(relative));
+  };
+  return contains(first, second) || contains(second, first);
+}
+
+function assertProtectedRuntimePath(value) {
+  let current = value;
+  while (true) {
+    const stat = fs.lstatSync(current);
+    if (stat.isSymbolicLink()) throw new Error("remote Codex runtime path must not contain symbolic links");
+    let writable = false;
+    try { fs.accessSync(current, fs.constants.W_OK); writable = true; } catch {}
+    const unsafePosixMetadata = process.platform !== "win32" && ((stat.mode & 0o022) !== 0 || stat.uid !== 0);
+    if (writable || unsafePosixMetadata) {
+      throw new Error("remote Codex runtime path must be administrator-owned and not writable by local accounts");
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return;
+    current = parent;
+  }
+}
+
+function remoteExecutableNames(environment) {
+  if (process.platform !== "win32") return ["codex"];
+  const extensions = String(environment.PATHEXT || ".COM;.EXE;.CMD;.BAT")
+    .split(";")
+    .map((value) => value.trim())
+    .filter((value) => /^\.[A-Za-z0-9]{1,12}$/u.test(value));
+  return extensions.map((extension) => `codex${extension}`);
+}
+
+function prepareRemoteCodexLaunch(source, codexHome, forbiddenRoots = []) {
+  const baseEnvironment = remoteCodexEnvironment(source, codexHome);
+  if (!Array.isArray(forbiddenRoots)
+      || forbiddenRoots.some((value) => typeof value !== "string" || !path.isAbsolute(value))) {
+    throw new Error("remote Codex forbidden roots must be absolute");
+  }
+  const roots = forbiddenRoots.map((value) => path.resolve(value));
+  const directories = [];
+  for (const rawEntry of String(baseEnvironment.PATH || "").split(path.delimiter)) {
+    const entry = rawEntry.trim().replace(/^"(.*)"$/u, "$1");
+    if (!entry || !path.isAbsolute(entry) || entry.includes("\0")) continue;
+    let directory;
+    try {
+      directory = fs.realpathSync.native(entry);
+      if (!fs.statSync(directory).isDirectory() || roots.some((root) => pathsOverlap(root, directory))) continue;
+      assertProtectedRuntimePath(directory);
+    } catch {
+      continue;
+    }
+    const key = process.platform === "win32" ? directory.toLowerCase() : directory;
+    if (!directories.some((item) => item.key === key)) directories.push({ key, path: directory });
+  }
+  let command = null;
+  for (const directory of directories) {
+    for (const name of remoteExecutableNames(baseEnvironment)) {
+      const candidate = path.join(directory.path, name);
+      try {
+        const real = fs.realpathSync.native(candidate);
+        const stat = fs.statSync(real);
+        if (!stat.isFile() || roots.some((root) => pathsOverlap(root, real))) continue;
+        fs.accessSync(real, process.platform === "win32" ? fs.constants.F_OK : fs.constants.X_OK);
+        assertProtectedRuntimePath(real);
+        command = real;
+        break;
+      } catch {
+        // Continue through the sanitized, protected absolute search path.
+      }
+    }
+    if (command) break;
+  }
+  if (!command) throw new Error("a protected absolute Codex executable is unavailable outside private runner state");
+  return Object.freeze({
+    command,
+    environment: Object.freeze({
+      ...baseEnvironment,
+      PATH: directories.map((item) => item.path).join(path.delimiter)
+    })
+  });
+}
+
 function stableOwnerFile(value, maximumBytes, label) {
   let before;
   try { before = fs.lstatSync(value, { bigint: true }); } catch { throw new Error(`${label} is unavailable`); }
@@ -448,21 +539,51 @@ function acquireInstanceLock(directory) {
 
 function validateCwd(value) {
   let stat;
-  try { stat = fs.statSync(value); } catch { throw new Error("Codex working directory is unavailable"); }
-  if (!stat.isDirectory()) throw new Error("Codex working directory is invalid");
-  return value;
+  try { stat = fs.lstatSync(value); } catch { throw new Error("Codex working directory is unavailable"); }
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Codex working directory is invalid");
+  let real;
+  try { real = fs.realpathSync.native(value); } catch { throw new Error("Codex working directory is unavailable"); }
+  const expected = path.resolve(value);
+  const comparableReal = process.platform === "win32" ? real.toLowerCase() : real;
+  const comparableExpected = process.platform === "win32" ? expected.toLowerCase() : expected;
+  if (comparableReal !== comparableExpected) throw new Error("Codex working directory must not traverse symbolic links");
+  return real;
+}
+
+function assertWorkingDirectoryBoundary(cwd, values) {
+  const boundaries = [
+    [values.journalDirectory, "runner journal"],
+    [values.codexHome, "remote Codex home"],
+    [path.dirname(values.privateKeyFile), "runner private-key state"],
+    [values.threadIdFile, "runner thread state"]
+  ];
+  for (const [candidate, label] of boundaries) {
+    if (pathsOverlap(cwd, candidate)) {
+      throw new Error(`Codex working directory must not overlap ${label}`);
+    }
+  }
 }
 
 async function run(options) {
   const journalDirectory = ownerDirectory(options.journalDirectory);
+  const cwd = validateCwd(options.cwd);
+  const codexHome = ownerDirectory(options.codexHome);
+  const privateKey = readPrivateKey(options.privateKeyFile);
+  assertWorkingDirectoryBoundary(cwd, {
+    ...options,
+    journalDirectory,
+    codexHome
+  });
+  const codexLaunch = prepareRemoteCodexLaunch(process.env, codexHome, [
+    cwd,
+    journalDirectory,
+    path.dirname(options.privateKeyFile)
+  ]);
   const releaseLock = acquireInstanceLock(journalDirectory);
   let adapter;
   let runner;
   let runnerStarted = false;
   try {
-    const cwd = validateCwd(options.cwd);
-    const codexHome = ownerDirectory(options.codexHome);
-    const privateKey = readPrivateKey(options.privateKeyFile);
     const fleetProvider = createGateFleetProvider({ observerUrl: options.gateObserver });
     const threadRecord = new ThreadRecord({
       file: options.threadIdFile,
@@ -478,7 +599,8 @@ async function run(options) {
       threadId: resumeThreadId,
       executionPosture: REMOTE_READ_ONLY_EXECUTION_POSTURE,
       codexHome,
-      environment: remoteCodexEnvironment(process.env, codexHome),
+      command: codexLaunch.command,
+      environment: codexLaunch.environment,
       beforeThreadCreate: () => threadRecord.begin(),
       afterThreadCreate: (threadId) => threadRecord.provisional(threadId),
       beforeFirstTurn: (threadId) => threadRecord.markUsed(threadId)
@@ -550,7 +672,10 @@ export const runnerCliInternals = Object.freeze({
   REMOTE_TOOL_BOUNDARY_REVISION,
   ThreadRecord,
   acquireInstanceLock,
+  assertWorkingDirectoryBoundary,
   parseArguments,
+  pathsOverlap,
+  prepareRemoteCodexLaunch,
   readPrivateKey,
   remoteCodexEnvironment,
   run,

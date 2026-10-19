@@ -326,7 +326,10 @@ export async function verifyRunnerRequest({
   const normalizedPath = normalizePath(path);
   const normalizedBody = normalizeBody(body);
 
-  if (Math.abs(currentTime - timestamp) > skew) throw rejectedRequest();
+  // Keep the accepted timestamp interval open at both ends. Nonces expire at
+  // timestamp + skew, so accepting that exact instant would let cleanup remove
+  // the first nonce before an otherwise identical replay is verified.
+  if (Math.abs(currentTime - timestamp) >= skew) throw rejectedRequest();
 
   const actualDigest = crypto.createHash("sha256").update(normalizedBody).digest();
   const claimedDigestBytes = Buffer.from(claimedDigest, "hex");

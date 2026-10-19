@@ -1,0 +1,7 @@
+# Install as /etc/gate-remote/deployments/DEPLOYMENT_ID.conf.
+# The port must equal the loopback coordinator port in the private server config.
+# Replace every authorization placeholder with the exact reviewed release value.
+HEALTH_PORT=43180
+AUTHORIZED_COMMIT=REPLACE_WITH_FULL_40_CHARACTER_LOWERCASE_COMMIT
+AUTHORIZED_ARCHIVE_SHA256=REPLACE_WITH_64_CHARACTER_LOWERCASE_ARCHIVE_SHA256
+AUTHORIZED_INSTALLER_SHA256=REPLACE_WITH_64_CHARACTER_LOWERCASE_INSTALLER_SHA256

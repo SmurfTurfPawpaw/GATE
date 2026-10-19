@@ -5,6 +5,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { signRunnerRequest } from "../runner-auth.mjs";
 import { serverCliInternals } from "../server-cli.mjs";
@@ -16,6 +17,28 @@ const ORIGIN = "https://gate.example";
 const OPERATOR_ID = "operator@example";
 const CASE_ID = "demo-case";
 const SESSION_REVISION = 7;
+const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+
+function remoteCliConfig(keyPath, databasePath) {
+  return {
+    apiVersion: "gate.remote-server-config/v1",
+    origin: ORIGIN,
+    host: "127.0.0.1",
+    port: 8443,
+    operatorId: OPERATOR_ID,
+    caseId: CASE_ID,
+    sessionRevision: SESSION_REVISION,
+    databasePath,
+    identityAssertionHeader: "cf-access-jwt-assertion",
+    oidc: {
+      issuer: "https://identity.example",
+      audience: "gate-audience",
+      operatorSubject: OPERATOR_ID,
+      jwksUrl: "https://identity.example/.well-known/jwks.json"
+    },
+    runner: { id: "runner-main", publicKeyPath: keyPath }
+  };
+}
 
 function request({ port, pathname = "/", method = "GET", headers = {}, body = "" }) {
   return new Promise((resolve, reject) => {
@@ -357,28 +380,20 @@ test("remote server CLI accepts one explicit owner-only config and Ed25519 publi
     const databasePath = path.join(directory, "bridge.sqlite");
     const { publicKey } = crypto.generateKeyPairSync("ed25519");
     fs.writeFileSync(keyPath, publicKey.export({ type: "spki", format: "pem" }), { mode: 0o600 });
-    fs.writeFileSync(configPath, JSON.stringify({
-      apiVersion: "gate.remote-server-config/v1",
-      origin: ORIGIN,
-      host: "127.0.0.1",
-      port: 8443,
-      operatorId: OPERATOR_ID,
-      caseId: CASE_ID,
-      sessionRevision: SESSION_REVISION,
-      databasePath,
-      identityAssertionHeader: "cf-access-jwt-assertion",
-      oidc: {
-        issuer: "https://identity.example",
-        audience: "gate-audience",
-        operatorSubject: OPERATOR_ID,
-        jwksUrl: "https://identity.example/.well-known/jwks.json"
-      },
-      runner: { id: "runner-main", publicKeyPath: keyPath }
-    }), { mode: 0o600 });
+    fs.writeFileSync(configPath, JSON.stringify(remoteCliConfig(keyPath, databasePath)), { mode: 0o600 });
     assert.equal(serverCliInternals.parseArguments([], { GATE_REMOTE_CONFIG: configPath }).configPath, configPath);
     const config = serverCliInternals.readConfiguration(configPath);
     assert.equal(config.identityAssertionHeader, "cf-access-jwt-assertion");
     assert.equal(serverCliInternals.loadRunnerPublicKey(keyPath).asymmetricKeyType, "ed25519");
+    assert.deepEqual(
+      serverCliInternals.readConfiguration(configPath, { includeOwnership: true }).ownership,
+      "current-user"
+    );
+    assert.throws(
+      () => serverCliInternals.loadRunnerPublicKey(keyPath, { expectedOwnership: "administrator" }),
+      /same protected ownership class/u,
+      "an administrator config must not enroll a replaceable service-owned key"
+    );
 
     const linkedConfig = path.join(directory, "linked-config.json");
     fs.symlinkSync(configPath, linkedConfig);
@@ -394,10 +409,73 @@ test("remote server CLI accepts one explicit owner-only config and Ed25519 publi
     fs.chmodSync(configPath, 0o640);
     assert.throws(() => serverCliInternals.readConfiguration(configPath), /owner-only/u);
     assert.equal(serverCliInternals.startupDiagnostic({ code: "ENOENT", message: `/private/value ${configPath}` }),
-      "A required owner-only file, database, or listener is unavailable.");
+      "A required protected file, owner-only database, or listener is unavailable.");
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("remote server CLI accepts protected root-owned static files for a read-only service identity", (t) => {
+  if (process.platform === "win32" || typeof process.getuid !== "function") return;
+  if (process.getuid() !== 0) return t.skip("creating a root-owned service fixture requires a root test runner");
+  const directory = fs.mkdtempSync(path.join(path.dirname(REPOSITORY_ROOT), ".gate-remote-admin-cli-"));
+  fs.chmodSync(directory, 0o750);
+  try {
+    const keyPath = path.join(directory, "runner-public.pem");
+    const configPath = path.join(directory, "server.json");
+    const databasePath = path.join(directory, "state", "bridge.sqlite");
+    const { publicKey } = crypto.generateKeyPairSync("ed25519");
+    fs.writeFileSync(keyPath, publicKey.export({ type: "spki", format: "pem" }), { mode: 0o440 });
+    fs.writeFileSync(configPath, JSON.stringify(remoteCliConfig(keyPath, databasePath)), { mode: 0o440 });
+    fs.chmodSync(keyPath, 0o440);
+    fs.chmodSync(configPath, 0o440);
+
+    const stat = fs.statSync(directory, { bigint: true });
+    const identity = Object.freeze({
+      uid: BigInt(process.getuid()) + 10_000n,
+      gids: new Set([stat.gid]),
+      actual: false
+    });
+    const options = { identity };
+    const loaded = serverCliInternals.readConfiguration(configPath, { ...options, includeOwnership: true });
+    assert.equal(loaded.configuration.databasePath, databasePath);
+    assert.equal(loaded.ownership, "administrator");
+    assert.equal(serverCliInternals.loadRunnerPublicKey(keyPath, {
+      ...options,
+      expectedOwnership: loaded.ownership
+    }).asymmetricKeyType, "ed25519");
+
+    fs.chmodSync(configPath, 0o460);
+    assert.throws(
+      () => serverCliInternals.readConfiguration(configPath, options),
+      /not writable by the current user/u
+    );
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("remote server CLI trusts only a root-owned group-read-only static-file mode for a service identity", () => {
+  const identity = Object.freeze({ uid: 10_001n, gids: new Set([10_002n]), actual: false });
+  const file = (uid, mode) => ({
+    uid,
+    gid: 10_002n,
+    mode,
+    isFile: () => true,
+    isSymbolicLink: () => false
+  });
+  assert.equal(
+    serverCliInternals.assertProtectedStaticFile(file(0n, 0o100440n), "Remote config", identity),
+    "administrator"
+  );
+  assert.throws(
+    () => serverCliInternals.assertProtectedStaticFile(file(10_003n, 0o100440n), "Remote config", identity),
+    /root-owned/u
+  );
+  assert.throws(
+    () => serverCliInternals.assertProtectedStaticFile(file(0n, 0o100460n), "Remote config", identity),
+    /not writable by the current user/u
+  );
 });
 
 test("request limits recover on the next bounded window instead of bricking the service", async (t) => {

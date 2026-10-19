@@ -117,6 +117,17 @@ Core
                                     Run the read-only local cockpit
   validate [--json]                 Validate tracked configuration and pins
 
+Remote cockpit
+  ./bin/gate.mjs remote init ID --origin URL --issuer URL --audience VALUE --subject VALUE
+                                --jwks-url URL --repo PATH
+                                --coordinator-config-root ABSOLUTE_PATH
+                                --coordinator-state-root ABSOLUTE_PATH
+                                [--runner-id ID] [--revision N]
+                                [--port N] [--identity-header NAME] [--observer URL]
+                                    Prepare one private case-bound coordinator/runner bundle
+  ./bin/gate.mjs remote doctor ID [--json]
+                                    Check local files, keys, runtimes, and remaining live gates
+
 Operations
   event <kind> --summary TEXT       Append a sanitized activity event
   learn --cause TEXT --change TEXT [--private] [--scope session|project|repository]
@@ -1360,6 +1371,18 @@ function printDoctor(doctor, json) {
   }
 }
 
+function printRemoteDoctor(doctor, json) {
+  if (json) return output(doctor, true);
+  for (const check of doctor.checks) {
+    const detail = check.status === "failed" ? `\t${check.problem}` : "";
+    process.stdout.write(`${check.status}\t${check.id}\t${check.description}${detail}\n`);
+  }
+  process.stdout.write(
+    `\nLocal remote-case preparation ${doctor.ok ? "passed" : "has failures"}; ` +
+    `live deployment remains ${doctor.liveReady ? "verified" : "unverified"}.\n${doctor.next}\n`
+  );
+}
+
 function publicationRequest(flags) {
   return {
     repository: requiredFlag(flags, "repo"),
@@ -1446,7 +1469,8 @@ const GLOBAL_CASE_COMMANDS = new Set([
   "objective",
   "workspace",
   "upstream",
-  "publication"
+  "publication",
+  "remote"
 ]);
 const GLOBAL_BOUNTY_PROFILE_ACTIONS = new Set(["create", "resume", "ui", "status", "show", "verify"]);
 const GLOBAL_TOOL_ACTIONS = new Set(["list", "show", "plan", "prefetch", "install", "verify", "remove"]);
@@ -1585,6 +1609,47 @@ export async function main(argv) {
     printDoctor(doctor, json);
     if (!doctor.ok) process.exitCode = 1;
     return;
+  }
+
+  if (command === "remote") {
+    const { initializeRemoteCase, inspectRemoteCase } = await import("./lib/remote-setup.mjs");
+    const [action, caseId] = parsed.positional;
+    if (action === "init") {
+      assertPositionals(parsed.positional, 2,
+        "./bin/gate.mjs remote init ID --origin URL --issuer URL --audience VALUE --subject VALUE --jwks-url URL --repo PATH --coordinator-config-root ABSOLUTE_PATH --coordinator-state-root ABSOLUTE_PATH");
+      assertFlags(parsed.flags, [
+        "origin", "issuer", "audience", "subject", "jwks-url", "repo", "coordinator-config-root",
+        "coordinator-state-root", "runner-id", "revision", "port", "identity-header", "observer", "json"
+      ]);
+      assertBooleanSwitch(parsed.flags, "json");
+      const initialized = initializeRemoteCase({
+        caseId,
+        origin: requiredFlag(parsed.flags, "origin"),
+        issuer: requiredFlag(parsed.flags, "issuer"),
+        audience: requiredFlag(parsed.flags, "audience"),
+        subject: requiredFlag(parsed.flags, "subject"),
+        jwksUrl: requiredFlag(parsed.flags, "jwks-url"),
+        repository: requiredFlag(parsed.flags, "repo"),
+        coordinatorConfigRoot: requiredFlag(parsed.flags, "coordinator-config-root"),
+        coordinatorStateRoot: requiredFlag(parsed.flags, "coordinator-state-root"),
+        runnerId: optionalValueFlag(parsed.flags, "runner-id"),
+        sessionRevision: optionalValueFlag(parsed.flags, "revision"),
+        port: optionalValueFlag(parsed.flags, "port"),
+        identityHeader: optionalValueFlag(parsed.flags, "identity-header"),
+        observerUrl: optionalValueFlag(parsed.flags, "observer")
+      }, { paths: basePaths });
+      return output(initialized, json);
+    }
+    if (action === "doctor") {
+      assertPositionals(parsed.positional, 2, "./bin/gate.mjs remote doctor ID [--json]");
+      assertFlags(parsed.flags, ["json"]);
+      assertBooleanSwitch(parsed.flags, "json");
+      const doctor = inspectRemoteCase(caseId, { paths: basePaths });
+      printRemoteDoctor(doctor, json);
+      if (!doctor.ok) process.exitCode = 1;
+      return;
+    }
+    throw new Error("expected ./bin/gate.mjs remote init ID or ./bin/gate.mjs remote doctor ID");
   }
 
   if (command === "status") {

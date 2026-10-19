@@ -1,0 +1,39 @@
+[Unit]
+Description=Cloudflare Tunnel for GATE remote cockpit %i
+Documentation=https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/
+After=network-online.target nginx.service gate-remote@%i.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cloudflared
+Group=cloudflared
+ExecStartPre=/usr/bin/test -r /etc/cloudflared/%i/config.yml
+ExecStartPre=/usr/bin/test -r /etc/cloudflared/%i/tunnel-credentials.json
+ExecStart=/opt/cloudflared/REPLACE_CLOUDFLARED_VERSION/cloudflared --no-autoupdate --config /etc/cloudflared/%i/config.yml tunnel run
+Restart=on-failure
+RestartSec=5s
+UMask=0077
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+ReadOnlyPaths=/etc/cloudflared/%i /opt/cloudflared/REPLACE_CLOUDFLARED_VERSION
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

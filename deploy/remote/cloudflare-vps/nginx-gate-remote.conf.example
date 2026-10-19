@@ -1,0 +1,45 @@
+# TEMPLATE ONLY. Replace every REPLACE_ token in the private installed copy.
+server {
+    listen 127.0.0.1:43179 default_server;
+    server_name REPLACE_PUBLIC_HOSTNAME;
+    server_tokens off;
+    access_log off;
+    client_max_body_size 256k;
+    large_client_header_buffers 4 32k;
+
+    # Cloudflared sets this fixed value; reject any unexpected local vhost input.
+    if ($http_host != "REPLACE_PUBLIC_HOSTNAME") { return 421; }
+
+    # Host-private checks never proxy through the public route gateway.
+    location = /healthz { return 404; }
+    location = /readyz  { return 404; }
+
+    location = / {
+        include /etc/nginx/gate-remote/REPLACE_CASE_ID/browser-proxy.inc;
+    }
+
+    location ~ ^/(?:index\.html|remote/client\.js|data/status\.json|robots\.txt|\.nojekyll)$ {
+        include /etc/nginx/gate-remote/REPLACE_CASE_ID/browser-proxy.inc;
+    }
+
+    location ^~ /assets/ {
+        include /etc/nginx/gate-remote/REPLACE_CASE_ID/browser-proxy.inc;
+    }
+
+    location = /api/cockpit/v1/events {
+        proxy_read_timeout 11m;
+        proxy_send_timeout 30s;
+        include /etc/nginx/gate-remote/REPLACE_CASE_ID/browser-proxy.inc;
+    }
+
+    location ^~ /api/cockpit/v1/ {
+        include /etc/nginx/gate-remote/REPLACE_CASE_ID/browser-proxy.inc;
+    }
+
+    location ^~ /api/runner/v1/ {
+        include /etc/nginx/gate-remote/REPLACE_CASE_ID/runner-proxy.inc;
+    }
+
+    # No fallback proxy and no public coordinator health route.
+    location / { return 404; }
+}
