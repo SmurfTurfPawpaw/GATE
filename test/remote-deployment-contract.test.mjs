@@ -218,6 +218,8 @@ test("expanded archive and tar metadata output stop at a hard byte sentinel", (t
   const output = path.join(directory, "expanded.tar");
   const probe = [
     "set -euo pipefail",
+    // Match the installer's protected-output precondition regardless of the host umask.
+    "umask 077",
     'fail() { printf "%s\\n" "$*" >&2; exit 1; }',
     boundedFunction,
     'bounded_command_output "$2" "$1" "expanded archive" gzip --decompress --stdout -- "$3"'
