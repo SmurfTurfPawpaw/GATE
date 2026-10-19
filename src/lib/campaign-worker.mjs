@@ -17,6 +17,7 @@ import {
 } from "./lab-campaign-authority.mjs";
 import { nextCtfPilotTimestamp, updateCtfPilotState } from "./ctf-pilot.mjs";
 import { runtimePaths } from "./paths.mjs";
+import { workflowStatus } from "./workflow-runtime.mjs";
 import {
   readPrivateFileBounded,
   securePrivateFile,
@@ -650,6 +651,19 @@ export async function runNextCampaignWorkerJob(id, options = {}) {
   if (authority?.authorityId !== authorityId || authority?.campaignId !== id ||
       authority?.confirmed !== true || authority?.status !== "authorized") {
     return deferredManagedJob(observed.state, "The selected lab authority is not confirmed, current, and bound to this campaign.");
+  }
+
+  try {
+    const context = loadCampaignContext(id, { ...options, paths });
+    const definition = context.jobs.find((job) => job.metadata.id === queued.id && job.jobSha256 === queued.jobSha256);
+    const workflow = definition?.job.workflow;
+    const status = workflow && (options.workflowStatus || workflowStatus)(workflow.instanceId, { ...options, paths });
+    if (!status?.ok || status.instanceId !== workflow.instanceId ||
+        status.activePhase?.attemptId !== workflow.phaseAttemptId || status.activePhase.testReadyForExecution !== true) {
+      return deferredManagedJob(observed.state, "The managed job requires a fresh, unreserved workflow test in its exact phase attempt.");
+    }
+  } catch (error) {
+    return deferredManagedJob(observed.state, `Workflow test readiness is unavailable: ${String(error?.message || error)}`);
   }
 
   const controllerOptions = { ...options, paths };

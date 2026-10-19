@@ -223,6 +223,7 @@ function setup(t, { jobCount = 2, basis = "dedicated-lab", crossOrigin = false, 
     activePhase: {
       id: "active-surface-validation",
       attemptId: `wpa_${"1".repeat(32)}`,
+      testReadyForExecution: true,
       effectClass: "A1",
       toolId: "httpx",
       admissionSha256,

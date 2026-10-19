@@ -1650,6 +1650,7 @@ function compactTestFeedback(projection) {
 
 function compactStatus(projection, definition, extra = {}) {
   const active = projection.activePhase;
+  const plannedTests = Object.values(active?.tests || {}).filter((test) => test.status === "planned");
   const { updatedAt = null, ...journalExtra } = extra;
   const phaseCounts = { running: 0, tested: 0, "not-applicable": 0, blocked: 0, untested: 0, pending: 0 };
   for (const phase of definition.value.phases) {
@@ -1676,6 +1677,9 @@ function compactStatus(projection, definition, extra = {}) {
     activePhase: active ? {
       id: active.phaseId,
       attemptId: active.attemptId,
+      testReadyForExecution: projection.status === "open" && plannedTests.length === 1 &&
+        !Object.values(projection.executionReservations).some((reservation) => reservation.testId === plannedTests[0].testId) &&
+        !pendingReservations(projection).some((reservation) => reservation.phaseAttemptId === active.attemptId),
       lane: active.lane,
       effectClass: active.effectClass,
       toolId: active.toolId,

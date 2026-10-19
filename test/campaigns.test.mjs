@@ -81,6 +81,8 @@ function fixture(t) {
   const options = {
     paths,
     now: fixedAt,
+    workflowStatus: () => ({ ok: true, instanceId: "ctf-workflow",
+      activePhase: { attemptId: `wpa_${"1".repeat(32)}`, testReadyForExecution: true } }),
     readCurrentProgramProfileBinding: () => ({
       id: programId,
       profileSha256,
