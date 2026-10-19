@@ -1186,7 +1186,7 @@
         "id": "research-plan",
         "owner": "gate",
         "state": "planning-only",
-        "reason": "GATE has no generic persisted research runner or source-fetch adapter in v0.1.",
+        "reason": "GATE has no generic persisted research runner or source-fetch adapter in v0.2.",
         "requirements": [
           "declared-source-route"
         ]
@@ -1335,7 +1335,7 @@
         "id": "general-analysis-plan",
         "owner": "gate",
         "state": "planning-only",
-        "reason": "GATE has no generic persisted data-analysis runner in v0.1.",
+        "reason": "GATE has no generic persisted data-analysis runner in v0.2.",
         "requirements": [
           "analysis-specific-adapter"
         ]

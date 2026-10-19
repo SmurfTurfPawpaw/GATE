@@ -791,15 +791,23 @@ export async function startRemoteCockpitServer(options = {}) {
       if (pathname === "/api/cockpit/v1/state" || pathname === "/api/cockpit/v1/fleet") {
         if (method !== "GET") return methodRejected(response, method, ["GET"], setCookie);
         assertNoRequestBody(request);
-        const projection = await withDeadline(() => pathname.endsWith("/state")
+        const storedProjection = await withDeadline(() => pathname.endsWith("/state")
           ? store.getStateProjection(config.caseBinding)
           : store.getFleetProjection(config.caseBinding),
         config.operationTimeoutMs);
+        let projection = null;
+        try {
+          projection = storedProjection === null ? null : pathname.endsWith("/state")
+            ? normalizeRemoteStateProjection(storedProjection)
+            : normalizeRemoteFleetProjection(storedProjection);
+        } catch {
+          projection = null;
+        }
         if (!projection || projection.sessionRevision !== config.caseBinding.sessionRevision) {
           return json(response, 503, errorBody("projection-unavailable", "The remote cockpit projection is unavailable."), method,
             setCookie);
         }
-        if (pathname.endsWith("/state") && Date.parse(projection.validUntil) <= clockMilliseconds(config.clock)) {
+        if (Date.parse(projection.validUntil) <= clockMilliseconds(config.clock)) {
           return json(response, 503, errorBody("projection-expired", "The remote cockpit projection has expired."), method,
             setCookie);
         }
@@ -922,6 +930,9 @@ export async function startRemoteCockpitServer(options = {}) {
         fail(409, "session-changed", "The remote cockpit session changed. Reload the runner.");
       }
       requireIsoNearNow(projection.receivedAt, config, "fleet-projection");
+      if (Date.parse(projection.validUntil) <= clockMilliseconds(config.clock)) {
+        fail(409, "projection-expired", "The remote fleet projection is already expired.");
+      }
       await withDeadline(() => store.putFleetProjection(caseBinding(config), projection), config.operationTimeoutMs);
       return json(response, 200, { apiVersion: RUNNER_ACK_VERSION, acceptedAt: isoNow(config.clock) }, method);
     }

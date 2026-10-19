@@ -11,6 +11,7 @@ import {
   REMOTE_CODEX_APP_SERVER_VERSION,
   REMOTE_READ_ONLY_EXECUTION_POSTURE
 } from "../companion/app-server.mjs";
+import { ActivityStore } from "../companion/activity.mjs";
 import { createGateFleetProvider, gateFleetInternals } from "../companion/gate-fleet.mjs";
 import { RemoteCockpitRunner } from "./runner.mjs";
 
@@ -564,7 +565,7 @@ function assertWorkingDirectoryBoundary(cwd, values) {
   }
 }
 
-async function run(options) {
+async function run(options, { prepareLaunch = prepareRemoteCodexLaunch, createRunner = (configuration) => new RemoteCockpitRunner(configuration) } = {}) {
   const journalDirectory = ownerDirectory(options.journalDirectory);
   const cwd = validateCwd(options.cwd);
   const codexHome = ownerDirectory(options.codexHome);
@@ -574,7 +575,7 @@ async function run(options) {
     journalDirectory,
     codexHome
   });
-  const codexLaunch = prepareRemoteCodexLaunch(process.env, codexHome, [
+  const codexLaunch = prepareLaunch(process.env, codexHome, [
     cwd,
     journalDirectory,
     path.dirname(options.privateKeyFile)
@@ -592,20 +593,22 @@ async function run(options) {
       cwd,
       codexHome
     });
-    const resumeThreadId = threadRecord.threadId;
-    adapter = new CodexCompanionAdapter({
+    const activityStore = new ActivityStore();
+    const createAdapter = () => new CodexCompanionAdapter({
       cwd,
       ephemeral: false,
-      threadId: resumeThreadId,
+      threadId: threadRecord.threadId,
       executionPosture: REMOTE_READ_ONLY_EXECUTION_POSTURE,
       codexHome,
       command: codexLaunch.command,
       environment: codexLaunch.environment,
+      activityStore,
       beforeThreadCreate: () => threadRecord.begin(),
       afterThreadCreate: (threadId) => threadRecord.provisional(threadId),
       beforeFirstTurn: (threadId) => threadRecord.markUsed(threadId)
     });
-    runner = new RemoteCockpitRunner({
+    adapter = createAdapter();
+    runner = createRunner({
       controlPlaneUrl: options.controlPlaneUrl,
       runnerId: options.runnerId,
       caseId: options.caseId,
@@ -613,10 +616,10 @@ async function run(options) {
       privateKey,
       journalDirectory,
       adapter,
+      adapterFactory: createAdapter,
       fleetProvider
     });
-    await adapter.connect();
-    process.stdout.write("Remote cockpit runner connected to its dedicated Codex thread.\n");
+    process.stdout.write("Remote cockpit runner starting signed telemetry and its dedicated Codex connection.\n");
     process.stdout.write("Keep this terminal open. Press Ctrl+C to stop cleanly.\n");
 
     let stopping = false;

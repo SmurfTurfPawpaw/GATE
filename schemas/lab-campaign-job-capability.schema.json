@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/lab-campaign-job-capability.schema.json",
+  "title": "GATE single-use dedicated-lab campaign job capability",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "apiVersion", "kind", "metadata", "authority", "campaign", "workflow", "request", "adapter", "bounds", "capabilitySha256"],
+  "properties": {
+    "$schema": { "const": "https://gate.local/schemas/lab-campaign-job-capability.schema.json" },
+    "apiVersion": { "const": "gate.lab-campaign-job-capability/v1" },
+    "kind": { "const": "LabCampaignJobCapability" },
+    "metadata": {
+      "type": "object", "additionalProperties": false, "required": ["id", "issuedAt", "expiresAt"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^lcap_[a-f0-9]{32}$" },
+        "issuedAt": { "type": "string", "format": "date-time" },
+        "expiresAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "authority": {
+      "type": "object", "additionalProperties": false, "required": ["id", "sha256", "receiptSha256"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" }, "sha256": { "$ref": "#/$defs/sha256" }, "receiptSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "campaign": {
+      "type": "object", "additionalProperties": false, "required": ["id", "grantSha256", "jobId", "jobSha256"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" }, "grantSha256": { "$ref": "#/$defs/sha256" },
+        "jobId": { "$ref": "#/$defs/id" }, "jobSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "workflow": {
+      "type": "object", "additionalProperties": false,
+      "required": ["instanceId", "phaseId", "phaseAttemptId", "admissionSha256", "authorityReceiptSha256"],
+      "properties": {
+        "instanceId": { "$ref": "#/$defs/id" }, "phaseId": { "$ref": "#/$defs/id" },
+        "phaseAttemptId": { "type": "string", "pattern": "^wpa_[a-f0-9]{32}$" },
+        "admissionSha256": { "$ref": "#/$defs/sha256" }, "authorityReceiptSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "request": {
+      "type": "object", "additionalProperties": false,
+      "required": ["url", "origin", "method", "allowedIp", "operationSha256", "argvSha256"],
+      "properties": {
+        "url": { "type": "string", "format": "uri", "maxLength": 500 },
+        "origin": { "type": "string", "format": "uri", "maxLength": 500 },
+        "method": { "enum": ["GET", "HEAD"] },
+        "allowedIp": { "type": "string", "minLength": 2, "maxLength": 45, "pattern": "^[0-9a-fA-F:.]+$" },
+        "operationSha256": { "$ref": "#/$defs/sha256" }, "argvSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "adapter": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "registrySha256", "entrySha256", "compilerSourceSha256", "runtimeSha256"],
+      "properties": {
+        "id": { "const": "httpx-url-fetch" },
+        "registrySha256": { "$ref": "#/$defs/sha256" }, "entrySha256": { "$ref": "#/$defs/sha256" },
+        "compilerSourceSha256": { "$ref": "#/$defs/sha256" }, "runtimeSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "bounds": {
+      "type": "object", "additionalProperties": false,
+      "required": ["maxMinutes", "estimatedRequests", "maxParallel", "maxRatePerSecond", "maxTokens", "maxSpend", "maxEvidenceBytes"],
+      "properties": {
+        "maxMinutes": { "type": "integer", "minimum": 1, "maximum": 5 },
+        "estimatedRequests": { "const": 1 }, "maxParallel": { "const": 1 },
+        "maxRatePerSecond": { "type": "number", "exclusiveMinimum": 0, "maximum": 2 },
+        "maxTokens": { "type": "integer", "minimum": 1000, "maximum": 100000000 },
+        "maxSpend": { "type": "number", "minimum": 0, "maximum": 1000000 },
+        "maxEvidenceBytes": { "type": "integer", "minimum": 2097152, "maximum": 2147483648 }
+      }
+    },
+    "capabilitySha256": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { CodexCompanionAdapter } from "../../companion/app-server.mjs";
 import { ActivityStore } from "../../companion/activity.mjs";
 import {
   REMOTE_MESSAGE_VERSION,
@@ -66,10 +67,12 @@ function localState(overrides = {}) {
 
 function unavailableFleet(overrides = {}) {
   return {
-    apiVersion: "gate.local-fleet/v1",
+    apiVersion: "gate.local-fleet/v2",
     revision: 1,
+    selectionEpoch: "0".repeat(32),
     observedAt: null,
     receivedAt: new Date(NOW).toISOString(),
+    validUntil: new Date(NOW + 15_000).toISOString(),
     connection: "unavailable",
     sourceFreshness: "unavailable",
     coverage: {
@@ -94,6 +97,7 @@ function unavailableFleet(overrides = {}) {
       activeWorkflows: { value: null, precision: "unavailable" },
       runningAnalyses: { value: null, precision: "unavailable" },
       setupBlockers: { value: null, precision: "unavailable" },
+      blockers: { value: null, precision: "unavailable" },
       campaignTokens: { availability: "unavailable", total: null },
       hostTokens: {
         availability: "unavailable", input: null, cachedInput: null, output: null, total: null,
@@ -360,13 +364,23 @@ test("a terminal acknowledgement remains authoritative when an in-flight renewal
     .map((item) => item.value.state), ["accepted", "running", "renewed", "completed"]);
 });
 
-test("runner stops before leasing when its connected adapter closes", async (t) => {
+test("runner keeps signed fleet telemetry live and never leases while its conversation adapter is offline", async (t) => {
   let connected = true;
+  let now = NOW;
   const selectedAdapter = Object.assign(new EventEmitter(), adapter({
     privateState: () => localState({ connected })
   }));
   const requests = [];
-  const prepared = runnerOptions(t, { adapter: selectedAdapter });
+  const prepared = runnerOptions(t, {
+    adapter: selectedAdapter,
+    clock: () => now,
+    options: { fleetProvider: async () => unavailableFleet({
+      revision: requests.filter((item) => item.path.endsWith("/fleet")).length + 1,
+      receivedAt: new Date(now).toISOString(),
+      validUntil: new Date(now + 15_000).toISOString()
+    }) }
+  });
+  let runner;
   const controlPlane = signedControlPlane({
     publicKey: prepared.publicKey,
     commandValue: null,
@@ -374,22 +388,180 @@ test("runner stops before leasing when its connected adapter closes", async (t) 
   });
   prepared.options.fetch = async (url, init) => {
     const result = await controlPlane(url, init);
-    if (new URL(url).pathname.endsWith("/heartbeat")) {
+    if (new URL(url).pathname.endsWith("/heartbeat") && connected) {
       connected = false;
       selectedAdapter.emit("closed");
     }
+    if (new URL(url).pathname.endsWith("/fleet")
+        && requests.filter((item) => item.path.endsWith("/fleet")).length === 2) {
+      queueMicrotask(() => { void runner.stop(); });
+    }
     return result;
   };
-  prepared.options.delay = async () => {};
-  const runner = new RemoteCockpitRunner(prepared.options);
+  prepared.options.delay = async (milliseconds) => {
+    now += milliseconds;
+    await new Promise((resolve) => setImmediate(resolve));
+  };
+  runner = new RemoteCockpitRunner(prepared.options);
 
-  await assert.rejects(runner.start(), (error) => error?.code === "adapter-unavailable");
+  await runner.start();
   assert.equal(requests.some((item) => item.path.endsWith("/lease")), false);
+  assert.equal(requests.filter((item) => item.path.endsWith("/fleet")).length, 2);
+  assert.ok(requests.filter((item) => item.path.endsWith("/state"))
+    .every((item) => item.value.runner.state === "connected" && item.value.codex.state === "offline"));
   assert.equal(selectedAdapter.closed, 1);
 });
 
-test("adapter death during delivery never reports the command failed or leases another command", async (t) => {
+test("runner promptly republishes offline state when a working adapter closes during a state upload", async (t) => {
   let connected = true;
+  let turn = "working";
+  let now = NOW;
+  let factoryCalls = 0;
+  const selectedAdapter = Object.assign(new EventEmitter(), adapter({
+    privateState: () => localState({ connected, turn })
+  }));
+  const requests = [];
+  const prepared = runnerOptions(t, {
+    adapter: selectedAdapter,
+    clock: () => now,
+    options: {
+      adapterFactory: async () => { factoryCalls += 1; return adapter(); },
+      heartbeatIntervalMs: 300_000,
+      projectionIntervalMs: 300_000
+    }
+  });
+  let runner;
+  const controlPlane = signedControlPlane({
+    publicKey: prepared.publicKey,
+    commandValue: null,
+    requests
+  });
+  prepared.options.fetch = async (url, init) => {
+    const result = await controlPlane(url, init);
+    const route = new URL(url).pathname;
+    const stateUploads = requests.filter((item) => item.path.endsWith("/state")).length;
+    if (route.endsWith("/state") && stateUploads === 1) {
+      connected = false;
+      turn = "idle";
+      selectedAdapter.emit("closed");
+      await new Promise((resolve) => setImmediate(resolve));
+    } else if (route.endsWith("/state") && stateUploads === 2) {
+      queueMicrotask(() => { void runner.stop(); });
+    }
+    return result;
+  };
+  prepared.options.delay = async (milliseconds) => {
+    now += milliseconds;
+    await new Promise((resolve) => setImmediate(resolve));
+  };
+  runner = new RemoteCockpitRunner(prepared.options);
+
+  await runner.start();
+  const projectedStates = requests.filter((item) => item.path.endsWith("/state"))
+    .map((item) => item.value.codex.state);
+  assert.deepEqual(projectedStates, ["working", "offline"]);
+  assert.equal(requests.some((item) => item.path.endsWith("/lease")), false);
+  assert.equal(factoryCalls, 0);
+});
+
+test("runner starts telemetry offline when the conversation adapter is initially unavailable", async (t) => {
+  for (const connectRejects of [false, true]) {
+    let now = NOW;
+    let factoryCalls = 0;
+    const selectedAdapter = adapter({
+      connect: async () => {
+        if (connectRejects) throw new Error("local conversation unavailable");
+      },
+      privateState: () => localState({ connected: false })
+    });
+    const requests = [];
+    const prepared = runnerOptions(t, {
+      adapter: selectedAdapter,
+      clock: () => now,
+      options: {
+        adapterFactory: async () => { factoryCalls += 1; return adapter(); },
+        fleetProvider: async () => unavailableFleet({
+          revision: requests.filter((item) => item.path.endsWith("/fleet")).length + 1,
+          receivedAt: new Date(now).toISOString(),
+          validUntil: new Date(now + 15_000).toISOString()
+        })
+      }
+    });
+    let runner;
+    const controlPlane = signedControlPlane({
+      publicKey: prepared.publicKey,
+      commandValue: null,
+      requests
+    });
+    prepared.options.fetch = async (url, init) => {
+      const result = await controlPlane(url, init);
+      if (new URL(url).pathname.endsWith("/fleet")
+          && requests.filter((item) => item.path.endsWith("/fleet")).length === 2) {
+        queueMicrotask(() => { void runner.stop(); });
+      }
+      return result;
+    };
+    prepared.options.delay = async (milliseconds) => {
+      now += milliseconds;
+      await new Promise((resolve) => setImmediate(resolve));
+    };
+    runner = new RemoteCockpitRunner(prepared.options);
+
+    await runner.start();
+    assert.ok(requests.some((item) => item.path.endsWith("/heartbeat")));
+    assert.equal(requests.filter((item) => item.path.endsWith("/fleet")).length, 2);
+    assert.ok(requests.filter((item) => item.path.endsWith("/state"))
+      .every((item) => item.value.codex.state === "offline"));
+    assert.equal(requests.some((item) => item.path.endsWith("/lease")), false);
+    assert.equal(factoryCalls, 0);
+  }
+});
+
+test("CLI startup publishes signed telemetry when its Codex connection fails", async (t) => {
+  const root = ownerDirectory(t);
+  const cwd = path.join(root, "work");
+  const journalDirectory = path.join(root, "journal");
+  const keysDirectory = path.join(root, "keys");
+  for (const directory of [cwd, journalDirectory, keysDirectory, path.join(journalDirectory, "codex-home")]) fs.mkdirSync(directory, { mode: 0o700 });
+  const prepared = runnerOptions(t);
+  const privateKeyFile = path.join(keysDirectory, "runner.pem");
+  fs.writeFileSync(privateKeyFile, prepared.options.privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600 });
+  const requests = [];
+  const controlPlane = signedControlPlane({ publicKey: prepared.publicKey, commandValue: null, requests });
+  let connectCalls = 0;
+  t.mock.method(CodexCompanionAdapter.prototype, "connect", async () => {
+    connectCalls += 1;
+    throw new Error("conversation unavailable at startup");
+  });
+  await runnerCliInternals.run({
+    ...prepared.options, cwd, journalDirectory, privateKeyFile,
+    codexHome: path.join(journalDirectory, "codex-home"),
+    threadIdFile: path.join(journalDirectory, "thread.json")
+  }, {
+    prepareLaunch: () => ({ command: process.execPath, environment: {} }),
+    createRunner: (configuration) => {
+      const runner = new RemoteCockpitRunner({
+        ...prepared.options, ...configuration,
+        fleetProvider: async () => unavailableFleet(),
+        fetch: async (url, init) => {
+          const result = await controlPlane(url, init);
+          if (new URL(url).pathname.endsWith("/fleet")) queueMicrotask(() => { void runner.stop(); });
+          return result;
+        }
+      });
+      return runner;
+    }
+  });
+  assert.equal(connectCalls, 1);
+  assert.ok(requests.some((item) => item.path.endsWith("/heartbeat")));
+  assert.ok(requests.some((item) => item.path.endsWith("/fleet")));
+  assert.ok(requests.some((item) => item.path.endsWith("/state") && item.value.codex.state === "offline"));
+  assert.equal(requests.some((item) => item.path.endsWith("/lease")), false);
+});
+
+test("adapter death during delivery leaves the command ambiguous while fleet telemetry continues", async (t) => {
+  let connected = true;
+  let now = NOW;
   const selectedAdapter = Object.assign(new EventEmitter(), adapter({
     privateState: () => localState({ connected }),
     sendMessage: async () => {
@@ -405,19 +577,213 @@ test("adapter death during delivery never reports the command failed or leases a
     message: "Do not consume another command after the adapter exits."
   };
   const requests = [];
-  const prepared = runnerOptions(t, { adapter: selectedAdapter });
-  prepared.options.fetch = signedControlPlane({
+  const prepared = runnerOptions(t, {
+    adapter: selectedAdapter,
+    clock: () => now,
+    options: { fleetProvider: async () => unavailableFleet({
+      revision: requests.filter((item) => item.path.endsWith("/fleet")).length + 1,
+      receivedAt: new Date(now).toISOString(),
+      validUntil: new Date(now + 15_000).toISOString()
+    }) }
+  });
+  let runner;
+  const controlPlane = signedControlPlane({
     publicKey: prepared.publicKey,
     commandValue: command("message", payload, "XXXXXXXXXXXXXXXX"),
     requests
   });
-  prepared.options.delay = async () => {};
-  const runner = new RemoteCockpitRunner(prepared.options);
+  prepared.options.fetch = async (url, init) => {
+    const result = await controlPlane(url, init);
+    if (new URL(url).pathname.endsWith("/fleet")
+        && requests.filter((item) => item.path.endsWith("/fleet")).length === 2) {
+      queueMicrotask(() => { void runner.stop(); });
+    }
+    return result;
+  };
+  prepared.options.delay = async (milliseconds) => {
+    now += milliseconds;
+    await new Promise((resolve) => setImmediate(resolve));
+  };
+  runner = new RemoteCockpitRunner(prepared.options);
 
-  await assert.rejects(runner.start(), (error) => error?.code === "adapter-unavailable");
+  await runner.start();
   assert.deepEqual(requests.filter((item) => item.path.endsWith("/transition"))
     .map((item) => item.value.state), ["accepted", "running"]);
   assert.equal(requests.filter((item) => item.path.endsWith("/lease")).length, 1);
+  assert.equal(requests.filter((item) => item.path.endsWith("/fleet")).length, 2);
+  assert.equal(requests.filter((item) => item.path.endsWith("/state")).at(-1).value.codex.state, "offline");
+});
+
+test("delivery disconnect without a closed event still quarantines commands and preserves telemetry", async (t) => {
+  let connected = true;
+  let now = NOW;
+  let factoryCalls = 0;
+  const selectedAdapter = adapter({
+    privateState: () => localState({ connected }),
+    sendMessage: async () => {
+      connected = false;
+      throw new Error("app-server disappeared without a close notification");
+    }
+  });
+  const payload = {
+    apiVersion: REMOTE_MESSAGE_VERSION,
+    requestId: "request-silent-adapter-death-01",
+    sessionRevision: SESSION_REVISION,
+    message: "This delivery must remain ambiguous."
+  };
+  const requests = [];
+  const prepared = runnerOptions(t, {
+    adapter: selectedAdapter,
+    clock: () => now,
+    options: {
+      adapterFactory: async () => { factoryCalls += 1; return adapter(); },
+      fleetProvider: async () => unavailableFleet({
+        revision: requests.filter((item) => item.path.endsWith("/fleet")).length + 1,
+        receivedAt: new Date(now).toISOString(),
+        validUntil: new Date(now + 15_000).toISOString()
+      })
+    }
+  });
+  let runner;
+  const controlPlane = signedControlPlane({
+    publicKey: prepared.publicKey,
+    commandValue: command("message", payload, "ZZZZZZZZZZZZZZZZ"),
+    requests
+  });
+  prepared.options.fetch = async (url, init) => {
+    const result = await controlPlane(url, init);
+    if (new URL(url).pathname.endsWith("/fleet")
+        && requests.filter((item) => item.path.endsWith("/fleet")).length === 2) {
+      queueMicrotask(() => { void runner.stop(); });
+    }
+    return result;
+  };
+  prepared.options.delay = async (milliseconds) => {
+    now += milliseconds;
+    await new Promise((resolve) => setImmediate(resolve));
+  };
+  runner = new RemoteCockpitRunner(prepared.options);
+  await runner.start();
+
+  assert.deepEqual(requests.filter((item) => item.path.endsWith("/transition"))
+    .map((item) => item.value.state), ["accepted", "running"]);
+  assert.equal(requests.filter((item) => item.path.endsWith("/lease")).length, 1);
+  assert.equal(requests.filter((item) => item.path.endsWith("/fleet")).length, 2);
+  assert.equal(requests.filter((item) => item.path.endsWith("/state")).at(-1).value.codex.state, "offline");
+  assert.equal(factoryCalls, 0);
+});
+
+test("uncertain terminal acknowledgement quarantines later commands while fleet telemetry continues", async (t) => {
+  let now = NOW;
+  const selectedAdapter = adapter();
+  const payload = {
+    apiVersion: REMOTE_MESSAGE_VERSION,
+    requestId: "request-terminal-uncertain-01",
+    sessionRevision: SESSION_REVISION,
+    message: "Accept this delivery once and keep later commands quarantined if finalization is uncertain."
+  };
+  const requests = [];
+  const prepared = runnerOptions(t, {
+    adapter: selectedAdapter,
+    clock: () => now,
+    options: { fleetProvider: async () => unavailableFleet({
+      revision: requests.filter((item) => item.path.endsWith("/fleet")).length + 1,
+      receivedAt: new Date(now).toISOString(),
+      validUntil: new Date(now + 15_000).toISOString()
+    }) }
+  });
+  let runner;
+  const controlPlane = signedControlPlane({
+    publicKey: prepared.publicKey,
+    commandValue: command("message", payload, "TTTTTTTTTTTTTTTT"),
+    requests
+  });
+  prepared.options.fetch = async (url, init) => {
+    const result = await controlPlane(url, init);
+    const value = JSON.parse(init.body);
+    if (new URL(url).pathname.endsWith("/transition") && value.state === "completed") {
+      throw new Error("terminal acknowledgement lost");
+    }
+    if (new URL(url).pathname.endsWith("/fleet")
+        && requests.filter((item) => item.path.endsWith("/fleet")).length === 2) {
+      queueMicrotask(() => { void runner.stop(); });
+    }
+    return result;
+  };
+  prepared.options.delay = async (milliseconds) => {
+    now += milliseconds;
+    await new Promise((resolve) => setImmediate(resolve));
+  };
+  runner = new RemoteCockpitRunner(prepared.options);
+  await runner.start();
+
+  assert.equal(selectedAdapter.calls.length, 1);
+  assert.equal(requests.filter((item) => item.path.endsWith("/lease")).length, 1);
+  assert.deepEqual(requests.filter((item) => item.path.endsWith("/transition"))
+    .map((item) => item.value.state), ["accepted", "running", "completed", "completed", "completed"]);
+  assert.equal(requests.filter((item) => item.path.endsWith("/fleet")).length, 2);
+  assert.equal(requests.filter((item) => item.path.endsWith("/state")).at(-1).value.codex.state, "offline");
+});
+
+test("runner recovers idle conversation through a bounded replacement adapter without a lease while offline", async (t) => {
+  let initialConnected = true;
+  let now = NOW;
+  const initial = Object.assign(new EventEmitter(), adapter({
+    privateState: () => localState({ connected: initialConnected })
+  }));
+  const replacement = Object.assign(new EventEmitter(), adapter());
+  const payload = {
+    apiVersion: REMOTE_MESSAGE_VERSION,
+    requestId: "request-recovered-adapter-01",
+    sessionRevision: SESSION_REVISION,
+    message: "Continue only after the replacement conversation adapter is connected."
+  };
+  const requests = [];
+  let factoryCalls = 0;
+  const prepared = runnerOptions(t, {
+    adapter: initial,
+    clock: () => now,
+    options: {
+      adapterFactory: async () => { factoryCalls += 1; return replacement; },
+      fleetProvider: async () => unavailableFleet({
+        revision: requests.filter((item) => item.path.endsWith("/fleet")).length + 1,
+        receivedAt: new Date(now).toISOString(),
+        validUntil: new Date(now + 15_000).toISOString()
+      })
+    }
+  });
+  let runner;
+  const controlPlane = signedControlPlane({
+    publicKey: prepared.publicKey,
+    commandValue: command("message", payload, "YYYYYYYYYYYYYYYY"),
+    requests,
+    onTerminal: () => queueMicrotask(() => { void runner.stop(); })
+  });
+  prepared.options.fetch = async (url, init) => {
+    const result = await controlPlane(url, init);
+    if (new URL(url).pathname.endsWith("/heartbeat") && initialConnected) {
+      initialConnected = false;
+      initial.emit("closed");
+    }
+    return result;
+  };
+  prepared.options.delay = async (milliseconds) => {
+    now += milliseconds;
+    await new Promise((resolve) => setImmediate(resolve));
+  };
+  runner = new RemoteCockpitRunner(prepared.options);
+  await runner.start();
+
+  const projectedStates = requests.filter((item) => item.path.endsWith("/state"))
+    .map((item) => item.value.codex.state);
+  assert.ok(projectedStates.includes("offline"));
+  assert.ok(projectedStates.includes("idle"));
+  assert.equal(factoryCalls, 1);
+  assert.equal(initial.calls.length, 0);
+  assert.deepEqual(replacement.calls, [["message", payload]]);
+  assert.equal(requests.filter((item) => item.path.endsWith("/lease")).length, 1);
+  assert.deepEqual(requests.filter((item) => item.path.endsWith("/transition"))
+    .map((item) => item.value.state), ["accepted", "running", "completed"]);
 });
 
 test("a command durably accepted by a prior runner is failed without replay after restart", async (t) => {
@@ -467,13 +833,13 @@ test("a command durably accepted by a prior runner is failed without replay afte
     ["accepted", "failed"]);
 });
 
-test("journal retention prunes only the oldest terminal entry and preserves in-flight dedupe", async (t) => {
+test("journal retention prunes only the oldest terminal entry", async (t) => {
   const directory = ownerDirectory(t);
   const accepted = Array.from({ length: remoteRunnerInternals.MAX_JOURNAL_ENTRIES }, (_, index) => ({
     commandId: `cmd_${index.toString(36).padStart(16, "0")}`,
     payloadSha256: "a".repeat(64),
     acceptedAt: new Date(NOW - index).toISOString(),
-    terminalState: index === 0 ? null : "completed"
+    terminalState: "completed"
   }));
   const journalFile = path.join(directory, "remote-runner-journal.json");
   fs.writeFileSync(journalFile, `${JSON.stringify({
@@ -507,10 +873,56 @@ test("journal retention prunes only the oldest terminal entry and preserves in-f
 
   const saved = JSON.parse(fs.readFileSync(journalFile, "utf8"));
   assert.equal(saved.accepted.length, remoteRunnerInternals.MAX_JOURNAL_ENTRIES);
-  assert.ok(saved.accepted.some((entry) => entry.commandId === "cmd_0000000000000000" && entry.terminalState === null));
-  assert.equal(saved.accepted.some((entry) => entry.commandId === "cmd_0000000000000001"), false);
+  assert.equal(saved.accepted.some((entry) => entry.commandId === "cmd_0000000000000000"), false);
+  assert.ok(saved.accepted.some((entry) => entry.commandId === "cmd_0000000000000001"
+    && entry.terminalState === "completed"));
   assert.ok(saved.accepted.some((entry) => entry.commandId === "cmd_EEEEEEEEEEEEEEEE"
     && entry.terminalState === "completed"));
+});
+
+test("an unresolved journal command durably quarantines conversation while telemetry remains live", async (t) => {
+  const directory = ownerDirectory(t);
+  const journalFile = path.join(directory, "remote-runner-journal.json");
+  fs.writeFileSync(journalFile, `${JSON.stringify({
+    apiVersion: remoteRunnerInternals.JOURNAL_VERSION,
+    runnerId: RUNNER_ID,
+    caseId: CASE_ID,
+    sessionRevision: SESSION_REVISION,
+    projectionRevisions: { state: 0, fleet: 0 },
+    accepted: [{
+      commandId: "cmd_unresolved000000",
+      payloadSha256: "a".repeat(64),
+      acceptedAt: new Date(NOW).toISOString(),
+      terminalState: null
+    }]
+  })}\n`, { mode: 0o600 });
+  const selectedAdapter = adapter();
+  const requests = [];
+  const prepared = runnerOptions(t, {
+    adapter: selectedAdapter,
+    journalDirectory: directory,
+    options: { fleetProvider: async () => unavailableFleet() }
+  });
+  let runner;
+  const controlPlane = signedControlPlane({
+    publicKey: prepared.publicKey,
+    commandValue: null,
+    requests
+  });
+  prepared.options.fetch = async (url, init) => {
+    const result = await controlPlane(url, init);
+    if (new URL(url).pathname.endsWith("/fleet")) queueMicrotask(() => { void runner.stop(); });
+    return result;
+  };
+  prepared.options.delay = async () => {};
+  runner = new RemoteCockpitRunner(prepared.options);
+  await runner.start();
+
+  assert.equal(requests.some((item) => item.path.endsWith("/lease")), false);
+  assert.equal(selectedAdapter.calls.length, 0);
+  assert.equal(requests.find((item) => item.path.endsWith("/state")).value.codex.state, "offline");
+  assert.equal(requests.filter((item) => item.path.endsWith("/fleet")).length, 1);
+  assert.equal(JSON.parse(fs.readFileSync(journalFile, "utf8")).accepted[0].terminalState, null);
 });
 
 test("runner dispatches a bounded question response to the adapter", async (t) => {
@@ -557,7 +969,7 @@ test("state and fleet projection expose only the reviewed remote shape", () => {
   const fleet = projectRemoteFleet(unavailableFleet({
     secretReference: "must-not-cross"
   }), { sessionRevision: SESSION_REVISION });
-  assert.equal(fleet.apiVersion, "gate.remote-fleet/v1");
+  assert.equal(fleet.apiVersion, "gate.remote-fleet/v2");
   assert.equal(fleet.sessionRevision, SESSION_REVISION);
   assert.equal("secretReference" in fleet, false);
 });

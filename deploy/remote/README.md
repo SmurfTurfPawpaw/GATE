@@ -256,7 +256,7 @@ CODEX_HOME="$remote_codex_home" "$remote_codex" login
 CODEX_HOME="$remote_codex_home" "$remote_codex" login status
 ```
 
-Transfer `runner-public.pem` through the operator's reviewed private channel. Do not copy the private key to the coordinator. `remote init` already wrote the case-bound owner-only `runner/runner.env`; load that generated file unchanged in the terminal that will keep the runner open. `runner.env.example` is only a public shape and layout reference and must not overwrite the generated configuration:
+Transfer `runner-public.pem` through the operator's reviewed private channel. Do not copy the private key to the coordinator. `remote init` already wrote the case-bound owner-only `runner/runner.env`; load that generated file unchanged for a foreground run. `runner.env.example` is only a public shape and layout reference and must not overwrite the generated configuration:
 
 ```bash
 generated_runner_environment="$runner_state/runner.env"
@@ -268,11 +268,11 @@ set +a
 npm run cockpit:remote:runner
 ```
 
-Run that command from the reviewed GATE checkout that contains `package.json`. The remote thread is conversation-only and uses a read-only sandbox with every local filesystem, shell, image, skill, worktree, workspace-dependency, and unified-execution tool disabled. It cannot inspect or edit the checkout, run tests, or contact a target. Active target execution would require a separate typed, case-bound controller outside Codex; that relay is not implemented. For foreground-process lifetime, automatic transient retries, and when to restart manually, follow [Configuration and entrypoints](../../docs/remote-cockpit.md#configuration-and-entrypoints). Reconcile an ambiguous or failed command before manual retry.
+Run that command from the reviewed GATE checkout that contains `package.json`. The remote thread is conversation-only and uses a read-only sandbox with every local filesystem, shell, image, skill, worktree, workspace-dependency, and unified-execution tool disabled. It cannot inspect or edit the checkout, run tests, or contact a target. Active target execution requires the separate typed, case-bound campaign controller and its own exact authority. For foreground-process lifetime, persistent user-service setup, automatic transient retries, and restart handling, follow [Configuration and entrypoints](../../docs/remote-cockpit.md#configuration-and-entrypoints). Reconcile an ambiguous or failed command before manual retry.
 
 The Codex executable is a separate trust boundary from the writable dedicated `CODEX_HOME`. See [Configuration and entrypoints](../../docs/remote-cockpit.md#configuration-and-entrypoints) for protected executable selection and `PATH` filtering.
 
-No laptop service definition is supplied. Do not use an unconditional shell or service restart loop: permanent authentication, signature, session-revision, Codex-boundary, and configuration failures deliberately stop the runner. Any future supervised wrapper must distinguish permanent from transient exits, keep all state owner-only, send a clean termination signal, and enforce one process per journal.
+A tested `gate-remote-runner@.service` user unit and fixed-path renderer are supplied under [persistent local services](../local/systemd/README.md). It loads an owner-only copy of the generated environment and uses `Restart=on-abnormal`: permanent authentication, signature, session-revision, Codex-boundary, and configuration failures deliberately remain stopped. The runner handles transient coordinator failures internally. The unit sends a clean termination signal and must never share one journal with another service or foreground runner.
 
 The thread record must be a direct child of the journal directory. The v3 lifecycle performs the version, home, and effective-configuration preflight before writing any record. Immediately before `thread/start` it writes `creating`; after a valid start response it writes `provisional`; immediately before the first `turn/start` request it durably writes `used`. Only `used` records are resumed. An intentional clean stop closes app-server and removes a never-used `provisional` record, so the next start creates a fresh thread. A `creating` or `provisional` record found at startup, or any failed resume of a `used` record, is ambiguous and stops without creating another thread. Reconcile it explicitly; do not delete it merely to make the runner start.
 

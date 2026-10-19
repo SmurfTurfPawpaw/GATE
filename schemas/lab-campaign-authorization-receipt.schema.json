@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/lab-campaign-authorization-receipt.schema.json",
+  "title": "GATE one-time dedicated-lab campaign authorization receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "apiVersion", "kind", "authorityId", "authoritySha256", "confirmation", "confirmedAt", "receiptSha256"],
+  "properties": {
+    "$schema": { "const": "https://gate.local/schemas/lab-campaign-authorization-receipt.schema.json" },
+    "apiVersion": { "const": "gate.lab-campaign-authorization/v1" },
+    "kind": { "const": "LabCampaignAuthorizationReceipt" },
+    "authorityId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$" },
+    "authoritySha256": { "$ref": "#/$defs/sha256" },
+    "confirmation": { "type": "string", "minLength": 90, "maxLength": 151, "pattern": "^AUTHORIZE LAB CAMPAIGN [a-z][a-z0-9-]{1,62} [a-f0-9]{64}$" },
+    "confirmedAt": { "type": "string", "format": "date-time" },
+    "receiptSha256": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": { "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" } }
+}

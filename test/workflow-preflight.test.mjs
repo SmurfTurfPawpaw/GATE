@@ -15,7 +15,10 @@ import {
   recordTechnicalReview
 } from "../src/lib/engagements.mjs";
 import { consultLearnings } from "../src/lib/learnings.mjs";
-import { runtimePaths } from "../src/lib/paths.mjs";
+import { runtimePaths, ensureRuntime } from "../src/lib/paths.mjs";
+import { CASE_SCOPE_SCHEMA, CASE_SCOPE_API_VERSION, CASE_SCOPE_KIND, CASE_SCOPE_ISOLATION, caseScopeDigest, canonicalCaseScopeText } from "../src/lib/case-scope.mjs";
+import { createCampaign, resumeCampaign, campaignStatus } from "../src/lib/campaigns.mjs";
+import { runNextCampaignWorkerJob, runCampaignWorker } from "../src/lib/campaign-worker.mjs";
 import {
   addWorkflowEvidence,
   createWorkflowInstance,
@@ -766,4 +769,95 @@ test("admission expiry blocks reservation, claim, and execution despite valid en
     disposition: "blocked",
     rationale: "The admission expiry fixture deliberately ended without a successful execution."
   }, { paths });
+});
+
+
+test("two managed jobs wait for assisted review and a fresh unreserved workflow test", async (t) => {
+  const { root, paths: base } = fixture(t);
+  const at = new Date().toISOString();
+  const caseId = "campaign-case";
+  const paths = runtimePaths({ home: base.home, repo, caseId });
+  fs.mkdirSync(paths.stateHome, { recursive: true, mode: 0o700 });
+  const scope = {
+    $schema: CASE_SCOPE_SCHEMA, apiVersion: CASE_SCOPE_API_VERSION, kind: CASE_SCOPE_KIND,
+    metadata: { id: caseId, displayName: "Campaign fixture", createdAt: at },
+    program: { id: "pilot-program", profileSha256: "a".repeat(64) }, project: null,
+    isolation: { ...CASE_SCOPE_ISOLATION }, scopeSha256: "0".repeat(64)
+  };
+  scope.scopeSha256 = caseScopeDigest(scope);
+  fs.writeFileSync(paths.caseScope, canonicalCaseScopeText(scope), { mode: 0o600 });
+  fs.writeFileSync(paths.caseBinding, JSON.stringify({ caseId, scopeSha256: scope.scopeSha256 }), { mode: 0o600 });
+  ensureRuntime(paths);
+  const workflowId = "campaign-flow";
+  const target = "http://127.0.0.1/challenge/";
+  createWorkflowInstance(workflowId, {}, { paths });
+  completeFoundation(root, paths, workflowId);
+  approve(root, paths, { id: "campaign-authority", target, actions: ["observe"], tools: ["httpx"] });
+  const built = buildAdmission(root, paths, { engagementId: "campaign-authority", workflowId,
+    phaseId: "active-surface-validation", target, action: "observe", toolId: "httpx", name: "campaign" });
+  const started = startWorkflowPhase(workflowId, { phaseId: "active-surface-validation",
+    sourcePhase: "target-and-architecture-map", admissionFile: built.file }, { paths });
+  const active = started.projection.activePhase;
+  const plan = planFixtureTest(paths, workflowId, active);
+  const bounds = { maxMinutes: 1, estimatedRequests: 1, maxParallel: 1, maxRatePerSecond: 1,
+    maxTokens: 1000, maxSpend: 0, maxEvidenceBytes: 2 * 1024 * 1024 };
+  const source = { id: "rules", contentSha256: "b".repeat(64), projectionSha256: "c".repeat(64), snapshotSha256: "d".repeat(64) };
+  const sourceRef = `private://program-sources/pilot-program/rules/bodies/${source.contentSha256}.bin`;
+  const options = {
+    paths,
+    readCurrentProgramProfileBinding: () => ({ ...scope.program, sources: [{ id: source.id, contentSha256: source.contentSha256 }] }),
+    readCurrentProgramSource: () => ({
+      $schema: "https://gate.local/schemas/program-source-snapshot.schema.json",
+      apiVersion: "gate.dev/program-source-snapshot/v1", kind: "ProgramSourceSnapshot",
+      metadata: { programId: scope.program.id, sourceId: source.id, revision: 1, capturedAt: at,
+        contentSha256: source.contentSha256, projectionSha256: source.projectionSha256, snapshotSha256: source.snapshotSha256, bodyBytes: 12 },
+      source: { id: source.id, type: "program-rules", title: "Fixture rules", reference: sourceRef,
+        contentSha256: source.contentSha256, observedAt: at, claimState: "observed", notes: null },
+      acquisition: { method: "local-file", requestedUrl: null, finalUrl: null, redirects: 0, httpStatus: null, mediaType: "text/plain", contentEncoding: null },
+      projection: { scope: [], rules: [] }, storage: { bodyRef: sourceRef }, predecessor: null
+    }),
+    labAuthorityId: "lab-authority",
+    labCampaignAuthorityStatus: () => ({ authorityId: "lab-authority", campaignId: "two-jobs", confirmed: true, status: "authorized" })
+  };
+  createCampaign({ id: "two-jobs", expiresAt: new Date(Date.now() + 600_000).toISOString(), source,
+    engagementId: "campaign-authority", environment: "host", selectors: [{ type: "url", value: target }],
+    operations: [{ adapterId: "httpx-url-fetch", action: "observe", toolId: "httpx" }],
+    ceilings: { maxWallMinutes: 10, maxRequests: 10, maxRatePerSecond: 1, maxConcurrency: 1,
+      maxInputTokens: 2000, maxOutputTokens: 2000, maxTotalTokens: 2000, maxSpend: 0, maxEvidenceBytes: 4 * 1024 * 1024 },
+    jobs: ["first-fetch", "second-fetch"].map((id) => ({ id, type: "managed-adapter", engagementId: "campaign-authority",
+      workflow: { instanceId: workflowId, phaseAttemptId: active.attemptId },
+      adapter: { id: "httpx-url-fetch", action: "observe", toolId: "httpx" }, selector: { type: "url", value: target },
+      operation: { kind: "http-fetch", method: "GET", allowedIp: "127.0.0.1", timeoutSeconds: 5, maxResponseBytes: 1024 }, bounds }))
+  }, options);
+  resumeCampaign("two-jobs", options);
+  const executionAdmission = writeJson(root, "execution-admission.json", { ...built.admission,
+    envelope: { ...built.admission.envelope, maxMinutes: 1, maxRequests: 1, maxTotalTokens: 1000, maxEvidenceBytes: 2 * 1024 * 1024 } });
+  let dispatches = 0;
+  let resultSha;
+  const dispatchOptions = { ...options, dispatchAuthorizedLabCampaignJob: async (_authorityId, job) => {
+    dispatches += 1;
+    resultSha = completeFixtureExecution(root, paths, workflowId, active, executionAdmission.file);
+    return { ok: true, status: "succeeded", authorityId: "lab-authority", campaignId: "two-jobs", jobId: job.metadata.id,
+      capabilityId: `lcap_${String(dispatches).repeat(32)}`, manifestId: `xmf_${String(dispatches).repeat(32)}`,
+      runId: `xrun_${String(dispatches).repeat(32)}`, stopCondition: null,
+      metrics: { requests: 1, wallMilliseconds: 1, inputTokens: 0, outputTokens: 0, totalTokens: 0, spend: 0, evidenceBytes: 0 } };
+  } };
+  const abort = new AbortController();
+  await runCampaignWorker("two-jobs", { ...dispatchOptions, signal: abort.signal, processSignals: false,
+    pollMs: 250, heartbeatMs: 1000, wait: async () => abort.abort() });
+  assert.equal(dispatches, 1);
+  const waiting = campaignStatus("two-jobs", options).state;
+  assert.equal(waiting.jobs[0].status, "completed");
+  assert.equal(waiting.jobs[1].status, "queued");
+  assert.equal(workflowStatus(workflowId, { paths }).activePhase.testReadyForExecution, false);
+  assert.equal((await runNextCampaignWorkerJob("two-jobs", dispatchOptions)).deferred, true);
+  assert.deepEqual(campaignStatus("two-jobs", options).state, waiting);
+  reviewFixtureTest(paths, workflowId, plan, [resultSha]);
+  assert.equal((await runNextCampaignWorkerJob("two-jobs", dispatchOptions)).deferred, true);
+  assert.equal(dispatches, 1);
+  planFixtureTest(paths, workflowId, active);
+  assert.equal(workflowStatus(workflowId, { paths }).activePhase.testReadyForExecution, true);
+  assert.equal((await runNextCampaignWorkerJob("two-jobs", dispatchOptions)).ok, true);
+  assert.equal(dispatches, 2);
+  assert.equal(campaignStatus("two-jobs", options).state.status, "completed");
 });

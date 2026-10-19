@@ -19,7 +19,34 @@ import {
   verifyProgramProfile
 } from "./lib/bounty-profiles.mjs";
 import { caseFleetStatus, createCase, openCaseRuntime, selectCaseRuntime, showCase } from "./lib/cases.mjs";
+import {
+  campaignInternals,
+  campaignStatus,
+  createCampaign,
+  pauseCampaign,
+  recoverCampaign,
+  resumeCampaign,
+  stopCampaign
+} from "./lib/campaigns.mjs";
+import { runCampaignWorker, runNextCampaignWorkerJob } from "./lib/campaign-worker.mjs";
+import {
+  confirmLabCampaignAuthority,
+  createLabCampaignAuthority,
+  enqueueAuthorizedLabCampaignFetch,
+  labCampaignAuthorityStatus,
+  recoverLabCampaignAuthority,
+  stopLabCampaignAuthority
+} from "./lib/lab-campaign-authority.mjs";
+import {
+  diffProgramSourceSnapshots,
+  importProgramSource,
+  programSourceSnapshotSummary,
+  readCurrentProgramSource,
+  readProgramSourceProjection,
+  readProgramSourceRevision
+} from "./lib/program-sources.mjs";
 import { loadConfig, writeJsonAtomic } from "./lib/config.mjs";
+import { ctfPilotStatusProjection, readCtfPilotStatus, writeCtfPilotState } from "./lib/ctf-pilot.mjs";
 import { runDoctor } from "./lib/doctor.mjs";
 import {
   approveEngagement,
@@ -153,7 +180,47 @@ Cases
   case list                         List case bindings and scope health
   case show ID                      Show one immutable private case scope
 
-Case-owned engagement, workflow, profile-compilation, and analysis commands
+Program source snapshots
+  source import PROGRAM SOURCE --file PATH --type TYPE --title TEXT --reference URL
+                     [--media-type TYPE] [--projection PRIVATE_FILE]
+                                    Import one operator-saved source without printing its body
+  source fetch PROGRAM SOURCE --url HTTPS_URL --type TYPE --title TEXT --allow-network
+                     [--projection PRIVATE_FILE]
+                                    Explicitly retrieve and snapshot one bounded public HTTPS source
+  source show PROGRAM SOURCE        Show current verified metadata without source bytes or claims
+  source diff PROGRAM SOURCE [--from REV] [--to REV]
+                                    Compare two verified revisions; defaults to current predecessor
+
+CTF pilot scorecard
+  ctf pilot status                  Show the identifier-free three-axis pilot state
+  ctf pilot update --file PRIVATE_FILE
+                                    Publish a validated monotonic case-worker scorecard
+
+Campaign controller
+  campaign create ID --file PRIVATE_FILE
+                                    Create a paused, source-bound private campaign and immutable queue
+  campaign status ID                Replay state and show binding health, counters, and capability
+  campaign resume ID                Recheck bindings and resume foreground scheduling
+  campaign run-next ID [--lab-authority ID]
+                                    Run one queued dry job or one confirmed dedicated-lab job
+  campaign pause ID                 Pause foreground scheduling
+  campaign stop ID [--reason TEXT]  Stop the campaign durably
+  campaign recover ID               Retire a dead lock and rebuild state from the journal
+  campaign worker ID [--poll-ms N] [--heartbeat-ms N] [--lab-authority ID]
+                                    Run the durable foreground scheduler and heartbeat loop
+  campaign lab-create ID --file PRIVATE_FILE
+                                    Propose one digest-bound dedicated-lab campaign authority
+  campaign lab-confirm ID --confirm "AUTHORIZE LAB CAMPAIGN ID SHA256"
+                                    Confirm the full authority once; ordinary execution confirmation is unchanged
+  campaign lab-status ID           Show private authority, usage, stop, and recovery state
+  campaign lab-enqueue ID --file PRIVATE_FILE
+                                    Append one typed same-origin GET/HEAD job within confirmed bounds
+  campaign lab-stop ID --confirm "STOP LAB CAMPAIGN ID SHA256"
+                                    Stop the authority durably
+  campaign lab-recover ID --confirm "RECOVER LAB CAMPAIGN ID SHA256"
+                                    Retire only a pre-contact orphan capability claim
+
+Case-owned engagement, workflow, profile-compilation, analysis, and CTF pilot commands
 require an explicit runtime: --case ID (or GATE_CASE), or leading --unassigned.
 The writable --unassigned base runtime creates unscoped state and opts out of
 case attribution. Cases separate state directories but share the operator user
@@ -203,7 +270,7 @@ Engagements
   engagement check ID --target TARGET --action ACTION
   engagement manifest ID --workflow ID --phase-attempt ID --target TARGET --action ACTION --tool TOOL --minutes N
                          --requests N --parallel N --rate N --tokens N [--evidence-bytes N] -- ARGV...
-  engagement adapter-manifest ID --adapter dnsx-domain-observe|httpx-url-observe --workflow ID
+  engagement adapter-manifest ID --adapter dnsx-domain-observe|httpx-url-observe|httpx-url-fetch --workflow ID
                          --phase-attempt ID --target TARGET --minutes N --requests 1 --parallel 1 --rate 1
                          --tokens N [adapter operation flags]
   engagement exec ID --manifest ID --confirm "EXECUTE ID SHA256 UNMETERED"
@@ -331,6 +398,98 @@ function readStructuredCommandFile(file, label, maximumBytes = MAX_STRUCTURED_CO
   }
 }
 
+function pathIsWithin(parent, candidate) {
+  const relative = path.relative(path.resolve(parent), path.resolve(candidate));
+  return relative !== "" && !relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative);
+}
+
+function readPrivateCampaignInput(file, paths) {
+  const resolved = path.resolve(String(file || ""));
+  let realFile;
+  let realStateHome;
+  try {
+    realFile = fs.realpathSync(resolved);
+    realStateHome = fs.realpathSync(paths.stateHome);
+  } catch (error) {
+    throw new Error(`campaign creation input is unavailable: ${error.message}`, { cause: error });
+  }
+  if (path.resolve(realFile) !== resolved) {
+    throw new Error("campaign creation input path must not contain symbolic links");
+  }
+  if (!pathIsWithin(realStateHome, realFile)) {
+    throw new Error("campaign creation input must be stored inside the selected case state directory");
+  }
+  const metadata = fs.statSync(realFile, { bigint: true });
+  if (process.platform !== "win32") {
+    if (typeof process.getuid === "function" && metadata.uid !== BigInt(process.getuid())) {
+      throw new Error("campaign creation input must be owned by the current account");
+    }
+    if (Number(metadata.mode & 0o777n) !== 0o600) {
+      throw new Error("campaign creation input must have mode 0600");
+    }
+  }
+  return readStructuredCommandFile(realFile, "campaign creation input");
+}
+
+function readPrivateCtfPilotInput(file, paths) {
+  const resolved = path.resolve(String(file || ""));
+  let realFile;
+  let realStateHome;
+  try {
+    realFile = fs.realpathSync(resolved);
+    realStateHome = fs.realpathSync(paths.stateHome);
+  } catch (error) {
+    throw new Error(`CTF pilot input is unavailable: ${error.message}`, { cause: error });
+  }
+  if (path.resolve(realFile) !== resolved) throw new Error("CTF pilot input path must not contain symbolic links");
+  if (!pathIsWithin(realStateHome, realFile)) {
+    throw new Error("CTF pilot input must be stored inside the selected case state directory");
+  }
+  const metadata = fs.statSync(realFile, { bigint: true });
+  if (process.platform !== "win32") {
+    if (typeof process.getuid === "function" && metadata.uid !== BigInt(process.getuid())) {
+      throw new Error("CTF pilot input must be owned by the current account");
+    }
+    if (Number(metadata.mode & 0o777n) !== 0o600) throw new Error("CTF pilot input must have mode 0600");
+  }
+  return readStructuredCommandFile(realFile, "CTF pilot input", 64 * 1024);
+}
+
+function campaignCreationProjection(result) {
+  return {
+    created: result.created,
+    campaignId: result.state.campaignId,
+    grantSha256: result.state.grantSha256,
+    status: result.state.status,
+    queue: result.state.queue,
+    kpis: result.state.kpis,
+    usage: result.state.usage,
+    capability: result.state.capability,
+    bindingHealth: result.bindingHealth
+  };
+}
+
+function sourceProjection(flags, paths) {
+  const file = optionalValueFlag(flags, "projection");
+  return file ? readProgramSourceProjection(file, { paths }) : { scope: [], rules: [] };
+}
+
+function sourceReceipt(result) {
+  return {
+    snapshot: programSourceSnapshotSummary(result.snapshot),
+    diff: result.diff
+  };
+}
+
+function sourceRevisionFlag(flags, name, fallback) {
+  const raw = optionalValueFlag(flags, name);
+  if (raw === undefined) return fallback;
+  if (!/^[1-9][0-9]*$/u.test(raw)) throw new Error(`--${name} must be a positive integer revision`);
+  const revision = Number(raw);
+  if (!Number.isSafeInteger(revision)) throw new Error(`--${name} must be a safe integer revision`);
+  return revision;
+}
+
 function assertUnambiguousAnalysisArgs(argv) {
   const seen = new Set();
   for (const value of argv) {
@@ -347,6 +506,19 @@ function assertUnambiguousAnalysisArgs(argv) {
 function assertBooleanSwitch(flags, name) {
   if (flags[name] !== undefined && flags[name] !== true) {
     throw new Error(`--${name} does not accept a value`);
+  }
+}
+
+function assertUnambiguousSourceArgs(argv) {
+  const seen = new Set();
+  for (const value of argv) {
+    if (value === "--") throw new Error("program source commands do not accept passthrough arguments");
+    if (!value.startsWith("--")) continue;
+    const equals = value.indexOf("=");
+    const name = value.slice(2, equals === -1 ? undefined : equals);
+    if (!name) throw new Error("program source options must have a name");
+    if (seen.has(name)) throw new Error(`program source option must not be repeated: --${name}`);
+    seen.add(name);
   }
 }
 
@@ -1243,6 +1415,7 @@ async function runProfileWizardSession(id, options = {}) {
 export const cliInternals = Object.freeze({
   applicableQuestionProgress,
   boundedTerminalValue,
+  campaignCreationProjection,
   caseSelectorRequired,
   caseSelectionMode,
   parseQuestionAnswer,
@@ -1250,6 +1423,7 @@ export const cliInternals = Object.freeze({
   questionFormatGuidance,
   questionnaireResult,
   questionHasAnswer,
+  readPrivateCampaignInput,
   runProfileWizardSession,
   runProgramProfileQuestionnaire,
   verificationQuestionIndex
@@ -1470,12 +1644,14 @@ const GLOBAL_CASE_COMMANDS = new Set([
   "workspace",
   "upstream",
   "publication",
-  "remote"
+  "remote",
+  "source"
 ]);
 const GLOBAL_BOUNTY_PROFILE_ACTIONS = new Set(["create", "resume", "ui", "status", "show", "verify"]);
 const GLOBAL_TOOL_ACTIONS = new Set(["list", "show", "plan", "prefetch", "install", "verify", "remove"]);
 const STALE_SAFE_ENGAGEMENT_ACTIONS = new Set(["status", "stop", "revoke", "reconcile", "close"]);
 const STALE_SAFE_ANALYSIS_ACTIONS = new Set(["status", "purge"]);
+const STALE_SAFE_CAMPAIGN_ACTIONS = new Set(["status", "pause", "stop", "recover"]);
 const CASE_OWNED_ANALYSIS_ACTIONS = new Set(["manifest", "run", "purge", "status"]);
 const GLOBAL_META_COMMANDS = new Set(["help", "--help", "-h", "version", "--version", "-v"]);
 
@@ -1508,12 +1684,18 @@ function caseSelectionMode(command, parsed) {
   if (command === "analysis" && STALE_SAFE_ANALYSIS_ACTIONS.has(parsed.positional[0])) {
     return "stale-safe";
   }
+  if (command === "campaign" && STALE_SAFE_CAMPAIGN_ACTIONS.has(parsed.positional[0])) {
+    return "stale-safe";
+  }
+  if (command === "ctf" && parsed.positional[0] === "pilot" && parsed.positional[1] === "status") {
+    return "stale-safe";
+  }
   if (command === "workflow" && staleSafeWorkflowRoute(parsed.positional)) return "stale-safe";
   return "strict";
 }
 
 function caseSelectorRequired(command, parsed) {
-  if (command === "engagement" || command === "workflow") return true;
+  if (command === "engagement" || command === "workflow" || command === "campaign" || command === "ctf") return true;
   if (command === "bounty") {
     const [area, action] = parsed.positional;
     return area === "profile" && action === "compile";
@@ -1532,6 +1714,12 @@ function assertRuntimeSelectorContract(command, parsed, mode, invocation) {
     throw new Error(
       `gate ${command} requires --case ID (or GATE_CASE) or explicit --unassigned`
     );
+  }
+  if (command === "campaign" && !invocation.caseId) {
+    throw new Error("gate campaign requires --case ID (or GATE_CASE); --unassigned is not supported");
+  }
+  if (command === "ctf" && !invocation.caseId) {
+    throw new Error("gate ctf requires --case ID (or GATE_CASE); --unassigned is not supported");
   }
 }
 
@@ -1707,6 +1895,225 @@ export async function main(argv) {
       return output(showCase(id, { paths: basePaths }), json);
     }
     throw new Error(`unknown case action: ${action}`);
+  }
+
+  if (command === "source") {
+    assertUnambiguousSourceArgs(rest);
+    const [action, programId, sourceId] = parsed.positional;
+    if (!action) throw new Error("program source action is required");
+    if (!programId || !sourceId) throw new Error("program id and source id are required");
+    if (action === "import") {
+      assertPositionals(parsed.positional, 3,
+        "gate source import PROGRAM SOURCE --file PATH --type TYPE --title TEXT --reference URL");
+      assertFlags(parsed.flags, ["file", "type", "title", "reference", "media-type", "projection", "json"]);
+      assertBooleanSwitch(parsed.flags, "json");
+      const mediaType = optionalValueFlag(parsed.flags, "media-type");
+      const result = await importProgramSource({
+        paths: basePaths,
+        programId,
+        source: {
+          id: sourceId,
+          type: requiredFlag(parsed.flags, "type"),
+          title: requiredFlag(parsed.flags, "title"),
+          reference: requiredFlag(parsed.flags, "reference")
+        },
+        acquisition: {
+          kind: "local-file",
+          path: requiredFlag(parsed.flags, "file"),
+          ...(mediaType ? { mediaType } : {})
+        },
+        projection: sourceProjection(parsed.flags, basePaths)
+      });
+      return output(sourceReceipt(result), json);
+    }
+    if (action === "fetch") {
+      assertPositionals(parsed.positional, 3,
+        "gate source fetch PROGRAM SOURCE --url HTTPS_URL --type TYPE --title TEXT --allow-network");
+      assertFlags(parsed.flags, ["url", "type", "title", "allow-network", "projection", "json"]);
+      assertBooleanSwitch(parsed.flags, "allow-network");
+      assertBooleanSwitch(parsed.flags, "json");
+      if (parsed.flags["allow-network"] !== true) {
+        throw new Error("gate source fetch requires explicit --allow-network");
+      }
+      const url = requiredFlag(parsed.flags, "url");
+      const result = await importProgramSource({
+        paths: basePaths,
+        programId,
+        source: {
+          id: sourceId,
+          type: requiredFlag(parsed.flags, "type"),
+          title: requiredFlag(parsed.flags, "title"),
+          reference: url
+        },
+        acquisition: { kind: "public-url", url },
+        projection: sourceProjection(parsed.flags, basePaths),
+        allowNetwork: true
+      });
+      return output(sourceReceipt(result), json);
+    }
+    if (action === "show") {
+      assertPositionals(parsed.positional, 3, "gate source show PROGRAM SOURCE");
+      assertFlags(parsed.flags, ["json"]);
+      assertBooleanSwitch(parsed.flags, "json");
+      return output(programSourceSnapshotSummary(
+        readCurrentProgramSource(programId, sourceId, { paths: basePaths })
+      ), json);
+    }
+    if (action === "diff") {
+      assertPositionals(parsed.positional, 3, "gate source diff PROGRAM SOURCE [--from REV] [--to REV]");
+      assertFlags(parsed.flags, ["from", "to", "json"]);
+      assertBooleanSwitch(parsed.flags, "json");
+      const current = readCurrentProgramSource(programId, sourceId, { paths: basePaths });
+      const toRevision = sourceRevisionFlag(parsed.flags, "to", current.metadata.revision);
+      const fromRevision = sourceRevisionFlag(parsed.flags, "from", toRevision - 1);
+      if (fromRevision < 1) {
+        throw new Error("program source diff needs two revisions; import another observation or pass --from and --to");
+      }
+      if (fromRevision >= toRevision) throw new Error("--from must name an earlier revision than --to");
+      const before = readProgramSourceRevision(programId, sourceId, fromRevision, { paths: basePaths });
+      const after = toRevision === current.metadata.revision
+        ? current
+        : readProgramSourceRevision(programId, sourceId, toRevision, { paths: basePaths });
+      return output(diffProgramSourceSnapshots(before, after), json);
+    }
+    throw new Error(`unknown program source action: ${action}`);
+  }
+
+  if (command === "campaign") {
+    const [action, id] = parsed.positional;
+    if (!action) throw new Error("campaign action is required");
+    if (!id) throw new Error("campaign id is required");
+    if (action === "create") {
+      assertPositionals(parsed.positional, 2, "gate campaign create ID --file PRIVATE_FILE");
+      assertFlags(parsed.flags, ["file", "json"]);
+      const document = readPrivateCampaignInput(requiredFlag(parsed.flags, "file"), paths);
+      if (!document || typeof document !== "object" || Array.isArray(document)) {
+        throw new Error("campaign creation input must be an object");
+      }
+      if (document.id !== undefined && document.id !== id) {
+        throw new Error("campaign creation input id does not match the command id");
+      }
+      return output(campaignCreationProjection(createCampaign({ ...document, id }, { paths })), json);
+    }
+    if (action === "status") {
+      assertPositionals(parsed.positional, 2, "gate campaign status ID");
+      assertFlags(parsed.flags, ["json"]);
+      return output(campaignStatus(id, { paths }), json);
+    }
+    if (action === "resume") {
+      assertPositionals(parsed.positional, 2, "gate campaign resume ID");
+      assertFlags(parsed.flags, ["json"]);
+      return output(resumeCampaign(id, { paths }), json);
+    }
+    if (action === "run-next") {
+      assertPositionals(parsed.positional, 2, "gate campaign run-next ID [--lab-authority ID]");
+      assertFlags(parsed.flags, ["lab-authority", "json"]);
+      return output(await runNextCampaignWorkerJob(id, {
+        paths,
+        labAuthorityId: optionalValueFlag(parsed.flags, "lab-authority")
+      }), json);
+    }
+    if (action === "pause") {
+      assertPositionals(parsed.positional, 2, "gate campaign pause ID");
+      assertFlags(parsed.flags, ["json"]);
+      return output(pauseCampaign(id, { paths }), json);
+    }
+    if (action === "stop") {
+      assertPositionals(parsed.positional, 2, "gate campaign stop ID [--reason TEXT]");
+      assertFlags(parsed.flags, ["reason", "json"]);
+      return output(stopCampaign(id, { reason: optionalValueFlag(parsed.flags, "reason") }, { paths }), json);
+    }
+    if (action === "recover") {
+      assertPositionals(parsed.positional, 2, "gate campaign recover ID");
+      assertFlags(parsed.flags, ["json"]);
+      return output(recoverCampaign(id, { paths }), json);
+    }
+    if (action === "worker") {
+      assertPositionals(parsed.positional, 2,
+        "gate campaign worker ID [--poll-ms N] [--heartbeat-ms N] [--lab-authority ID]");
+      assertFlags(parsed.flags, ["poll-ms", "heartbeat-ms", "lab-authority", "json"]);
+      const pollMs = optionalValueFlag(parsed.flags, "poll-ms");
+      const heartbeatMs = optionalValueFlag(parsed.flags, "heartbeat-ms");
+      const flagAuthority = optionalValueFlag(parsed.flags, "lab-authority");
+      const environmentAuthority = process.env.GATE_LAB_AUTHORITY || undefined;
+      return output(await runCampaignWorker(id, {
+        paths,
+        pollMs: pollMs === undefined ? undefined : Number(pollMs),
+        heartbeatMs: heartbeatMs === undefined ? undefined : Number(heartbeatMs),
+        labAuthorityId: flagAuthority === undefined ? environmentAuthority : flagAuthority
+      }), json);
+    }
+    if (action === "lab-create") {
+      assertPositionals(parsed.positional, 2, "gate campaign lab-create ID --file PRIVATE_FILE");
+      assertFlags(parsed.flags, ["file", "json"]);
+      const document = readPrivateCampaignInput(requiredFlag(parsed.flags, "file"), paths);
+      if (!document || typeof document !== "object" || Array.isArray(document)) {
+        throw new Error("lab campaign authority input must be an object");
+      }
+      if (document.authorityId !== undefined && document.authorityId !== id) {
+        throw new Error("lab campaign authority input id does not match the command id");
+      }
+      return output(createLabCampaignAuthority({ ...document, authorityId: id }, {
+        paths,
+        loadCampaignContext: campaignInternals.loadCampaignContext
+      }), json);
+    }
+    if (action === "lab-confirm") {
+      assertPositionals(parsed.positional, 2, "gate campaign lab-confirm ID --confirm TEXT");
+      assertFlags(parsed.flags, ["confirm", "json"]);
+      return output(confirmLabCampaignAuthority(id, {
+        confirm: requiredFlag(parsed.flags, "confirm")
+      }, { paths, loadCampaignContext: campaignInternals.loadCampaignContext }), json);
+    }
+    if (action === "lab-status") {
+      assertPositionals(parsed.positional, 2, "gate campaign lab-status ID");
+      assertFlags(parsed.flags, ["json"]);
+      return output(labCampaignAuthorityStatus(id, { paths }), json);
+    }
+    if (action === "lab-enqueue") {
+      assertPositionals(parsed.positional, 2, "gate campaign lab-enqueue ID --file PRIVATE_FILE");
+      assertFlags(parsed.flags, ["file", "json"]);
+      const document = readPrivateCampaignInput(requiredFlag(parsed.flags, "file"), paths);
+      if (!document || typeof document !== "object" || Array.isArray(document)) {
+        throw new Error("adaptive lab job input must be an object");
+      }
+      return output(await enqueueAuthorizedLabCampaignFetch(id, document, {
+        paths,
+        loadCampaignContext: campaignInternals.loadCampaignContext
+      }), json);
+    }
+    if (action === "lab-stop") {
+      assertPositionals(parsed.positional, 2, "gate campaign lab-stop ID --confirm TEXT");
+      assertFlags(parsed.flags, ["confirm", "json"]);
+      return output(stopLabCampaignAuthority(id, {
+        confirm: requiredFlag(parsed.flags, "confirm")
+      }, { paths }), json);
+    }
+    if (action === "lab-recover") {
+      assertPositionals(parsed.positional, 2, "gate campaign lab-recover ID --confirm TEXT");
+      assertFlags(parsed.flags, ["confirm", "json"]);
+      return output(recoverLabCampaignAuthority(id, {
+        confirm: requiredFlag(parsed.flags, "confirm")
+      }, { paths }), json);
+    }
+    throw new Error(`unknown campaign action: ${action}`);
+  }
+
+  if (command === "ctf") {
+    const [area, action] = parsed.positional;
+    if (area !== "pilot" || !new Set(["status", "update"]).has(action)) {
+      throw new Error("expected gate ctf pilot status or gate ctf pilot update --file PRIVATE_FILE");
+    }
+    if (action === "status") {
+      assertPositionals(parsed.positional, 2, "gate ctf pilot status");
+      assertFlags(parsed.flags, ["json"]);
+      return output(ctfPilotStatusProjection(readCtfPilotStatus({ paths })), json);
+    }
+    assertPositionals(parsed.positional, 2, "gate ctf pilot update --file PRIVATE_FILE");
+    assertFlags(parsed.flags, ["file", "json"]);
+    const state = readPrivateCtfPilotInput(requiredFlag(parsed.flags, "file"), paths);
+    writeCtfPilotState(state, { paths });
+    return output(ctfPilotStatusProjection(readCtfPilotStatus({ paths })), json);
   }
 
   if (command === "project") {
@@ -2212,10 +2619,10 @@ export async function main(argv) {
           resolver: requiredFlag(parsed.flags, "resolver"),
           timeoutSeconds: Number(requiredFlag(parsed.flags, "timeout-seconds"))
         };
-      } else if (adapterId === "httpx-url-observe") {
+      } else if (new Set(["httpx-url-observe", "httpx-url-fetch"]).has(adapterId)) {
         assertFlags(parsed.flags, [...common, "method", "allowed-ip", "max-response-bytes"]);
         operation = {
-          kind: "http-get",
+          kind: adapterId === "httpx-url-fetch" ? "http-fetch" : "http-get",
           method: requiredFlag(parsed.flags, "method"),
           allowedIp: requiredFlag(parsed.flags, "allowed-ip"),
           timeoutSeconds: Number(requiredFlag(parsed.flags, "timeout-seconds")),

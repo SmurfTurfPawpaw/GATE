@@ -1,0 +1,40 @@
+[Unit]
+Description=GATE remote laptop runner (%i)
+Documentation=https://github.com/SmurfTurfPawpaw/GATE
+Wants=network-online.target gate-observer.service
+After=network-online.target gate-observer.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+Environment=NODE_OPTIONS=
+Environment=PATH=/usr/bin:/bin
+EnvironmentFile=%h/.config/gate/remote-runner-%i.env
+WorkingDirectory=@GATE_WORKDIR@
+ExecStart=@NODE@ @REMOTE_RUNNER@
+# The runner retries bounded transient coordinator failures itself. Restart a
+# signal/core/timeout crash, but leave permanent identity/config exits stopped.
+Restart=on-abnormal
+RestartSec=5s
+KillSignal=SIGTERM
+TimeoutStopSec=30s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

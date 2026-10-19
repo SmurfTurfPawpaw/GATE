@@ -118,18 +118,31 @@ function fixture(t) {
       "const hostHeader = at('-H').replace(/^Host:\\s*/i, '');",
       "const parsed = new URL(target);",
       "const dialHost = parsed.hostname.replace(/^\\[|\\]$/g, '');",
-      "if (parsed.protocol !== 'http:' || at('-x') !== 'GET' || !args.includes('-nfs') || dialHost !== allowedIp) process.exit(9);",
+      "const method = at('-x');",
+      "if (parsed.protocol !== 'http:' || !['GET', 'HEAD'].includes(method) || !args.includes('-nfs') || dialHost !== allowedIp) process.exit(9);",
       "const request = http.request({",
       "  hostname: dialHost,",
       "  port: parsed.port || 80,",
       "  path: `${parsed.pathname}${parsed.search}` ,",
-      "  method: 'GET',",
+      "  method,",
       "  headers: { host: hostHeader }",
       "}, (response) => {",
-      "  response.resume();",
-      "  response.on('end', () => process.stdout.write(JSON.stringify({",
-      "    input: target, url: target, host_ip: dialHost, status_code: response.statusCode",
-      "  }) + '\\n'));",
+      "  const chunks = [];",
+      "  response.on('data', (chunk) => { if (args.includes('-irr') && method === 'GET') chunks.push(chunk); });",
+      "  response.on('end', () => {",
+      "    const body = Buffer.concat(chunks).toString('utf8');",
+      "    const headerLength = Number(response.headers['content-length']);",
+      "    const record = {",
+      "      input: target, url: target, host_ip: dialHost, method, status_code: response.statusCode,",
+      "      content_length: Number.isSafeInteger(headerLength) ? headerLength : Buffer.byteLength(body)",
+      "    };",
+      "    if (args.includes('-irr') && method === 'GET') {",
+      "      record.request = `${method} ${parsed.pathname}${parsed.search} HTTP/1.1\\r\\nHost: ${hostHeader}\\r\\n\\r\\n`;",
+      "      record.header = Object.fromEntries(Object.entries(response.headers));",
+      "      record.body = body;",
+      "    }",
+      "    process.stdout.write(JSON.stringify(record) + '\\n');",
+      "  });",
       "});",
       "request.on('error', (error) => { console.error(error.message); process.exitCode = 2; });",
       "request.end();"
@@ -144,9 +157,11 @@ function fixture(t) {
     const runtime = lock.runtimes.find((candidate) => candidate.toolId === toolId);
     const artifact = runtime.artifacts.find((candidate) => candidate.platform === platform.key);
     artifact.executableSha256 = executableSha256[toolId];
-    const adapter = registry.adapters.find((candidate) => candidate.tool.id === toolId);
-    adapter.tool.executableSha256[platform.key] = executableSha256[toolId];
-    adapter.tool.lockEntrySha256 = canonicalSha256(runtime);
+    const adapters = registry.adapters.filter((candidate) => candidate.tool.id === toolId);
+    for (const adapter of adapters) {
+      adapter.tool.executableSha256[platform.key] = executableSha256[toolId];
+      adapter.tool.lockEntrySha256 = canonicalSha256(runtime);
+    }
   }
   fs.writeFileSync(lockFile, `${JSON.stringify(lock, null, 2)}\n`);
   fs.writeFileSync(registryFile, `${JSON.stringify(registry, null, 2)}\n`);
@@ -557,6 +572,31 @@ managedTest("managed adapter compilers are strict, deterministic, and expose no 
     "-content-length", "-content-type", "-location", "-method", "-ip", "-silent", "-nc",
     "-disable-update-check", "-auth=false", "-random-agent=false", "-cdn=false"
   ]);
+  const fetchPrepared = prepareManagedAdapterInvocation({
+    ...base,
+    adapterId: "httpx-url-fetch",
+    target: "http://fixture.invalid/challenge?level=1",
+    operation: {
+      kind: "http-fetch", method: "GET", allowedIp: "127.0.0.1", timeoutSeconds: 5, maxResponseBytes: 131_072
+    }
+  }, { paths, verifyManagedTool });
+  assert.equal(fetchPrepared.compiled.argv[1], "http://127.0.0.1/challenge?level=1");
+  assert.equal(fetchPrepared.compiled.argv[fetchPrepared.compiled.argv.indexOf("-x") + 1], "GET");
+  assert.equal(fetchPrepared.compiled.argv.includes("-omit-body"), false);
+  assert.equal(fetchPrepared.compiled.argv.filter((argument) => argument === "-irr").length, 1);
+  assert.equal(fetchPrepared.compiled.controls.responseBodyPrivate, true);
+  assert.equal(fetchPrepared.compiled.controls.redirectsFollowed, 0);
+  const headPrepared = prepareManagedAdapterInvocation({
+    ...base,
+    adapterId: "httpx-url-fetch",
+    target: "http://fixture.invalid/challenge",
+    operation: {
+      kind: "http-fetch", method: "HEAD", allowedIp: "127.0.0.1", timeoutSeconds: 5, maxResponseBytes: 4096
+    }
+  }, { paths, verifyManagedTool });
+  assert.equal(headPrepared.compiled.argv[headPrepared.compiled.argv.indexOf("-x") + 1], "HEAD");
+  assert.equal(headPrepared.compiled.argv.includes("-irr"), false);
+  assert.equal(headPrepared.compiled.controls.responseBodyPrivate, false);
   const httpsPrepared = prepareManagedAdapterInvocation({
     ...base,
     adapterId: "httpx-url-observe",
@@ -623,13 +663,38 @@ managedTest("managed adapter compilers are strict, deterministic, and expose no 
     }, { paths, verifyManagedTool }),
     /must equal the literal IP in the approved URL/u
   );
+  assert.throws(
+    () => prepareManagedAdapterInvocation({
+      ...base,
+      adapterId: "httpx-url-fetch",
+      target: "http://fixture.invalid/",
+      operation: {
+        kind: "http-fetch", method: "POST", allowedIp: "127.0.0.1", timeoutSeconds: 5,
+        maxResponseBytes: 4096
+      }
+    }, { paths, verifyManagedTool }),
+    /admits GET or HEAD only/u
+  );
+  assert.throws(
+    () => prepareManagedAdapterInvocation({
+      ...base,
+      adapterId: "httpx-url-fetch",
+      target: "http://fixture.invalid/",
+      operation: {
+        kind: "http-fetch", method: "GET", allowedIp: "127.0.0.1", timeoutSeconds: 5,
+        maxResponseBytes: 4096, headers: { cookie: "never" }
+      }
+    }, { paths, verifyManagedTool }),
+    /must contain exactly/u
+  );
 });
 
 managedTest("tool readiness exposes only verified reviewed adapter capability and fails closed on registry drift", (t) => {
   const { contractRepo, paths, runSmoke } = fixture(t);
   for (const [toolId, adapterId] of [
     ["dnsx", "dnsx-domain-observe"],
-    ["httpx", "httpx-url-observe"]
+    ["httpx", "httpx-url-observe"],
+    ["httpx", "httpx-url-fetch"]
   ]) {
     const planned = toolPlan(toolId, { paths, runSmoke });
     assert.equal(planned.readiness, "adapter-ready");
@@ -765,6 +830,165 @@ managedTest("HTTPx adapter dials only the approved IP while preserving the appro
   }
 });
 
+managedTest("HTTPx fetch adapter retains one bounded GET body privately without following redirects", async (t) => {
+  const { root, paths, verifyManagedTool } = fixture(t);
+  const requests = [];
+  const privateBody = "private challenge response";
+  const port = await listen(t, (request, response) => {
+    requests.push({ method: request.method, url: request.url, host: request.headers.host });
+    if (request.url === "/followed") {
+      response.writeHead(500, { "content-length": "0" });
+      response.end();
+      return;
+    }
+    response.writeHead(302, {
+      location: "/followed",
+      "content-length": String(Buffer.byteLength(privateBody)),
+      "content-type": "text/plain; charset=utf-8"
+    });
+    response.end(privateBody);
+  });
+  const target = `http://fixture.invalid:${port}/challenge?level=1`;
+  const scope = approve(paths, root, { id: "managed-http-fetch", target, toolId: "httpx" });
+  const created = createManagedExecutionManifest(scope.id, managedInput(scope, "httpx-url-fetch", {
+    kind: "http-fetch",
+    method: "GET",
+    allowedIp: "127.0.0.1",
+    timeoutSeconds: 5,
+    maxResponseBytes: 4096
+  }), { paths, verifyManagedTool });
+  assert.equal(created.operation.adapter.id, "httpx-url-fetch");
+  assert.equal(created.operation.argv.includes("-omit-body"), false);
+  assert.equal(created.operation.argv.includes("-irr"), true);
+  assert.equal(created.operation.adapter.controls.redirects, false);
+  assert.equal(created.operation.adapter.controls.requests, 1);
+  assert.equal(created.operation.adapter.controls.responseBodyPrivate, true);
+  const persisted = JSON.parse(fs.readFileSync(manifestFile(paths, created.manifestId), "utf8"));
+  const baseRecord = {
+    input: created.operation.adapter.controls.dialUrl,
+    url: created.operation.adapter.controls.dialUrl,
+    host_ip: "127.0.0.1",
+    method: "GET",
+    status_code: 200,
+    content_length: 1
+  };
+  assert.deepEqual(
+    validateManagedAdapterOutput(persisted, Buffer.from(`${JSON.stringify(baseRecord)}\n`), { paths }),
+    { ok: false, status: "invalid", reason: "output-validation-failed", records: 1 }
+  );
+  assert.deepEqual(
+    validateManagedAdapterOutput(persisted, Buffer.from(`${JSON.stringify({
+      ...baseRecord,
+      content_length: 4097,
+      body: "x".repeat(4097)
+    })}\n`), { paths }),
+    { ok: false, status: "invalid", reason: "output-validation-failed", records: 1 }
+  );
+  assert.deepEqual(
+    validateManagedAdapterOutput(persisted, Buffer.from(`${JSON.stringify({
+      ...baseRecord,
+      body: null
+    })}\n`), { paths }),
+    { ok: false, status: "invalid", reason: "output-validation-failed", records: 1 }
+  );
+
+  const result = await executeExecutionManifest(scope.id, {
+    manifestId: created.manifestId,
+    confirm: created.confirmationRequired
+  }, { paths, verifyManagedTool, pollIntervalMs: 20, terminationGraceMs: 50 });
+  assert.equal(result.status, "succeeded");
+  assert.deepEqual(result.adapterOutput, {
+    ok: true,
+    status: "observed",
+    reason: null,
+    records: 1,
+    metrics: {
+      requestCount: 1,
+      method: "GET",
+      statusCode: 302,
+      responseBodyBytes: Buffer.byteLength(privateBody),
+      responseContentLength: Buffer.byteLength(privateBody),
+      rateLimitPerSecond: 1,
+      redirectsFollowed: 0,
+      redirectStatus: "not-followed",
+      retries: 0,
+      backoffStatus: "disabled-no-retries"
+    }
+  });
+  assert.deepEqual(requests, [{
+    method: "GET",
+    url: "/challenge?level=1",
+    host: `fixture.invalid:${port}`
+  }]);
+  const output = JSON.parse(fs.readFileSync(evidenceFile(paths, result.evidence.stdout.ref), "utf8"));
+  assert.equal(output.body, privateBody);
+  assert.equal(JSON.stringify(result).includes(privateBody), false);
+  const stdoutBytes = fs.readFileSync(evidenceFile(paths, result.evidence.stdout.ref));
+  assert.equal(result.evidence.stdout.available, true);
+  assert.equal(result.evidence.stdout.bytes, stdoutBytes.length);
+  assert.equal(result.evidence.stdout.sha256, crypto.createHash("sha256").update(stdoutBytes).digest("hex"));
+  assert.equal(Number.isSafeInteger(result.durationMs), true);
+  assert.equal(result.durationMs >= 0, true);
+});
+
+managedTest("HTTPx fetch adapter issues HEAD without retaining a response body", async (t) => {
+  const { root, paths, verifyManagedTool } = fixture(t);
+  const requests = [];
+  const port = await listen(t, (request, response) => {
+    requests.push({ method: request.method, url: request.url, host: request.headers.host });
+    response.writeHead(200, { "content-length": "321", "content-type": "text/plain" });
+    response.end("the HEAD transport must not retain this body");
+  });
+  const target = `http://fixture.invalid:${port}/headers`;
+  const scope = approve(paths, root, { id: "managed-http-head", target, toolId: "httpx" });
+  const created = createManagedExecutionManifest(scope.id, managedInput(scope, "httpx-url-fetch", {
+    kind: "http-fetch",
+    method: "HEAD",
+    allowedIp: "127.0.0.1",
+    timeoutSeconds: 5,
+    maxResponseBytes: 4096
+  }), { paths, verifyManagedTool });
+  assert.equal(created.operation.adapter.controls.responseBodyPrivate, false);
+  const persisted = JSON.parse(fs.readFileSync(manifestFile(paths, created.manifestId), "utf8"));
+  assert.deepEqual(
+    validateManagedAdapterOutput(persisted, Buffer.from(`${JSON.stringify({
+      input: created.operation.adapter.controls.dialUrl,
+      url: created.operation.adapter.controls.dialUrl,
+      host_ip: "127.0.0.1",
+      method: "HEAD",
+      status_code: 200,
+      content_length: 321,
+      body: null
+    })}\n`), { paths }),
+    { ok: false, status: "invalid", reason: "output-validation-failed", records: 1 }
+  );
+
+  const result = await executeExecutionManifest(scope.id, {
+    manifestId: created.manifestId,
+    confirm: created.confirmationRequired
+  }, { paths, verifyManagedTool, pollIntervalMs: 20, terminationGraceMs: 50 });
+  assert.equal(result.status, "succeeded");
+  assert.deepEqual(result.adapterOutput.metrics, {
+    requestCount: 1,
+    method: "HEAD",
+    statusCode: 200,
+    responseBodyBytes: 0,
+    responseContentLength: 321,
+    rateLimitPerSecond: 1,
+    redirectsFollowed: 0,
+    redirectStatus: "not-followed",
+    retries: 0,
+    backoffStatus: "disabled-no-retries"
+  });
+  assert.deepEqual(requests, [{
+    method: "HEAD",
+    url: "/headers",
+    host: `fixture.invalid:${port}`
+  }]);
+  const output = JSON.parse(fs.readFileSync(evidenceFile(paths, result.evidence.stdout.ref), "utf8"));
+  assert.equal(Object.hasOwn(output, "body"), false);
+});
+
 managedTest("HTTPx adapter does not fall back from an unreachable approved IP to the URL hostname", async (t) => {
   const { root, paths, verifyManagedTool } = fixture(t);
   let requests = 0;
@@ -883,6 +1107,8 @@ managedTest("typed adapter destinations respect exact-IP and CIDR exclusions bef
     ["httpx", "httpx-url-observe", "https://approved.example/probe", "127.0.0.0/8", "127.0.0.1"],
     ["httpx", "httpx-url-observe", "https://approved.example/probe", "0:0:0:0:0:0:0:1", "::1"],
     ["httpx", "httpx-url-observe", "https://approved.example/probe", "::1/128", "::1"],
+    ["httpx", "httpx-url-fetch", "https://approved.example/challenge", "127.0.0.0/8", "127.0.0.1"],
+    ["httpx", "httpx-url-fetch", "https://approved.example/challenge", "::1/128", "::1"],
     ["dnsx", "dnsx-domain-observe", "approved.example", "127.0.0.1", "127.0.0.1:5353"],
     ["dnsx", "dnsx-domain-observe", "approved.example", "127.0.0.0/8", "127.0.0.1:5353"],
     ["dnsx", "dnsx-domain-observe", "approved.example", "::1", "[0:0:0:0:0:0:0:1]:5353"],
@@ -891,7 +1117,13 @@ managedTest("typed adapter destinations respect exact-IP and CIDR exclusions bef
   for (const [index, [toolId, adapterId, target, excluded, destination]] of cases.entries()) {
     const scope = approve(paths, root, { id: `excluded-${index}`, target, toolId, exclude: [excluded] });
     const operation = toolId === "httpx"
-      ? { kind: "http-get", method: "GET", allowedIp: destination, timeoutSeconds: 5, maxResponseBytes: 4096 }
+      ? {
+          kind: adapterId === "httpx-url-fetch" ? "http-fetch" : "http-get",
+          method: adapterId === "httpx-url-fetch" ? "HEAD" : "GET",
+          allowedIp: destination,
+          timeoutSeconds: 5,
+          maxResponseBytes: 4096
+        }
       : { kind: "dns-query", recordType: "A", resolver: destination, timeoutSeconds: 5 };
     const before = workflowStatus(scope.workflowId, { paths }).journal;
     assert.throws(() => createManagedExecutionManifest(scope.id, managedInput(scope, adapterId, operation), {

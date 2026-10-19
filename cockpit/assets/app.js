@@ -1,5 +1,6 @@
 import {
   hasAvailableFleetMetric,
+  pilotCockpitPresentation,
   readPublicSnapshotResponse,
   remoteStateIsFresh,
   toDisplayModel,
@@ -33,7 +34,20 @@ const elements = {
   conversation: byId("conversation"), choiceList: byId("choice-list"), activityFeed: byId("activity-feed"),
   modeBanner: byId("mode-banner"), decisionPanel: byId("decision-panel"), messageComposer: byId("message-composer"),
   messageInput: byId("message-input"), messageSend: byId("message-send"), messageCount: byId("message-count"),
-  messageStatus: byId("message-status")
+  messageStatus: byId("message-status"),
+  pilotPanel: byId("pilot-panel"), pilotHeartbeat: byId("pilot-heartbeat"), pilotAlert: byId("pilot-alert"),
+  pilotCaseAlias: byId("pilot-case-alias"), pilotCaseSelect: byId("pilot-case-select"),
+  pilotSolvingVerdict: byId("pilot-solving-verdict"), pilotSolvingDetail: byId("pilot-solving-detail"),
+  pilotLearningVerdict: byId("pilot-learning-verdict"), pilotLearningVerdictDetail: byId("pilot-learning-verdict-detail"),
+  pilotCockpitVerdict: byId("pilot-cockpit-verdict"), pilotCockpitVerdictDetail: byId("pilot-cockpit-verdict-detail"),
+  pilotNow: byId("pilot-now"),
+  pilotTimestamp: byId("pilot-timestamp"), pilotAction: byId("pilot-action"), pilotActionDetail: byId("pilot-action-detail"),
+  pilotEvent: byId("pilot-event"), pilotEventDetail: byId("pilot-event-detail"),
+  pilotTimeline: byId("pilot-timeline"), pilotDepth: byId("pilot-depth"), pilotDepthDetail: byId("pilot-depth-detail"),
+  pilotEfficiency: byId("pilot-efficiency"), pilotEfficiencyDetail: byId("pilot-efficiency-detail"),
+  pilotLearning: byId("pilot-learning"), pilotLearningDetail: byId("pilot-learning-detail"),
+  pilotCockpit: byId("pilot-cockpit"), pilotCockpitDetail: byId("pilot-cockpit-detail"),
+  pilotIntegrity: byId("pilot-integrity"), pilotIntegrityDetail: byId("pilot-integrity-detail")
 };
 
 let latestGeneratedAt;
@@ -41,6 +55,44 @@ let currentDisplay;
 let submitting = false;
 let localState;
 let localFleet;
+const PILOT_SELECTION_STORAGE_KEY = "gate.pilot-case-selection/v2";
+const PILOT_SELECTION_VERSION = "gate.pilot-case-selection/v2";
+const PILOT_ALIAS = /^Campaign [1-9]\d{0,2}$/u;
+const PILOT_SELECTION_EPOCH = /^[a-f0-9]{32}$/u;
+
+function readPilotSelection() {
+  try {
+    const raw = globalThis.sessionStorage?.getItem(PILOT_SELECTION_STORAGE_KEY);
+    if (typeof raw !== "string" || new TextEncoder().encode(raw).byteLength > 256) return null;
+    const value = JSON.parse(raw);
+    return exactObjectKeys(value, ["apiVersion", "selectionEpoch", "alias"])
+      && value.apiVersion === PILOT_SELECTION_VERSION
+      && PILOT_SELECTION_EPOCH.test(value.selectionEpoch)
+      && PILOT_ALIAS.test(value.alias)
+      ? Object.freeze({ alias: value.alias, selectionEpoch: value.selectionEpoch }) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writePilotSelection(alias, selectionEpoch) {
+  try {
+    if (alias === null) globalThis.sessionStorage?.removeItem(PILOT_SELECTION_STORAGE_KEY);
+    else if (PILOT_ALIAS.test(alias) && PILOT_SELECTION_EPOCH.test(selectionEpoch || "")) {
+      globalThis.sessionStorage?.setItem(PILOT_SELECTION_STORAGE_KEY, JSON.stringify({
+        apiVersion: PILOT_SELECTION_VERSION,
+        selectionEpoch,
+        alias
+      }));
+    }
+  } catch {
+    // Selection persistence is optional; explicit selection remains usable.
+  }
+}
+
+const storedPilotSelection = readPilotSelection();
+let selectedPilotAlias = storedPilotSelection?.alias || null;
+let selectedPilotEpoch = storedPilotSelection?.selectionEpoch || null;
 let localTransportConnected = null;
 let localActivity = [];
 let remoteState;
@@ -92,6 +144,138 @@ function compactNumber(value) {
   return new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(value);
 }
 
+function readablePilotValue(value) {
+  if (!value) return "Unavailable";
+  const words = value.replace(/-/gu, " ");
+  return `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
+}
+
+function pilotCount(value) {
+  return Number.isSafeInteger(value) ? compactNumber(value) : "Unavailable";
+}
+
+function pilotDuration(value) {
+  if (!Number.isSafeInteger(value)) return "Unavailable";
+  if (value < 60) return `${value}s`;
+  if (value < 3_600) return `${Math.floor(value / 60)}m`;
+  return `${Math.floor(value / 3_600)}h ${Math.floor(value % 3_600 / 60)}m`;
+}
+
+function pilotAge(value) {
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return "Feed unavailable";
+  const seconds = Math.max(0, Math.floor((Date.now() - parsed) / 1_000));
+  if (seconds < 5) return "Updated just now";
+  if (seconds < 60) return `Updated ${seconds}s ago`;
+  if (seconds < 3_600) return `Updated ${Math.floor(seconds / 60)}m ago`;
+  return `Updated ${Math.floor(seconds / 3_600)}h ago`;
+}
+
+function renderPilot(fleet) {
+  if (fleet?.connection === "connected" && selectedPilotEpoch !== null
+      && selectedPilotEpoch !== fleet.selectionEpoch) {
+    selectedPilotAlias = null;
+    selectedPilotEpoch = null;
+    writePilotSelection(null, null);
+  }
+  let pilot = pilotCockpitPresentation(fleet, selectedPilotAlias);
+  if (selectedPilotAlias !== null && fleet?.connection === "connected" && !pilot.aliases.includes(selectedPilotAlias)) {
+    selectedPilotAlias = null;
+    selectedPilotEpoch = null;
+    writePilotSelection(null, null);
+    pilot = pilotCockpitPresentation(fleet, null);
+  }
+  clear(elements.pilotCaseSelect);
+  const placeholder = node("option", "", pilot.aliases.length > 0 ? "Select a case" : "Case feed unavailable");
+  placeholder.value = "";
+  elements.pilotCaseSelect.append(placeholder);
+  for (const alias of pilot.aliases) {
+    const option = node("option", "", alias);
+    option.value = alias;
+    elements.pilotCaseSelect.append(option);
+  }
+  elements.pilotCaseSelect.disabled = pilot.aliases.length === 0;
+  elements.pilotCaseSelect.value = pilot.alias || "";
+  elements.pilotCaseAlias.textContent = pilot.alias || "No case selected";
+  elements.pilotHeartbeat.className = `pilot-heartbeat ${pilot.heartbeat === "current" ? "current" : pilot.heartbeat === "delayed" ? "delayed" : "unavailable"}`;
+  elements.pilotHeartbeat.textContent = pilot.state === "feed-unavailable"
+    ? "Feed unavailable"
+    : pilot.heartbeat === "current" ? "Observer heartbeat current"
+      : pilot.heartbeat === "delayed" ? "Observer heartbeat delayed" : "Observer heartbeat unavailable";
+  elements.pilotAlert.hidden = pilot.state === "available";
+  if (pilot.state !== "available") {
+    clear(elements.pilotAlert);
+    elements.pilotAlert.append(node("strong", "", pilot.title), node("span", "", pilot.recovery));
+  }
+  elements.pilotSolvingVerdict.textContent = readablePilotValue(pilot.solving.verdict);
+  elements.pilotSolvingDetail.textContent = pilot.solving.objectives
+    ? `${pilot.solving.objectives.completed} of ${pilot.solving.objectives.total} objectives complete`
+    : "Objectives unavailable";
+  elements.pilotLearningVerdict.textContent = readablePilotValue(pilot.learning.verdict);
+  elements.pilotLearningVerdictDetail.textContent = pilot.learning.stages.transferred === null
+    ? "Transfer unavailable"
+    : `${pilotCount(pilot.learning.stages.transferred)} transferred learning`;
+  elements.pilotCockpitVerdict.textContent = readablePilotValue(pilot.cockpit.verdict);
+  elements.pilotCockpitVerdictDetail.textContent = pilot.cockpit.signals
+    ? `${pilot.cockpit.signals.available} of ${pilot.cockpit.signals.total} signals available`
+    : "Signals unavailable";
+  elements.pilotNow.textContent = readablePilotValue(pilot.solving.now);
+  elements.pilotTimestamp.textContent = pilotAge(pilot.observedAt);
+  const axisActions = [pilot.solving.actionNeeded, pilot.learning.actionNeeded, pilot.cockpit.actionNeeded];
+  const availableActions = axisActions.filter(Boolean);
+  const activeActions = [...new Set(availableActions.filter((value) => value !== "none"))];
+  const action = availableActions.length === 0 ? null : activeActions.length === 0 ? "none"
+    : activeActions.length === 1 ? activeActions[0] : "multiple";
+  elements.pilotAction.textContent = readablePilotValue(action);
+  elements.pilotActionDetail.textContent = availableActions.length === 0 ? "Observer status required"
+    : `Solving ${readablePilotValue(axisActions[0])} · Learning ${readablePilotValue(axisActions[1])} · Cockpit ${readablePilotValue(axisActions[2])}`;
+  elements.pilotEvent.textContent = pilot.latestEvent
+    ? `${readablePilotValue(pilot.latestEvent.category)} ${readablePilotValue(pilot.latestEvent.status)}`
+    : "Unavailable";
+  elements.pilotEventDetail.textContent = pilot.latestEvent ? pilotAge(pilot.latestEvent.at) : "Verified event unavailable";
+
+  clear(elements.pilotTimeline);
+  if (pilot.timeline.length === 0) {
+    elements.pilotTimeline.append(node("li", "unavailable", "Plan timeline unavailable"));
+  } else {
+    for (const item of pilot.timeline) elements.pilotTimeline.append(node("li", item.current ? "current" : "", item.stage));
+  }
+  elements.pilotDepth.textContent = readablePilotValue(pilot.depth.level);
+  elements.pilotDepthDetail.textContent = pilot.depth.level
+    ? `${pilotCount(pilot.depth.branchesExplored)} branches · ${pilotCount(pilot.depth.techniquesAttempted)} techniques · ${pilotCount(pilot.depth.deadEndsRetired)} retired`
+    : "Measurements unavailable";
+  const elapsed = pilotDuration(pilot.efficiency.elapsedSeconds);
+  const active = pilotDuration(pilot.efficiency.activeSeconds);
+  const resourceParts = [
+    pilot.efficiency.tokens === null ? null : `${pilotCount(pilot.efficiency.tokens)} tokens`,
+    pilot.efficiency.toolRuns === null ? null : `${pilotCount(pilot.efficiency.toolRuns)} tools`,
+    pilot.efficiency.requests === null ? null : `${pilotCount(pilot.efficiency.requests)} requests`,
+    pilot.efficiency.retries === null ? null : `${pilotCount(pilot.efficiency.retries)} retries`
+  ].filter(Boolean);
+  elements.pilotEfficiency.textContent = pilot.efficiency.activeSeconds !== null
+    ? `${active} active`
+    : pilot.efficiency.tokens !== null ? `${pilotCount(pilot.efficiency.tokens)} tokens` : "Unavailable";
+  elements.pilotEfficiencyDetail.textContent = [
+    pilot.efficiency.elapsedSeconds === null && pilot.efficiency.activeSeconds === null
+      ? "Duration unavailable"
+      : `${elapsed} elapsed · ${active} active`,
+    ...resourceParts
+  ].join(" · ");
+  elements.pilotLearning.textContent = readablePilotValue(pilot.learning.now);
+  const stages = pilot.learning.stages;
+  elements.pilotLearningDetail.textContent = pilot.learning.now
+    ? `${pilotCount(stages.observations)} observed · ${pilotCount(stages.candidates)} candidate · ${pilotCount(stages.validated)} validated · ${pilotCount(stages.applied)} applied · ${pilotCount(stages.transferred)} transferred · ${pilotCount(stages.regressed)} regressed`
+    : "Stages unavailable";
+  elements.pilotCockpit.textContent = readablePilotValue(pilot.cockpit.now);
+  elements.pilotCockpitDetail.textContent = pilot.cockpit.signals
+    ? `${pilot.cockpit.signals.available} of ${pilot.cockpit.signals.total} signals · ${pilotCount(pilot.cockpit.updatesPublished)} updates · ${pilotCount(pilot.cockpit.updatesMissed)} missed`
+    : "Signals unavailable";
+  elements.pilotIntegrity.textContent = readablePilotValue(pilot.integrity.status);
+  elements.pilotIntegrityDetail.textContent = pilot.integrity.checks
+    ? `${pilot.integrity.checks.available} of ${pilot.integrity.checks.total} checks · ${pilotCount(pilot.integrity.issues)} issues`
+    : "Checks unavailable";
+}
+
 function transport() {
   const localPresent = globalThis.GATE_PUBLIC_COCKPIT_BRIDGE !== undefined;
   const remotePresent = globalThis.GATE_REMOTE_COCKPIT_BRIDGE !== undefined;
@@ -119,6 +303,15 @@ function remoteReady() {
     && remoteState?.sessionRevision === selected.bridge.sessionRevision
     && remoteState?.runner.state === "connected"
     && remoteState?.codex.state !== "offline"
+    && remoteStateIsFresh(remoteState);
+}
+
+function remoteTelemetryReady() {
+  const selected = transport();
+  return selected.kind === "remote"
+    && remoteConnection?.state === "connected"
+    && remoteState?.sessionRevision === selected.bridge.sessionRevision
+    && remoteState?.runner.state === "connected"
     && remoteStateIsFresh(remoteState);
 }
 
@@ -324,6 +517,14 @@ function setMode(mode) {
   } else if (mode === "remote") {
     elements.modeBanner.className = "mode-banner mode-remote";
     elements.modeBanner.append(node("strong", "", "LIVE · REMOTE"), node("span", "", "Authenticated control plane connected."));
+  } else if (mode === "remote-conversation-offline") {
+    const fleetLive = remoteFleet?.connection === "connected";
+    elements.modeBanner.className = "mode-banner mode-remote mode-remote-connecting";
+    elements.modeBanner.append(node("strong", "", fleetLive
+      ? "LIVE · FLEET · CODEX OFFLINE" : "RUNNER LIVE · CODEX OFFLINE"),
+    node("span", "", fleetLive
+      ? "Operational telemetry continues; conversation steering is paused."
+      : "The signed runner is current; fleet telemetry is unavailable and conversation steering is paused."));
   } else if (mode === "remote-connecting") {
     elements.modeBanner.className = "mode-banner mode-remote mode-remote-connecting";
     elements.modeBanner.append(node("strong", "", "LIVE · REMOTE · CONNECTING"), node("span", "", "Restoring the live connection."));
@@ -338,10 +539,13 @@ function setMode(mode) {
 
 function renderBridgeState(connected, mode = currentDisplay?.mode) {
   const connecting = mode === "remote-connecting";
-  elements.connectionState.className = `connection-state ${connected ? "connected" : connecting ? "connecting" : "unavailable"}`;
+  const telemetryOnly = mode === "remote-conversation-offline";
+  elements.connectionState.className = `connection-state ${connected ? "connected" : connecting || telemetryOnly ? "connecting" : "unavailable"}`;
   clear(elements.connectionState);
   const label = connected ? mode === "remote" ? "Remote connected" : "Connected"
     : connecting ? "Connecting"
+      : telemetryOnly ? remoteFleet?.connection === "connected"
+        ? "Fleet live · Codex offline" : "Runner live · Codex offline"
       : mode === "preview" ? "Preview · interaction off" : "Offline";
   elements.connectionState.append(node("i", ""), document.createTextNode(label));
 }
@@ -350,23 +554,24 @@ function renderUnavailable() {
   currentDisplay = undefined;
   elements.decisionPanel.hidden = false;
   setMode("unavailable");
-  elements.siteVersion.textContent = "v—";
-  elements.gateVersion.textContent = "v—";
-  elements.runningMetricLabel.textContent = "RUNNING";
-  elements.runningCount.textContent = "—";
+  renderPilot(null);
+  elements.siteVersion.textContent = "Unavailable";
+  elements.gateVersion.textContent = "Unavailable";
+  elements.runningMetricLabel.textContent = "ACTIVE WORK";
+  elements.runningCount.textContent = "Unavailable";
   elements.runningSummary.textContent = "Work unavailable";
   elements.tokenMetricLabel.textContent = "TOKENS";
-  elements.tokenUsage.textContent = "—";
+  elements.tokenUsage.textContent = "Unavailable";
   elements.tokenSummary.textContent = "Telemetry unavailable";
-  elements.blockerCount.textContent = "—";
+  elements.blockerCount.textContent = "Unavailable";
   elements.blockerSummary.textContent = "Status unavailable";
   elements.questionMetricLabel.textContent = "NEEDS YOU";
-  elements.questionCount.textContent = "—";
+  elements.questionCount.textContent = "Unavailable";
   elements.questionSummary.textContent = "Queue unavailable";
 
   clear(elements.campaignList);
   const empty = node("div", "empty-state");
-  empty.append(node("span", "", "—"), node("p", "", "No valid public snapshot is available."));
+  empty.append(node("p", "", "No valid public snapshot is available."));
   elements.campaignList.append(empty);
   clear(elements.conversation);
   elements.conversation.append(node("div", "conversation-empty", "Decision state withheld until a valid snapshot arrives."));
@@ -447,11 +652,14 @@ function renderDecision(model) {
 
 function configureComposer(model, bridge) {
   const enabled = Boolean(bridge) && liveReady();
+  const conversationOffline = transport().kind === "remote" && remoteTelemetryReady()
+    && remoteState?.codex.state === "offline";
   elements.messageInput.disabled = !enabled;
-  elements.messageInput.placeholder = enabled ? "Write a short message…" : "Live connection required";
+  elements.messageInput.placeholder = enabled ? "Write a short message…"
+    : conversationOffline ? "Codex conversation offline" : "Live connection required";
   elements.messageStatus.textContent = enabled
     ? interactionStatus || "Ready."
-    : "Live connection required.";
+    : conversationOffline ? "Fleet telemetry is live. Conversation commands are paused." : "Live connection required.";
   updateComposer();
 }
 
@@ -708,7 +916,7 @@ function localActivityLine(entry, latest) {
   line.append(
     node("time", "", localTime(entry.at)),
     identity,
-    node("span", "activity-count", determinate ? `${entry.completed} / ${entry.total}` : "—"),
+    node("span", "activity-count", determinate ? `${entry.completed} / ${entry.total}` : "Unavailable"),
     node("span", "activity-result", result),
     progress
   );
@@ -716,7 +924,7 @@ function localActivityLine(entry, latest) {
 }
 
 function fleetMetricText(value) {
-  if (!value || value.precision === "unavailable" || value.value === null) return "—";
+  if (!value || value.precision === "unavailable" || value.value === null) return "Unavailable";
   return `${compactNumber(value.value)}${value.precision === "lower-bound" ? "+" : ""}`;
 }
 
@@ -746,6 +954,12 @@ function fleetWorkSummary(campaign) {
     const blockers = fleetMetricText(campaign.work.setupBlockers);
     return `${campaign.progress.completed} / ${campaign.progress.total} answers · ${blockers} blockers`;
   }
+  if (campaign.pilot?.availability === "available") {
+    const tokens = campaign.tokens.availability === "unavailable"
+      ? "tokens unavailable"
+      : `${compactNumber(campaign.tokens.total)} ${campaign.tokens.availability} tokens`;
+    return `Solving ${readablePilotValue(campaign.pilot.solving.verdict)} · Learning ${readablePilotValue(campaign.pilot.learning.verdict)} · Cockpit ${readablePilotValue(campaign.pilot.cockpit.verdict)} · ${tokens}`;
+  }
   const workflows = fleetMetricText(campaign.work.activeWorkflows);
   const executions = fleetMetricText(campaign.work.runningExecutions);
   const analyses = fleetMetricText(campaign.work.runningAnalyses);
@@ -765,26 +979,37 @@ function localFleetCampaignCard(campaign) {
 
   const stageRow = node("div", "campaign-stage");
   const stage = node("div", "");
-  stage.append(node("small", "", campaign.kind === "profile" ? "PROFILE" : "CURRENT LANE"), node("strong", "", fleetStageLabel(campaign.stage)));
-  stageRow.append(stage, node("strong", "progress-number", campaign.progress?.percent === null || campaign.progress === null ? "—" : `${campaign.progress.percent}%`));
-  const track = node("div", `progress-track${campaign.progress === null ? " local-session-progress indeterminate" : ""}`);
+  const pilotActive = campaign.kind === "case" && campaign.pilot?.availability === "available";
+  stage.append(
+    node("small", "", campaign.kind === "profile" ? "PROFILE" : pilotActive ? "CURRENT PLAN STEP" : "CURRENT LANE"),
+    node("strong", "", pilotActive ? readablePilotValue(campaign.pilot.solving.now) : fleetStageLabel(campaign.stage))
+  );
+  const objectiveMetric = pilotActive && campaign.pilot.solving.objectives.availability === "available"
+    ? campaign.pilot.solving.objectives : null;
+  const objectiveProgress = objectiveMetric ? `${objectiveMetric.completed}/${objectiveMetric.total}` : null;
+  const progressPercent = objectiveMetric
+    ? Math.floor(objectiveMetric.completed / objectiveMetric.total * 100)
+    : campaign.progress?.percent ?? null;
+  stageRow.append(stage, node("strong", "progress-number", objectiveProgress || (progressPercent === null ? "Unavailable" : `${progressPercent}%`)));
+  const track = node("div", `progress-track${progressPercent === null ? " unavailable" : ""}`);
   track.setAttribute("role", "progressbar");
   track.setAttribute("aria-label", `${campaign.alias} progress`);
   const fill = node("span", "progress-fill");
-  if (campaign.progress === null || campaign.progress.percent === null) {
-    track.setAttribute("aria-valuetext", campaign.kind === "case" ? "In progress; completion percentage unavailable" : "No percentage available");
+  if (progressPercent === null) {
+    track.setAttribute("aria-valuetext", campaign.kind === "case" ? "Objective progress unavailable" : "No percentage available");
   } else {
     track.setAttribute("aria-valuemin", "0");
     track.setAttribute("aria-valuemax", "100");
-    track.setAttribute("aria-valuenow", String(campaign.progress.percent));
-    fill.style.setProperty("--progress", `${campaign.progress.percent}%`);
+    track.setAttribute("aria-valuenow", String(progressPercent));
+    fill.style.setProperty("--progress", `${progressPercent}%`);
   }
   track.append(fill);
   const footer = node("footer", "campaign-card-footer");
   const attention = node("span", `attention attention-${campaign.attention}`);
   attention.append(node("i", ""), node("span", "", campaign.attention === "response-needed" ? "Response needed" : campaign.attention === "watch" ? "Watch" : "Steady"));
-  const state = node("span", `codex-state codex-${campaign.state === "running" ? "working" : campaign.state === "waiting" ? "waiting" : "idle"}`);
-  state.append(node("i", ""), node("span", "", campaign.state.replace("-", " ")));
+  const pilotUnavailable = campaign.kind === "case" && campaign.pilot?.availability !== "available";
+  const state = node("span", `codex-state codex-${pilotUnavailable ? "waiting" : campaign.state === "running" ? "working" : campaign.state === "waiting" ? "waiting" : "idle"}`);
+  state.append(node("i", ""), node("span", "", pilotUnavailable ? "Pilot unavailable" : campaign.state.replace("-", " ")));
   footer.append(attention, state);
   article.append(header, stageRow, track, node("p", "campaign-action", fleetWorkSummary(campaign)), footer);
   return article;
@@ -812,7 +1037,7 @@ function remoteCommandLine(entry, latest) {
   line.append(
     node("time", "", localTime(when)),
     identity,
-    node("span", "activity-count", "—"),
+    node("span", "activity-count", "Unavailable"),
     node("span", "activity-result", entry.state === "queued" ? "Queued" : entry.state.replace("-", " ")),
     progress
   );
@@ -822,6 +1047,7 @@ function remoteCommandLine(entry, latest) {
 function renderRemoteWithoutState() {
   const mode = remoteConnection?.state === "connecting" ? "remote-connecting" : "remote-offline";
   setMode(mode);
+  renderPilot(null);
   elements.decisionPanel.hidden = false;
   for (const [count, summary, text] of [
     [elements.runningCount, elements.runningSummary, "Work unavailable"],
@@ -829,7 +1055,7 @@ function renderRemoteWithoutState() {
     [elements.blockerCount, elements.blockerSummary, "Status unavailable"],
     [elements.tokenUsage, elements.tokenSummary, "Telemetry unavailable"]
   ]) {
-    count.textContent = "—";
+    count.textContent = "Unavailable";
     summary.textContent = text;
   }
   clear(elements.campaignList);
@@ -866,15 +1092,17 @@ function renderLiveMode() {
   const ready = remoteMode ? remoteReady() : localReady();
   const mode = !remoteMode ? "local"
     : ready ? "remote"
+      : remoteTelemetryReady() && remoteState?.codex.state === "offline" ? "remote-conversation-offline"
       : remoteConnection?.state === "connecting" ? "remote-connecting" : "remote-offline";
   const fleetConnected = fleet?.connection === "connected";
+  renderPilot(fleet);
   const fleetSummary = fleet?.summary;
   setMode(mode);
   elements.decisionPanel.hidden = false;
-  elements.runningMetricLabel.textContent = "RUNNING";
-  elements.runningCount.textContent = fleetMetricText(fleetSummary?.activeWorkflows);
+  elements.runningMetricLabel.textContent = "ACTIVE WORK";
+  elements.runningCount.textContent = fleetMetricText(fleetSummary?.active);
   elements.runningSummary.textContent = fleetConnected
-    ? `${fleetMetricText(fleetSummary.runningExecutions)} runs · ${fleetMetricText(fleetSummary.runningAnalyses)} analyses`
+    ? `${fleetMetricText(fleetSummary.activeWorkflows)} workflow lanes · ${fleetMetricText(fleetSummary.runningExecutions)} runs · ${fleetMetricText(fleetSummary.runningAnalyses)} analyses`
     : state.turn === "working" ? "Codex active · fleet unavailable" : "Fleet unavailable";
   const campaignTokens = fleetSummary?.campaignTokens;
   if (fleetConnected && campaignTokens?.availability !== "unavailable") {
@@ -889,11 +1117,11 @@ function renderLiveMode() {
     elements.tokenSummary.textContent = "Exact dedicated session";
   } else {
     elements.tokenMetricLabel.textContent = "TOKENS";
-    elements.tokenUsage.textContent = "—";
+    elements.tokenUsage.textContent = "Unavailable";
     elements.tokenSummary.textContent = "Telemetry unavailable";
   }
-  elements.blockerCount.textContent = fleetMetricText(fleetSummary?.setupBlockers);
-  elements.blockerSummary.textContent = fleetConnected ? "Profile setup blockers" : "Status unavailable";
+  elements.blockerCount.textContent = fleetMetricText(fleetSummary?.blockers);
+  elements.blockerSummary.textContent = fleetConnected ? "Blocked cases and profile setup" : "Status unavailable";
   const visiblePendingCount = state.pendingQuestions.reduce((total, pending) => total + pending.questions.length, 0);
   const hasWithheldRemoteQuestion = remoteMode && state.turn === "waiting" && visiblePendingCount === 0;
   const pendingCount = visiblePendingCount + (hasWithheldRemoteQuestion ? 1 : 0);
@@ -902,7 +1130,7 @@ function renderLiveMode() {
   elements.questionMetricLabel.textContent = "NEEDS YOU";
   elements.questionCount.textContent = attentionKnown
     ? `${compactNumber(pendingCount + attentionMetric.value)}${attentionMetric.precision === "lower-bound" ? "+" : ""}`
-    : pendingCount > 0 ? `${compactNumber(pendingCount)}+` : "—";
+    : pendingCount > 0 ? `${compactNumber(pendingCount)}+` : "Unavailable";
   elements.questionSummary.textContent = hasWithheldRemoteQuestion
     ? attentionKnown
       ? `Open laptop · ${fleetMetricText(attentionMetric)} fleet alert${attentionMetric.value === 1 ? "" : "s"}`
@@ -973,6 +1201,7 @@ function activityLine(entry, latest) {
 function renderAvailable(model) {
   currentDisplay = model;
   setMode(model.mode);
+  renderPilot(null);
   elements.siteVersion.textContent = `v${model.siteVersion}`;
   elements.gateVersion.textContent = `v${model.gateVersion}`;
   const runningCount = model.campaigns.filter((campaign) => campaign.codex === "working").length;
@@ -985,7 +1214,7 @@ function renderAvailable(model) {
     elements.tokenUsage.textContent = `${compactNumber(model.aggregate.tokensUsed)} / ${compactNumber(model.aggregate.tokenBudget)}`;
     elements.tokenSummary.textContent = `Example budget · ${Math.round(model.aggregate.tokensUsed / model.aggregate.tokenBudget * 100)}%`;
   } else {
-    elements.tokenUsage.textContent = "—";
+    elements.tokenUsage.textContent = "Unavailable";
     elements.tokenSummary.textContent = "Telemetry unavailable";
   }
   elements.blockerCount.textContent = String(model.aggregate.blockerCount);
@@ -1037,6 +1266,13 @@ async function refresh() {
 
 refresh();
 window.setInterval(refresh, 60_000);
+window.setInterval(() => {
+  const now = Date.now();
+  let changed = false;
+  if (localFleet && Date.parse(localFleet.validUntil) <= now) { localFleet = undefined; changed = true; }
+  if (remoteFleet && Date.parse(remoteFleet.validUntil) <= now) { remoteFleet = undefined; changed = true; }
+  if (changed) renderLiveMode();
+}, 1_000);
 globalThis.addEventListener("gate:companion-snapshot", refresh);
 globalThis.addEventListener("gate:companion-private-state", (event) => {
   const next = validateLocalCompanionState(event.detail);
@@ -1164,3 +1400,11 @@ elements.messageInput.addEventListener("input", () => {
   updateComposer();
 });
 elements.messageComposer.addEventListener("submit", submitMessage);
+elements.pilotCaseSelect.addEventListener("change", () => {
+  selectedPilotAlias = elements.pilotCaseSelect.value || null;
+  const selected = transport();
+  const fleet = selected.kind === "remote" || (selected.kind === "none" && remoteConnection) ? remoteFleet : localFleet;
+  selectedPilotEpoch = selectedPilotAlias === null ? null : fleet?.selectionEpoch || null;
+  writePilotSelection(selectedPilotAlias, selectedPilotEpoch);
+  renderPilot(fleet);
+});

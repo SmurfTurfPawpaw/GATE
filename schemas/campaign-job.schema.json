@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/campaign-job.schema.json",
+  "title": "GATE immutable campaign job",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "apiVersion", "kind", "metadata", "campaignId", "grantSha256", "job", "jobSha256"],
+  "properties": {
+    "$schema": { "const": "https://gate.local/schemas/campaign-job.schema.json" },
+    "apiVersion": { "const": "gate.dev/campaign-job/v1" },
+    "kind": { "const": "CampaignJob" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "createdAt"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "campaignId": { "$ref": "#/$defs/id" },
+    "grantSha256": { "$ref": "#/$defs/sha256" },
+    "job": {
+      "oneOf": [
+        { "$ref": "#/$defs/dryRun" },
+        { "$ref": "#/$defs/managedAdapter" }
+      ]
+    },
+    "jobSha256": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "toolId": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "minLength": 2, "maxLength": 64 },
+    "selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "value"],
+      "properties": {
+        "type": { "enum": ["domain", "ip", "cidr", "url", "application", "account", "repository", "device", "path"] },
+        "value": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "^[^\\u0000\\r\\n]+$" }
+      }
+    },
+    "action": {
+      "enum": [
+        "observe",
+        "scan",
+        "intercept",
+        "authenticate",
+        "fuzz",
+        "exploit-safe",
+        "exploit-stateful",
+        "persist",
+        "denial-of-service",
+        "destructive-test",
+        "data-access",
+        "data-removal",
+        "exfiltration-simulation"
+      ]
+    },
+    "dryRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "summary"],
+      "properties": {
+        "type": { "const": "non-contact-dry-run" },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "^[^\\u0000\\r\\n]+$" }
+      }
+    },
+    "managedAdapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "engagementId", "workflow", "adapter", "selector", "operation", "bounds"],
+      "properties": {
+        "type": { "const": "managed-adapter" },
+        "engagementId": { "$ref": "#/$defs/id" },
+        "workflow": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["instanceId", "phaseAttemptId"],
+          "properties": {
+            "instanceId": { "$ref": "#/$defs/id" },
+            "phaseAttemptId": { "type": "string", "pattern": "^wpa_[a-f0-9]{32}$" }
+          }
+        },
+        "adapter": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "action", "toolId"],
+          "properties": {
+            "id": { "$ref": "#/$defs/toolId" },
+            "action": { "$ref": "#/$defs/action" },
+            "toolId": { "$ref": "#/$defs/toolId" }
+          }
+        },
+        "selector": { "$ref": "#/$defs/selector" },
+        "operation": {
+          "type": "object",
+          "maxProperties": 32,
+          "propertyNames": { "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$" }
+        },
+        "bounds": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["maxMinutes", "estimatedRequests", "maxParallel", "maxRatePerSecond", "maxTokens", "maxSpend", "maxEvidenceBytes"],
+          "properties": {
+            "maxMinutes": { "type": "integer", "minimum": 1, "maximum": 10080 },
+            "estimatedRequests": { "type": "integer", "minimum": 1, "maximum": 10000000 },
+            "maxParallel": { "type": "integer", "minimum": 1, "maximum": 256 },
+            "maxRatePerSecond": { "type": "number", "exclusiveMinimum": 0, "maximum": 100000 },
+            "maxTokens": { "type": "integer", "minimum": 1000, "maximum": 100000000 },
+            "maxSpend": { "type": "number", "minimum": 0, "maximum": 1000000 },
+            "maxEvidenceBytes": { "type": "integer", "minimum": 2097152, "maximum": 2147483648 }
+          }
+        }
+      }
+    }
+  }
+}

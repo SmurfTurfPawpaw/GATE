@@ -29,8 +29,8 @@
         </span>
       </a>
       <div class="version-rail" aria-label="Build versions">
-        <span class="version-badge"><span>Site</span> <strong id="site-version">v—</strong></span>
-        <span class="version-badge gate-version"><span>GATE</span> <strong id="gate-version">v—</strong></span>
+        <span class="version-badge"><span>Site</span> <strong id="site-version">Unavailable</strong></span>
+        <span class="version-badge gate-version"><span>GATE</span> <strong id="gate-version">Unavailable</strong></span>
       </div>
     </header>
 
@@ -40,50 +40,70 @@
     </div>
 
     <main id="cockpit" tabindex="-1">
-      <section class="panel decision-panel" id="decision-panel" aria-labelledby="decision-title">
-        <header class="panel-heading decision-heading">
+      <section class="panel pilot-panel" id="pilot-panel" aria-labelledby="pilot-title">
+        <header class="panel-heading pilot-heading">
           <div>
-            <p class="section-kicker">CONVERSATION</p>
-            <h1 id="decision-title">Steer GATE</h1>
+            <p class="section-kicker">CTF PILOT · CASE WORKER SIGNAL</p>
+            <h1 id="pilot-title">Pilot status</h1>
+            <p class="pilot-case-alias" id="pilot-case-alias">No case selected</p>
           </div>
-          <span class="connection-state unavailable" id="connection-state"><i aria-hidden="true"></i> Preview · interaction off</span>
+          <span class="pilot-heartbeat unavailable" id="pilot-heartbeat">Laptop observer offline</span>
         </header>
-
-        <div class="conversation" id="conversation" aria-live="polite">
-          <div class="conversation-empty">Waiting for a valid decision signal.</div>
+        <label class="pilot-case-picker" for="pilot-case-select">
+          <span>CASE SCORECARD</span>
+          <select id="pilot-case-select" aria-label="Select a case scorecard" disabled>
+            <option value="">Case feed unavailable</option>
+          </select>
+        </label>
+        <p class="pilot-source" id="pilot-source">Case worker events and the laptop observer are the source for this scorecard.</p>
+        <div class="pilot-alert" id="pilot-alert" role="status" aria-live="polite">
+          <strong>Pilot feed unavailable</strong>
+          <span>Check the laptop observer and dedicated runner.</span>
         </div>
-        <div class="choice-list" id="choice-list"></div>
-
-        <form class="message-composer" id="message-composer">
-          <label class="sr-only" for="message-input">Message Codex</label>
-          <textarea id="message-input" rows="3" maxlength="1000" disabled aria-describedby="message-status" placeholder="Live connection required"></textarea>
-          <div class="composer-footer">
-            <span id="message-count">0 / 1000</span>
-            <button id="message-send" type="submit" disabled>Send</button>
+        <div class="pilot-primary" aria-label="Independent pilot verdicts">
+          <article><small>SOLVING</small><strong id="pilot-solving-verdict">Unavailable</strong><span id="pilot-solving-detail">Objectives unavailable</span></article>
+          <article><small>LEARNING</small><strong id="pilot-learning-verdict">Unavailable</strong><span id="pilot-learning-verdict-detail">Transfer unavailable</span></article>
+          <article><small>COCKPIT</small><strong id="pilot-cockpit-verdict">Unavailable</strong><span id="pilot-cockpit-verdict-detail">Signals unavailable</span></article>
+        </div>
+        <div class="pilot-plan" aria-label="Current plan and action">
+          <article><small>NOW · PLAN STEP</small><strong id="pilot-now">Unavailable</strong><span id="pilot-timestamp">Feed unavailable</span></article>
+          <article><small>ACTION NEEDED</small><strong id="pilot-action">Unavailable</strong><span id="pilot-action-detail">Observer status required</span></article>
+          <article><small>LATEST VERIFIED EVENT</small><strong id="pilot-event">Unavailable</strong><span id="pilot-event-detail">Feed unavailable</span></article>
+        </div>
+        <ol class="pilot-timeline" id="pilot-timeline" aria-label="Current plan timeline">
+          <li class="unavailable">Plan timeline unavailable</li>
+        </ol>
+        <details class="pilot-details">
+          <summary>Depth, efficiency, learning, and integrity</summary>
+          <div class="pilot-kpi-grid">
+            <article><small>DEPTH</small><strong id="pilot-depth">Unavailable</strong><span id="pilot-depth-detail">Measurements unavailable</span></article>
+            <article><small>EFFICIENCY</small><strong id="pilot-efficiency">Unavailable</strong><span id="pilot-efficiency-detail">Resource usage unavailable</span></article>
+            <article><small>LEARNING STAGE</small><strong id="pilot-learning">Unavailable</strong><span id="pilot-learning-detail">Stages unavailable</span></article>
+            <article><small>COCKPIT FEED</small><strong id="pilot-cockpit">Unavailable</strong><span id="pilot-cockpit-detail">Signals unavailable</span></article>
+            <article><small>INTEGRITY</small><strong id="pilot-integrity">Unavailable</strong><span id="pilot-integrity-detail">Checks unavailable</span></article>
           </div>
-          <p id="message-status" role="status" aria-live="polite">Live connection required.</p>
-        </form>
+        </details>
       </section>
 
       <section class="metric-grid" aria-label="Current status">
         <article class="metric-card running-card">
-          <small id="running-metric-label">RUNNING</small>
-          <strong id="running-count">—</strong>
+          <small id="running-metric-label">ACTIVE WORK</small>
+          <strong id="running-count">Unavailable</strong>
           <p id="running-summary">Work unavailable</p>
         </article>
         <article class="metric-card needs-card">
           <small id="question-metric-label">NEEDS YOU</small>
-          <strong id="question-count">—</strong>
+          <strong id="question-count">Unavailable</strong>
           <p id="question-summary">Queue unavailable</p>
         </article>
         <article class="metric-card blocker-card">
-          <small>BLOCKED</small>
-          <strong id="blocker-count">—</strong>
-          <p id="blocker-summary">Status unavailable</p>
+          <small>BLOCKERS</small>
+          <strong id="blocker-count">Unavailable</strong>
+          <p id="blocker-summary">Blocked cases and profile setup unavailable</p>
         </article>
         <article class="metric-card token-card">
           <small id="token-metric-label">TOKENS</small>
-          <strong id="token-usage">—</strong>
+          <strong id="token-usage">Unavailable</strong>
           <p id="token-summary">Telemetry unavailable</p>
         </article>
       </section>
@@ -113,6 +133,30 @@
           </ol>
         </section>
       </div>
+
+      <section class="panel decision-panel secondary-panel" id="decision-panel" aria-labelledby="decision-title">
+        <header class="panel-heading decision-heading">
+          <div>
+            <p class="section-kicker">OPERATOR CHANNEL</p>
+            <h2 id="decision-title">Steer the dedicated runner</h2>
+          </div>
+          <span class="connection-state unavailable" id="connection-state"><i aria-hidden="true"></i> Preview · interaction off</span>
+        </header>
+        <p class="pilot-source">This channel belongs to the dedicated cockpit thread. Pilot KPIs come from case worker events.</p>
+        <div class="conversation" id="conversation" aria-live="polite">
+          <div class="conversation-empty">Waiting for a valid decision signal.</div>
+        </div>
+        <div class="choice-list" id="choice-list"></div>
+        <form class="message-composer" id="message-composer">
+          <label class="sr-only" for="message-input">Message Codex</label>
+          <textarea id="message-input" rows="3" maxlength="1000" disabled aria-describedby="message-status" placeholder="Live connection required"></textarea>
+          <div class="composer-footer">
+            <span id="message-count">0 / 1000</span>
+            <button id="message-send" type="submit" disabled>Send</button>
+          </div>
+          <p id="message-status" role="status" aria-live="polite">Live connection required.</p>
+        </form>
+      </section>
     </main>
 
     <noscript><p class="noscript">JavaScript is required to validate and display the cockpit.</p></noscript>

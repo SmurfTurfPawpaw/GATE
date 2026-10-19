@@ -74,7 +74,7 @@ async function readFleet() {
     });
     const value = await response.json();
     if (response.ok && exactKeys(value, ["ok", "fleet"]) && value.ok === true
-        && value.fleet?.apiVersion === "gate.local-fleet/v1") {
+        && value.fleet?.apiVersion === "gate.local-fleet/v2") {
       globalThis.dispatchEvent(new CustomEvent("gate:companion-fleet", { detail: value.fleet }));
     }
   } catch {

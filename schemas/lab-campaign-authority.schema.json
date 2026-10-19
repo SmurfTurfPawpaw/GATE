@@ -1,0 +1,208 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/lab-campaign-authority.schema.json",
+  "title": "GATE dedicated-lab campaign authority proposal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "apiVersion", "kind", "metadata", "campaign", "binding", "ceilings", "adaptive", "stopConditions", "authoritySha256"],
+  "properties": {
+    "$schema": { "const": "https://gate.local/schemas/lab-campaign-authority.schema.json" },
+    "apiVersion": { "const": "gate.lab-campaign-authority/v1" },
+    "kind": { "const": "LabCampaignAuthority" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "createdAt", "expiresAt"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "expiresAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "campaign": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "grantSha256", "jobSetSha256", "jobs"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "grantSha256": { "$ref": "#/$defs/sha256" },
+        "jobSetSha256": { "$ref": "#/$defs/sha256" },
+        "jobs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 10000,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "jobSha256"],
+            "properties": {
+              "id": { "$ref": "#/$defs/id" },
+              "jobSha256": { "$ref": "#/$defs/sha256" }
+            }
+          }
+        }
+      }
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["case", "program", "source", "engagement", "workflow", "challenge", "adapter"],
+      "properties": {
+        "case": { "$ref": "#/$defs/caseBinding" },
+        "program": { "$ref": "#/$defs/programBinding" },
+        "source": { "$ref": "#/$defs/sourceBinding" },
+        "engagement": { "$ref": "#/$defs/engagementBinding" },
+        "workflow": { "$ref": "#/$defs/workflowBinding" },
+        "challenge": { "$ref": "#/$defs/challengeBinding" },
+        "adapter": { "$ref": "#/$defs/adapterBinding" }
+      }
+    },
+    "ceilings": { "$ref": "#/$defs/ceilings" },
+    "adaptive": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxJobs", "allowedMethods", "maxResponseBytes", "maxTimeoutSeconds", "jobBounds"],
+      "properties": {
+        "maxJobs": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "allowedMethods": {
+          "type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": true,
+          "items": { "enum": ["GET", "HEAD"] }
+        },
+        "maxResponseBytes": { "type": "integer", "minimum": 1024, "maximum": 131072 },
+        "maxTimeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 15 },
+        "jobBounds": {
+          "type": "object", "additionalProperties": false,
+          "required": ["maxMinutes", "estimatedRequests", "maxParallel", "maxRatePerSecond", "maxTokens", "maxSpend", "maxEvidenceBytes"],
+          "properties": {
+            "maxMinutes": { "type": "integer", "minimum": 1, "maximum": 5 },
+            "estimatedRequests": { "const": 1 },
+            "maxParallel": { "const": 1 },
+            "maxRatePerSecond": { "type": "number", "exclusiveMinimum": 0, "maximum": 2 },
+            "maxTokens": { "type": "integer", "minimum": 1000, "maximum": 100000000 },
+            "maxSpend": { "type": "number", "minimum": 0, "maximum": 1000000 },
+            "maxEvidenceBytes": { "type": "integer", "minimum": 2097152, "maximum": 2147483648 }
+          }
+        }
+      }
+    },
+    "stopConditions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,79}$" }
+    },
+    "authoritySha256": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "oneLine": { "type": "string", "minLength": 1, "maxLength": 1000, "pattern": "^[^\\u0000\\r\\n]+$" },
+    "caseBinding": {
+      "type": "object", "additionalProperties": false, "required": ["id", "scopeSha256"],
+      "properties": { "id": { "$ref": "#/$defs/id" }, "scopeSha256": { "$ref": "#/$defs/sha256" } }
+    },
+    "programBinding": {
+      "type": "object", "additionalProperties": false, "required": ["id", "profileSha256"],
+      "properties": { "id": { "$ref": "#/$defs/id" }, "profileSha256": { "$ref": "#/$defs/sha256" } }
+    },
+    "sourceBinding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "contentSha256", "projectionSha256", "snapshotSha256"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "contentSha256": { "$ref": "#/$defs/sha256" },
+        "projectionSha256": { "$ref": "#/$defs/sha256" },
+        "snapshotSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "engagementBinding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "basis", "planSha256", "envelopeSha256", "receiptSha256", "authorizationValidUntil", "environment"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "basis": { "const": "dedicated-lab" },
+        "planSha256": { "$ref": "#/$defs/sha256" },
+        "envelopeSha256": { "$ref": "#/$defs/sha256" },
+        "receiptSha256": { "$ref": "#/$defs/sha256" },
+        "authorizationValidUntil": { "type": "string", "format": "date-time" },
+        "environment": { "const": "host" }
+      }
+    },
+    "workflowBinding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["instanceId", "contractSha256", "definitionSha256", "phaseId", "phaseAttemptId", "admissionSha256", "admissionExpiresAt", "authorityReceiptSha256", "toolId", "action", "envelopeSha256"],
+      "properties": {
+        "instanceId": { "$ref": "#/$defs/id" },
+        "contractSha256": { "$ref": "#/$defs/sha256" },
+        "definitionSha256": { "$ref": "#/$defs/sha256" },
+        "phaseId": { "$ref": "#/$defs/id" },
+        "phaseAttemptId": { "type": "string", "pattern": "^wpa_[a-f0-9]{32}$" },
+        "admissionSha256": { "$ref": "#/$defs/sha256" },
+        "admissionExpiresAt": { "type": "string", "format": "date-time" },
+        "authorityReceiptSha256": { "$ref": "#/$defs/sha256" },
+        "toolId": { "const": "httpx" },
+        "action": { "const": "observe" },
+        "envelopeSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "challengeBinding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["origin", "exactUrl", "pathPrefix", "frozenIps", "destinationObservationSha256", "destinationObservedAt", "destinationSourceSha256"],
+      "properties": {
+        "origin": { "type": "string", "format": "uri", "maxLength": 500 },
+        "exactUrl": { "type": "string", "format": "uri", "maxLength": 500 },
+        "pathPrefix": { "type": "string", "format": "uri", "maxLength": 500 },
+        "frozenIps": {
+          "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true,
+          "items": { "type": "string", "minLength": 2, "maxLength": 45, "pattern": "^[0-9a-fA-F:.]+$" }
+        },
+        "destinationObservationSha256": { "$ref": "#/$defs/sha256" },
+        "destinationObservedAt": { "type": "string", "format": "date-time" },
+        "destinationSourceSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "runtimeBinding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["provider", "version", "platform", "lockEntrySha256", "catalogEntrySha256", "artifactSha256", "executableSha256"],
+      "properties": {
+        "provider": { "const": "verified-release" },
+        "version": { "$ref": "#/$defs/oneLine" },
+        "platform": { "$ref": "#/$defs/oneLine" },
+        "lockEntrySha256": { "$ref": "#/$defs/sha256" },
+        "catalogEntrySha256": { "$ref": "#/$defs/sha256" },
+        "artifactSha256": { "$ref": "#/$defs/sha256" },
+        "executableSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "adapterBinding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "action", "toolId", "registrySha256", "entrySha256", "compilerId", "compilerSourceSha256", "runtime"],
+      "properties": {
+        "id": { "const": "httpx-url-fetch" },
+        "action": { "const": "observe" },
+        "toolId": { "const": "httpx" },
+        "registrySha256": { "$ref": "#/$defs/sha256" },
+        "entrySha256": { "$ref": "#/$defs/sha256" },
+        "compilerId": { "const": "httpx-exact-url-fetch-v1" },
+        "compilerSourceSha256": { "$ref": "#/$defs/sha256" },
+        "runtime": { "$ref": "#/$defs/runtimeBinding" }
+      }
+    },
+    "ceilings": {
+      "type": "object", "additionalProperties": false,
+      "required": ["maxWallMinutes", "maxRequests", "maxRatePerSecond", "maxConcurrency", "maxInputTokens", "maxOutputTokens", "maxTotalTokens", "maxSpend", "maxEvidenceBytes"],
+      "properties": {
+        "maxWallMinutes": { "type": "integer", "minimum": 1, "maximum": 525600 },
+        "maxRequests": { "type": "integer", "minimum": 1, "maximum": 10000000 },
+        "maxRatePerSecond": { "type": "number", "exclusiveMinimum": 0, "maximum": 2 },
+        "maxConcurrency": { "const": 1 },
+        "maxInputTokens": { "type": "integer", "minimum": 0, "maximum": 1000000000 },
+        "maxOutputTokens": { "type": "integer", "minimum": 0, "maximum": 1000000000 },
+        "maxTotalTokens": { "type": "integer", "minimum": 0, "maximum": 1000000000 },
+        "maxSpend": { "type": "number", "minimum": 0, "maximum": 1000000000 },
+        "maxEvidenceBytes": { "type": "integer", "minimum": 0, "maximum": 10737418240 }
+      }
+    }
+  }
+}

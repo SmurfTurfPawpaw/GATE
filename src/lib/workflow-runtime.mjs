@@ -1,9 +1,11 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
-import { checkEngagement } from "./engagements.mjs";
+import { checkEngagement, targetMatches } from "./engagements.mjs";
+import { verifyLabCampaignWorkflowReservation } from "./lab-campaign-authority.mjs";
 import {
   consultLearnings,
   verifyLearningConsultationSnapshot,
@@ -1252,6 +1254,7 @@ function applyEntry(previous, entry, paths) {
       if (active.effectClass === "A3") {
         throw new Error("the supervised generic execution lane cannot execute an A3 phase");
       }
+      const labCampaign = assertLabReservationReplayBinding(projection, active, payload);
       if (pendingReservations(projection).some((reservation) =>
         reservation.phaseAttemptId === payload.phaseAttemptId)) {
         throw new Error("workflow execution reservation journal entry overlaps a pending reservation");
@@ -1276,7 +1279,7 @@ function applyEntry(previous, entry, paths) {
       if (active.targetContact) {
         if (payload.instanceId !== projection.instanceId ||
           payload.engagementId !== active.authority?.engagementId ||
-          payload.targetSha256 !== active.targetSha256 || payload.action !== active.action ||
+          payload.targetSha256 !== (labCampaign?.requestUrlSha256 || active.targetSha256) || payload.action !== active.action ||
           payload.toolId !== active.toolId || payload.toolMappingSha256 !== active.toolMappingSha256 ||
           payload.admissionSha256 !== active.admissionSha256 ||
           payload.authorityReceiptSha256 !== active.authority?.receiptSha256 ||
@@ -1647,6 +1650,7 @@ function compactTestFeedback(projection) {
 
 function compactStatus(projection, definition, extra = {}) {
   const active = projection.activePhase;
+  const plannedTests = Object.values(active?.tests || {}).filter((test) => test.status === "planned");
   const { updatedAt = null, ...journalExtra } = extra;
   const phaseCounts = { running: 0, tested: 0, "not-applicable": 0, blocked: 0, untested: 0, pending: 0 };
   for (const phase of definition.value.phases) {
@@ -1673,6 +1677,9 @@ function compactStatus(projection, definition, extra = {}) {
     activePhase: active ? {
       id: active.phaseId,
       attemptId: active.attemptId,
+      testReadyForExecution: projection.status === "open" && plannedTests.length === 1 &&
+        !Object.values(projection.executionReservations).some((reservation) => reservation.testId === plannedTests[0].testId) &&
+        !pendingReservations(projection).some((reservation) => reservation.phaseAttemptId === active.attemptId),
       lane: active.lane,
       effectClass: active.effectClass,
       toolId: active.toolId,
@@ -3039,6 +3046,73 @@ function executionEnvelope(input, active) {
   return value;
 }
 
+const LAB_RESERVATION_FIELDS = Object.freeze([
+  "authorityId", "authoritySha256", "receiptSha256", "capabilityId", "capabilitySha256",
+  "campaignId", "grantSha256", "engagementId", "workflowInstanceId", "phaseId",
+  "phaseAttemptId", "admissionSha256", "authorityReceiptSha256", "origin", "pathPrefix",
+  "requestUrl", "requestUrlSha256", "allowedIp", "operationSha256", "argvSha256",
+  "boundsSha256", "expiresAt"
+]);
+
+function assertLabReservationReplayBinding(projection, active, payload) {
+  const lab = payload.labCampaign || null;
+  if (!lab) return null;
+  if (!lab || typeof lab !== "object" || Array.isArray(lab) ||
+      Object.keys(lab).sort().join("\0") !== [...LAB_RESERVATION_FIELDS].sort().join("\0")) {
+    throw new Error("workflow dedicated-lab reservation binding fields are invalid");
+  }
+  for (const field of [
+    "authoritySha256", "receiptSha256", "capabilitySha256", "grantSha256", "admissionSha256",
+    "authorityReceiptSha256", "requestUrlSha256", "operationSha256", "argvSha256", "boundsSha256"
+  ]) {
+    if (!SHA256_PATTERN.test(String(lab[field] || ""))) {
+      throw new Error(`workflow dedicated-lab reservation digest is invalid: ${field}`);
+    }
+  }
+  if (!ID_PATTERN.test(String(lab.authorityId || "")) || !ID_PATTERN.test(String(lab.campaignId || "")) ||
+      !ID_PATTERN.test(String(lab.engagementId || "")) || !ID_PATTERN.test(String(lab.workflowInstanceId || "")) ||
+      !PHASE_ID_PATTERN.test(String(lab.phaseId || "")) || !ATTEMPT_PATTERN.test(String(lab.phaseAttemptId || "")) ||
+      !/^lcap_[a-f0-9]{32}$/u.test(String(lab.capabilityId || "")) || !net.isIP(String(lab.allowedIp || "")) ||
+      !Number.isFinite(Date.parse(lab.expiresAt))) {
+    throw new Error("workflow dedicated-lab reservation identity is invalid");
+  }
+  let origin;
+  let prefix;
+  let request;
+  try {
+    origin = new URL(lab.origin);
+    prefix = new URL(lab.pathPrefix);
+    request = new URL(lab.requestUrl);
+  } catch {
+    throw new Error("workflow dedicated-lab reservation URL binding is invalid");
+  }
+  if (!new Set(["http:", "https:"]).has(request.protocol) || request.username || request.password || request.hash ||
+      prefix.username || prefix.password || prefix.hash || lab.pathPrefix !== prefix.href ||
+      lab.requestUrl !== request.href || lab.origin !== origin.origin || prefix.origin !== origin.origin ||
+      request.origin !== origin.origin ||
+      !targetMatches({ type: "url", value: prefix.href }, { type: "url", value: request.href }) ||
+      sha256(Buffer.from(lab.requestUrl)) !== lab.requestUrlSha256 ||
+      payload.targetSha256 !== lab.requestUrlSha256) {
+    throw new Error("workflow dedicated-lab reservation leaves its exact origin or path prefix");
+  }
+  if (active.phaseId !== "active-surface-validation" || active.effectClass !== "A1" ||
+      active.action !== "observe" || active.toolId !== "httpx" ||
+      projection.instanceId !== lab.workflowInstanceId || active.phaseId !== lab.phaseId ||
+      active.attemptId !== lab.phaseAttemptId || active.admissionSha256 !== lab.admissionSha256 ||
+      active.authority?.engagementId !== lab.engagementId ||
+      active.authority?.receiptSha256 !== lab.authorityReceiptSha256 ||
+      payload.engagementId !== lab.engagementId) {
+    throw new Error("workflow dedicated-lab reservation differs from the active A1/httpx admission");
+  }
+  if (Object.values(projection.executionReservations).some((reservation) =>
+    reservation.labCampaign?.capabilityId === lab.capabilityId ||
+    reservation.labCampaign?.capabilitySha256 === lab.capabilitySha256
+  )) {
+    throw new Error("workflow dedicated-lab capability already has an execution reservation");
+  }
+  return lab;
+}
+
 function assertReservationBinding(reservation, input) {
   if (!reservation) throw new Error("workflow execution reservation does not exist");
   const comparisons = [
@@ -3053,6 +3127,10 @@ function assertReservationBinding(reservation, input) {
   for (const [field, expected] of comparisons) {
     if (field === "manifestSha256" && reservation.manifestSha256 === null) continue;
     if (reservation[field] !== expected) throw new Error(`workflow execution reservation binding changed: ${field}`);
+  }
+  if (input.labCampaign !== undefined &&
+      !sameCanonicalValue(reservation.labCampaign || null, input.labCampaign || null)) {
+    throw new Error("workflow execution reservation binding changed: labCampaign");
   }
 }
 
@@ -3074,7 +3152,7 @@ export function reserveWorkflowExecution(id, input, options = {}) {
     if (!active || active.attemptId !== phaseAttemptId) throw new Error("workflow execution does not bind the active phase attempt");
     if (!active.targetContact || !active.admissionSha256 || !active.authority) throw new Error("active phase has no target-contact admission");
     if (active.effectClass === "A3") throw new Error("the supervised generic execution lane cannot execute an A3 phase");
-    if (target !== active.target || action !== active.action || toolId !== active.toolId) {
+    if (action !== active.action || toolId !== active.toolId) {
       throw new Error("workflow execution target, action, or tool differs from the active admission");
     }
     if (input.engagementId && input.engagementId !== active.authority.engagementId) {
@@ -3093,8 +3171,33 @@ export function reserveWorkflowExecution(id, input, options = {}) {
     )) {
       throw new Error("workflow planned test already has an execution reservation");
     }
-    recheckAdmission(paths, active);
     const envelope = executionEnvelope(input, active);
+    let labCampaign = null;
+    if (input.labCampaign) {
+      labCampaign = verifyLabCampaignWorkflowReservation(input.labCampaign, {
+        engagementId: active.authority.engagementId,
+        workflowInstanceId: projection.instanceId,
+        phaseId: active.phaseId,
+        phaseAttemptId,
+        admissionSha256: active.admissionSha256,
+        authorityReceiptSha256: active.authority.receiptSha256,
+        target,
+        targetSha256: sha256(Buffer.from(target)),
+        action,
+        toolId,
+        envelope,
+        requireUnbound: true
+      }, { paths });
+      if (Object.values(projection.executionReservations).some((reservation) =>
+        reservation.labCampaign?.capabilityId === labCampaign.capabilityId ||
+        reservation.labCampaign?.capabilitySha256 === labCampaign.capabilitySha256
+      )) {
+        throw new Error("workflow dedicated-lab capability already has an execution reservation");
+      }
+    } else if (target !== active.target) {
+      throw new Error("workflow execution target, action, or tool differs from the active admission");
+    }
+    recheckAdmission(paths, active);
     for (const field of ["maxMinutes", "maxRequests", "maxRatePerSecond", "maxParallel", "maxInputTokens", "maxOutputTokens", "maxTotalTokens", "maxEvidenceBytes", "maxSpend"]) {
       if (envelope[field] > Number(active.envelope[field])) throw new Error(`workflow execution ${field} exceeds the active admission`);
     }
@@ -3127,6 +3230,7 @@ export function reserveWorkflowExecution(id, input, options = {}) {
         toolMappingSha256: active.toolMappingSha256,
         admissionSha256: active.admissionSha256,
         authorityReceiptSha256: active.authority.receiptSha256,
+        labCampaign,
         journalHeadAtReservationSha256: projection.journalHeadSha256,
         executionEpochSha256: active.executionEpochSha256,
         envelope
@@ -3156,6 +3260,23 @@ export function claimWorkflowExecution(id, input, options = {}) {
     const active = projection.activePhase;
     if (!active || active.attemptId !== reservation.phaseAttemptId || active.executionEpochSha256 !== reservation.executionEpochSha256) {
       throw new Error("workflow execution reservation no longer binds the active phase epoch");
+    }
+    if (reservation.labCampaign) {
+      verifyLabCampaignWorkflowReservation(reservation.labCampaign, {
+        engagementId: reservation.engagementId,
+        workflowInstanceId: projection.instanceId,
+        phaseId: reservation.phaseId,
+        phaseAttemptId: reservation.phaseAttemptId,
+        admissionSha256: reservation.admissionSha256,
+        authorityReceiptSha256: reservation.authorityReceiptSha256,
+        target: reservation.labCampaign.requestUrl,
+        targetSha256: reservation.targetSha256,
+        action: reservation.action,
+        toolId: reservation.toolId,
+        envelope: reservation.envelope,
+        manifestId: reservation.manifestId,
+        manifestSha256: input.manifestSha256
+      }, { paths });
     }
     recheckAdmission(paths, active);
     return {
@@ -3207,6 +3328,23 @@ export function checkWorkflowExecution(id, input, options = {}) {
     if (input.target && sha256(Buffer.from(input.target)) !== reservation.targetSha256) throw new Error("workflow execution target changed");
     if (input.action && input.action !== reservation.action) throw new Error("workflow execution action changed");
     if (input.toolId && input.toolId !== reservation.toolId) throw new Error("workflow execution tool changed");
+    if (reservation.labCampaign) {
+      verifyLabCampaignWorkflowReservation(reservation.labCampaign, {
+        engagementId: reservation.engagementId,
+        workflowInstanceId: loaded.projection.instanceId,
+        phaseId: reservation.phaseId,
+        phaseAttemptId: reservation.phaseAttemptId,
+        admissionSha256: reservation.admissionSha256,
+        authorityReceiptSha256: reservation.authorityReceiptSha256,
+        target: reservation.labCampaign.requestUrl,
+        targetSha256: reservation.targetSha256,
+        action: reservation.action,
+        toolId: reservation.toolId,
+        envelope: reservation.envelope,
+        manifestId: reservation.manifestId,
+        manifestSha256: reservation.manifestSha256 || input.manifestSha256 || undefined
+      }, { paths });
+    }
     for (const [field, actual] of [
       ["definitionSha256", loaded.projection.definition.sha256],
       ["admissionSha256", reservation.admissionSha256],

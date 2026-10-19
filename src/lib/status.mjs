@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { loadConfig } from "./config.mjs";
+import { readCtfPilotStatus } from "./ctf-pilot.mjs";
 import { caseFleetStatus, openCaseRuntime } from "./cases.mjs";
 import { executionStatus } from "./executions.mjs";
 import { readJsonLines } from "./jsonl.mjs";
@@ -193,8 +194,12 @@ async function buildRuntimeStatus(paths, options = {}) {
   const engagementProjection = options.includeEngagements === false
     ? omittedEngagementProjection()
     : boundedEngagements(paths);
+  const ctfPilot = readCtfPilotStatus({ paths, now: observedAt });
   return {
-    at: observedAt.toISOString(),
+    // Capture the enclosing snapshot after all component reads. A worker may
+    // publish while status is being assembled; using the start time would make
+    // that legitimate component update appear to come from the future.
+    at: options.now === undefined ? new Date().toISOString() : observedAt.toISOString(),
     repository: paths.repo,
     gate_home: paths.home,
     events: events.slice(-30).reverse(),
@@ -206,6 +211,7 @@ async function buildRuntimeStatus(paths, options = {}) {
     engagementScan: engagementProjection.scan,
     execution: executionStatus({ paths }),
     workflows: workflowFleetStatus({ paths, runtimeEnsured: true }),
+    ctfPilot,
     offlineAnalysis: offlineAnalysisStatus({ paths }),
     projects: includeShared ? projectRegistryStatus({ paths }) : [],
     tokens,

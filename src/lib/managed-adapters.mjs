@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { compileDnsxDomainObserve } from "../adapters/dnsx-domain-observe.mjs";
+import { compileHttpxUrlFetch } from "../adapters/httpx-url-fetch.mjs";
 import { compileHttpxUrlObserve } from "../adapters/httpx-url-observe.mjs";
 import { readJson } from "./config.mjs";
 import { runtimePaths } from "./paths.mjs";
@@ -25,6 +26,11 @@ const COMPILERS = Object.freeze({
     compile: compileHttpxUrlObserve,
     source: "src/adapters/httpx-url-observe.mjs",
     sourceSha256: "ba1d336153866bf71f061d392ac6cd0ab57960a6fbf1066030ac52c5bb99e5ae"
+  }),
+  "httpx-exact-url-fetch-v1": Object.freeze({
+    compile: compileHttpxUrlFetch,
+    source: "src/adapters/httpx-url-fetch.mjs",
+    sourceSha256: "deaafcb24df1fa3b88b5b48b3d6ab077cf6153c1bca8e8ce7a3d8ca3bf7417e8"
   })
 });
 
@@ -310,6 +316,41 @@ export function validateManagedAdapterOutput(manifest, bytes, options = {}) {
         record.host_ip !== checked.binding.operation.allowedIp) {
       return { ok: false, status: "invalid", reason: "output-validation-failed", records: 1 };
     }
+  } else if (checked.adapter.id === "httpx-url-fetch") {
+    const observed = [record.url, record.input].filter((value) => typeof value === "string");
+    const operation = checked.binding.operation;
+    const bodyPresent = Object.hasOwn(record, "body");
+    const bodyValid = !bodyPresent || typeof record.body === "string";
+    const bodyBytes = bodyPresent && bodyValid ? Buffer.byteLength(record.body, "utf8") : 0;
+    const contentLengthValid = Number.isSafeInteger(record.content_length) && record.content_length >= 0;
+    const statusValid = Number.isSafeInteger(record.status_code) && record.status_code >= 100 && record.status_code <= 599;
+    const methodValid = record.method === operation.method;
+    const bodySemanticsValid = operation.method === "HEAD"
+      ? !bodyPresent || (bodyValid && record.body.length === 0)
+      : (bodyPresent && bodyValid) || record.content_length === 0 || new Set([204, 205, 304]).has(record.status_code);
+    if (!observed.includes(checked.compiled.controls.dialUrl) ||
+        record.host_ip !== operation.allowedIp || !methodValid || !statusValid || !contentLengthValid ||
+        !bodyValid || !bodySemanticsValid || bodyBytes > operation.maxResponseBytes) {
+      return { ok: false, status: "invalid", reason: "output-validation-failed", records: 1 };
+    }
+    return {
+      ok: true,
+      status: "observed",
+      reason: null,
+      records: 1,
+      metrics: {
+        requestCount: 1,
+        method: operation.method,
+        statusCode: record.status_code,
+        responseBodyBytes: bodyBytes,
+        responseContentLength: record.content_length,
+        rateLimitPerSecond: checked.compiled.controls.ratePerSecond,
+        redirectsFollowed: 0,
+        redirectStatus: "not-followed",
+        retries: 0,
+        backoffStatus: "disabled-no-retries"
+      }
+    };
   } else {
     return { ok: false, status: "invalid", reason: "output-validation-failed", records: 1 };
   }

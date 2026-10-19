@@ -207,11 +207,13 @@ function fleetProjection(revision = 1) {
     discoveredAtLeast: false, omittedAtLeast: false, complete: false, truncated: true
   };
   return {
-    apiVersion: "gate.remote-fleet/v1",
+    apiVersion: "gate.remote-fleet/v2",
     sessionRevision: SESSION_REVISION,
     revision,
+    selectionEpoch: "0".repeat(32),
     observedAt: null,
     receivedAt: new Date().toISOString(),
+    validUntil: new Date(Date.now() + 15_000).toISOString(),
     connection: "unavailable",
     sourceFreshness: "unavailable",
     coverage: {
@@ -223,7 +225,7 @@ function fleetProjection(revision = 1) {
       campaigns: { ...metric }, active: { ...metric }, waiting: { ...metric }, attention: { ...metric },
       profileAnswers: { answered: null, total: null, precision: "unavailable" },
       runningExecutions: { ...metric }, activeWorkflows: { ...metric }, runningAnalyses: { ...metric },
-      setupBlockers: { ...metric }, campaignTokens: { availability: "unavailable", total: null },
+      setupBlockers: { ...metric }, blockers: { ...metric }, campaignTokens: { availability: "unavailable", total: null },
       hostTokens: {
         availability: "unavailable", input: null, cachedInput: null, output: null, total: null,
         cost: { availability: "unavailable", amountMicros: null, unit: null }
@@ -231,6 +233,31 @@ function fleetProjection(revision = 1) {
     },
     campaigns: []
   };
+}
+
+function connectedFleetProjection(revision = 1) {
+  const fleet = fleetProjection(revision);
+  const exact = { value: 0, precision: "exact" };
+  const scan = {
+    availability: "available", discovered: 0, scanned: 0, omitted: 0, invalid: 0,
+    discoveredAtLeast: false, omittedAtLeast: false, complete: true, truncated: false
+  };
+  fleet.observedAt = fleet.receivedAt;
+  fleet.connection = "connected";
+  fleet.sourceFreshness = "current";
+  fleet.coverage = {
+    state: "exact",
+    cases: { ...scan },
+    profiles: { ...scan, visible: 0, representedByCases: 0 }
+  };
+  fleet.summary = {
+    campaigns: { ...exact }, active: { ...exact }, waiting: { ...exact }, attention: { ...exact },
+    profileAnswers: { answered: 0, total: 0, precision: "exact" },
+    runningExecutions: { ...exact }, activeWorkflows: { ...exact }, runningAnalyses: { ...exact },
+    setupBlockers: { ...exact }, blockers: { ...exact }, campaignTokens: { availability: "exact", total: 0 },
+    hostTokens: fleet.summary.hostTokens
+  };
+  return fleet;
 }
 
 function activity() {
@@ -1096,6 +1123,55 @@ test("runner projections are normalized before authenticated browser reads", asy
   const stale = stateProjection(0);
   stale.sessionRevision = SESSION_REVISION - 1;
   assert.equal((await runnerPost(fixture, "/api/runner/v1/state", stale)).status, 409);
+});
+
+test("coordinator preserves current fleet telemetry beside an explicit offline conversation state", async (t) => {
+  const fixture = await makeFixture(t);
+  const auth = await login(fixture);
+  const state = stateProjection();
+  state.codex.state = "offline";
+  const fleet = connectedFleetProjection();
+  assert.equal((await runnerPost(fixture, "/api/runner/v1/state", state)).status, 200);
+  assert.equal((await runnerPost(fixture, "/api/runner/v1/fleet", fleet)).status, 200);
+
+  const [visibleState, visibleFleet] = await Promise.all(["state", "fleet"].map(async (route) => {
+    const result = await request({
+      port: fixture.started.port,
+      pathname: `/api/cockpit/v1/${route}`,
+      headers: externalHeaders({ Cookie: auth.cookie })
+    });
+    assert.equal(result.status, 200, result.body);
+    return JSON.parse(result.body);
+  }));
+  assert.equal(visibleState.runner.state, "connected");
+  assert.equal(visibleState.codex.state, "offline");
+  assert.equal(visibleFleet.connection, "connected");
+  assert.equal(visibleFleet.summary.active.value, 0);
+  assert.equal(visibleFleet.summary.active.precision, "exact");
+});
+
+test("remote fleet upload and reads expire at the exact fleet deadline", async (t) => {
+  let now = Date.now();
+  const fixture = await makeFixture(t, { clock: () => now });
+  const auth = await login(fixture);
+  const fleet = fleetProjection();
+  fleet.receivedAt = new Date(now).toISOString();
+  fleet.validUntil = new Date(now + 15_000).toISOString();
+  assert.equal((await runnerPost(fixture, "/api/runner/v1/fleet", fleet)).status, 200);
+
+  now += 15_000;
+  const expiredRead = await request({
+    port: fixture.started.port,
+    pathname: "/api/cockpit/v1/fleet",
+    headers: externalHeaders({ Cookie: auth.cookie })
+  });
+  assert.equal(expiredRead.status, 503);
+  assert.equal(JSON.parse(expiredRead.body).error.code, "projection-expired");
+
+  const expiredUpload = fleetProjection(2);
+  expiredUpload.receivedAt = new Date(now - 10_000).toISOString();
+  expiredUpload.validUntil = new Date(now).toISOString();
+  assert.equal((await runnerPost(fixture, "/api/runner/v1/fleet", expiredUpload)).status, 409);
 });
 
 test("SSE replays durable monotonic events and emits an explicit resync for an unsatisfiable cursor", async (t) => {

@@ -1,0 +1,517 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/program-source-snapshot.schema.json",
+  "title": "GATE private program source snapshot",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "apiVersion",
+    "kind",
+    "metadata",
+    "source",
+    "acquisition",
+    "projection",
+    "storage",
+    "predecessor"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "https://gate.local/schemas/program-source-snapshot.schema.json"
+    },
+    "apiVersion": {
+      "const": "gate.dev/program-source-snapshot/v1"
+    },
+    "kind": {
+      "const": "ProgramSourceSnapshot"
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "programId",
+        "sourceId",
+        "revision",
+        "capturedAt",
+        "contentSha256",
+        "projectionSha256",
+        "snapshotSha256",
+        "bodyBytes"
+      ],
+      "properties": {
+        "programId": {
+          "$ref": "#/$defs/programId"
+        },
+        "sourceId": {
+          "$ref": "#/$defs/sourceId"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 999999
+        },
+        "capturedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "contentSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "projectionSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "snapshotSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "bodyBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2097152
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "type",
+        "title",
+        "reference",
+        "contentSha256",
+        "observedAt",
+        "claimState",
+        "notes"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/sourceId"
+        },
+        "type": {
+          "enum": [
+            "operator-statement",
+            "program-rules",
+            "safe-harbor",
+            "scope-list",
+            "contract",
+            "platform-page",
+            "architecture",
+            "account-instructions",
+            "other"
+          ]
+        },
+        "title": {
+          "$ref": "#/$defs/oneLine"
+        },
+        "reference": {
+          "$ref": "#/$defs/reference"
+        },
+        "contentSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "observedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "claimState": {
+          "const": "observed"
+        },
+        "notes": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/text"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "acquisition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "requestedUrl",
+        "finalUrl",
+        "redirects",
+        "httpStatus",
+        "mediaType",
+        "contentEncoding"
+      ],
+      "properties": {
+        "method": {
+          "enum": [
+            "local-file",
+            "public-url"
+          ]
+        },
+        "requestedUrl": {
+          "$ref": "#/$defs/nullableHttpsUrl"
+        },
+        "finalUrl": {
+          "$ref": "#/$defs/nullableHttpsUrl"
+        },
+        "redirects": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "httpStatus": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 200,
+              "maximum": 299
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mediaType": {
+          "$ref": "#/$defs/mediaType"
+        },
+        "contentEncoding": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/oneLine"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "local-file"
+              }
+            },
+            "required": [
+              "method"
+            ]
+          },
+          "then": {
+            "properties": {
+              "requestedUrl": {
+                "type": "null"
+              },
+              "finalUrl": {
+                "type": "null"
+              },
+              "redirects": {
+                "const": 0
+              },
+              "httpStatus": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "public-url"
+              }
+            },
+            "required": [
+              "method"
+            ]
+          },
+          "then": {
+            "properties": {
+              "requestedUrl": {
+                "type": "string"
+              },
+              "finalUrl": {
+                "type": "string"
+              },
+              "httpStatus": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "projection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "rules"
+      ],
+      "properties": {
+        "scope": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "$ref": "#/$defs/scopeClaim"
+          }
+        },
+        "rules": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "$ref": "#/$defs/ruleClaim"
+          }
+        }
+      }
+    },
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bodyRef"
+      ],
+      "properties": {
+        "bodyRef": {
+          "type": "string",
+          "pattern": "^private://program-sources/[a-z][a-z0-9-]{1,62}/[a-z][a-z0-9-]{1,62}/bodies/[a-f0-9]{64}\\.bin$"
+        }
+      }
+    },
+    "predecessor": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "revision",
+            "snapshotSha256",
+            "contentSha256",
+            "projectionSha256"
+          ],
+          "properties": {
+            "revision": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 999999
+            },
+            "snapshotSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "contentSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "projectionSha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "programId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,62}$"
+    },
+    "sourceId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,62}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "oneLine": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "pattern": "^[^\\r\\n\\u0000-\\u001F\\u007F-\\u009F]+$"
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 10000,
+      "pattern": "^(?![\\s\\S]*[\\u0000-\\u0008\\u000B-\\u001F\\u007F-\\u009F\\u061C\\u200B\\u200E\\u200F\\u2028-\\u202E\\u2060-\\u206F\\uFEFF\\u{E0000}-\\u{E007F}])[\\s\\S]+$"
+    },
+    "reference": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000,
+      "pattern": "^(?:https://|private://)[^\\s]+$"
+    },
+    "nullableHttpsUrl": {
+      "oneOf": [
+        {
+          "type": "string",
+          "format": "uri",
+          "maxLength": 2000,
+          "pattern": "^https://"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "mediaType": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 200,
+      "pattern": "^[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+$"
+    },
+    "claimState": {
+      "enum": [
+        "observed",
+        "inferred",
+        "unverified"
+      ]
+    },
+    "disposition": {
+      "enum": [
+        "allowed",
+        "denied",
+        "conditional",
+        "unknown"
+      ]
+    },
+    "conditionList": {
+      "type": "array",
+      "maxItems": 50,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/text"
+      }
+    },
+    "locator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "value"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "json-pointer",
+            "line-range",
+            "section",
+            "other"
+          ]
+        },
+        "value": {
+          "$ref": "#/$defs/oneLine"
+        }
+      }
+    },
+    "selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "value"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "domain",
+            "ip",
+            "cidr",
+            "url",
+            "application",
+            "account",
+            "repository",
+            "device",
+            "path"
+          ]
+        },
+        "value": {
+          "$ref": "#/$defs/oneLine"
+        }
+      }
+    },
+    "scopeClaim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "selector",
+        "disposition",
+        "claimState",
+        "conditions",
+        "locator"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/sourceId"
+        },
+        "selector": {
+          "$ref": "#/$defs/selector"
+        },
+        "disposition": {
+          "$ref": "#/$defs/disposition"
+        },
+        "claimState": {
+          "$ref": "#/$defs/claimState"
+        },
+        "conditions": {
+          "$ref": "#/$defs/conditionList"
+        },
+        "locator": {
+          "$ref": "#/$defs/locator"
+        }
+      }
+    },
+    "ruleClaim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "category",
+        "disposition",
+        "claimState",
+        "summary",
+        "conditions",
+        "locator"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/sourceId"
+        },
+        "category": {
+          "enum": [
+            "authorization",
+            "safe-harbor",
+            "allowed-testing",
+            "prohibited-testing",
+            "automation",
+            "rate-limit",
+            "account",
+            "availability",
+            "data-handling",
+            "reporting",
+            "disclosure",
+            "reward",
+            "other"
+          ]
+        },
+        "disposition": {
+          "$ref": "#/$defs/disposition"
+        },
+        "claimState": {
+          "$ref": "#/$defs/claimState"
+        },
+        "summary": {
+          "$ref": "#/$defs/text"
+        },
+        "conditions": {
+          "$ref": "#/$defs/conditionList"
+        },
+        "locator": {
+          "$ref": "#/$defs/locator"
+        }
+      }
+    }
+  }
+}

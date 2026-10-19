@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gate.local/schemas/campaign-worker-state.schema.json",
+  "title": "GATE private campaign worker heartbeat",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "apiVersion",
+    "kind",
+    "caseId",
+    "campaignId",
+    "generation",
+    "controller",
+    "serviceState",
+    "startedAt",
+    "heartbeatAt",
+    "validUntil",
+    "campaign",
+    "counters",
+    "failureCategory"
+  ],
+  "properties": {
+    "$schema": { "const": "https://gate.local/schemas/campaign-worker-state.schema.json" },
+    "apiVersion": { "const": "gate.dev/campaign-worker-state/v1" },
+    "kind": { "const": "CampaignWorkerState" },
+    "caseId": { "$ref": "#/$defs/id" },
+    "campaignId": { "$ref": "#/$defs/id" },
+    "generation": { "type": "string", "pattern": "^[a-f0-9]{32}$" },
+    "controller": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pid", "bootId", "startTimeTicks"],
+      "properties": {
+        "pid": { "type": "integer", "minimum": 1 },
+        "bootId": { "type": "string", "pattern": "^[a-f0-9-]{36}$" },
+        "startTimeTicks": { "type": "string", "pattern": "^[0-9]+$" }
+      }
+    },
+    "serviceState": { "enum": ["starting", "running", "waiting", "stopping", "failed"] },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "heartbeatAt": { "type": "string", "format": "date-time" },
+    "validUntil": { "type": "string", "format": "date-time" },
+    "campaign": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "journal", "queue"],
+      "properties": {
+        "status": { "enum": ["paused", "running", "blocked", "stopped", "completed"] },
+        "journal": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sequence", "headSha256"],
+          "properties": {
+            "sequence": { "type": "integer", "minimum": 1 },
+            "headSha256": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        "queue": { "$ref": "#/$defs/queue" }
+      }
+    },
+    "counters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cycles", "runNextCalls", "recoveries", "snapshotRetries", "heartbeatWriteFailures", "pilotUpdates", "pilotSemanticUpdates", "pilotUpdateFailures"],
+      "properties": {
+        "cycles": { "type": "integer", "minimum": 0 },
+        "runNextCalls": { "type": "integer", "minimum": 0 },
+        "recoveries": { "type": "integer", "minimum": 0 },
+        "snapshotRetries": { "type": "integer", "minimum": 0 },
+        "heartbeatWriteFailures": { "type": "integer", "minimum": 0 },
+        "pilotUpdates": { "type": "integer", "minimum": 0 },
+        "pilotSemanticUpdates": { "type": "integer", "minimum": 0 },
+        "pilotUpdateFailures": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "failureCategory": {
+      "type": ["string", "null"],
+      "enum": [null, "campaign-state", "worker-lease", "heartbeat-write", "controller-error"]
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "queue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "queued", "running", "completed", "blocked", "failed"],
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "queued": { "type": "integer", "minimum": 0 },
+        "running": { "type": "integer", "minimum": 0 },
+        "completed": { "type": "integer", "minimum": 0 },
+        "blocked": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

@@ -150,6 +150,8 @@ The target-specific Program Profile remains in GATE's shared private profile reg
 
 For parallel programs, follow the [campaign acceptance and GATE improvement checklist](docs/campaign-acceptance.md). It verifies that profile intake, case state, live activity, resources, and learning stay correctly attributed while reusable improvements move through a separate sanitized and reviewed path.
 
+For an intentionally vulnerable CTF pilot, use the [program source snapshot](docs/program-source-import.md) guide to retain and bind the exact published rules, the [campaign controller](docs/campaign-controller.md) guide to create and supervise the private queue, and the [CTF pilot baseline](docs/ctf-pilot-baseline.md) to publish the independent Solving, Learning, and Cockpit measurements. The [dedicated-lab campaign authority](docs/lab-campaign-authority.md) is the bounded active HTTP path. Its worker does not yet review results or invent the next hypothesis, so each adaptive step still needs an operator or agent to record the prior result, review the test, and prepare the next typed job.
+
 Setup and shared-registry commands reject `--case`, `GATE_CASE`, and `--unassigned`. This includes `bootstrap`, `doctor`, `validate`, `up`, project, case, workspace, upstream, tool, publication, Program Profile intake, and `analysis capability`. Run those from a separate terminal with `GATE_CASE` unset, as the cockpit example does. Plain `gate status` aggregates the bounded case fleet, `gate --unassigned status` reads only base state, and `gate --case ID status` reads one case. Events and private learning without a selector also use base state.
 
 This directory boundary prevents accidental state mixing between programs. Processes still share the same user, host, credentials available to that user, kernel, and network. Network containment depends on the admitted adapter or execution environment. Case selection grants no target authority.
@@ -228,10 +230,7 @@ export GATE_CASE=example-web
 
 Complete `authorization-and-roe` and `target-and-architecture-map`. Before a target-contact phase can start, attach a reviewed workflow admission that binds the exact target, action, tool mapping, adapter, environment, destinations, limits, and all mandatory stops. See [Target-contact admission and execution](docs/pentest-workflow.md#target-contact-admission-and-execution).
 
-This release has two narrow reviewed active adapters:
-
-- DNSx 1.3.1: one exact-domain `A` observation through one explicit resolver.
-- HTTPx 1.12.0: one exact-URL `GET`, dialled through one operator-approved literal IP while preserving the approved Host header and HTTPS SNI.
+The [managed active adapter reference](docs/security-tooling.md#managed-core-runtime) defines the available DNSx and HTTPx operations and their limits. The examples below cover DNS observation and metadata-only HTTP observation; the [workflow execution guide](docs/pentest-workflow.md#target-contact-admission-and-execution) also covers bounded HTTP GET/HEAD fetches.
 
 After the matching `active-surface-validation` phase is admitted, retain its `activePhase.attemptId`, `activePhase.toolId`, and the workflow `contract.sha256` from `workflow status`. Before creating a manifest, consult the exact learning projection for that workflow contract, phase, and admitted tool. This DNSx example uses the default consultation limits that `workflow test plan` will recompute:
 
@@ -258,7 +257,7 @@ chmod 600 "$GATE_HOME/input/active-surface-learning.json"
   --limit 8 --max-bytes 4096 --json
 ```
 
-Replace the example workflow digest with `contract.sha256`. If the admission uses HTTPx, replace the tool reference with `httpx` and rewrite the hypothesis, method, and signals for that exact HTTP request. The plan's applicability must equal this runtime-derived workflow, phase, and optional tool set; v0.1 rejects every extra reference. Copy the complete applicability array, returned `selected[].id` values in order, `ledgerHeadSha256`, and `projectionSha256` into the first private test plan:
+Replace the example workflow digest with `contract.sha256`. If the admission uses HTTPx, replace the tool reference with `httpx` and rewrite the hypothesis, method, and signals for that exact HTTP request. The plan's applicability must equal this runtime-derived workflow, phase, and optional tool set; v0.2 rejects every extra reference. Copy the complete applicability array, returned `selected[].id` values in order, `ledgerHeadSha256`, and `projectionSha256` into the first private test plan:
 
 ```bash
 cat >"$GATE_HOME/input/active-surface-test-plan.json" <<'JSON'
@@ -314,7 +313,7 @@ Replace the attempt ID, applicability values, selected learning IDs, and consult
   --tokens 1000 --evidence-bytes 2097152 --json
 ```
 
-Review the immutable manifest and execute it only with its exact returned confirmation through `gate engagement exec`. DNSx and HTTPx retain broader catalog capabilities, but these adapters admit only the operations above. The other five managed core runtimes remain available for verified planning while their active adapters are added.
+Review the immutable manifest and execute it only with its exact returned confirmation through `gate engagement exec`. Broader catalog capabilities remain subject to the [managed active adapter boundary](docs/security-tooling.md#managed-core-runtime).
 
 ```bash
 ./bin/gate.mjs engagement exec ENGAGEMENT_ID \
@@ -404,7 +403,7 @@ chmod 600 "$GATE_HOME/input/learning-consult.json"
   --limit 8 --max-bytes 4096 --json
 ```
 
-Consultation returns only public, sanitized, active lessons with that exact applicability set. Replace the example workflow digest with `contract.sha256` from `workflow status`. Every test plan's applicability must equal exactly one workflow reference with its current version and digest, exactly one reference to the active phase, and the exact admitted tool reference when the active phase has one; v0.1 accepts no additional references. Retain the applicability array, `selected[].id`, `ledgerHeadSha256`, and `projectionSha256` together. Copy the selected IDs in their returned order and both returned digests into the plan even when `selected` is empty. `workflow test plan` recomputes this default 8-record, 4096-byte consultation and rejects stale values, unresolved conflicts, or any omitted applicable lesson.
+Consultation returns only public, sanitized, active lessons with that exact applicability set. Replace the example workflow digest with `contract.sha256` from `workflow status`. Every test plan's applicability must equal exactly one workflow reference with its current version and digest, exactly one reference to the active phase, and the exact admitted tool reference when the active phase has one; v0.2 accepts no additional references. Retain the applicability array, `selected[].id`, `ledgerHeadSha256`, and `projectionSha256` together. Copy the selected IDs in their returned order and both returned digests into the plan even when `selected` is empty. `workflow test plan` recomputes this default 8-record, 4096-byte consultation and rejects stale values, unresolved conflicts, or any omitted applicable lesson.
 
 Create the first private test plan for the active phase attempt:
 
@@ -534,7 +533,7 @@ chmod 600 "$GATE_HOME/input/learning-promotion.json"
   --file "$GATE_HOME/input/learning-promotion.json" --json
 ```
 
-Replace every example ID, digest, evidence reference, commit, and review attestation with its real value. `review.candidateSha256` must equal the `learn cycle` receipt, and `review.headSha` must be the full 40-character lowercase Git head reported by the review. Promotion creates a new active record that supersedes the candidate and preserves its cycle, applicability, cause, change, configuration references, and replacement lineage exactly. Each replacement target must match the promoted record's sensitivity as well as its domain and exact applicability. Promotion rejects an attempt to choose or alter `replaces`, and a record cannot both replace and conflict with the same lesson. GATE validates the candidate binding and field shapes, but `headSha` and the external attestation remain locally asserted provenance: v0.1 does not invoke No Mistakes, verify the commit against a repository, or cryptographically verify the review's authenticity. If the new record contradicts another existing effective lesson without replacing it, add that learning ID to the optional `conflictsWith` array; otherwise the records coexist. A later consult excludes and reports explicitly conflicting records, excludes replaced ancestors, and prefers the newest effective compatible guidance. The default projection is capped at eight records and 4096 bytes, and consultation itself makes no model call. Tokens are used only when a caller places that bounded projection in model context.
+Replace every example ID, digest, evidence reference, commit, and review attestation with its real value. `review.candidateSha256` must equal the `learn cycle` receipt, and `review.headSha` must be the full 40-character lowercase Git head reported by the review. Promotion creates a new active record that supersedes the candidate and preserves its cycle, applicability, cause, change, configuration references, and replacement lineage exactly. Each replacement target must match the promoted record's sensitivity as well as its domain and exact applicability. Promotion rejects an attempt to choose or alter `replaces`, and a record cannot both replace and conflict with the same lesson. GATE validates the candidate binding and field shapes, but `headSha` and the external attestation remain locally asserted provenance: v0.2 does not invoke No Mistakes, verify the commit against a repository, or cryptographically verify the review's authenticity. If the new record contradicts another existing effective lesson without replacing it, add that learning ID to the optional `conflictsWith` array; otherwise the records coexist. A later consult excludes and reports explicitly conflicting records, excludes replaced ancestors, and prefers the newest effective compatible guidance. The default projection is capped at eight records and 4096 bytes, and consultation itself makes no model call. Tokens are used only when a caller places that bounded projection in model context.
 
 The legacy `learn --cause ... --change ...` command remains available for a simple cause-and-change observation. Use private learning for target, client, credential, evidence, unpublished finding, or private-path details.
 

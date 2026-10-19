@@ -63,7 +63,7 @@
           "additionalProperties": false,
           "required": ["kind", "schemaVersion"],
           "properties": {
-            "kind": { "enum": ["dns-query", "http-get"] },
+            "kind": { "enum": ["dns-query", "http-get", "http-fetch"] },
             "schemaVersion": { "const": 1 }
           }
         },

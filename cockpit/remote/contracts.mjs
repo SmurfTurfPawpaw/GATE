@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { unavailablePilotProjection, validatePilotProjection } from "../assets/model.js";
 
 export const REMOTE_BRIDGE_VERSION = "gate.remote-cockpit-bridge/v1";
 export const REMOTE_MESSAGE_VERSION = "gate.remote-message-request/v1";
@@ -10,7 +11,7 @@ export const REMOTE_COMMAND_STATUS_REQUEST_VERSION = "gate.remote-command-status
 export const REMOTE_COMMAND_STATUS_RESPONSE_VERSION = "gate.remote-command-status-response/v1";
 export const REMOTE_ACTIVITY_EVENT_VERSION = "gate.remote-cockpit-event/v1";
 export const REMOTE_STATE_VERSION = "gate.remote-cockpit-state/v1";
-export const REMOTE_FLEET_VERSION = "gate.remote-fleet/v1";
+export const REMOTE_FLEET_VERSION = "gate.remote-fleet/v2";
 export const REMOTE_EVENTS_PAGE_VERSION = "gate.remote-events-page/v1";
 
 export const MAX_REMOTE_MESSAGE_CHARACTERS = 1_000;
@@ -69,6 +70,8 @@ const FLEET_STAGES = new Set([
 const FLEET_STATES = new Set(["queued", "running", "waiting", "blocked", "succeeded", "failed", "cancelled", "unknown", "idle"]);
 const FLEET_ATTENTION = new Set(["steady", "watch", "response-needed"]);
 const FLEET_FRESHNESS = new Set(["current", "delayed", "unknown"]);
+const FLEET_EVENT_CATEGORIES = new Set(["campaign", "workflow", "execution", "test", "evidence", "learning", "analysis", "tool", "operator", "system", "other"]);
+const FLEET_EVENT_STATUSES = new Set(["queued", "running", "waiting", "blocked", "succeeded", "failed", "cancelled", "unknown"]);
 const FLEET_TOKEN_AVAILABILITY = new Set(["exact", "estimated", "partial", "unavailable"]);
 const TOKEN_PROVENANCE = new Set(["exact", "estimated", "unavailable"]);
 const MAX_SAFE_SEQUENCE = Number.MAX_SAFE_INTEGER;
@@ -511,10 +514,11 @@ export function normalizeRemoteStateProjection(value) {
 
 export function normalizeRemoteFleetProjection(value) {
   if (!exactKeys(value, [
-    "apiVersion", "sessionRevision", "revision", "observedAt", "receivedAt", "connection", "sourceFreshness",
+    "apiVersion", "sessionRevision", "revision", "selectionEpoch", "observedAt", "receivedAt", "validUntil", "connection", "sourceFreshness",
     "coverage", "summary", "campaigns"
   ]) || value.apiVersion !== REMOTE_FLEET_VERSION
       || !boundedInteger(value.revision, 1, 2_147_483_647)
+      || typeof value.selectionEpoch !== "string" || !/^[a-f0-9]{32}$/u.test(value.selectionEpoch)
       || !FLEET_CONNECTION.has(value.connection) || !FLEET_SOURCE_FRESHNESS.has(value.sourceFreshness)) {
     fail(400, "fleet-projection-invalid", "The remote fleet projection is invalid.");
   }
@@ -522,8 +526,11 @@ export function normalizeRemoteFleetProjection(value) {
     ? null
     : normalizeTimestamp(value.observedAt, "fleet-projection-invalid", "fleet observation timestamp");
   const receivedAt = normalizeTimestamp(value.receivedAt, "fleet-projection-invalid", "fleet receipt timestamp");
+  const validUntil = normalizeTimestamp(value.validUntil, "fleet-projection-invalid", "fleet expiry timestamp");
   if ((value.connection === "unavailable") !== (observedAt === null)
-      || (observedAt !== null && Date.parse(observedAt) > Date.parse(receivedAt) + 300_000)) {
+      || (observedAt !== null && Date.parse(observedAt) > Date.parse(receivedAt))
+      || Date.parse(validUntil) <= Date.parse(receivedAt)
+      || Date.parse(validUntil) - Date.parse(receivedAt) > 15_000) {
     fail(400, "fleet-projection-invalid", "The remote fleet projection is invalid.");
   }
 
@@ -581,10 +588,10 @@ export function normalizeRemoteFleetProjection(value) {
   const profiles = scan(value.coverage.profiles, true);
 
   const metricKeys = ["campaigns", "active", "waiting", "attention", "runningExecutions", "activeWorkflows",
-    "runningAnalyses", "setupBlockers"];
+    "runningAnalyses", "setupBlockers", "blockers"];
   if (!exactKeys(value.summary, [
     "campaigns", "active", "waiting", "attention", "profileAnswers", "runningExecutions", "activeWorkflows",
-    "runningAnalyses", "setupBlockers", "campaignTokens", "hostTokens"
+    "runningAnalyses", "setupBlockers", "blockers", "campaignTokens", "hostTokens"
   ])) invalid();
   const summary = Object.create(null);
   for (const key of metricKeys) summary[key] = metric(value.summary[key]);
@@ -602,7 +609,8 @@ export function normalizeRemoteFleetProjection(value) {
   if (!Array.isArray(value.campaigns) || value.campaigns.length > 64) invalid();
   const aliases = new Set();
   const campaigns = value.campaigns.map((item) => {
-    if (!exactKeys(item, ["alias", "kind", "stage", "state", "progress", "attention", "freshness", "work", "tokens"])
+    const campaignKeys = ["alias", "kind", "stage", "state", "progress", "attention", "freshness", "work", "tokens", "pilot", "latestEvent"];
+    if (!(exactKeys(item, campaignKeys) || exactKeys(item, campaignKeys.filter((key) => key !== "pilot")))
         || typeof item.alias !== "string" || !/^Campaign [1-9]\d{0,2}$/u.test(item.alias) || aliases.has(item.alias)
         || !FLEET_KINDS.has(item.kind) || !FLEET_STAGES.has(item.stage) || !FLEET_STATES.has(item.state)
         || !FLEET_ATTENTION.has(item.attention) || !FLEET_FRESHNESS.has(item.freshness)) invalid();
@@ -623,13 +631,29 @@ export function normalizeRemoteFleetProjection(value) {
     for (const key of ["runningExecutions", "activeWorkflows", "runningAnalyses", "setupBlockers"]) {
       work[key] = metric(item.work[key]);
     }
+    const pilot = item.pilot === undefined ? unavailablePilotProjection("missing") : validatePilotProjection(item.pilot);
+    if (!pilot || !exactKeys(item.latestEvent, ["availability", "category", "status", "at"])) invalid();
+    const latestEvent = item.latestEvent.availability === "unavailable"
+      && item.latestEvent.category === null && item.latestEvent.status === null && item.latestEvent.at === null
+      ? Object.freeze({ ...item.latestEvent })
+      : item.latestEvent.availability === "available" && FLEET_EVENT_CATEGORIES.has(item.latestEvent.category)
+        && FLEET_EVENT_STATUSES.has(item.latestEvent.status) && normalizeTimestamp(
+          item.latestEvent.at, "fleet-projection-invalid", "fleet event timestamp"
+        ) ? Object.freeze({ ...item.latestEvent }) : null;
+    if (!latestEvent || latestEvent.availability === "available" && observedAt !== null
+        && Date.parse(latestEvent.at) > Date.parse(observedAt)) invalid();
     return Object.freeze({
       ...item,
       progress,
       work: Object.freeze(work),
-      tokens: fleetTokens(item.tokens)
+      tokens: fleetTokens(item.tokens),
+      pilot,
+      latestEvent
     });
   });
+  if (value.connection === "connected" && campaigns.some((item) => item.pilot.availability === "available"
+      && (Date.parse(item.pilot.observedAt) > Date.parse(observedAt)
+        || Date.parse(validUntil) > Date.parse(item.pilot.validUntil)))) invalid();
   if (value.connection === "unavailable" && (value.coverage.state !== "unavailable" || campaigns.length !== 0
       || Object.values(summary).some((item) => item?.precision && item.precision !== "unavailable"))) invalid();
 
@@ -637,8 +661,10 @@ export function normalizeRemoteFleetProjection(value) {
     apiVersion: REMOTE_FLEET_VERSION,
     sessionRevision: sessionRevision(value.sessionRevision),
     revision: value.revision,
+    selectionEpoch: value.selectionEpoch,
     observedAt,
     receivedAt,
+    validUntil,
     connection: value.connection,
     sourceFreshness: value.sourceFreshness,
     coverage: Object.freeze({ state: value.coverage.state, cases, profiles }),

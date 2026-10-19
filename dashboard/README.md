@@ -47,7 +47,7 @@ The status response contains:
 - aggregate `state` and `counts` that fold projected case queued, running, waiting, blocked, failed, succeeded, and unknown counts into base-state counts; agent and task counts describe base/unassigned state only;
 - `agents` and `tasks` derived only from the latest valid base/unassigned GATE events, with process-scoped member, run, and task pseudonyms plus public component label, stage, status, effect class, and timestamps;
 - host/base `usage`, containing availability, source, nullable token counts, process-scoped session pseudonyms, and nullable context and bounded-loop budget measurements;
-- `budget`, the configured bounded-loop limit and its source; v0.1 does not measure budget consumption;
+- `budget`, the configured bounded-loop limit and its source; v0.2 does not measure budget consumption;
 - `telemetry`, containing source freshness and last-activity time;
 - `operator`, containing the bounded display name used in the case-terminal welcome;
 - `cases`, with at most 32 selected entries: opaque case ID, display name, status, singular program/project `binding`, lifecycle state and counts, telemetry, token availability, execution and workflow summaries, recent safe activity, per-case learning count, and explicit isolation labels;
@@ -195,9 +195,9 @@ Example reduced status fields:
 }
 ```
 
-Token availability is `exact`, `estimated`, or `unavailable`. When availability is `unavailable`, token counts are `null` even if an input source supplied zero placeholders. Context use and bounded-loop budget use are unavailable in v0.1; a configured window or limit may still be shown. `telemetry.lastActivityAt` describes observed source activity, while `at` is only the time the snapshot was generated.
+Token availability is `exact`, `estimated`, or `unavailable`. When availability is `unavailable`, token counts are `null` even if an input source supplied zero placeholders. Context use and bounded-loop budget use are unavailable in v0.2; a configured window or limit may still be shown. `telemetry.lastActivityAt` describes observed source activity, while `at` is only the time the snapshot was generated.
 
-The Campaign fleet keeps concurrent programs visually separate. It selects at most 32 cases from at most 1,024 discovered entries. `discoveredAtLeast`, `omittedAtLeast`, and `complete` remain beside the table so lower bounds and incomplete fleet coverage stay explicit; there is no fleet pagination in v0.1. Retrieve a known omitted case with `gate case show ID --json` and `gate --case ID status --summary --json`.
+The Campaign fleet keeps concurrent programs visually separate. It selects at most 32 cases from at most 1,024 discovered entries. `discoveredAtLeast`, `omittedAtLeast`, and `complete` remain beside the table so lower bounds and incomplete fleet coverage stay explicit; there is no fleet pagination in v0.2. Retrieve a known omitted case with `gate case show ID --json` and `gate --case ID status --summary --json`.
 
 Each row shows only allowlisted, comparable operational fields: campaign label and opaque ID, state, an explicitly active workflow phase and tool, last telemetry signal, categorized active work, projected attention signals, aggregate token availability, and per-case learning count. “Current phase” is never inferred from a recent event. Active work keeps workflow, supervised-run, and offline-analysis categories separate rather than adding them into a misleading total. Attention comes only from projected case, runtime, count, workflow-health, and engagement-scan states. Findings tracking is explicitly **Unavailable** because the observer contract does not project it.
 

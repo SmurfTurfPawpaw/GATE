@@ -1,6 +1,6 @@
 # Operator opinions for GATE
 
-Last reviewed: 16 October 2026 (Europe/Brussels)
+Last reviewed: 19 October 2026 (Europe/Brussels)
 
 This document records the operator's durable operating preferences for GATE. It explains how to choose between reasonable options when a task, policy, or implementation leaves room for judgment.
 
@@ -201,6 +201,14 @@ For work performed on the operator's machine, make the exact command or planned 
 When an interactive workflow needs operator input, especially while creating a Program Profile, use a concise interview with clear, clickable answer choices. Recommend a sensible option when the evidence supports one. Import, derive, or prefill exact values locally first, then ask the operator to type only a short unresolved value when the available choices cannot capture a material detail. Avoid broad prompts, repeated manual entry, and long open-ended answers.
 
 The operator should be able to accept a reviewed recommendation question by question or apply every currently supported unanswered recommendation in one action. Recommendations must distinguish durable operator preferences from source- or local-evidence proposals and direct human confirmations. Explicit answers take precedence, unsupported questions stay visible, and authorization confirmation and final attestation remain direct operator acts.
+
+### OP-WRK-011 — Optimize credit usage by default
+
+**Labels:** explicit · high confidence · current
+
+**Sources:** `SRC-GATE`
+
+Use the smallest model, agent, tool, and test effort that produces sufficient evidence for the current decision. Prefer focused regressions during implementation, one final release gate, and reused evidence that is still bound to unchanged inputs. Avoid overlapping agents, repeated full suites, duplicate research, and open-ended perfection work. Broaden validation when the change is cross-cutting, security- or recovery-sensitive, required by the release contract, or explicitly requested by the operator. Missing evidence must remain visible rather than being relabeled as a credit-saving success.
 
 ## Knowledge and synchronization
 
@@ -570,7 +578,7 @@ These are preferences that must be balanced explicitly rather than resolved by h
 
 These are a concise interpretation of the implementation gaps described in the [README's current limits](README.md#current-limits), which remains authoritative for current product status. They are not reasons to weaken the opinions:
 
-- GATE catalogues a broad security surface, but only a small managed core and two narrow active adapters are currently executable through reviewed paths.
+- GATE catalogues a broad security surface, but only a small managed core, three narrow active adapters, and one bounded dedicated-lab HTTP campaign authority are currently executable through reviewed paths. Result review and next-test planning remain assisted.
 - Program Profiles can carry depth and exploration instructions, while the workflow runtime still lacks a typed hypothesis queue and a reviewed stateful experiment runner that binds arbitrary script, dependency, configuration, fixture, and input bytes.
 - Several machine policies are validated declarations whose actual behavior is still distributed through hard-coded runtime rules.
 - Publication preflight can verify an exact head, while fully trusted merge, deployment, and publication adapters remain incomplete.

@@ -1,11 +1,15 @@
-const LOCAL_FLEET_VERSION = "gate.local-fleet/v1";
+import crypto from "node:crypto";
+
+const LOCAL_FLEET_VERSION = "gate.local-fleet/v2";
 const OBSERVER_VERSION = "gate.observer/v1";
 const DEFAULT_OBSERVER_URL = "http://127.0.0.1:4173/api/status";
 const DEFAULT_TIMEOUT_MS = 3_500;
 const DEFAULT_CACHE_MS = 2_000;
+const DEFAULT_FLEET_TTL_MS = 15_000;
 const MAX_OBSERVER_BYTES = 2_000_000;
 const MAX_COUNT = 1_000_000_000;
 const MAX_TOKENS = Number.MAX_SAFE_INTEGER;
+const PILOT_TTL_MS = 180_000;
 
 const OBSERVER_ROOT_KEYS = [
   "apiVersion", "at", "state", "counts", "agents", "tasks", "usage", "budget", "telemetry",
@@ -14,7 +18,7 @@ const OBSERVER_ROOT_KEYS = [
 ];
 const CASE_KEYS = [
   "id", "displayName", "status", "binding", "isolation", "runtimeHealth", "state", "counts", "telemetry",
-  "usage", "execution", "workflows", "engagementScan", "offlineAnalysis", "activity", "learningCount"
+  "usage", "execution", "workflows", "engagementScan", "offlineAnalysis", "activity", "learningCount", "ctfPilot"
 ];
 const PROFILE_KEYS = [
   "id", "displayName", "stage", "readiness", "progress", "blockerCount", "nextSection",
@@ -42,6 +46,22 @@ const PROFILE_NEXT_SECTIONS = new Set([
   "accounts-identities", "architecture-data-flows", "workflow-coverage", "data-evidence",
   "stops-escalation-cleanup", "reporting-disclosure", "ambiguities-attestation", "conditional-modules"
 ]);
+const PILOT_REASONS = new Set(["not-case-scoped", "missing", "invalid", "expired", "worker-unavailable"]);
+const PILOT_SOLVING_VERDICTS = new Set(["pass", "provisional", "fail", "blocked", "unknown"]);
+const PILOT_SOLVING_NOW = new Set(["idle", "intake", "mapping", "enumerating", "exploiting", "validating", "submitting", "complete", "blocked"]);
+const PILOT_LEARNING_VERDICTS = new Set(["pass", "provisional", "fail", "blocked", "unknown", "not-applicable"]);
+const PILOT_LEARNING_NOW = new Set(["observing", "extracting", "validating", "applying", "checking", "idle", "blocked"]);
+const PILOT_COCKPIT_VERDICTS = new Set(["pass", "provisional", "fail", "blocked", "unknown"]);
+const PILOT_COCKPIT_NOW = new Set(["collecting", "projecting", "current", "delayed", "blocked"]);
+const PILOT_ACTIONS = new Set(["none", "operator", "solver", "platform", "review"]);
+const PILOT_DEPTH = new Set(["unavailable", "baseline", "systematic", "deep"]);
+const PILOT_INTEGRITY = new Set(["consistent", "degraded"]);
+const PILOT_COMPLETION_STATES = new Set(["complete", "incomplete", "unknown"]);
+const PILOT_REPRODUCTION = new Set(["confirmed", "not-confirmed", "not-applicable", "unknown"]);
+const PILOT_EXTERNAL_ACCEPTANCE = new Set(["accepted", "pending", "rejected", "not-applicable", "unknown"]);
+const EVENT_STATUSES = new Set(["queued", "running", "waiting", "blocked", "succeeded", "failed", "cancelled", "unknown"]);
+const EVENT_CATEGORIES = new Set(["campaign", "workflow", "execution", "test", "evidence", "learning", "analysis", "tool", "operator", "system"]);
+const SELECTION_EPOCH = /^[a-f0-9]{32}$/u;
 
 function record(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -68,6 +88,208 @@ function count(value) {
 
 function tokenCount(value) {
   return Number.isSafeInteger(value) && value >= 0 && value <= MAX_TOKENS ? value : null;
+}
+
+function pilotMetricUnavailable() {
+  return Object.freeze({ availability: "unavailable", value: null });
+}
+
+function pilotUnavailable(reason = "missing") {
+  const axis = () => Object.freeze({ availability: "unavailable", verdict: null, now: null, actionNeeded: null, updatedAt: null });
+  return Object.freeze({
+    availability: "unavailable",
+    reason: PILOT_REASONS.has(reason) ? reason : "invalid",
+    observedAt: null,
+    validUntil: null,
+    solving: Object.freeze({
+      ...axis(),
+      completion: Object.freeze({ state: null, reproduction: null, externalAcceptance: null }),
+      objectives: Object.freeze({ availability: "unavailable", completed: null, total: null }),
+      depth: Object.freeze({
+        level: "unavailable",
+        branchesExplored: pilotMetricUnavailable(),
+        techniquesAttempted: pilotMetricUnavailable(),
+        deadEndsRetired: pilotMetricUnavailable()
+      }),
+      efficiency: Object.freeze(Object.fromEntries(
+        ["elapsedSeconds", "activeSeconds", "tokens", "toolRuns", "requests", "retries"]
+          .map((key) => [key, pilotMetricUnavailable()])
+      ))
+    }),
+    learning: Object.freeze({
+      ...axis(),
+      stages: Object.freeze(Object.fromEntries(
+        ["observations", "candidates", "validated", "applied", "transferred", "regressed"]
+          .map((key) => [key, pilotMetricUnavailable()])
+      ))
+    }),
+    cockpit: Object.freeze({
+      ...axis(),
+      signals: Object.freeze({ availability: "unavailable", available: null, total: null }),
+      updatesPublished: pilotMetricUnavailable(),
+      updatesMissed: pilotMetricUnavailable()
+    }),
+    integrity: Object.freeze({
+      availability: "unavailable",
+      status: null,
+      checks: Object.freeze({ availability: "unavailable", available: null, total: null }),
+      issues: pilotMetricUnavailable(),
+      checkedAt: null
+    })
+  });
+}
+
+function validatePilotMetric(value) {
+  if (!exactKeys(value, ["availability", "value"])) return null;
+  if (value.availability === "unavailable" && value.value === null) return pilotMetricUnavailable();
+  return value.availability === "available" && tokenCount(value.value) !== null
+    ? Object.freeze({ availability: "available", value: value.value })
+    : null;
+}
+
+function pilotLearningStagesAreConsistent(stages) {
+  const value = key => stages[key].availability === "available" ? stages[key].value : null;
+  const exceeds = (left, right) => left !== null && right !== null && left > right;
+  return !exceeds(value("candidates"), value("observations"))
+    && !exceeds(value("validated"), value("candidates"))
+    && !exceeds(value("applied"), value("validated"))
+    && !exceeds(value("transferred"), value("applied"))
+    && !exceeds(value("regressed"), value("applied"));
+}
+
+function validatePilotCoverage(value) {
+  if (!exactKeys(value, ["availability", "available", "total"])) return null;
+  if (value.availability === "unavailable" && value.available === null && value.total === null) {
+    return Object.freeze({ availability: "unavailable", available: null, total: null });
+  }
+  return value.availability === "available" && count(value.available) !== null && count(value.total) !== null
+    && value.total > 0 && value.available <= value.total
+    ? Object.freeze({ ...value })
+    : null;
+}
+
+function validatePilotAxis(value, verdicts, stages) {
+  if (!record(value) || !new Set(["available", "unavailable"]).has(value.availability)) return null;
+  if (value.availability === "unavailable") {
+    return value.verdict === null && value.now === null && value.actionNeeded === null && value.updatedAt === null
+      ? Object.freeze({ availability: "unavailable", verdict: null, now: null, actionNeeded: null, updatedAt: null })
+      : null;
+  }
+  return verdicts.has(value.verdict) && stages.has(value.now) && PILOT_ACTIONS.has(value.actionNeeded) && timestamp(value.updatedAt)
+    ? Object.freeze({ availability: "available", verdict: value.verdict, now: value.now, actionNeeded: value.actionNeeded, updatedAt: value.updatedAt })
+    : null;
+}
+
+function validatePilot(value) {
+  if (!record(value) || !exactKeys(value, ["availability", "reason", "observedAt", "validUntil", "solving", "learning", "cockpit", "integrity"])) return null;
+  if (value.availability === "unavailable") {
+    if (!PILOT_REASONS.has(value.reason) || value.observedAt !== null || value.validUntil !== null) return null;
+  } else if (value.availability !== "available" || value.reason !== null
+      || !timestamp(value.observedAt) || !timestamp(value.validUntil)
+      || Date.parse(value.validUntil) <= Date.parse(value.observedAt)
+      || Date.parse(value.validUntil) - Date.parse(value.observedAt) > PILOT_TTL_MS) return null;
+  if (!exactKeys(value.solving, ["availability", "verdict", "now", "actionNeeded", "updatedAt", "completion", "objectives", "depth", "efficiency"]) ||
+      !exactKeys(value.learning, ["availability", "verdict", "now", "actionNeeded", "updatedAt", "stages"]) ||
+      !exactKeys(value.cockpit, ["availability", "verdict", "now", "actionNeeded", "updatedAt", "signals", "updatesPublished", "updatesMissed"]) ||
+      !exactKeys(value.integrity, ["availability", "status", "checks", "issues", "checkedAt"])) return null;
+  const solving = validatePilotAxis(value.solving, PILOT_SOLVING_VERDICTS, PILOT_SOLVING_NOW);
+  const learning = validatePilotAxis(value.learning, PILOT_LEARNING_VERDICTS, PILOT_LEARNING_NOW);
+  const cockpit = validatePilotAxis(value.cockpit, PILOT_COCKPIT_VERDICTS, PILOT_COCKPIT_NOW);
+  const objectives = value.solving.objectives;
+  const completion = value.solving.completion;
+  if (!solving || !learning || !cockpit || !exactKeys(objectives, ["availability", "completed", "total"])
+      || !exactKeys(completion, ["state", "reproduction", "externalAcceptance"])) return null;
+  const completionProjection = solving.availability === "unavailable"
+    ? completion.state === null && completion.reproduction === null && completion.externalAcceptance === null
+      ? Object.freeze({ ...completion }) : null
+    : PILOT_COMPLETION_STATES.has(completion.state) && PILOT_REPRODUCTION.has(completion.reproduction)
+      && PILOT_EXTERNAL_ACCEPTANCE.has(completion.externalAcceptance) ? Object.freeze({ ...completion }) : null;
+  const objectiveProjection = objectives.availability === "unavailable" && objectives.completed === null && objectives.total === null
+    ? Object.freeze({ ...objectives })
+    : objectives.availability === "available" && count(objectives.completed) !== null && count(objectives.total) !== null
+      && objectives.total > 0 && objectives.completed <= objectives.total ? Object.freeze({ ...objectives }) : null;
+  if (!completionProjection || !objectiveProjection || !exactKeys(value.solving.depth, ["level", "branchesExplored", "techniquesAttempted", "deadEndsRetired"]) ||
+      !PILOT_DEPTH.has(value.solving.depth.level) ||
+      !exactKeys(value.solving.efficiency, ["elapsedSeconds", "activeSeconds", "tokens", "toolRuns", "requests", "retries"]) ||
+      !exactKeys(value.learning.stages, ["observations", "candidates", "validated", "applied", "transferred", "regressed"])) return null;
+  const depth = {};
+  for (const key of ["branchesExplored", "techniquesAttempted", "deadEndsRetired"]) {
+    depth[key] = validatePilotMetric(value.solving.depth[key]);
+    if (!depth[key]) return null;
+  }
+  const efficiency = {};
+  for (const key of ["elapsedSeconds", "activeSeconds", "tokens", "toolRuns", "requests", "retries"]) {
+    efficiency[key] = validatePilotMetric(value.solving.efficiency[key]);
+    if (!efficiency[key]) return null;
+  }
+  const learningStages = {};
+  for (const key of ["observations", "candidates", "validated", "applied", "transferred", "regressed"]) {
+    learningStages[key] = validatePilotMetric(value.learning.stages[key]);
+    if (!learningStages[key]) return null;
+  }
+  if (!pilotLearningStagesAreConsistent(learningStages)) return null;
+  const signals = validatePilotCoverage(value.cockpit.signals);
+  const updatesPublished = validatePilotMetric(value.cockpit.updatesPublished);
+  const updatesMissed = validatePilotMetric(value.cockpit.updatesMissed);
+  const checks = validatePilotCoverage(value.integrity.checks);
+  const issues = validatePilotMetric(value.integrity.issues);
+  if (!signals || !updatesPublished || !updatesMissed || !checks || !issues) return null;
+  let integrity;
+  if (value.integrity.availability === "unavailable") {
+    if (value.integrity.status !== null || value.integrity.checkedAt !== null) return null;
+    integrity = Object.freeze({ availability: "unavailable", status: null, checks, issues, checkedAt: null });
+  } else if (value.integrity.availability === "available" && PILOT_INTEGRITY.has(value.integrity.status) && timestamp(value.integrity.checkedAt)) {
+    integrity = Object.freeze({ ...value.integrity, checks, issues });
+  } else return null;
+  const observedMs = value.observedAt === null ? null : Date.parse(value.observedAt);
+  const axisTimes = [solving, learning, cockpit]
+    .filter((axis) => axis.availability === "available")
+    .map((axis) => Date.parse(axis.updatedAt));
+  if (value.availability === "unavailable") {
+    if (solving.availability !== "unavailable" || learning.availability !== "unavailable"
+        || cockpit.availability !== "unavailable" || integrity.availability !== "unavailable") return null;
+  } else if (axisTimes.some((at) => at > observedMs)
+      || integrity.availability === "available" && Date.parse(integrity.checkedAt) > observedMs) return null;
+  const objectiveComplete = objectiveProjection.availability === "available"
+    && objectiveProjection.completed === objectiveProjection.total;
+  if (solving.verdict === "pass" && !(solving.now === "complete" && solving.actionNeeded === "none"
+      && completionProjection.state === "complete" && objectiveComplete
+      && new Set(["confirmed", "not-applicable"]).has(completionProjection.reproduction)
+      && new Set(["accepted", "not-applicable"]).has(completionProjection.externalAcceptance))) return null;
+  if (learning.verdict === "pass" && !(learningStages.transferred.availability === "available"
+      && learningStages.transferred.value > 0)) return null;
+  if (cockpit.verdict === "pass" && !(cockpit.now === "current" && cockpit.actionNeeded === "none"
+      && signals.availability === "available" && signals.available === signals.total
+      && updatesMissed.availability === "available" && updatesMissed.value === 0)) return null;
+  return Object.freeze({
+    availability: value.availability,
+    reason: value.reason,
+    observedAt: value.observedAt,
+    validUntil: value.validUntil,
+    solving: Object.freeze({ ...solving, completion: completionProjection, objectives: objectiveProjection, depth: Object.freeze({ level: value.solving.depth.level, ...depth }), efficiency: Object.freeze(efficiency) }),
+    learning: Object.freeze({ ...learning, stages: Object.freeze(learningStages) }),
+    cockpit: Object.freeze({ ...cockpit, signals, updatesPublished, updatesMissed }),
+    integrity
+  });
+}
+
+function latestCaseEvent(value) {
+  if (!Array.isArray(value) || value.length > 20) return null;
+  let latest = null;
+  for (const item of value) {
+    if (!record(item) || !timestamp(item.at) || typeof item.kind !== "string"
+        || !/^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+$/u.test(item.kind)
+        || !EVENT_STATUSES.has(item.status)) continue;
+    const prefix = item.kind.split(".", 1)[0];
+    const candidate = Object.freeze({
+      availability: "available",
+      category: EVENT_CATEGORIES.has(prefix) ? prefix : "other",
+      status: item.status,
+      at: item.at
+    });
+    if (!latest || Date.parse(candidate.at) > Date.parse(latest.at)) latest = candidate;
+  }
+  return latest || Object.freeze({ availability: "unavailable", category: null, status: null, at: null });
 }
 
 function metric(value, precision) {
@@ -163,7 +385,8 @@ function scanPrecision(scan, visible, profile = false) {
 }
 
 function validateCase(value) {
-  if (!exactKeys(value, CASE_KEYS) || typeof value.id !== "string" || !/^case_[a-f0-9]{16}$/u.test(value.id)
+  const caseKeysValid = exactKeys(value, CASE_KEYS) || exactKeys(value, CASE_KEYS.filter((key) => key !== "ctfPilot"));
+  if (!caseKeysValid || typeof value.id !== "string" || !/^case_[a-f0-9]{16}$/u.test(value.id)
       || !CASE_STATUSES.has(value.status) || !CASE_STATES.has(value.state)) return null;
   if (!exactKeys(value.runtimeHealth, ["status", "reason"])
       || !new Set(["available", "unavailable"]).has(value.runtimeHealth.status)
@@ -200,6 +423,9 @@ function validateCase(value) {
       lanes.add(instance.activePhase.lane);
     }
   }
+  const ctfPilot = value.ctfPilot === undefined ? pilotUnavailable("missing") : validatePilot(value.ctfPilot);
+  const latestEvent = latestCaseEvent(value.activity);
+  if (!ctfPilot || !latestEvent) return null;
   return Object.freeze({
     sourceId: value.id,
     sourceStatus: value.status,
@@ -214,7 +440,9 @@ function validateCase(value) {
     workflowActive,
     workflowComplete: value.workflows.scan.complete === true && value.workflows.scan.truncated === false,
     analysisRunning,
-    stage: lanes.size === 1 ? [...lanes][0] : lanes.size > 1 ? "multiple" : value.state === "idle" ? "idle" : "unknown"
+    stage: lanes.size === 1 ? [...lanes][0] : lanes.size > 1 ? "multiple" : value.state === "idle" ? "idle" : "unknown",
+    ctfPilot,
+    latestEvent
   });
 }
 
@@ -266,7 +494,11 @@ function precisionForCaseMetric(item, value, fleetPrecision, workflow = false) {
   return "exact";
 }
 
-function caseCampaign(item, alias, fleetPrecision) {
+function caseCampaign(item, alias, fleetPrecision, receivedTime) {
+  const pilot = item.ctfPilot.availability === "available"
+    && receivedTime >= Date.parse(item.ctfPilot.validUntil)
+    ? pilotUnavailable("expired")
+    : item.ctfPilot;
   return Object.freeze({
     alias,
     kind: "case",
@@ -281,7 +513,9 @@ function caseCampaign(item, alias, fleetPrecision) {
       runningAnalyses: metric(item.analysisRunning, precisionForCaseMetric(item, item.analysisRunning, fleetPrecision)),
       setupBlockers: unavailableMetric()
     }),
-    tokens: Object.freeze({ availability: item.usage.availability, total: item.usage.total })
+    tokens: Object.freeze({ availability: item.usage.availability, total: item.usage.total }),
+    pilot,
+    latestEvent: item.latestEvent
   });
 }
 
@@ -301,7 +535,9 @@ function profileCampaign(item, alias, profilePrecision) {
       runningAnalyses: unavailableMetric(),
       setupBlockers: metric(item.blockerCount, profilePrecision)
     }),
-    tokens: Object.freeze({ availability: "unavailable", total: null })
+    tokens: Object.freeze({ availability: "unavailable", total: null }),
+    pilot: pilotUnavailable("not-case-scoped"),
+    latestEvent: Object.freeze({ availability: "unavailable", category: null, status: null, at: null })
   });
 }
 
@@ -313,6 +549,28 @@ function addMetrics(campaigns, field, overallPrecision) {
   const exact = overallPrecision === "exact" && available.length === cases.length
     && available.every((item) => item.precision === "exact");
   return metric(value, exact ? "exact" : "lower-bound");
+}
+
+function aggregateBlockers(campaigns, casePrecision, profilePrecision) {
+  const parts = [];
+  if (casePrecision !== "unavailable") {
+    parts.push(metric(
+      campaigns.filter((item) => item.kind === "case" && item.state === "blocked").length,
+      casePrecision
+    ));
+  }
+  if (profilePrecision !== "unavailable") {
+    parts.push(metric(
+      campaigns.filter((item) => item.kind === "profile")
+        .reduce((sum, item) => sum + item.work.setupBlockers.value, 0),
+      profilePrecision
+    ));
+  }
+  if (parts.length === 0) return unavailableMetric();
+  return metric(
+    parts.reduce((sum, item) => sum + item.value, 0),
+    parts.length === 2 && parts.every((item) => item.precision === "exact") ? "exact" : "lower-bound"
+  );
 }
 
 function aggregateCampaignTokens(cases, casePrecision) {
@@ -330,12 +588,16 @@ function aggregateCampaignTokens(cases, casePrecision) {
   });
 }
 
-function unavailableProjection(receivedAt, revision) {
+function unavailableProjection(receivedAt, revision, selectionEpoch = crypto.randomBytes(16).toString("hex")) {
+  if (!SELECTION_EPOCH.test(selectionEpoch)) throw new Error("invalid fleet selection epoch");
+  const validUntil = new Date(Date.parse(receivedAt) + DEFAULT_FLEET_TTL_MS).toISOString();
   return Object.freeze({
     apiVersion: LOCAL_FLEET_VERSION,
     revision,
+    selectionEpoch,
     observedAt: null,
     receivedAt,
+    validUntil,
     connection: "unavailable",
     sourceFreshness: "unavailable",
     coverage: Object.freeze({ state: "unavailable", cases: unavailableScan(), profiles: unavailableScan(true) }),
@@ -343,7 +605,8 @@ function unavailableProjection(receivedAt, revision) {
       campaigns: unavailableMetric(), active: unavailableMetric(), waiting: unavailableMetric(), attention: unavailableMetric(),
       profileAnswers: Object.freeze({ answered: null, total: null, precision: "unavailable" }),
       runningExecutions: unavailableMetric(), activeWorkflows: unavailableMetric(), runningAnalyses: unavailableMetric(),
-      setupBlockers: unavailableMetric(), campaignTokens: Object.freeze({ availability: "unavailable", total: null }),
+      setupBlockers: unavailableMetric(), blockers: unavailableMetric(),
+      campaignTokens: Object.freeze({ availability: "unavailable", total: null }),
       hostTokens: projectHostTokens(null)
     }),
     campaigns: Object.freeze([])
@@ -361,12 +624,21 @@ function aliasFor(aliases, sourceId) {
   return `Campaign ${aliases.get(sourceId)}`;
 }
 
+function aliasBindingSignature(aliases) {
+  return [...aliases.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([sourceId, number]) => `${sourceId}:${number}`)
+    .join("|");
+}
+
 export function projectGateObserverStatus(value, options = {}) {
   const receivedAt = options.receivedAt instanceof Date ? options.receivedAt : new Date(options.receivedAt || Date.now());
   const revision = options.revision ?? 1;
   const aliases = options.aliases || new Map();
+  const selectionEpoch = options.selectionEpoch ?? crypto.randomBytes(16).toString("hex");
   if (!Number.isSafeInteger(revision) || revision < 1 || !(aliases instanceof Map)
-      || !exactKeys(value, OBSERVER_ROOT_KEYS)
+      || !SELECTION_EPOCH.test(selectionEpoch)
+      || !(exactKeys(value, OBSERVER_ROOT_KEYS) || exactKeys(value, [...OBSERVER_ROOT_KEYS, "ctfPilot"]))
       || value.apiVersion !== OBSERVER_VERSION || !timestamp(value.at) || !CASE_STATES.has(value.state)
       || !Array.isArray(value.cases) || value.cases.length > 32
       || !Array.isArray(value.profileSetups) || value.profileSetups.length > 32) {
@@ -380,6 +652,10 @@ export function projectGateObserverStatus(value, options = {}) {
   const sourceCases = value.cases.map(validateCase);
   const sourceProfiles = value.profileSetups.map(validateProfile);
   if (sourceCases.some((item) => !item) || sourceProfiles.some((item) => !item)) throw new Error("invalid GATE observer campaign");
+  if (sourceCases.some((item) => item.ctfPilot.availability === "available"
+      && Date.parse(item.ctfPilot.observedAt) > sourceTime)) throw new Error("invalid GATE observer campaign timestamp");
+  if (sourceCases.some((item) => item.latestEvent.availability === "available"
+      && Date.parse(item.latestEvent.at) > sourceTime)) throw new Error("invalid GATE observer event timestamp");
 
   const visibleCases = caseScan.availability === "available" ? sourceCases : [];
   const visibleProfiles = profileScan.availability === "available" ? sourceProfiles : [];
@@ -413,7 +689,7 @@ export function projectGateObserverStatus(value, options = {}) {
       ? "exact"
       : "lower-bound";
   const campaigns = [
-    ...visibleCases.map((item) => caseCampaign(item, aliasFor(aliases, `case:${item.sourceId}`), casePrecision)),
+    ...visibleCases.map((item) => caseCampaign(item, aliasFor(aliases, `case:${item.sourceId}`), casePrecision, receivedAt.getTime())),
     ...visibleProfiles.map((item) => profileCampaign(item, aliasFor(aliases, `profile:${item.sourceId}`), profilePrecision))
   ];
   const aggregatePrecision = coverageState;
@@ -426,11 +702,16 @@ export function projectGateObserverStatus(value, options = {}) {
     ? Object.freeze({ answered: null, total: null, precision: "unavailable" })
     : Object.freeze({ answered: profileAnswered, total: profileTotal, precision: profilePrecision });
   const sourceAge = Math.max(0, receivedAt.getTime() - sourceTime);
+  const fleetValidUntil = campaigns.reduce((deadline, campaign) => campaign.pilot.availability === "available"
+    ? Math.min(deadline, Date.parse(campaign.pilot.validUntil))
+    : deadline, receivedAt.getTime() + DEFAULT_FLEET_TTL_MS);
   return Object.freeze({
     apiVersion: LOCAL_FLEET_VERSION,
     revision,
+    selectionEpoch,
     observedAt: value.at,
     receivedAt: receivedAt.toISOString(),
+    validUntil: new Date(fleetValidUntil).toISOString(),
     connection: "connected",
     sourceFreshness: sourceAge <= 15_000 ? "current" : "delayed",
     coverage: Object.freeze({ state: coverageState, cases: caseScan, profiles: profileScan }),
@@ -446,6 +727,7 @@ export function projectGateObserverStatus(value, options = {}) {
       setupBlockers: profilePrecision === "unavailable"
         ? unavailableMetric()
         : metric(visibleProfiles.reduce((sum, item) => sum + item.blockerCount, 0), profilePrecision),
+      blockers: aggregateBlockers(campaigns, casePrecision, profilePrecision),
       campaignTokens: aggregateCampaignTokens(visibleCases, casePrecision),
       hostTokens: projectHostTokens(value.usage)
     }),
@@ -508,19 +790,20 @@ export function createGateFleetProvider(options = {}) {
     throw new Error("GATE observer provider limits are invalid");
   }
   const aliases = new Map();
+  let selectionEpoch = crypto.randomBytes(16).toString("hex");
+  let publishedAliasSignature = "";
   let revision = 0;
   let cached = null;
   let cachedAt = 0;
   let inFlight = null;
   return async function gateFleet() {
     const nowMs = typeof options.now === "function" ? options.now() : Date.now();
-    if (cached && nowMs - cachedAt < cacheMs) return cached;
+    if (cached && nowMs - cachedAt < cacheMs && Date.parse(cached.validUntil) > nowMs) return cached;
     if (inFlight) return inFlight;
     inFlight = (async () => {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       revision += 1;
-      const receivedAt = new Date(typeof options.now === "function" ? options.now() : Date.now());
       try {
         const response = await fetchImpl(observerUrl, {
           method: "GET",
@@ -530,9 +813,18 @@ export function createGateFleetProvider(options = {}) {
           headers: { Accept: "application/json" }
         });
         const source = await boundedJson(response, maximumBytes);
-        return projectGateObserverStatus(source, { aliases, revision, receivedAt });
+        const receivedAt = new Date(typeof options.now === "function" ? options.now() : Date.now());
+        let projection = projectGateObserverStatus(source, { aliases, revision, receivedAt, selectionEpoch });
+        const aliasSignature = aliasBindingSignature(aliases);
+        if (aliasSignature !== publishedAliasSignature) {
+          selectionEpoch = crypto.randomBytes(16).toString("hex");
+          projection = projectGateObserverStatus(source, { aliases, revision, receivedAt, selectionEpoch });
+          publishedAliasSignature = aliasSignature;
+        }
+        return projection;
       } catch {
-        return unavailableProjection(receivedAt.toISOString(), revision);
+        const receivedAt = new Date(typeof options.now === "function" ? options.now() : Date.now());
+        return unavailableProjection(receivedAt.toISOString(), revision, selectionEpoch);
       } finally {
         clearTimeout(timer);
       }
@@ -549,11 +841,17 @@ export function createGateFleetProvider(options = {}) {
 
 export function createUnavailableFleetProvider(options = {}) {
   let revision = 0;
-  return async () => unavailableProjection(new Date(typeof options.now === "function" ? options.now() : Date.now()).toISOString(), ++revision);
+  const selectionEpoch = crypto.randomBytes(16).toString("hex");
+  return async () => unavailableProjection(
+    new Date(typeof options.now === "function" ? options.now() : Date.now()).toISOString(),
+    ++revision,
+    selectionEpoch
+  );
 }
 
 export const gateFleetInternals = Object.freeze({
   DEFAULT_CACHE_MS,
+  DEFAULT_FLEET_TTL_MS,
   DEFAULT_OBSERVER_URL,
   DEFAULT_TIMEOUT_MS,
   LOCAL_FLEET_VERSION,
