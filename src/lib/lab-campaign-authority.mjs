@@ -536,6 +536,7 @@ function journalEntry(authorityId, sequence, previousEntrySha256, type, payload,
 }
 
 function parseJournalBytes(resolved, bytes) {
+  if (bytes.length > MAX_JOURNAL_BYTES) throw new Error("lab campaign journal exceeds its byte limit");
   if (bytes.length === 0) return [];
   const text = bytes.toString("utf8");
   const lines = text.endsWith("\n") ? text.slice(0, -1).split("\n") : text.split("\n");
@@ -636,22 +637,19 @@ function repairIncompleteJournalTail(loaded, options) {
 
   // A complete hash-valid final record that merely lost its newline is still
   // committed. Restore the delimiter rather than rolling that record back.
-  let candidate;
   let completeJson = false;
   try {
-    candidate = JSON.parse(tail.toString("utf8"));
+    JSON.parse(tail.toString("utf8"));
     completeJson = true;
   } catch { /* A nonparseable final fragment is quarantined below. */ }
   if (completeJson) {
-    const previous = entries.at(-1)?.entrySha256 || ZERO_SHA256;
-    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate) ||
-        candidate.authorityId !== path.basename(resolved.directory) ||
-        candidate.sequence !== entries.length + 1 || candidate.previousEntrySha256 !== previous ||
-        candidate.entrySha256 !== digestWithout(candidate, "entrySha256", "gate.lab-campaign-journal-entry.v1")) {
-      throw new Error("lab campaign journal final record is complete but invalid and was preserved for review");
+    const repaired = Buffer.concat([bytes, Buffer.from("\n")]);
+    try {
+      assertAuthorityJournalPrefix(parseJournalBytes(resolved, repaired), loaded.authority, loaded.receipt);
+    } catch (error) {
+      throw new Error("lab campaign journal final record is complete but invalid and was preserved for review", { cause: error });
     }
-    assertAuthorityJournalPrefix([...entries, candidate], loaded.authority, loaded.receipt);
-    writePrivateFileAtomic(resolved.journal, Buffer.concat([bytes, Buffer.from("\n")]), {
+    writePrivateFileAtomic(resolved.journal, repaired, {
       label: "repaired private lab campaign journal delimiter"
     });
     syncPrivateDirectory(resolved.directory, { label: "private lab campaign authority after journal repair" });
@@ -660,14 +658,16 @@ function repairIncompleteJournalTail(loaded, options) {
 
   if (entries.length === 0) throw new Error("lab campaign journal has no complete record to recover");
   assertAuthorityJournalPrefix(entries, loaded.authority, loaded.receipt);
-  const quarantine = `${resolved.journal}.torn.${crypto.randomBytes(8).toString("hex")}.bin`;
-  writePrivateFileExclusive(quarantine, tail, { label: "quarantined private lab campaign journal tail" });
   const stopped = entries.some((entry) => entry.type === "authority-stopped");
   const stop = stopped ? Buffer.alloc(0) : Buffer.from(`${JSON.stringify(journalEntry(
     path.basename(resolved.directory), entries.length + 1, entries.at(-1).entrySha256,
     "authority-stopped", { condition: "execution-ambiguity", jobId: null, runId: null }, nowInstant(options)
   ))}\n`);
-  writePrivateFileAtomic(resolved.journal, Buffer.concat([prefix, stop]), { label: "repaired private lab campaign journal" });
+  const repaired = Buffer.concat([prefix, stop]);
+  assertAuthorityJournalPrefix(parseJournalBytes(resolved, repaired), loaded.authority, loaded.receipt);
+  const quarantine = `${resolved.journal}.torn.${crypto.randomBytes(8).toString("hex")}.bin`;
+  writePrivateFileExclusive(quarantine, tail, { label: "quarantined private lab campaign journal tail" });
+  writePrivateFileAtomic(resolved.journal, repaired, { label: "repaired private lab campaign journal" });
   syncPrivateDirectory(resolved.directory, { label: "private lab campaign authority after journal repair" });
   return { repaired: true, mode: "incomplete-tail-quarantined" };
 }
@@ -686,12 +686,17 @@ function appendEntry(resolved, type, payload, options = {}, loaded = null) {
     payload,
     nowInstant(options)
   );
-  appendJsonLine(resolved.journal, entry, 0o600, { sync: true });
-  if (creating) {
-    assertAuthorityJournalPrefix([entry], loaded.authority, null);
-  } else {
-    assertAuthorityJournalPrefix([...entries, entry], loaded.authority, loaded.receipt);
+  const prefix = creating ? Buffer.alloc(0) : readPrivateFileBounded(resolved.journal, MAX_JOURNAL_BYTES, null, {
+    label: "private lab campaign journal"
+  });
+  const proposed = parseJournalBytes(resolved, Buffer.concat([prefix, Buffer.from(`${JSON.stringify(entry)}\n`)]));
+  assertAuthorityJournalPrefix(proposed, loaded.authority, creating ? null : loaded.receipt);
+  if (type === "authority-confirmed") {
+    writePrivateFileExclusive(resolved.receipt, canonicalText(loaded.receipt), {
+      encoding: "utf8", label: "private lab campaign authorization receipt"
+    });
   }
+  appendJsonLine(resolved.journal, entry, 0o600, { sync: true });
   return entry;
 }
 
@@ -1266,9 +1271,6 @@ export function confirmLabCampaignAuthority(authorityId, input, options = {}) {
     if (entries.some((entry) => entry.type === "authority-stopped")) {
       throw new Error("lab campaign authority is stopped");
     }
-    writePrivateFileExclusive(loaded.resolved.receipt, canonicalText(receipt), {
-      encoding: "utf8", label: "private lab campaign authorization receipt"
-    });
     appendEntry(loaded.resolved, "authority-confirmed", {
       authoritySha256: loaded.authority.authoritySha256,
       receiptSha256: receipt.receiptSha256

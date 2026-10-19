@@ -374,6 +374,48 @@ test("one exact confirmation authorizes an immutable repeated-request lab campai
   );
 });
 
+test("backward clocks cannot publish confirmation, stop, or recovery journals", (t) => {
+  const fixture = setup(t, { jobCount: 1 });
+  const created = proposal(fixture);
+  const directory = path.join(fixture.paths.stateHome, "lab-campaign-authorities", "hacker101-baseline");
+  const journal = path.join(directory, "journal.jsonl");
+  const original = fs.readFileSync(journal);
+  const rollback = { ...fixture.options, now: () => new Date(Date.parse(fixture.createdAt) - 1).toISOString() };
+  assert.throws(() => confirmLabCampaignAuthority("hacker101-baseline", {
+    confirm: created.confirmationRequired
+  }, rollback), /journal time is invalid/u);
+  assert.deepEqual(fs.readFileSync(journal), original);
+  assert.equal(fs.existsSync(path.join(directory, "authorization-receipt.json")), false);
+  assert.equal(labCampaignAuthorityStatus("hacker101-baseline", fixture.options).status, "proposed");
+
+  confirmLabCampaignAuthority("hacker101-baseline", { confirm: created.confirmationRequired }, fixture.options);
+  const confirmed = fs.readFileSync(journal);
+  assert.throws(() => stopLabCampaignAuthority("hacker101-baseline", {
+    confirm: labCampaignAuthorityInternals.exactStopConfirmation(created.authority)
+  }, rollback), /journal time is invalid/u);
+  assert.deepEqual(fs.readFileSync(journal), confirmed);
+  assert.equal(labCampaignAuthorityStatus("hacker101-baseline", fixture.options).status, "authorized");
+
+  const records = confirmed.toString("utf8").trimEnd().split("\n").map(JSON.parse);
+  const final = records.at(-1);
+  final.at = rollback.now();
+  delete final.entrySha256;
+  final.entrySha256 = labCampaignAuthorityInternals.canonicalSha256(final, "gate.lab-campaign-journal-entry.v1");
+  fs.writeFileSync(journal, records.map((record) => JSON.stringify(record)).join("\n"));
+  const invalidDelimiter = fs.readFileSync(journal);
+  const recovery = { confirm: labCampaignAuthorityInternals.exactRecoveryConfirmation(created.authority) };
+  assert.throws(() => recoverLabCampaignAuthority("hacker101-baseline", recovery, fixture.options), /final record is complete but invalid/u);
+  assert.deepEqual(fs.readFileSync(journal), invalidDelimiter);
+  fs.writeFileSync(journal, confirmed);
+
+  fs.appendFileSync(journal, '{"type":"authority-stopped"');
+  const torn = fs.readFileSync(journal);
+  assert.throws(() => recoverLabCampaignAuthority("hacker101-baseline", recovery, rollback), /journal time is invalid/u);
+  assert.deepEqual(fs.readFileSync(journal), torn);
+  assert.equal(recoverLabCampaignAuthority("hacker101-baseline", recovery, fixture.options).stopped, true);
+  assert.equal(labCampaignAuthorityStatus("hacker101-baseline", fixture.options).status, "stopped");
+});
+
 test("confirmation is exact and dedicated-lab is mandatory", (t) => {
   const fixture = setup(t, { basis: "owner" });
   assert.throws(() => proposal(fixture), /authorization\.basis=dedicated-lab/u);
