@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { REMOTE_CODEX_APP_SERVER_VERSION } from "../../cockpit/companion/app-server.mjs";
+import { configuredHeaderName } from "../../cockpit/remote/server.mjs";
 import { createOidcVerifier } from "../../cockpit/remote/auth.mjs";
 import { runnerCliInternals } from "../../cockpit/remote/runner-cli.mjs";
 import { serverCliInternals } from "../../cockpit/remote/server-cli.mjs";
@@ -17,7 +18,6 @@ import {
 const REMOTE_CASE_VERSION = "gate.remote-case/v1";
 const CASE_ID = /^[a-z][a-z0-9-]{1,62}$/u;
 const RUNNER_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/u;
-const HEADER_NAME = /^[a-z0-9][a-z0-9-]{0,126}$/u;
 const MAX_MANIFEST_BYTES = 32 * 1024;
 const EXPECTED_CODEX_VERSION = `codex-cli ${REMOTE_CODEX_APP_SERVER_VERSION}`;
 const usesPosixPermissions = process.platform !== "win32";
@@ -190,7 +190,7 @@ function normalizeInput(input) {
   const identityHeader = input.identityHeader === undefined
     ? "x-gate-oidc-assertion"
     : boundedText(input.identityHeader, "identity assertion header", 127);
-  if (!HEADER_NAME.test(identityHeader)) throw new Error("identity assertion header must be lowercase HTTP header syntax");
+  configuredHeaderName(identityHeader);
   const coordinatorConfigRoot = boundedText(input.coordinatorConfigRoot, "coordinator config root", 8_192);
   const coordinatorStateRoot = boundedText(input.coordinatorStateRoot, "coordinator state root", 8_192);
   for (const [value, label] of [
@@ -552,9 +552,7 @@ export function inspectRemoteCase(caseId, options = {}) {
     httpsUrl(configuration.oidc.jwksUrl, "OIDC JWKS URL", { allowQuery: true });
     boundedText(configuration.oidc.audience, "OIDC audience");
     boundedText(configuration.oidc.operatorSubject, "OIDC operator subject");
-    if (!HEADER_NAME.test(configuration.identityAssertionHeader || "")) {
-      throw new Error("identity assertion header is invalid");
-    }
+    configuredHeaderName(configuration.identityAssertionHeader);
     createOidcVerifier(configuration.oidc);
   }));
   checks.push(checkResult("runner-config", "Runner environment matches the reviewed case-bound configuration.", () => {

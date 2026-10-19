@@ -393,3 +393,37 @@ test("remote doctor reports a mismatched key and pinned Codex version as local f
   assert.equal(report.ok, false);
   assert.doesNotMatch(JSON.stringify(report), /SECRET_VERSION_CANARY/u);
 });
+
+const invalidIdentityHeaders = [
+  "x", "cookie", "authorization", "host", "origin", "sec-fetch-site",
+  "1x-private", "X-Private", "x".repeat(64)
+];
+
+test("remote init rejects headers forbidden by the coordinator before creating a case", (t) => {
+  const { working, paths } = fixture(t);
+  for (const identityHeader of invalidIdentityHeaders) {
+    assert.throws(() => initializeRemoteCase(input(working, { identityHeader }), { paths }),
+      /identityAssertionHeader must be a lowercase private request header/u);
+    assert.equal(fs.existsSync(remoteSetupInternals.layout(paths, "demo-case").root), false);
+  }
+});
+
+test("remote doctor applies the coordinator header contract to persisted configuration", (t) => {
+  const { working, paths } = fixture(t);
+  initializeRemoteCase(input(working), { paths });
+  const locations = remoteSetupInternals.layout(paths, "demo-case");
+  const config = JSON.parse(fs.readFileSync(locations.coordinatorConfig, "utf8"));
+  for (const identityAssertionHeader of [...invalidIdentityHeaders, "xy", "x".repeat(63)]) {
+    fs.writeFileSync(locations.coordinatorConfig, JSON.stringify({ ...config, identityAssertionHeader }));
+    const report = inspectRemoteCase("demo-case", {
+      paths,
+      commandRunner: fakeCodexProbe().run,
+      prepareCodexLaunch: (_source, codexHome) => fakeCodexLaunch(codexHome),
+      nodeVersion: "24.0.0",
+      sqliteAvailable: true
+    });
+    const check = report.checks.find((entry) => entry.id === "coordinator-config");
+    assert.equal(check.status, invalidIdentityHeaders.includes(identityAssertionHeader) ? "failed" : "passed",
+      identityAssertionHeader);
+  }
+});

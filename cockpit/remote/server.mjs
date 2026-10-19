@@ -135,7 +135,7 @@ function configuredHost(value) {
   return value;
 }
 
-function configuredHeaderName(value) {
+export function configuredHeaderName(value) {
   const normalized = value ?? "x-gate-oidc-assertion";
   if (typeof normalized !== "string" || normalized !== normalized.toLowerCase()
       || !/^[a-z][a-z0-9-]{1,62}$/u.test(normalized)
