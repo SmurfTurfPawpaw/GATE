@@ -295,7 +295,7 @@ main {
   line-height: 1.45;
 }
 
-.pilot-alert {
+.pilot-alert:not([hidden]) {
   display: grid;
   gap: 0.35rem;
   margin-bottom: 0.85rem;
