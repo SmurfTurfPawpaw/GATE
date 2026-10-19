@@ -1068,7 +1068,7 @@ export function createLabCampaignAuthority(input, options = {}) {
   options = { ...options, paths };
   const authorityId = exactId(input.authorityId, "lab campaign authority id");
   const campaignId = exactId(input.campaignId, "campaign id");
-  const context = assertContext(requireLoader(options)(campaignId), paths, {
+  const context = assertContext(requireLoader(options)(campaignId, options), paths, {
     expectedCampaignId: campaignId,
     allowedState: new Set(["paused"])
   });
@@ -2194,10 +2194,13 @@ export function labCampaignAuthorityStatus(authorityId, options = {}) {
   const ambiguous = claims.filter((claim) => !entries.some((entry) =>
     new Set(["request-completed", "request-failed"]).has(entry.type) && entry.payload.capabilityId === claim.metadata.id
   ));
+  const expired = nowMilliseconds(options) >= Date.parse(loaded.authority.metadata.expiresAt);
+  const incompleteMetrics = entries.some((entry) => entry.type === "request-started" &&
+    !completed.some((completion) => completion.payload.capabilityId === entry.payload.capabilityId));
   return {
     authorityId: loaded.authority.metadata.id,
     campaignId: loaded.authority.campaign.id,
-    status: stopped ? "stopped" : ambiguous.length ? "recovery-required" : loaded.receipt ? "authorized" : "proposed",
+    status: stopped ? "stopped" : ambiguous.length ? "recovery-required" : expired ? "expired" : loaded.receipt ? "authorized" : "proposed",
     confirmed: Boolean(loaded.receipt),
     expiresAt: loaded.authority.metadata.expiresAt,
     stopConfirmationRequired: loaded.receipt ? exactStopConfirmation(loaded.authority) : null,
@@ -2213,12 +2216,13 @@ export function labCampaignAuthorityStatus(authorityId, options = {}) {
       ambiguous: ambiguous.length
     },
     usage: completed.reduce((total, entry) => ({
+      precision: total.precision,
       requests: total.requests + entry.payload.metrics.requests,
       wallMilliseconds: total.wallMilliseconds + entry.payload.metrics.wallMilliseconds,
       evidenceBytes: total.evidenceBytes + entry.payload.metrics.evidenceBytes,
       totalTokens: total.totalTokens + entry.payload.metrics.totalTokens,
       spend: total.spend + entry.payload.metrics.spend
-    }), { requests: 0, wallMilliseconds: 0, evidenceBytes: 0, totalTokens: 0, spend: 0 }),
+    }), { precision: incompleteMetrics ? "lower-bound" : "exact", requests: 0, wallMilliseconds: 0, evidenceBytes: 0, totalTokens: 0, spend: 0 }),
     stop: stopped?.payload || null
   };
 }

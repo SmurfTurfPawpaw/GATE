@@ -615,6 +615,35 @@ test("confirmed authority derives one-shot capabilities and keeps broker confirm
   const status = labCampaignAuthorityStatus("hacker101-baseline", fixture.options);
   assert.equal(status.jobs.completed, 1);
   assert.equal(status.usage.requests, 1);
+  assert.equal(status.usage.precision, "exact");
+
+  setControllerStart(fixture, 1);
+  let contacted = false;
+  const failedOptions = {
+    ...dispatchOptions,
+    now: () => new Date(Date.parse(fixture.createdAt) + 1_000).toISOString(),
+    createManagedExecutionManifest: (...args) => {
+      const manifest = dispatchOptions.createManagedExecutionManifest(...args);
+      const manifestId = `xmf_${"d".repeat(32)}`;
+      const manifestSha256 = sha("e");
+      return { ...manifest, manifestId, manifestSha256,
+        confirmationRequired: `EXECUTE ${manifestId} ${manifestSha256} UNMETERED` };
+    },
+    executeExecutionManifest: async () => {
+      contacted = true;
+      const pending = labCampaignAuthorityStatus("hacker101-baseline", fixture.options);
+      assert.equal(pending.usage.precision, "lower-bound");
+      assert.equal(pending.usage.requests, 1);
+      return { ok: true, status: "succeeded", adapterOutput: { invalid: true } };
+    }
+  };
+  await assert.rejects(dispatchAuthorizedLabCampaignJob("hacker101-baseline", fixture.jobs[1], failedOptions), /adapter.*(?:output|metric)/u);
+  assert.equal(contacted, true);
+  const failed = labCampaignAuthorityStatus("hacker101-baseline", fixture.options);
+  assert.equal(failed.usage.precision, "lower-bound");
+  assert.equal(failed.usage.requests, 1);
+  assert.equal(failed.usage.wallMilliseconds, 25);
+  assert.equal(failed.usage.evidenceBytes, 120);
 });
 
 test("real campaign worker path starts, authority-dispatches, and finalizes one managed HTTP job", async (t) => {
@@ -645,13 +674,7 @@ test("real campaign worker path starts, authority-dispatches, and finalizes one 
     ceilings: structuredClone(fixture.context.grant.ceilings),
     jobs: [{ id: "fetch-1", ...structuredClone(fixture.jobs[0].job) }]
   }, controllerOptions);
-  const loadCampaignContext = (id, supplied = {}) => campaignInternals.loadCampaignContext(id, {
-    ...controllerOptions,
-    ...supplied,
-    paths: fixture.paths,
-    readCurrentProgramProfileBinding: controllerOptions.readCurrentProgramProfileBinding,
-    readCurrentProgramSource: controllerOptions.readCurrentProgramSource
-  });
+  const loadCampaignContext = campaignInternals.loadCampaignContext;
   const prepareManagedAdapterInvocation = (input) => {
     const prepared = fixture.prepareManagedAdapterInvocation(input);
     prepared.binding.registrySha256 = createdCampaign.grant.allow.adapterRegistrySha256;
@@ -673,12 +696,30 @@ test("real campaign worker path starts, authority-dispatches, and finalizes one 
     frozenIps: ["192.0.2.10"],
     destinationObservationFile: fixture.destinationObservationFile,
     admissionFile: fixture.admissionFile,
-    expiresAt: fixture.expiresAt
+    expiresAt: new Date(Date.parse(fixture.createdAt) + 60_000).toISOString()
   }, authorityOptions);
   confirmLabCampaignAuthority("hacker101-alternate", {
     confirm: alternate.confirmationRequired
   }, authorityOptions);
   resumeCampaign("baseline-campaign", controllerOptions);
+
+  const expiry = Date.parse(alternate.authority.metadata.expiresAt);
+  assert.equal(labCampaignAuthorityStatus("hacker101-alternate", {
+    ...authorityOptions, now: () => expiry - 1
+  }).status, "authorized");
+  assert.equal(labCampaignAuthorityStatus("hacker101-alternate", {
+    ...authorityOptions, now: () => expiry
+  }).status, "expired");
+  const beforeExpiredDispatch = campaignStatus("baseline-campaign", controllerOptions).state;
+  let expiredDispatches = 0;
+  const deferred = await runNextCampaignWorkerJob("baseline-campaign", {
+    ...authorityOptions, now: () => expiry, labAuthorityId: "hacker101-alternate",
+    dispatchAuthorizedLabCampaignJob: async () => { expiredDispatches += 1; }
+  });
+  assert.equal(deferred.deferred, true);
+  assert.equal(deferred.contactAttempted, false);
+  assert.equal(expiredDispatches, 0);
+  assert.deepEqual(campaignStatus("baseline-campaign", controllerOptions).state, beforeExpiredDispatch);
 
   let preparedForExecution;
   let capabilityContext;
@@ -1031,13 +1072,7 @@ test("adaptive authority and the real campaign controller commit the same immuta
     ceilings: structuredClone(fixture.context.grant.ceilings),
     jobs: [{ id: "fetch-1", ...structuredClone(fixture.jobs[0].job) }]
   }, controllerOptions);
-  const loadCampaignContext = (id, supplied = {}) => campaignInternals.loadCampaignContext(id, {
-    ...controllerOptions,
-    ...supplied,
-    paths: fixture.paths,
-    readCurrentProgramProfileBinding: controllerOptions.readCurrentProgramProfileBinding,
-    readCurrentProgramSource: controllerOptions.readCurrentProgramSource
-  });
+  const loadCampaignContext = campaignInternals.loadCampaignContext;
   const basePrepare = fixture.prepareManagedAdapterInvocation;
   const prepareManagedAdapterInvocation = (input) => {
     const prepared = basePrepare(input);

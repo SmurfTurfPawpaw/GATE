@@ -68,6 +68,13 @@ compact status exposes only typed metrics such as request count, duration,
 method, status, bounded byte counts, rate, redirect/retry state, evidence
 integrity, and recovery state. It never exposes a response body or flag.
 
+`lab-status` reports `expired` when the authority reaches its expiry, so workers
+leave queued jobs untouched instead of starting them. Stopped and unresolved
+recovery states retain precedence. Its `usage.precision` is `exact` only when
+every journaled request start has completion metrics; otherwise it is
+`lower-bound`. Lower-bound totals include only completed requests and must not
+be interpreted as exact totals, including when they are zero.
+
 ## Adaptive same-origin jobs
 
 An authorized controller transition may append a new immutable job only after
