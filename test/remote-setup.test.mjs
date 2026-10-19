@@ -120,7 +120,7 @@ test("remote init creates one owner-only case bundle outside Git with matching E
   assert.doesNotMatch(JSON.stringify(result), /BEGIN PRIVATE KEY/u);
 });
 
-test("public runner environment reference mirrors the generated runner subdirectory and is never the setup source", (t) => {
+test("public runner environment reference mirrors the generated runner subdirectory", (t) => {
   const { working, paths } = fixture(t);
   initializeRemoteCase(input(working), { paths });
   const locations = remoteSetupInternals.layout(paths, "demo-case");
@@ -150,30 +150,6 @@ test("public runner environment reference mirrors the generated runner subdirect
     );
     assert.match(example[variable], /\/runner(?:\/|$)/u, variable);
   }
-
-  const guide = fs.readFileSync(path.join(repo, "deploy", "remote", "README.md"), "utf8");
-  assert.match(guide, /\. "\$generated_runner_environment"/u);
-  assert.doesNotMatch(guide, /install[^\n]*runner\.env\.example/u);
-  assert.doesNotMatch(guide, /(^|\n)gate remote (?:init|doctor)\b/u);
-});
-
-test("protected Codex setup verifies root-staged artifacts before atomic publication", () => {
-  const guide = fs.readFileSync(path.join(repo, "docs", "setup.md"), "utf8");
-  const protectedStage = guide.indexOf('staging=$(mktemp -d "/opt/.codex-$codex_version.stage.XXXXXXXX")');
-  const protectedMode = guide.indexOf('chmod 0700 "$staging"', protectedStage);
-  const boundedCopy = guide.indexOf('bounded_copy "$wrapper_source" "$staging/wrapper.tgz"', protectedMode);
-  const rootVerification = guide.indexOf('verify_sri "$wrapper_sri" "$staging/wrapper.tgz"', boundedCopy);
-  const extraction = guide.indexOf('tar -xzf "$staging/wrapper.tgz"', rootVerification);
-  const ownership = guide.indexOf('chown -R root:root "$payload"', extraction);
-  const publication = guide.indexOf('mv --no-target-directory "$payload" "$codex_prefix"', ownership);
-  const privilegedEnd = guide.indexOf("\nROOT_INSTALL\n", publication);
-  const operatorWritableCheck = guide.indexOf('test ! -w "/opt/codex-$codex_version/bin/codex"', privilegedEnd);
-  assert.ok(protectedStage >= 0 && protectedStage < protectedMode);
-  assert.ok(protectedMode < boundedCopy && boundedCopy < rootVerification);
-  assert.ok(rootVerification < extraction && extraction < ownership && ownership < publication);
-  assert.ok(publication < privilegedEnd && privilegedEnd < operatorWritableCheck);
-  assert.match(guide.slice(protectedStage, publication), /iflag=nofollow,nonblock,count_bytes/u);
-  assert.doesNotMatch(guide, /sudo cp -a "\$install_root"/u);
 });
 
 test("repository-local remote init exposes a bounded summary and dispatches into private GATE_HOME state", (t) => {

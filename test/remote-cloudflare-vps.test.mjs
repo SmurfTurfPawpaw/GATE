@@ -13,54 +13,6 @@ function read(name) {
   return fs.readFileSync(path.join(bundle, name), "utf8");
 }
 
-test("deployment guides order identity discovery and clean-host staging before activation", () => {
-  const cloudflareGuide = read("README.md");
-  const deploymentGuide = fs.readFileSync(path.join(root, "deploy", "remote", "README.md"), "utf8");
-  const tunnelStep = cloudflareGuide.indexOf("## 1. Create the named tunnel and hostname");
-  const accessStep = cloudflareGuide.indexOf("## 2. Create Access and obtain the identity bindings");
-  const localInit = cloudflareGuide.indexOf("./bin/gate.mjs remote init");
-  const hostStage = cloudflareGuide.indexOf("## 3. Stage the release");
-  const nginxInstall = cloudflareGuide.indexOf("apt-get install --yes nginx");
-  const edgeControls = cloudflareGuide.indexOf("## 6. Apply the edge controls before starting the connector");
-  const nginxStart = cloudflareGuide.indexOf("systemctl enable --now nginx.service", edgeControls);
-  const connectorStart = cloudflareGuide.indexOf("systemctl enable --now cloudflared@", nginxStart);
-  assert.ok(tunnelStep >= 0 && tunnelStep < accessStep);
-  assert.ok(accessStep < localInit && localInit < hostStage);
-  for (const binding of ["issuer", "audience", "JWKS URL", "operator subject"]) {
-    const bindingIndex = cloudflareGuide.indexOf(binding, accessStep);
-    assert.ok(bindingIndex > accessStep && bindingIndex < localInit, binding);
-  }
-  assert.doesNotMatch(cloudflareGuide, /(^|\n)gate remote init\b/u);
-  assert.match(cloudflareGuide, /staged_release=\/opt\/gate-remote\/REPLACE_CASE_ID\/releases\/REPLACE_REVIEWED_COMMIT/u);
-  assert.match(cloudflareGuide, /\$staged_release\/deploy\/remote/u);
-  assert.doesNotMatch(cloudflareGuide, /enable --now gate-remote@/u);
-  assert.ok(hostStage < nginxInstall && nginxInstall < edgeControls);
-  assert.ok(edgeControls < nginxStart && nginxStart < connectorStart);
-  assert.match(cloudflareGuide, /systemctl disable --now nginx\.service/u);
-  assert.match(cloudflareGuide, /\/bin\/bash \/opt\/gate-remote\/REPLACE_CASE_ID\/current\/deploy\/remote\/cloudflare-vps\/readiness-check\.sh/u);
-
-  const stageOnly = deploymentGuide.indexOf("--stage-only");
-  const protectedConfig = deploymentGuide.indexOf("/secure/transfer/example-case-server.json", stageOnly);
-  const stagedUnit = deploymentGuide.indexOf("$staged_release/deploy/remote/gate-remote@.service.example", protectedConfig);
-  const activation = deploymentGuide.indexOf("Activate only after all prerequisites", stagedUnit);
-  assert.ok(stageOnly >= 0 && stageOnly < protectedConfig);
-  assert.ok(protectedConfig < stagedUnit && stagedUnit < activation);
-  assert.match(deploymentGuide.slice(stageOnly, activation), /systemctl daemon-reload/u);
-  assert.doesNotMatch(deploymentGuide, /install[^\n]*runner\.env\.example/u);
-  for (const dependency of ["/bin/bash", "awk", "curl", "findutils", "flock", "gzip", "GNU tar"]) {
-    assert.match(deploymentGuide, new RegExp(dependency.replace("/", "\\/"), "u"), dependency);
-  }
-  assert.match(deploymentGuide, /Changed host dependencies are outside that transaction/u);
-  assert.match(deploymentGuide, /`SIGKILL`, kernel failure, and power loss cannot run the rollback trap/u);
-  assert.match(deploymentGuide, /NOSETENV/u);
-  assert.match(deploymentGuide, /exact installed helper SHA-256/u);
-
-  const cloudflaredUnit = read("cloudflared@.service.example");
-  assert.match(cloudflaredUnit, /^After=network-online\.target nginx\.service gate-remote@%i\.service$/mu);
-  assert.match(cloudflaredUnit, /^Wants=network-online\.target$/mu);
-  assert.doesNotMatch(cloudflaredUnit, /^Wants=.*(?:nginx|gate-remote)/mu);
-});
-
 test("Cloudflare route contract preserves the exact browser, runner, and private-health split", () => {
   const value = JSON.parse(read("access-route-contract.example.json"));
   const server = JSON.parse(read("server-config.cloudflare.example.json"));

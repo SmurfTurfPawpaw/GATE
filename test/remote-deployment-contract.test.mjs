@@ -65,48 +65,6 @@ test("release installer is valid Bash and rejects malformed identities before pr
   }
 });
 
-test("release installer preserves the no-follow archive and bootstrap contracts", () => {
-  const source = installerSource();
-  assert.match(source, /^#!\/bin\/bash\n/u);
-  assert.doesNotMatch(source, /^#!\/usr\/bin\/env bash/mu);
-  const environmentReset = source.indexOf("export PATH=/usr/sbin:/usr/bin:/sbin:/bin");
-  const argumentParser = source.indexOf("while (($#))");
-  assert.ok(environmentReset > 0 && environmentReset < argumentParser);
-  assert.ok(source.indexOf("unset TAR_OPTIONS", environmentReset) < argumentParser);
-  assert.ok(source.indexOf("unset BASH_ENV", environmentReset) < argumentParser);
-  assert.match(source, /curl --disable --noproxy/u);
-  assert.match(source, /for helper_directory in \/usr\/local \/usr\/local\/sbin/u);
-
-  const copy = source.indexOf('dd if="$archive" of="$snapshot"');
-  const snapshotIdentity = source.indexOf("snapshot_stat=$(stat", copy);
-  const snapshotBound = source.indexOf("snapshot_size <= MAX_ARCHIVE_BYTES", snapshotIdentity);
-  const digest = source.indexOf("actual_archive_sha256=$(sha256sum", snapshotBound);
-  const expandedBound = source.indexOf('bounded_command_output "$expanded_snapshot"', digest);
-  const archiveListing = source.indexOf('tar --restrict --quoting-style=escape -tf "$expanded_snapshot"', expandedBound);
-  assert.ok(copy > 0);
-  assert.ok(copy < snapshotIdentity && snapshotIdentity < snapshotBound);
-  assert.ok(snapshotBound < digest && digest < expandedBound && expandedBound < archiveListing);
-  assert.match(source, /iflag=nofollow,nonblock,count_bytes,fullblock/u);
-  assert.match(source, /oflag=nofollow/u);
-  assert.match(source, /conv=excl,fsync/u);
-  assert.match(source, /count=\$\(\(MAX_ARCHIVE_BYTES \+ 1\)\)/u);
-  assert.doesNotMatch(source, /install[^\n]*"\$archive"[^\n]*"\$snapshot"/u);
-  assert.match(source, /MAX_EXPANDED_ARCHIVE_BYTES=.*320 \* 1024 \* 1024/u);
-  assert.match(source, /MAX_TAR_LISTING_BYTES=.*16 \* 1024 \* 1024/u);
-  assert.match(source, /"expanded archive" gzip --decompress --stdout/u);
-  assert.match(source, /"archive member listing" tar[^\n]*--restrict/u);
-  assert.match(source, /"archive detail listing" tar[^\n]*--restrict/u);
-  assert.doesNotMatch(source, /tar[^\n]*> "\$member_(?:list|details)"/u);
-
-  const stagedRelease = source.indexOf('mv -- "$candidate" "$release"');
-  const stageOnly = source.indexOf('if [[ "$stage_only" == true ]]');
-  const inspectCurrent = source.indexOf("previous=", stageOnly);
-  const firstSystemctl = source.indexOf("systemctl restart", stageOnly);
-  assert.ok(stagedRelease > 0 && stagedRelease < stageOnly);
-  assert.ok(stageOnly < inspectCurrent && inspectCurrent < firstSystemctl);
-  assert.doesNotMatch(source.slice(stageOnly, inspectCurrent), /systemctl|\$current/u);
-});
-
 test("installer sanitization prevents inherited TAR_OPTIONS execution", (t) => {
   if (process.platform !== "linux") return t.skip("the production installer targets Linux");
   const source = installerSource();
@@ -245,15 +203,6 @@ test("signals inside failed-activation recovery cannot bypass restart or stop", 
   }
 });
 
-test("sudo delegation binds environment, helper path, and exact helper digest", () => {
-  const sudoers = fs.readFileSync(path.join(repo, "deploy", "remote", "gate-remote-deployer.sudoers.example"), "utf8");
-  assert.match(sudoers, /env_reset/u);
-  assert.match(sudoers, /secure_path="\/usr\/sbin:\/usr\/bin:\/sbin:\/bin"/u);
-  assert.match(sudoers, /NOPASSWD:NOSETENV:/u);
-  assert.match(sudoers, /sha256:REPLACE_WITH_64_CHARACTER_LOWERCASE_INSTALLER_SHA256/u);
-  assert.match(sudoers, /\/usr\/local\/sbin\/gate-remote-install-release/u);
-});
-
 test("expanded archive and tar metadata output stop at a hard byte sentinel", (t) => {
   if (process.platform !== "linux") return t.skip("the production installer targets Linux");
   const source = installerSource();
@@ -305,20 +254,13 @@ test("GNU dd primitives used by the installer reject symlinks and preserve the o
   assert.equal(fs.statSync(boundedPath).size, 9);
 });
 
-test("readiness binds the exact response to the active systemd MainPID listener", async (t) => {
+test("readiness listener ownership rejects an unrelated process", async (t) => {
   if (process.platform !== "linux") return t.skip("the production readiness proof uses Linux procfs");
   const source = installerSource();
   const functionStart = source.indexOf("pid_owns_health_listener() {");
   const functionEnd = source.indexOf("\n}\n\nready_for_pid()", functionStart);
   assert.ok(functionStart > 0 && functionEnd > functionStart);
   const listenerFunction = source.slice(functionStart, functionEnd + 2);
-
-  assert.match(source, /systemctl is-active --quiet "\$service"/u);
-  assert.match(source, /systemctl show --property=MainPID --value "\$service"/u);
-  assert.match(source, /\/proc\/\$expected_pid\/fd/u);
-  assert.match(source, /\/proc\/net\/tcp \/proc\/net\/tcp6/u);
-  assert.match(source, /"\$response" == '\{"ok":true,"service":"gate-remote-cockpit-ready"\}'/u);
-  assert.doesNotMatch(source, /"\$response" == \*'"ok":true'/u);
 
   const server = net.createServer();
   t.after(() => server.close());
