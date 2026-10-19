@@ -41,7 +41,7 @@ import { ensureRuntime, runtimePaths } from "../src/lib/paths.mjs";
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const sha = (character) => character.repeat(64);
 
-function setup(t, { jobCount = 2, basis = "dedicated-lab", crossOrigin = false } = {}) {
+function setup(t, { jobCount = 2, basis = "dedicated-lab", crossOrigin = false, maxSpend = 0 } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-lab-authority-"));
   const home = path.join(root, "home");
   const caseId = "hacker101-pilot";
@@ -74,7 +74,7 @@ function setup(t, { jobCount = 2, basis = "dedicated-lab", crossOrigin = false }
     maxParallel: 1,
     maxRatePerSecond: 2,
     maxTokens: 1000,
-    maxSpend: 0,
+    maxSpend,
     maxEvidenceBytes: 2 * 1024 * 1024
   };
   const target = crossOrigin ? "https://other.example.test/levels/0" : "https://ctf.example.test/levels/0";
@@ -647,7 +647,7 @@ test("confirmed authority derives one-shot capabilities and keeps broker confirm
 });
 
 test("real campaign worker path starts, authority-dispatches, and finalizes one managed HTTP job", async (t) => {
-  const fixture = setup(t, { jobCount: 1 });
+  const fixture = setup(t, { jobCount: 1, maxSpend: 1 });
   const source = currentSourceSnapshot(fixture);
   const controllerOptions = {
     ...fixture.options,
@@ -723,6 +723,7 @@ test("real campaign worker path starts, authority-dispatches, and finalizes one 
 
   let preparedForExecution;
   let capabilityContext;
+  let reservationExpected;
   let executions = 0;
   let alternateManifestCreates = 0;
   const result = await runNextCampaignWorkerJob("baseline-campaign", {
@@ -755,6 +756,23 @@ test("real campaign worker path starts, authority-dispatches, and finalizes one 
         declaredBounds: prepared.normalized.declaredBounds,
         adapterBinding: prepared.binding
       }, authorityOptions);
+      reservationExpected = {
+        engagementId, workflowInstanceId: "pilot-workflow", phaseId: "active-surface-validation",
+        phaseAttemptId: `wpa_${"1".repeat(32)}`, admissionSha256: fixture.admissionSha256,
+        authorityReceiptSha256: sha("4"), target: input.target, targetSha256: cryptoSha(Buffer.from(input.target)),
+        action: "observe", toolId: "httpx",
+        envelope: {
+          maxMinutes: 2, maxRequests: 1, maxRatePerSecond: 2, maxParallel: 1,
+          maxInputTokens: 0, maxOutputTokens: 0, maxTotalTokens: 1000,
+          maxEvidenceBytes: 2 * 1024 * 1024, maxSpend: 0
+        }
+      };
+      verifyLabCampaignWorkflowReservation(capabilityContext, { ...reservationExpected, requireUnbound: true }, authorityOptions);
+      for (const maxSpend of [-1, Number.NaN, Number.POSITIVE_INFINITY, 2]) {
+        assert.throws(() => verifyLabCampaignWorkflowReservation(capabilityContext, {
+          ...reservationExpected, envelope: { ...reservationExpected.envelope, maxSpend }
+        }, authorityOptions), /reservation envelope differs/u);
+      }
       const manifestId = `xmf_${"3".repeat(32)}`;
       const manifestSha256 = sha("4");
       return {
@@ -794,6 +812,9 @@ test("real campaign worker path starts, authority-dispatches, and finalizes one 
         adapterBinding: preparedForExecution.binding,
         manifestId: `xmf_${"3".repeat(32)}`,
         manifestSha256: sha("4")
+      }, authorityOptions);
+      verifyLabCampaignWorkflowReservation(capabilityContext, {
+        ...reservationExpected, manifestId: `xmf_${"3".repeat(32)}`, manifestSha256: sha("4")
       }, authorityOptions);
       return {
         ok: true,

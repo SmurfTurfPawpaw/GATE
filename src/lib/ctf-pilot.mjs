@@ -11,6 +11,7 @@ import {
   writePrivateFileExclusive
 } from "./private-fs.mjs";
 import { validateDocument } from "./schema.mjs";
+import { campaignWorkerProducerStatus } from "./campaign-worker.mjs";
 
 const MAX_STATE_BYTES = 64 * 1024;
 const MAX_TRANSFER_RECEIPT_BYTES = 16 * 1024;
@@ -579,7 +580,12 @@ function readCtfPilotStatusInternal({ paths, now, checkExpiry }) {
 }
 
 export function readCtfPilotStatus({ paths, now } = {}) {
-  return readCtfPilotStatusInternal({ paths, now, checkExpiry: true });
+  const status = readCtfPilotStatusInternal({ paths, now, checkExpiry: true });
+  if (status.availability === "available" && status.state.metadata.producer?.kind === "campaign-worker" &&
+      campaignWorkerProducerStatus(status.state.metadata.producer, { paths, now }).availability !== "available") {
+    return unavailable("worker-unavailable");
+  }
+  return status;
 }
 
 function writeCtfPilotStateUnlocked(

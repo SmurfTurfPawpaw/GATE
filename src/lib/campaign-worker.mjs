@@ -348,6 +348,8 @@ function pilotStateFromCampaign(current, context, status, at, publication = {}) 
     updatesPublished: availableMetric(projectedSemanticUpdates),
     updatesMissed: availableMetric(projectedMissedUpdates)
   };
+  if (cockpit.verdict === "pass" && projectedMissedUpdates > 0) cockpit.verdict = "provisional";
+  if (pendingFailures > 0) cockpit.updatedAt = updatedAt;
   return {
     $schema: "https://gate.local/schemas/ctf-pilot-state.schema.json",
     apiVersion: "gate.dev/ctf-pilot-state/v1",

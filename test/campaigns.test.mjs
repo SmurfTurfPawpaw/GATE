@@ -611,8 +611,9 @@ test("campaign worker restart preserves an interrupted managed dispatch as ambig
   assert.equal(recovered.status, "blocked");
   assert.equal(recovered.queue.blocked, 1);
   assert.equal(recovered.stop.condition, "execution-ambiguity");
-  const pilot = readCtfPilotStatus({ paths, now: fixedAt });
-  assert.equal(pilot.state.solving.efficiency.requests.availability, "unavailable");
+  assert.equal(readCtfPilotStatus({ paths, now: fixedAt }).reason, "worker-unavailable");
+  const pilot = JSON.parse(fs.readFileSync(paths.ctfPilotState, "utf8"));
+  assert.equal(pilot.solving.efficiency.requests.availability, "unavailable");
   assert.deepEqual(readJournal(paths).slice(-1).map((entry) => entry.type), ["campaign-recovered"]);
 });
 
@@ -876,23 +877,17 @@ test("campaign worker feed counters remain additive across process generations",
   }
 
   await runOneGeneration();
-  const afterFirst = readCtfPilotStatus({
-    paths,
-    now: new Date(clockMs + 10).toISOString()
-  });
-  assert.equal(afterFirst.availability, "available");
-  assert.equal(afterFirst.state.cockpit.updatesPublished.value, 1);
+  assert.equal(readCtfPilotStatus({ paths, now: new Date(clockMs + 10).toISOString() }).reason, "worker-unavailable");
+  const afterFirst = JSON.parse(fs.readFileSync(paths.ctfPilotState, "utf8"));
+  assert.equal(afterFirst.cockpit.updatesPublished.value, 1);
 
   await runOneGeneration();
-  const afterSecond = readCtfPilotStatus({
-    paths,
-    now: new Date(clockMs + 10).toISOString()
-  });
-  assert.equal(afterSecond.availability, "available");
-  assert.equal(afterSecond.state.cockpit.updatesPublished.value, 2);
-  assert.equal(afterSecond.state.cockpit.updatesMissed.value, 0);
-  assert.equal(afterSecond.state.solving.verdict, "unknown");
-  assert.equal(afterSecond.state.integrity.availability, "unavailable");
+  assert.equal(readCtfPilotStatus({ paths, now: new Date(clockMs + 10).toISOString() }).reason, "worker-unavailable");
+  const afterSecond = JSON.parse(fs.readFileSync(paths.ctfPilotState, "utf8"));
+  assert.equal(afterSecond.cockpit.updatesPublished.value, 2);
+  assert.equal(afterSecond.cockpit.updatesMissed.value, 0);
+  assert.equal(afterSecond.solving.verdict, "unknown");
+  assert.equal(afterSecond.integrity.availability, "unavailable");
 });
 
 test("campaign worker merges interleaved case-pilot counters without rollback", async (t) => {
@@ -944,51 +939,108 @@ test("campaign worker merges interleaved case-pilot counters without rollback", 
   });
   assert.equal(result.ok, true);
   assert.equal(result.counters.pilotSemanticUpdates, 5);
-  const pilot = readCtfPilotStatus({ paths, now: new Date(clockMs + 10).toISOString() });
-  assert.equal(pilot.availability, "available");
+  assert.equal(readCtfPilotStatus({ paths, now: new Date(clockMs + 10).toISOString() }).reason, "worker-unavailable");
+  const pilot = JSON.parse(fs.readFileSync(paths.ctfPilotState, "utf8"));
   assert.equal(
-    pilot.state.cockpit.updatesPublished.value,
+    pilot.cockpit.updatesPublished.value,
     10 + result.counters.pilotSemanticUpdates
   );
-  assert.equal(pilot.state.cockpit.updatesMissed.value, 3);
+  assert.equal(pilot.cockpit.updatesMissed.value, 3);
 });
 
-test("heartbeat preserves same-generation solver and cockpit assessments", async (t) => {
-  const { paths, options } = fixture(t);
-  createCampaign(dryCampaign(), options);
-  resumeCampaign("first-campaign", options);
-  const abort = new AbortController();
-  let clockMs = Date.parse(fixedAt);
-  let waits = 0;
-  let expected;
-  await runCampaignWorker("first-campaign", {
-    ...options, now: () => new Date(clockMs++).toISOString(),
-    signal: abort.signal, processSignals: false, pollMs: 250, heartbeatMs: 1000,
-    wait: async () => {
-      if (waits++ === 0) {
-        updateCtfPilotState((current) => {
-          const updatedAt = nextCtfPilotTimestamp(current.state.metadata.updatedAt, new Date(clockMs++).toISOString());
-          const state = structuredClone(current.state);
-          state.metadata = { ...state.metadata, revision: state.metadata.revision + 1, updatedAt,
-            validUntil: new Date(Date.parse(updatedAt) + 15000).toISOString() };
-          state.solving = { ...state.solving, verdict: "pass", now: "complete", actionNeeded: "none", updatedAt,
-            completion: { state: "complete", reproduction: "confirmed", externalAcceptance: "accepted" },
-            objectives: { availability: "available", completed: 1, total: 1 } };
-          state.cockpit = { ...state.cockpit, verdict: "pass", now: "current", actionNeeded: "none", updatedAt,
-            signals: { availability: "available", available: 1, total: 1 } };
-          expected = state;
-          return state;
-        }, { paths });
-        clockMs += 1100;
-      } else {
-        const current = readCtfPilotStatus({ paths, now: new Date(clockMs).toISOString() }).state;
-        for (const axis of ["solving", "cockpit"]) {
-          for (const key of ["verdict", "now", "actionNeeded", "updatedAt"]) assert.equal(current[axis][key], expected[axis][key]);
+test("heartbeat preserves independent assessments and recovers after a missed publication", async (t) => {
+  for (const failPublication of [false, true]) {
+    const { paths, options } = fixture(t);
+    createCampaign(dryCampaign(), options);
+    resumeCampaign("first-campaign", options);
+    const abort = new AbortController();
+    let clockMs = Date.parse(fixedAt);
+    let waits = 0;
+    let expected;
+    const errors = [];
+    const result = await runCampaignWorker("first-campaign", {
+      ...options, now: () => new Date(clockMs++).toISOString(),
+      signal: abort.signal, processSignals: false, pollMs: 250, heartbeatMs: 1000,
+      onPilotError: (error) => errors.push(error.message),
+      wait: async () => {
+        const iteration = waits++;
+        if (iteration === 0) {
+          updateCtfPilotState((current) => {
+            const updatedAt = nextCtfPilotTimestamp(current.state.metadata.updatedAt, new Date(clockMs++).toISOString());
+            const state = structuredClone(current.state);
+            state.metadata = { ...state.metadata, revision: state.metadata.revision + 1, updatedAt,
+              validUntil: new Date(Date.parse(updatedAt) + 15000).toISOString() };
+            state.solving = { ...state.solving, verdict: "pass", now: "complete", actionNeeded: "none", updatedAt,
+              completion: { state: "complete", reproduction: "confirmed", externalAcceptance: "accepted" },
+              objectives: { availability: "available", completed: 1, total: 1 } };
+            state.cockpit = { ...state.cockpit, verdict: "pass", now: "current", actionNeeded: "none", updatedAt,
+              signals: { availability: "available", available: 1, total: 1 } };
+            expected = state;
+            return state;
+          }, { paths });
+          if (failPublication) {
+            const rename = fs.renameSync;
+            t.mock.method(fs, "renameSync", (...args) => {
+              if (args[1] === paths.ctfPilotState) throw new Error("transient pilot publication failure");
+              return rename(...args);
+            });
+          }
+        } else if (failPublication && iteration === 1) {
+          assert.deepEqual(errors, ["transient pilot publication failure"]);
+          t.mock.restoreAll();
+        } else {
+          const current = readCtfPilotStatus({ paths, now: new Date(clockMs).toISOString() }).state;
+          for (const key of ["verdict", "now", "actionNeeded", "updatedAt"]) assert.equal(current.solving[key], expected.solving[key]);
+          assert.equal(current.cockpit.verdict, failPublication ? "provisional" : "pass");
+          assert.equal(current.cockpit.updatesMissed.value, failPublication ? 1 : 0);
+          assert.equal(current.cockpit.now, "current");
+          assert.equal(current.cockpit.actionNeeded, expected.cockpit.actionNeeded);
+          if (failPublication) assert.ok(Date.parse(current.cockpit.updatedAt) > Date.parse(expected.cockpit.updatedAt));
+          else assert.equal(current.cockpit.updatedAt, expected.cockpit.updatedAt);
+          if (iteration >= 3) abort.abort();
         }
-        abort.abort();
+        clockMs += 1100;
       }
+    });
+    assert.equal(result.counters.pilotUpdateFailures, failPublication ? 1 : 0);
+  }
+});
+
+test("public and CLI pilot reads require the worker while mutation retains its state", async (t) => {
+  const { paths, options } = fixture(t);
+  const now = () => new Date().toISOString();
+  const liveOptions = { ...options, now };
+  createCampaign({ ...dryCampaign(), expiresAt: new Date(Date.now() + 120_000).toISOString() }, liveOptions);
+  const abort = new AbortController();
+  let reachedWait;
+  const waiting = new Promise((resolve) => { reachedWait = resolve; });
+  const running = runCampaignWorker("first-campaign", {
+    ...liveOptions, signal: abort.signal, processSignals: false, pollMs: 250, heartbeatMs: 1000,
+    wait: async () => {
+      reachedWait();
+      if (!abort.signal.aborted) await new Promise((resolve) => abort.signal.addEventListener("abort", resolve, { once: true }));
     }
   });
+  t.after(() => abort.abort());
+  await waiting;
+  const args = ["--case", paths.caseId, "ctf", "pilot", "status", "--json"];
+  const live = invoke(args, paths.home);
+  assert.equal(live.status, 0, live.stderr);
+  assert.equal(JSON.parse(live.stdout).availability, "available");
+  abort.abort();
+  await running;
+  assert.equal(readCtfPilotStatus({ paths, now: now() }).reason, "worker-unavailable");
+  const stopped = invoke(args, paths.home);
+  assert.equal(stopped.status, 0, stopped.stderr);
+  assert.equal(JSON.parse(stopped.stdout).reason, "worker-unavailable");
+  updateCtfPilotState((current) => {
+    assert.equal(current.availability, "available");
+    const updatedAt = nextCtfPilotTimestamp(current.state.metadata.updatedAt, now());
+    return { ...current.state, metadata: { ...current.state.metadata,
+      revision: current.state.metadata.revision + 1, updatedAt,
+      validUntil: new Date(Date.parse(updatedAt) + 15000).toISOString() } };
+  }, { paths });
+  assert.equal(readCtfPilotStatus({ paths, now: now() }).reason, "worker-unavailable");
 });
 
 test("campaign worker honors an already-aborted caller without polling", async (t) => {

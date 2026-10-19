@@ -1763,7 +1763,8 @@ export function verifyLabCampaignWorkflowReservation(reference, expected, option
       envelope.maxInputTokens !== 0 || envelope.maxOutputTokens !== 0 ||
       envelope.maxTotalTokens !== capability.bounds.maxTokens ||
       envelope.maxEvidenceBytes !== capability.bounds.maxEvidenceBytes ||
-      envelope.maxSpend !== capability.bounds.maxSpend) {
+      !Number.isFinite(envelope.maxSpend) || envelope.maxSpend < 0 ||
+      envelope.maxSpend > capability.bounds.maxSpend) {
     throw new Error("workflow reservation envelope differs from the lab capability bounds");
   }
   if (expected.target !== context.requestUrl || new URL(expected.target).origin !== context.origin ||

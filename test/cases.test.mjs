@@ -434,6 +434,15 @@ test("case creation binds ready authority and isolates mutable state while shari
   const pilotStatus = invoke(["--case", "alpha-case", "ctf", "pilot", "status", "--json"], paths.home);
   assert.equal(pilotStatus.status, 0, pilotStatus.stderr);
   assert.equal(JSON.parse(pilotStatus.stdout).revision, 1);
+
+  const workerState = ctfPilotState("alpha-case", 2);
+  workerState.metadata.producer = { kind: "campaign-worker", campaignId: "missing-worker", generation: "a".repeat(32) };
+  fs.writeFileSync(pilotInput, `${JSON.stringify(workerState)}\n`, { mode: 0o600 });
+  const workerUpdate = invoke([
+    "--case", "alpha-case", "ctf", "pilot", "update", "--file", pilotInput, "--json"
+  ], paths.home);
+  assert.equal(workerUpdate.status, 0, workerUpdate.stderr);
+  assert.equal(JSON.parse(workerUpdate.stdout).reason, "worker-unavailable");
 });
 
 test("stale cases remain observable and revocable while new admission stays blocked", async (t) => {

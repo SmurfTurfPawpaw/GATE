@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { campaignWorkerProducerStatus } from "./campaign-worker.mjs";
 import { loadConfig } from "./config.mjs";
 import { readCtfPilotStatus } from "./ctf-pilot.mjs";
 import { caseFleetStatus, openCaseRuntime } from "./cases.mjs";
@@ -195,13 +194,7 @@ async function buildRuntimeStatus(paths, options = {}) {
   const engagementProjection = options.includeEngagements === false
     ? omittedEngagementProjection()
     : boundedEngagements(paths);
-  let ctfPilot = readCtfPilotStatus({ paths, now: observedAt });
-  if (ctfPilot.availability === "available" && ctfPilot.state.metadata.producer?.kind === "campaign-worker") {
-    const producer = campaignWorkerProducerStatus(ctfPilot.state.metadata.producer, { paths, now: observedAt });
-    if (producer.availability !== "available") {
-      ctfPilot = Object.freeze({ availability: "unavailable", reason: "worker-unavailable", state: null });
-    }
-  }
+  const ctfPilot = readCtfPilotStatus({ paths, now: observedAt });
   return {
     // Capture the enclosing snapshot after all component reads. A worker may
     // publish while status is being assembled; using the start time would make
