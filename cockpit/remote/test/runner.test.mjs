@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { CodexCompanionAdapter } from "../../companion/app-server.mjs";
 import { ActivityStore } from "../../companion/activity.mjs";
 import {
   REMOTE_MESSAGE_VERSION,
@@ -514,6 +515,48 @@ test("runner starts telemetry offline when the conversation adapter is initially
     assert.equal(requests.some((item) => item.path.endsWith("/lease")), false);
     assert.equal(factoryCalls, 0);
   }
+});
+
+test("CLI startup publishes signed telemetry when its Codex connection fails", async (t) => {
+  const root = ownerDirectory(t);
+  const cwd = path.join(root, "work");
+  const journalDirectory = path.join(root, "journal");
+  const keysDirectory = path.join(root, "keys");
+  for (const directory of [cwd, journalDirectory, keysDirectory, path.join(journalDirectory, "codex-home")]) fs.mkdirSync(directory, { mode: 0o700 });
+  const prepared = runnerOptions(t);
+  const privateKeyFile = path.join(keysDirectory, "runner.pem");
+  fs.writeFileSync(privateKeyFile, prepared.options.privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600 });
+  const requests = [];
+  const controlPlane = signedControlPlane({ publicKey: prepared.publicKey, commandValue: null, requests });
+  let connectCalls = 0;
+  t.mock.method(CodexCompanionAdapter.prototype, "connect", async () => {
+    connectCalls += 1;
+    throw new Error("conversation unavailable at startup");
+  });
+  await runnerCliInternals.run({
+    ...prepared.options, cwd, journalDirectory, privateKeyFile,
+    codexHome: path.join(journalDirectory, "codex-home"),
+    threadIdFile: path.join(journalDirectory, "thread.json")
+  }, {
+    prepareLaunch: () => ({ command: process.execPath, environment: {} }),
+    createRunner: (configuration) => {
+      const runner = new RemoteCockpitRunner({
+        ...prepared.options, ...configuration,
+        fleetProvider: async () => unavailableFleet(),
+        fetch: async (url, init) => {
+          const result = await controlPlane(url, init);
+          if (new URL(url).pathname.endsWith("/fleet")) queueMicrotask(() => { void runner.stop(); });
+          return result;
+        }
+      });
+      return runner;
+    }
+  });
+  assert.equal(connectCalls, 1);
+  assert.ok(requests.some((item) => item.path.endsWith("/heartbeat")));
+  assert.ok(requests.some((item) => item.path.endsWith("/fleet")));
+  assert.ok(requests.some((item) => item.path.endsWith("/state") && item.value.codex.state === "offline"));
+  assert.equal(requests.some((item) => item.path.endsWith("/lease")), false);
 });
 
 test("adapter death during delivery leaves the command ambiguous while fleet telemetry continues", async (t) => {

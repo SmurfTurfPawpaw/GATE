@@ -1232,6 +1232,36 @@ test("a provably dead authority lock is recovered without weakening malformed-lo
   }, malformed.options), /malformed and requires reviewed recovery/u);
 });
 
+test("orphan claim recovery remains stopped after a crash during retirement", async (t) => {
+  const fixture = setup(t, { jobCount: 1 });
+  const created = proposal(fixture);
+  confirmLabCampaignAuthority("hacker101-baseline", { confirm: created.confirmationRequired }, fixture.options);
+  setControllerStart(fixture);
+  const write = fs.writeFileSync;
+  t.mock.method(fs, "writeFileSync", (...args) => {
+    if (typeof args[1] === "string" && args[1].startsWith("{")) {
+      const record = JSON.parse(args[1]);
+      if (record.type === "capability-issued") throw new Error("crash after capability claim");
+    }
+    return write(...args);
+  });
+  await assert.rejects(dispatchAuthorizedLabCampaignJob("hacker101-baseline", fixture.jobs[0], fixture.options), /crash after capability claim/u);
+  t.mock.restoreAll();
+  t.mock.method(fs, "writeFileSync", (...args) => {
+    const result = write(...args);
+    if (typeof args[1] === "string" && args[1].startsWith("{") && JSON.parse(args[1]).type === "request-failed") {
+      throw new Error("crash after retirement append");
+    }
+    return result;
+  });
+  assert.throws(() => recoverLabCampaignAuthority("hacker101-baseline", {
+    confirm: labCampaignAuthorityInternals.exactRecoveryConfirmation(created.authority)
+  }, fixture.options), /crash after retirement append/u);
+  t.mock.restoreAll();
+  assert.equal(labCampaignAuthorityStatus("hacker101-baseline", fixture.options).status, "stopped");
+  await assert.rejects(dispatchAuthorizedLabCampaignJob("hacker101-baseline", fixture.jobs[0], fixture.options), /stopped/u);
+});
+
 test("reviewed recovery quarantines a torn journal tail and restores a missing delimiter", (t) => {
   const torn = setup(t, { jobCount: 1 });
   const tornCreated = proposal(torn);
@@ -1250,14 +1280,17 @@ test("reviewed recovery quarantines a torn journal tail and restores a missing d
     () => labCampaignAuthorityStatus("hacker101-baseline", torn.options),
     /journal has an incomplete final record/u
   );
-  const recoveredTorn = recoverLabCampaignAuthority("hacker101-baseline", {
-    confirm: labCampaignAuthorityInternals.exactRecoveryConfirmation(tornCreated.authority)
-  }, torn.options);
-  assert.deepEqual(recoveredTorn.journalRepair, {
-    repaired: true,
-    mode: "incomplete-tail-quarantined"
+  const rename = fs.renameSync;
+  const injectedCrash = new Error("crash after journal replacement");
+  t.mock.method(fs, "renameSync", (...args) => {
+    const result = rename(...args);
+    if (args[1] === tornJournal) throw injectedCrash;
+    return result;
   });
-  assert.equal(recoveredTorn.stopped, true);
+  assert.throws(() => recoverLabCampaignAuthority("hacker101-baseline", {
+    confirm: labCampaignAuthorityInternals.exactRecoveryConfirmation(tornCreated.authority)
+  }, torn.options), /crash after journal replacement/u);
+  t.mock.restoreAll();
   assert.equal(labCampaignAuthorityStatus("hacker101-baseline", torn.options).status, "stopped");
   const quarantined = fs.readdirSync(tornDirectory)
     .filter((name) => /^journal\.jsonl\.torn\.[a-f0-9]{16}\.bin$/u.test(name));

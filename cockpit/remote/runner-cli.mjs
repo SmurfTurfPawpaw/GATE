@@ -565,7 +565,7 @@ function assertWorkingDirectoryBoundary(cwd, values) {
   }
 }
 
-async function run(options) {
+async function run(options, { prepareLaunch = prepareRemoteCodexLaunch, createRunner = (configuration) => new RemoteCockpitRunner(configuration) } = {}) {
   const journalDirectory = ownerDirectory(options.journalDirectory);
   const cwd = validateCwd(options.cwd);
   const codexHome = ownerDirectory(options.codexHome);
@@ -575,7 +575,7 @@ async function run(options) {
     journalDirectory,
     codexHome
   });
-  const codexLaunch = prepareRemoteCodexLaunch(process.env, codexHome, [
+  const codexLaunch = prepareLaunch(process.env, codexHome, [
     cwd,
     journalDirectory,
     path.dirname(options.privateKeyFile)
@@ -608,7 +608,7 @@ async function run(options) {
       beforeFirstTurn: (threadId) => threadRecord.markUsed(threadId)
     });
     adapter = createAdapter();
-    runner = new RemoteCockpitRunner({
+    runner = createRunner({
       controlPlaneUrl: options.controlPlaneUrl,
       runnerId: options.runnerId,
       caseId: options.caseId,
@@ -619,8 +619,7 @@ async function run(options) {
       adapterFactory: createAdapter,
       fleetProvider
     });
-    await adapter.connect();
-    process.stdout.write("Remote cockpit runner connected to its dedicated Codex thread.\n");
+    process.stdout.write("Remote cockpit runner starting signed telemetry and its dedicated Codex connection.\n");
     process.stdout.write("Keep this terminal open. Press Ctrl+C to stop cleanly.\n");
 
     let stopping = false;

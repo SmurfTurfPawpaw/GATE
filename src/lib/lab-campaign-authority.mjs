@@ -623,7 +623,7 @@ function readBoundJournal(loaded, options = {}) {
   );
 }
 
-function repairIncompleteJournalTail(loaded) {
+function repairIncompleteJournalTail(loaded, options) {
   const resolved = loaded.resolved;
   const bytes = readPrivateFileBounded(resolved.journal, MAX_JOURNAL_BYTES, null, {
     label: "private lab campaign journal"
@@ -662,7 +662,12 @@ function repairIncompleteJournalTail(loaded) {
   assertAuthorityJournalPrefix(entries, loaded.authority, loaded.receipt);
   const quarantine = `${resolved.journal}.torn.${crypto.randomBytes(8).toString("hex")}.bin`;
   writePrivateFileExclusive(quarantine, tail, { label: "quarantined private lab campaign journal tail" });
-  writePrivateFileAtomic(resolved.journal, prefix, { label: "repaired private lab campaign journal" });
+  const stopped = entries.some((entry) => entry.type === "authority-stopped");
+  const stop = stopped ? Buffer.alloc(0) : Buffer.from(`${JSON.stringify(journalEntry(
+    path.basename(resolved.directory), entries.length + 1, entries.at(-1).entrySha256,
+    "authority-stopped", { condition: "execution-ambiguity", jobId: null, runId: null }, nowInstant(options)
+  ))}\n`);
+  writePrivateFileAtomic(resolved.journal, Buffer.concat([prefix, stop]), { label: "repaired private lab campaign journal" });
   syncPrivateDirectory(resolved.directory, { label: "private lab campaign authority after journal repair" });
   return { repaired: true, mode: "incomplete-tail-quarantined" };
 }
@@ -1312,7 +1317,7 @@ export function recoverLabCampaignAuthority(authorityId, input, options = {}) {
     throw new Error(`lab campaign recovery confirmation must be exactly: ${confirmation}`);
   }
   return withLock(loaded.resolved, () => {
-    const journalRepair = repairIncompleteJournalTail(loaded);
+    const journalRepair = repairIncompleteJournalTail(loaded, options);
     const entries = readBoundJournal(loaded);
     const claims = readClaims(loaded.resolved, paths);
     const started = new Set(entries.filter((entry) => entry.type === "request-started")
@@ -1326,20 +1331,20 @@ export function recoverLabCampaignAuthority(authorityId, input, options = {}) {
     }
     const unjournaled = claims.filter((claim) =>
       !started.has(claim.metadata.id) && !terminal.has(claim.metadata.id));
-    for (const claim of unjournaled) {
-      appendEntry(loaded.resolved, "request-failed", {
-        capabilityId: claim.metadata.id,
-        jobId: claim.campaign.jobId,
-        manifestId: null,
-        reason: "Reviewed recovery retired a claimed capability before any request intent was journaled."
-      }, options, loaded);
-    }
     const ambiguousTail = journalRepair.mode === "incomplete-tail-quarantined";
     if ((unjournaled.length || ambiguousTail) && !entries.some((entry) => entry.type === "authority-stopped")) {
       appendEntry(loaded.resolved, "authority-stopped", {
         condition: "execution-ambiguity",
         jobId: unjournaled[0]?.campaign.jobId || null,
         runId: null
+      }, options, loaded);
+    }
+    for (const claim of unjournaled) {
+      appendEntry(loaded.resolved, "request-failed", {
+        capabilityId: claim.metadata.id,
+        jobId: claim.campaign.jobId,
+        manifestId: null,
+        reason: "Reviewed recovery retired a claimed capability before any request intent was journaled."
       }, options, loaded);
     }
     return {

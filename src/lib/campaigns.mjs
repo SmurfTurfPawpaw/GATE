@@ -737,6 +737,12 @@ function emptyUsage() {
   };
 }
 
+function invalidateContactUsage(state) {
+  for (const key of ["requests", "wallMinutes", "evidenceBytes"]) {
+    state.usage.observed[key] = measurement("unavailable", null);
+  }
+}
+
 function initialUsage(jobs) {
   const usage = emptyUsage();
   for (const envelope of jobs) {
@@ -978,6 +984,7 @@ function replay(entries, grant, jobs, paths) {
         throw new Error("campaign-recovered job set is incomplete or duplicated");
       }
       if (blocked) {
+        invalidateContactUsage(state);
         state.status = "blocked";
         state.stop = {
           condition: "execution-ambiguity",
@@ -1022,13 +1029,13 @@ function replay(entries, grant, jobs, paths) {
       }
       job.status = "completed";
       job.updatedAt = entry.at;
-      state.usage.observed.wallMinutes.value += metrics.wallMilliseconds / 60_000;
-      state.usage.observed.requests.value += metrics.requests;
+      if (state.usage.observed.wallMinutes.availability === "exact") state.usage.observed.wallMinutes.value += metrics.wallMilliseconds / 60_000;
+      if (state.usage.observed.requests.availability === "exact") state.usage.observed.requests.value += metrics.requests;
       state.usage.observed.inputTokens.value += metrics.inputTokens;
       state.usage.observed.outputTokens.value += metrics.outputTokens;
       state.usage.observed.totalTokens.value += metrics.totalTokens;
       state.usage.observed.spend.value += metrics.spend;
-      state.usage.observed.evidenceBytes.value += metrics.evidenceBytes;
+      if (state.usage.observed.evidenceBytes.availability === "exact") state.usage.observed.evidenceBytes.value += metrics.evidenceBytes;
       for (const [used, ceiling] of [
         [state.usage.observed.wallMinutes.value, grant.ceilings.maxWallMinutes],
         [state.usage.observed.requests.value, grant.ceilings.maxRequests],
@@ -1046,6 +1053,7 @@ function replay(entries, grant, jobs, paths) {
       if (job.jobSha256 !== entry.payload.jobSha256 || job.status !== "running" || state.status !== "running") {
         throw new Error(`campaign job terminal transition is invalid: ${job.id}`);
       }
+      if (definitions.get(job.id).job.type === "managed-adapter") invalidateContactUsage(state);
       job.status = entry.type === "job-blocked" ? "blocked" : "failed";
       job.updatedAt = entry.at;
       job.reason = oneLine(entry.payload.reason, { name: `${entry.type} reason`, max: 500 });

@@ -572,6 +572,10 @@ test("campaign worker integration defers without confirmed authority and fails c
   assert.equal(failed.state.status, "blocked");
   assert.equal(failed.state.queue.blocked, 1);
   assert.equal(failed.state.stop.condition, "execution-ambiguity");
+  for (const key of ["requests", "wallMinutes", "evidenceBytes"]) {
+    assert.deepEqual(failed.state.usage.observed[key], { availability: "unavailable", value: null });
+    assert.deepEqual(campaignStatus("first-campaign", failedFixture.options).state.usage.observed[key], { availability: "unavailable", value: null });
+  }
   assert.deepEqual(readJournal(failedFixture.paths).slice(-3).map((entry) => entry.type), [
     "job-started",
     "job-blocked",
@@ -607,6 +611,8 @@ test("campaign worker restart preserves an interrupted managed dispatch as ambig
   assert.equal(recovered.status, "blocked");
   assert.equal(recovered.queue.blocked, 1);
   assert.equal(recovered.stop.condition, "execution-ambiguity");
+  const pilot = readCtfPilotStatus({ paths, now: fixedAt });
+  assert.equal(pilot.state.solving.efficiency.requests.availability, "unavailable");
   assert.deepEqual(readJournal(paths).slice(-1).map((entry) => entry.type), ["campaign-recovered"]);
 });
 
@@ -947,6 +953,44 @@ test("campaign worker merges interleaved case-pilot counters without rollback", 
   assert.equal(pilot.state.cockpit.updatesMissed.value, 3);
 });
 
+test("heartbeat preserves same-generation solver and cockpit assessments", async (t) => {
+  const { paths, options } = fixture(t);
+  createCampaign(dryCampaign(), options);
+  resumeCampaign("first-campaign", options);
+  const abort = new AbortController();
+  let clockMs = Date.parse(fixedAt);
+  let waits = 0;
+  let expected;
+  await runCampaignWorker("first-campaign", {
+    ...options, now: () => new Date(clockMs++).toISOString(),
+    signal: abort.signal, processSignals: false, pollMs: 250, heartbeatMs: 1000,
+    wait: async () => {
+      if (waits++ === 0) {
+        updateCtfPilotState((current) => {
+          const updatedAt = nextCtfPilotTimestamp(current.state.metadata.updatedAt, new Date(clockMs++).toISOString());
+          const state = structuredClone(current.state);
+          state.metadata = { ...state.metadata, revision: state.metadata.revision + 1, updatedAt,
+            validUntil: new Date(Date.parse(updatedAt) + 15000).toISOString() };
+          state.solving = { ...state.solving, verdict: "pass", now: "complete", actionNeeded: "none", updatedAt,
+            completion: { state: "complete", reproduction: "confirmed", externalAcceptance: "accepted" },
+            objectives: { availability: "available", completed: 1, total: 1 } };
+          state.cockpit = { ...state.cockpit, verdict: "pass", now: "current", actionNeeded: "none", updatedAt,
+            signals: { availability: "available", available: 1, total: 1 } };
+          expected = state;
+          return state;
+        }, { paths });
+        clockMs += 1100;
+      } else {
+        const current = readCtfPilotStatus({ paths, now: new Date(clockMs).toISOString() }).state;
+        for (const axis of ["solving", "cockpit"]) {
+          for (const key of ["verdict", "now", "actionNeeded", "updatedAt"]) assert.equal(current[axis][key], expected[axis][key]);
+        }
+        abort.abort();
+      }
+    }
+  });
+});
+
 test("campaign worker honors an already-aborted caller without polling", async (t) => {
   const { options } = fixture(t);
   createCampaign(dryCampaign(), options);
@@ -1082,6 +1126,9 @@ test("recovery atomically blocks an interrupted managed job as execution ambigui
   assert.equal(recovered.state.queue.blocked, 1);
   assert.equal(recovered.state.stop.condition, "execution-ambiguity");
   assert.equal(recovered.state.kpis.recoveries.value, 1);
+  for (const key of ["requests", "wallMinutes", "evidenceBytes"]) {
+    assert.deepEqual(recovered.state.usage.observed[key], { availability: "unavailable", value: null });
+  }
   assert.equal(readJournal(paths).at(-1).type, "campaign-recovered");
 });
 
@@ -1323,25 +1370,40 @@ test("persistent user-service renderer emits fixed observer, campaign, and remot
   const observer = fs.readFileSync(path.join(outputDirectory, "gate-observer.service"), "utf8");
   const campaign = fs.readFileSync(path.join(outputDirectory, "gate-campaign@.service"), "utf8");
   const remoteRunner = fs.readFileSync(path.join(outputDirectory, "gate-remote-runner@.service"), "utf8");
-  for (const unit of [observer, campaign]) {
-    assert.match(unit, /Type=simple/u);
-    assert.match(unit, /Restart=on-failure/u);
-    assert.match(unit, /UMask=0077/u);
-    assert.match(unit, /NoNewPrivileges=true/u);
-    assert.doesNotMatch(unit, /@[A-Z_]+@/u);
+  function service(text) {
+    let section;
+    const values = new Map();
+    for (const raw of text.split("\n")) {
+      const line = raw.trim();
+      if (!line || line.startsWith("#") || line.startsWith(";")) continue;
+      if (line.startsWith("[")) { section = line; continue; }
+      if (section !== "[Service]") continue;
+      const index = line.indexOf("=");
+      assert.ok(index > 0);
+      const key = line.slice(0, index).trim();
+      const value = line.slice(index + 1).trim();
+      if (key === "EnvironmentFile" || key === "Environment") {
+        values.set(key, value ? [...(values.get(key) || []), value] : []);
+      } else values.set(key, value);
+    }
+    return values;
   }
-  assert.match(observer, /up --host 127\.0\.0\.1 --port 4173/u);
-  assert.match(campaign, /campaign worker \$\{GATE_CAMPAIGN\}/u);
-  assert.match(campaign, /EnvironmentFile=%h\/\.config\/gate\/campaign-%i\.env/u);
-  assert.match(remoteRunner, /Type=simple/u);
-  assert.match(remoteRunner, /Restart=on-abnormal/u);
-  assert.match(remoteRunner, /EnvironmentFile=%h\/\.config\/gate\/remote-runner-%i\.env/u);
-  assert.match(remoteRunner, /cockpit\/remote\/runner-cli\.mjs/u);
-  assert.match(remoteRunner, /UMask=0077/u);
-  assert.match(remoteRunner, /NoNewPrivileges=true/u);
-  assert.doesNotMatch(remoteRunner, /GATE_REMOTE_CASE_ID=|PRIVATE_KEY|@[A-Z_]+@/u);
-  assert.match(observer, /^WorkingDirectory=\/[^\r\n]+$/mu);
-  assert.doesNotMatch(observer, /^WorkingDirectory="/mu);
+  const [observed, managed, remote] = [observer, campaign, remoteRunner].map(service);
+  for (const unit of [observed, managed, remote]) {
+    assert.equal(unit.get("Type"), "simple");
+    assert.equal(unit.get("UMask"), "0077");
+    assert.equal(unit.get("NoNewPrivileges"), "true");
+    assert.equal(unit.get("WorkingDirectory"), repo);
+  }
+  assert.equal(observed.get("Restart"), "on-failure");
+  assert.equal(managed.get("Restart"), "on-failure");
+  assert.equal(remote.get("Restart"), "on-abnormal");
+  assert.equal(observed.get("ExecStart"), `"${process.execPath}" "${gate}" up --host 127.0.0.1 --port 4173`);
+  assert.equal(managed.get("ExecStart"), `"${process.execPath}" "${gate}" campaign worker ` + "${GATE_CAMPAIGN}");
+  assert.equal(remote.get("ExecStart"), `"${process.execPath}" "${path.join(repo, "cockpit/remote/runner-cli.mjs")}"`);
+  assert.deepEqual(managed.get("EnvironmentFile"), ["%h/.config/gate/gate.env", "%h/.config/gate/campaign-%i.env"]);
+  assert.deepEqual(remote.get("EnvironmentFile"), ["%h/.config/gate/remote-runner-%i.env"]);
+  assert.deepEqual(remote.get("Environment"), ["NODE_OPTIONS=", "PATH=/usr/bin:/bin"]);
   const verify = spawnSync("systemd-analyze", [
     "verify",
     path.join(outputDirectory, "gate-observer.service"),

@@ -281,15 +281,16 @@ function pilotStateFromCampaign(current, context, status, at, publication = {}) 
   const sameProducer = previous?.metadata?.producer?.kind === "campaign-worker" &&
     previous.metadata.producer.campaignId === context.campaignId &&
     previous.metadata.producer.generation === context.generation;
+  const preserveAssessment = sameProducer && !semantic;
   const stage = campaignStage(status.state);
   const previousSolving = previous?.solving?.availability === "available" ? previous.solving : null;
   const requests = observedInteger(status.state.usage.observed.requests);
   const tokens = observedInteger(status.state.usage.observed.totalTokens);
   const solving = {
     availability: "available",
-    verdict: status.state.status === "blocked" ? "blocked" : "unknown",
-    now: stage.now,
-    actionNeeded: stage.actionNeeded,
+    verdict: preserveAssessment && previousSolving ? previousSolving.verdict : status.state.status === "blocked" ? "blocked" : "unknown",
+    now: preserveAssessment && previousSolving ? previousSolving.now : stage.now,
+    actionNeeded: preserveAssessment && previousSolving ? previousSolving.actionNeeded : stage.actionNeeded,
     updatedAt: semantic ? updatedAt : previousSolving?.updatedAt || updatedAt,
     completion: sameProducer && previousSolving?.completion || {
       state: "unknown",
@@ -311,7 +312,7 @@ function pilotStateFromCampaign(current, context, status, at, publication = {}) 
       // launch no tool and managed jobs may block before the broker. Preserve
       // a receipt-backed solver value, otherwise report this as unavailable.
       toolRuns: previousSolving?.efficiency?.toolRuns || unavailableMetric(),
-      requests: mergeCount(previousSolving?.efficiency?.requests, requests),
+      requests: requests === null ? unavailableMetric() : mergeCount(previousSolving?.efficiency?.requests, requests),
       retries: previousSolving?.efficiency?.retries || unavailableMetric()
     }
   };
@@ -339,9 +340,9 @@ function pilotStateFromCampaign(current, context, status, at, publication = {}) 
   };
   const cockpit = {
     availability: "available",
-    verdict: "unknown",
-    now: "current",
-    actionNeeded: "none",
+    verdict: preserveAssessment && previousCockpit ? previousCockpit.verdict : "unknown",
+    now: preserveAssessment && previousCockpit ? previousCockpit.now : "current",
+    actionNeeded: preserveAssessment && previousCockpit ? previousCockpit.actionNeeded : "none",
     updatedAt: semantic ? updatedAt : previousCockpit?.updatedAt || updatedAt,
     signals: previousCockpit?.signals || unavailableCoverage(),
     updatesPublished: availableMetric(projectedSemanticUpdates),
