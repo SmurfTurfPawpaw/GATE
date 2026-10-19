@@ -147,3 +147,9 @@ a missing or empty file, a first record other than the exact bound
 `authority-created` record, or a confirmed receipt without the exact second
 `authority-confirmed` record leaves authority state indeterminate and blocks
 status, permits, capability verification, and execution.
+
+Before publishing an append or repaired journal, GATE validates the complete
+proposed journal, including nondecreasing timestamps. A backward host-clock
+transition that would violate that ordering is rejected while preserving the
+previous readable journal; confirmation likewise validates before persisting
+its receipt. Restore a consistent host clock before retrying the transition.

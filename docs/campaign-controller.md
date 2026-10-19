@@ -189,6 +189,16 @@ enqueue permit, so the worker can select that exact authority without the
 environment variable. An initial managed job requires `--lab-authority` or
 `GATE_LAB_AUTHORITY`. An absent, proposed, stopped, expired, recovery-required,
 or campaign-mismatched authority defers the queued job without contact.
+
+Both `run-next` and the persistent worker also require one fresh, unreserved
+workflow test in the queued job's exact workflow and phase attempt. A missing,
+already reserved, or unreadable test defers the job before the controller
+records a start or the authority claims a capability. After a completed job,
+review its result and open the next test through the
+[workflow feedback procedure](pentest-workflow.md#target-contact-admission-and-execution)
+before dispatching another queued managed job. The broker revalidates test
+readiness when reserving execution.
+
 The immutable context loader also projects the current hash-validated
 `job-started` authority ID, job ID, and job digest. The authority checks that
 exact start binding before capability creation and again after any rate wait,

@@ -230,10 +230,7 @@ export GATE_CASE=example-web
 
 Complete `authorization-and-roe` and `target-and-architecture-map`. Before a target-contact phase can start, attach a reviewed workflow admission that binds the exact target, action, tool mapping, adapter, environment, destinations, limits, and all mandatory stops. See [Target-contact admission and execution](docs/pentest-workflow.md#target-contact-admission-and-execution).
 
-This release has two narrow reviewed active adapters:
-
-- DNSx 1.3.1: one exact-domain `A` observation through one explicit resolver.
-- HTTPx 1.12.0: one exact-URL `GET`, dialled through one operator-approved literal IP while preserving the approved Host header and HTTPS SNI.
+The [managed active adapter reference](docs/security-tooling.md#managed-core-runtime) defines the available DNSx and HTTPx operations and their limits. The examples below cover DNS observation and metadata-only HTTP observation; the [workflow execution guide](docs/pentest-workflow.md#target-contact-admission-and-execution) also covers bounded HTTP GET/HEAD fetches.
 
 After the matching `active-surface-validation` phase is admitted, retain its `activePhase.attemptId`, `activePhase.toolId`, and the workflow `contract.sha256` from `workflow status`. Before creating a manifest, consult the exact learning projection for that workflow contract, phase, and admitted tool. This DNSx example uses the default consultation limits that `workflow test plan` will recompute:
 
@@ -316,7 +313,7 @@ Replace the attempt ID, applicability values, selected learning IDs, and consult
   --tokens 1000 --evidence-bytes 2097152 --json
 ```
 
-Review the immutable manifest and execute it only with its exact returned confirmation through `gate engagement exec`. DNSx and HTTPx retain broader catalog capabilities, but these adapters admit only the operations above. The other five managed core runtimes remain available for verified planning while their active adapters are added.
+Review the immutable manifest and execute it only with its exact returned confirmation through `gate engagement exec`. Broader catalog capabilities remain subject to the [managed active adapter boundary](docs/security-tooling.md#managed-core-runtime).
 
 ```bash
 ./bin/gate.mjs engagement exec ENGAGEMENT_ID \
