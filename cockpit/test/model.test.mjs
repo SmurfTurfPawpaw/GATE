@@ -25,8 +25,8 @@ test("accepts the exact gate.public-cockpit/v1 fixture", async () => {
   assert.equal(parsed.campaigns.length, 2);
   assert.equal(toDisplayModel(parsed).waitingCount, 1);
   assert.equal(toDisplayModel(parsed).mode, "preview");
-  assert.equal(toDisplayModel(parsed).siteVersion, "0.4.0");
-  assert.equal(toDisplayModel(parsed).gateVersion, "0.1.2");
+  assert.equal(toDisplayModel(parsed).siteVersion, "0.4.1");
+  assert.equal(toDisplayModel(parsed).gateVersion, "0.1.3");
 });
 
 test("preview is an explicit non-expiring, never-observed union", async () => {

@@ -20,6 +20,6 @@
   },
   "runner": {
     "id": "runner-example-001",
-    "publicKeyPath": "/var/lib/gate-remote/example-case/runner-public.pem"
+    "publicKeyPath": "/etc/gate-remote/example-case/runner-public.pem"
   }
 }

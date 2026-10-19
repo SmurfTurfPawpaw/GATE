@@ -1,0 +1,33 @@
+# Included only from /api/runner/v1/. Access is bypassed at the edge; the
+# coordinator authenticates the exact request with the enrolled Ed25519 key.
+proxy_pass http://127.0.0.1:43180;
+proxy_http_version 1.1;
+proxy_pass_request_headers on;
+proxy_request_buffering off;
+proxy_buffering off;
+proxy_cache off;
+proxy_no_cache 1;
+proxy_cache_bypass 1;
+proxy_intercept_errors off;
+
+# proxy_pass has no URI component, so Nginx preserves the origin-form path.
+proxy_set_header Host REPLACE_PUBLIC_HOSTNAME;
+proxy_set_header X-Forwarded-Proto https;
+proxy_set_header Connection "";
+
+# Never let a bypassed runner request carry a browser identity or ambient auth.
+proxy_set_header X-GATE-OIDC-Assertion "";
+proxy_set_header Cf-Access-Jwt-Assertion "";
+proxy_set_header Authorization "";
+proxy_set_header Proxy-Authorization "";
+proxy_set_header Cookie "";
+
+# Preserve the five headers covered by the runner request contract.
+proxy_set_header X-GATE-Runner $http_x_gate_runner;
+proxy_set_header X-GATE-Timestamp $http_x_gate_timestamp;
+proxy_set_header X-GATE-Nonce $http_x_gate_nonce;
+proxy_set_header X-GATE-Body-SHA256 $http_x_gate_body_sha256;
+proxy_set_header X-GATE-Signature $http_x_gate_signature;
+
+add_header Cache-Control "private, no-store, max-age=0" always;
+add_header Pragma "no-cache" always;

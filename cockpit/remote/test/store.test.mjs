@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import {
+  DEFAULT_RUNNER_CLOCK_SKEW_MS,
+  RunnerAuthError,
+  signRunnerRequest,
+  verifyRunnerRequest
+} from "../runner-auth.mjs";
 import { RemoteBridgeStore, RemoteStoreError } from "../store.mjs";
 
 const operatorId = "operator-123";
@@ -230,6 +237,48 @@ test("runner nonces are atomically single-use across close and reopen", (t) => {
   advance(60_001);
   assert.equal(reopened.consumeRunnerNonce(runnerId, nonce, expiresAt + 60_001), true,
     "an expired nonce row is pruned before an otherwise valid new request");
+});
+
+test("SQLite rejects an identical signed request through the final accepted skew millisecond", async (t) => {
+  const { store, advance } = fixture(t);
+  const now = Date.parse("2026-10-18T12:00:00.000Z");
+  const timestamp = now - DEFAULT_RUNNER_CLOCK_SKEW_MS + 1;
+  const runnerId = "runner-12345678";
+  const nonce = "Z".repeat(32);
+  const body = Buffer.from('{"kind":"lease"}\n');
+  const keys = crypto.generateKeyPairSync("ed25519");
+  const headers = signRunnerRequest({
+    runnerId,
+    privateKey: keys.privateKey,
+    method: "POST",
+    path: "/api/runner/v1/lease",
+    body,
+    timestamp,
+    nonce
+  });
+  const request = {
+    headers,
+    publicKeys: new Map([[runnerId, keys.publicKey]]),
+    nonceStore: store.runnerNonceStore(),
+    method: "POST",
+    path: "/api/runner/v1/lease",
+    body,
+    now
+  };
+
+  assert.deepEqual(await verifyRunnerRequest(request), { runnerId });
+  await assert.rejects(verifyRunnerRequest(request), (error) => {
+    assert.ok(error instanceof RunnerAuthError);
+    assert.equal(error.code, "runner-auth-replayed");
+    return true;
+  });
+
+  advance(1);
+  await assert.rejects(verifyRunnerRequest({ ...request, now: now + 1 }), (error) => {
+    assert.ok(error instanceof RunnerAuthError);
+    assert.equal(error.code, "runner-auth-rejected");
+    return true;
+  });
 });
 
 test("case session high-water survives reopen and fences every obsolete session path", (t) => {

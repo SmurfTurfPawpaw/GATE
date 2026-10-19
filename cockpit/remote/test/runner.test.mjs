@@ -909,6 +909,92 @@ test("runner CLI gives remote Codex only the minimal runtime and login environme
   assert.throws(() => runnerCliInternals.remoteCodexEnvironment({}, "relative"), /must be absolute/u);
 });
 
+test("runner rejects a writable or private-state Codex executable search path", (t) => {
+  const directory = ownerDirectory(t);
+  const codexHome = path.join(directory, "codex-home");
+  const binaryDirectory = path.join(directory, "bin");
+  fs.mkdirSync(codexHome, { mode: 0o700 });
+  fs.mkdirSync(binaryDirectory, { mode: 0o700 });
+  const executable = path.join(binaryDirectory, process.platform === "win32" ? "codex.EXE" : "codex");
+  fs.writeFileSync(executable, "not a trusted runtime\n", { mode: 0o700 });
+  assert.throws(
+    () => runnerCliInternals.prepareRemoteCodexLaunch({ PATH: binaryDirectory }, codexHome),
+    /protected absolute Codex executable is unavailable/u
+  );
+  assert.throws(
+    () => runnerCliInternals.prepareRemoteCodexLaunch({ PATH: binaryDirectory }, codexHome, [directory]),
+    /protected absolute Codex executable is unavailable/u
+  );
+  assert.throws(
+    () => runnerCliInternals.prepareRemoteCodexLaunch({ PATH: binaryDirectory }, codexHome, ["relative"]),
+    /forbidden roots must be absolute/u
+  );
+});
+
+test("runner selects only an absolute protected Codex executable and omits a writable PATH poison", (t) => {
+  const directory = ownerDirectory(t);
+  const poisonedDirectory = path.join(directory, "poisoned-bin");
+  fs.mkdirSync(poisonedDirectory, { mode: 0o700 });
+  const poisoned = path.join(poisonedDirectory, process.platform === "win32" ? "codex.EXE" : "codex");
+  fs.writeFileSync(poisoned, "poisoned runtime\n", { mode: 0o700 });
+  let launch;
+  try {
+    launch = runnerCliInternals.prepareRemoteCodexLaunch({
+      PATH: `${poisonedDirectory}${path.delimiter}${process.env.PATH || ""}`,
+      PATHEXT: process.env.PATHEXT || ""
+    }, path.join(directory, "codex-home"), [directory]);
+  } catch (error) {
+    if (/protected absolute Codex executable is unavailable/u.test(error.message)) {
+      return t.skip("this host has no administrator-protected Codex executable");
+    }
+    throw error;
+  }
+  assert.equal(path.isAbsolute(launch.command), true);
+  assert.equal(launch.command, fs.realpathSync.native(launch.command));
+  assert.notEqual(launch.command, poisoned);
+  assert.equal(launch.environment.PATH.split(path.delimiter).includes(poisonedDirectory), false);
+  assert.equal(Object.isFrozen(launch), true);
+  assert.equal(Object.isFrozen(launch.environment), true);
+});
+
+test("runner working directory boundary covers journal, Codex, key, and thread state", (t) => {
+  const root = ownerDirectory(t);
+  const values = {
+    journalDirectory: path.join(root, "journal"),
+    codexHome: path.join(root, "codex-home"),
+    privateKeyFile: path.join(root, "keys", "runner.pem"),
+    threadIdFile: path.join(root, "threads", "thread.json")
+  };
+  assert.doesNotThrow(() => runnerCliInternals.assertWorkingDirectoryBoundary(path.join(root, "work"), values));
+  for (const [cwd, label] of [
+    [path.join(values.journalDirectory, "nested"), /runner journal/u],
+    [values.codexHome, /remote Codex home/u],
+    [path.dirname(values.privateKeyFile), /runner private-key state/u],
+    [values.threadIdFile, /runner thread state/u]
+  ]) {
+    assert.throws(() => runnerCliInternals.assertWorkingDirectoryBoundary(cwd, values), label);
+  }
+});
+
+test("runner startup rejects a working directory that contains private state before taking its lock", async (t) => {
+  const root = ownerDirectory(t);
+  const journalDirectory = path.join(root, "private-runner-state");
+  const codexHome = path.join(journalDirectory, "codex-home");
+  const privateKeyFile = path.join(journalDirectory, "runner-private.pem");
+  fs.mkdirSync(journalDirectory, { mode: 0o700 });
+  fs.mkdirSync(codexHome, { mode: 0o700 });
+  const { privateKey } = crypto.generateKeyPairSync("ed25519");
+  fs.writeFileSync(privateKeyFile, privateKey.export({ format: "pem", type: "pkcs8" }), { mode: 0o600 });
+  await assert.rejects(runnerCliInternals.run({
+    cwd: root,
+    journalDirectory,
+    codexHome,
+    privateKeyFile,
+    threadIdFile: path.join(journalDirectory, "thread.json")
+  }), /must not overlap runner journal/u);
+  assert.equal(fs.existsSync(path.join(journalDirectory, ".remote-runner.lock")), false);
+});
+
 test("runner CLI records the v3 thread lifecycle and safely discards a clean unused thread", (t) => {
   const directory = ownerDirectory(t);
   const file = path.join(directory, "thread.json");

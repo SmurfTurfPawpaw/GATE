@@ -122,7 +122,7 @@ test("remote adapter pins and verifies a read-only posture on thread and turn st
   await adapter.connect();
   assert.deepEqual(lifecycle, ["creating", "provisional"]);
   assert.deepEqual(transport.calls[0].params, {
-    clientInfo: { name: "gate-cockpit", title: "GATE Remote Cockpit", version: "0.4.0" },
+    clientInfo: { name: "gate-cockpit", title: "GATE Remote Cockpit", version: "0.4.1" },
     capabilities: { experimentalApi: true }
   });
   assert.deepEqual(transport.calls[2], {
@@ -253,24 +253,31 @@ test("remote lifecycle callbacks fail closed before their corresponding app-serv
 });
 
 test("remote app-server launch arguments disable every non-host tool source", async () => {
+  const pinnedCommand = path.resolve("fixture-codex");
+  let command;
   let args;
   const adapter = new CodexCompanionAdapter({
     codexHome: REMOTE_CODEX_HOME,
+    command: pinnedCommand,
     executionPosture: "remote-read-only",
-    spawnProcess: (_command, actualArgs) => {
+    spawnProcess: (actualCommand, actualArgs) => {
+      command = actualCommand;
       args = actualArgs;
       throw new Error("launch captured");
     }
   });
   await assert.rejects(adapter.connect(), /launch captured/u);
   assert.equal(appServerInternals.REMOTE_CODEX_APP_SERVER_VERSION, "0.159.2");
+  assert.equal(command, pinnedCommand);
   assert.deepEqual(args.slice(0, 3), ["app-server", "--stdio", "--strict-config"]);
   for (const feature of [
     "apps", "browser_use", "browser_use_external", "browser_use_full_cdp_access",
     "code_mode", "code_mode_host", "computer_use", "enable_mcp_apps", "hooks",
     "image_generation", "in_app_browser", "in_app_local_automation", "memories",
     "multi_agent", "multi_agent_v2", "plugins", "remote_plugin",
-    "skill_mcp_dependency_install", "token_budget", "tool_suggest"
+    "shell_snapshot", "shell_snapshot_v2", "shell_tool", "skill_search",
+    "skill_mcp_dependency_install", "sleep_tool", "token_budget", "tool_suggest",
+    "unified_exec", "unified_exec_tty", "view_image", "workspace_dependencies", "worktrees"
   ]) {
     const index = args.findIndex((value, position) => value === "--disable" && args[position + 1] === feature);
     assert.notEqual(index, -1, `missing disabled feature ${feature}`);
@@ -281,6 +288,16 @@ test("remote app-server launch arguments disable every non-host tool source", as
   assert.ok(args.includes("orchestrator.mcp.enabled=false"));
   assert.throws(() => new CodexCompanionAdapter({
     codexHome: REMOTE_CODEX_HOME,
+    executionPosture: "remote-read-only"
+  }), /requires a pinned absolute executable/u);
+  assert.throws(() => new CodexCompanionAdapter({
+    codexHome: REMOTE_CODEX_HOME,
+    command: "codex",
+    executionPosture: "remote-read-only"
+  }), /requires a pinned absolute executable/u);
+  assert.throws(() => new CodexCompanionAdapter({
+    codexHome: REMOTE_CODEX_HOME,
+    command: pinnedCommand,
     executionPosture: "remote-read-only",
     args: ["app-server", "--stdio"]
   }), /arguments are fixed/u);

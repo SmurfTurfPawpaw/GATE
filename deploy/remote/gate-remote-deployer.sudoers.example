@@ -1,0 +1,6 @@
+# TEMPLATE ONLY. Replace the digest token with the exact reviewed helper's
+# lowercase SHA-256, validate with visudo -cf, and install as
+# /etc/sudoers.d/gate-remote-deployer. Update the digest only after another
+# exact helper has completed administrator review.
+Defaults:gate-deployer env_reset,secure_path="/usr/sbin:/usr/bin:/sbin:/bin"
+gate-deployer ALL=(root) NOPASSWD:NOSETENV: sha256:REPLACE_WITH_64_CHARACTER_LOWERCASE_INSTALLER_SHA256 /usr/local/sbin/gate-remote-install-release

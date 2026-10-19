@@ -139,16 +139,33 @@ test("atomically rejects replay of a previously accepted runner nonce", async ()
   await rejectsAuth(request, "runner-auth-replayed");
 });
 
-test("rejects timestamps beyond the default skew in either direction", async () => {
+test("rejects timestamps at and beyond the default skew in either direction", async () => {
   for (const timestamp of [
     NOW - DEFAULT_RUNNER_CLOCK_SKEW_MS - 1,
+    NOW - DEFAULT_RUNNER_CLOCK_SKEW_MS,
+    NOW + DEFAULT_RUNNER_CLOCK_SKEW_MS,
     NOW + DEFAULT_RUNNER_CLOCK_SKEW_MS + 1
   ]) {
     await rejectsAuth(verification({ headers: signed({ timestamp }) }));
   }
   assert.deepEqual(await verifyRunnerRequest(verification({
-    headers: signed({ timestamp: NOW - DEFAULT_RUNNER_CLOCK_SKEW_MS })
+    headers: signed({ timestamp: NOW - DEFAULT_RUNNER_CLOCK_SKEW_MS + 1 })
   })), { runnerId: RUNNER_ID });
+});
+
+test("retains an accepted nonce through the final millisecond of its verification window", async () => {
+  const timestamp = NOW - DEFAULT_RUNNER_CLOCK_SKEW_MS + 1;
+  let storeNow = NOW;
+  const store = new MemoryRunnerNonceStore({ now: () => storeNow });
+  const request = verification({
+    headers: signed({ timestamp }),
+    nonceStore: store,
+    now: NOW
+  });
+  assert.deepEqual(await verifyRunnerRequest(request), { runnerId: RUNNER_ID });
+  storeNow = timestamp + DEFAULT_RUNNER_CLOCK_SKEW_MS - 1;
+  await rejectsAuth({ ...request, now: storeNow }, "runner-auth-replayed");
+  await rejectsAuth({ ...request, now: timestamp + DEFAULT_RUNNER_CLOCK_SKEW_MS });
 });
 
 test("selects the public key by an exact runner ID and rejects wrong identities and keys", async () => {

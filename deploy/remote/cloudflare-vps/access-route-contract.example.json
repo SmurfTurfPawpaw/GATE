@@ -1,0 +1,71 @@
+{
+  "apiVersion": "gate.remote-cloudflare-route-contract/v1",
+  "templateOnly": true,
+  "publicHostname": "REPLACE_PUBLIC_HOSTNAME",
+  "cloudflareAccessApplications": [
+    {
+      "precedence": 1,
+      "name": "REPLACE_CASE_ID runner",
+      "hostnameAndPath": "REPLACE_PUBLIC_HOSTNAME/api/runner/v1/*",
+      "policyAction": "bypass",
+      "include": "everyone",
+      "interactiveLogin": false,
+      "accessAssertionExpected": false
+    },
+    {
+      "precedence": 2,
+      "name": "REPLACE_CASE_ID browser",
+      "hostnameAndPath": "REPLACE_PUBLIC_HOSTNAME",
+      "policyAction": "allow",
+      "include": "REPLACE_EXACT_OPERATOR_IDP_RULE",
+      "sessionDuration": "1h",
+      "interactiveLogin": true,
+      "accessAssertionExpected": true
+    }
+  ],
+  "originRouteClasses": {
+    "browser": [
+      "/",
+      "/index.html",
+      "/assets/*",
+      "/remote/client.js",
+      "/data/status.json",
+      "/robots.txt",
+      "/.nojekyll",
+      "/api/cockpit/v1/*"
+    ],
+    "runner": [
+      "/api/runner/v1/*"
+    ],
+    "hostPrivate": [
+      "/healthz",
+      "/readyz"
+    ],
+    "default": "deny"
+  },
+  "originHeaderContract": {
+    "browser": {
+      "removeClientHeader": "X-GATE-OIDC-Assertion",
+      "sourceProviderHeader": "Cf-Access-Jwt-Assertion",
+      "injectPrivateHeader": "X-GATE-OIDC-Assertion",
+      "removeProviderHeaderBeforeCoordinator": true
+    },
+    "runner": {
+      "removeHeaders": [
+        "X-GATE-OIDC-Assertion",
+        "Cf-Access-Jwt-Assertion",
+        "Authorization",
+        "Proxy-Authorization",
+        "Cookie"
+      ],
+      "preserveHeaders": [
+        "X-GATE-Runner",
+        "X-GATE-Timestamp",
+        "X-GATE-Nonce",
+        "X-GATE-Body-SHA256",
+        "X-GATE-Signature"
+      ],
+      "preserveMethodPathAndBodyBytes": true
+    }
+  }
+}

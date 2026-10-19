@@ -1,0 +1,25 @@
+{
+  "apiVersion": "gate.remote-server-config/v1",
+  "origin": "https://REPLACE_PUBLIC_HOSTNAME",
+  "host": "127.0.0.1",
+  "port": 43180,
+  "operatorId": "REPLACE_ACCESS_OPERATOR_SUBJECT",
+  "caseId": "REPLACE_CASE_ID",
+  "sessionRevision": 1,
+  "databasePath": "/var/lib/gate-remote/REPLACE_CASE_ID/bridge.sqlite",
+  "identityAssertionHeader": "x-gate-oidc-assertion",
+  "oidc": {
+    "issuer": "https://REPLACE_ACCESS_TEAM_NAME.cloudflareaccess.com",
+    "audience": "REPLACE_BROWSER_ACCESS_AUD_TAG",
+    "operatorSubject": "REPLACE_ACCESS_OPERATOR_SUBJECT",
+    "jwksUrl": "https://REPLACE_ACCESS_TEAM_NAME.cloudflareaccess.com/cdn-cgi/access/certs",
+    "clockSkewSeconds": 30,
+    "maxTokenLifetimeSeconds": 3600,
+    "jwksCacheMs": 300000,
+    "jwksTimeoutMs": 3000
+  },
+  "runner": {
+    "id": "REPLACE_RUNNER_ID",
+    "publicKeyPath": "/etc/gate-remote/REPLACE_CASE_ID/runner-public.pem"
+  }
+}

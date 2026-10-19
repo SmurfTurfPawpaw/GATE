@@ -1,0 +1,16 @@
+# TEMPLATE ONLY. Every REPLACE_ token is a non-secret identifier placeholder.
+# tunnel-credentials.json is secret and must never be committed or printed.
+tunnel: REPLACE_TUNNEL_UUID
+credentials-file: /etc/cloudflared/REPLACE_CASE_ID/tunnel-credentials.json
+metrics: 127.0.0.1:49312
+
+ingress:
+  - hostname: REPLACE_PUBLIC_HOSTNAME
+    path: "^/(healthz|readyz)$"
+    service: http_status:404
+  - hostname: REPLACE_PUBLIC_HOSTNAME
+    service: http://127.0.0.1:43179
+    originRequest:
+      httpHostHeader: REPLACE_PUBLIC_HOSTNAME
+      connectTimeout: 5s
+  - service: http_status:404
