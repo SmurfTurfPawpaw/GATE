@@ -21,7 +21,7 @@ Read [Remote cockpit bridge](../../docs/remote-cockpit.md) before using these fi
 
 The setup helper replaces the manual key and environment-file steps for one case. It refuses a `GATE_HOME` that overlaps the repository, creates every directory as `0700` and every file as `0600` on POSIX, generates an Ed25519 key with Node's cryptographic API, and never prints private-key or environment-file contents. It also refuses to replace an existing case.
 
-Run it from the reviewed checkout only after the identity gateway exists and you have its exact HTTPS origin, issuer, audience, JWKS URL, and the intended operator's stable verified subject. `--repo` must be an existing, real directory dedicated to this case's remote Codex thread. The two coordinator roots describe the eventual VPS layout; both must be absolute, normalized, non-root paths, and they cannot overlap each other. Use a different working directory or checkout for every concurrent laptop runner, and use a separate VPS for every concurrently deployed coordinator.
+Run it from the reviewed checkout only after the identity gateway exists and you have its exact HTTPS origin, issuer, audience, JWKS URL, and the intended operator's stable verified subject. Choose `--repo` using the [working-directory boundary](../../docs/remote-cockpit.md#configuration-and-entrypoints) for this case's remote Codex thread. The two coordinator roots describe the eventual VPS layout; both must be absolute, normalized, non-root paths, and they cannot overlap each other. Use a different working directory or checkout for every concurrent laptop runner, and use a separate VPS for every concurrently deployed coordinator.
 
 ```bash
 ./bin/gate.mjs remote init example-case \
