@@ -10,6 +10,8 @@ Prerequisites:
 - a working `codex` CLI login;
 - GATE's read-only observer for live campaign numbers.
 
+Private case and Program Profile titles require the same `GATE_OBSERVER_CONTEXT_TOKEN` in the observer and companion environments. The token must be a random 32-byte value encoded as 64 lowercase hexadecimal characters, supplied from an OS secret store or protected local environment; do not commit it or put it in a URL. The companion sends it only as a bearer header to the exact loopback observer endpoint. Missing credentials keep aggregate status available but withhold private titles; malformed configured tokens prevent startup. Restart both processes to rotate the token. The observer dashboard remains unauthenticated and shows generic case titles and no profile titles.
+
 Use two terminals:
 
 ```sh
@@ -90,7 +92,7 @@ The observer reads `CODEX_HOME/sessions`. If those files live on Windows, either
 
 The browser may show the operator's own bounded message and Codex's final user-visible answer in its authenticated private state. The categorical activity stream never receives hidden reasoning, system or developer instructions, command lines, arguments, stdout or stderr, file paths, tool names, target selectors, evidence, credentials, internal thread IDs, raw errors, or request bodies. Apart from the bounded campaign context label, the fleet projection omits source IDs, exact targets, contacts, raw evidence, session records, and session paths. Its separate execution-mirror field is the narrow exception: it can include an opaque attempt label, an operator-visible work order, a deterministic secret-masked command, and up to four bounded lines selected from the final 4 KiB of each supervised run's stdout and stderr. Terminal controls are escaped; a still secret-shaped line is withheld as a whole. Private paths, target selectors, raw evidence, credentials, private IDs, hidden reasoning, and unbounded output remain excluded.
 
-The bounded Fleet context label is private operator data because it can identify the program or objective. It is available only through the capability-protected companion or authenticated remote coordinator. The static public preview keeps synthetic opaque campaign aliases and never publishes a live context label.
+The bounded Fleet context label is private operator data because it can identify the program or objective. It is available over HTTP only through a bearer-authenticated observer request, the capability-protected companion, or the authenticated remote coordinator. The static public preview keeps synthetic opaque campaign aliases and never publishes a live context label.
 
 Item types become fixed categories such as `tool`, `file-change`, `research`, or `agent`. Progress is determinate only when a producer supplies a real completed count and total. Dedicated-thread token state contains exact input, cached-input, output, reasoning-output, and total counters from Codex notifications. When `account/usage/read` returns a matching thread estimate, the browser receives only the estimated USD or credit micros and unit; account summaries, groups, model metadata, thread IDs, and raw responses remain private. Likely credentials are rejected from operator messages and withheld from mirrored Codex answers.
 

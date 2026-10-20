@@ -1,5 +1,7 @@
 # GATE observer dashboard
 
+The unauthenticated dashboard receives aggregate case and profile status without private titles. The observer releases titles only to requests bearing the configured `GATE_OBSERVER_CONTEXT_TOKEN`; the companion and remote runner must share that protected environment value with the observer to show titles in authenticated Fleet. See [the companion setup](../docs/local-companion.md#start-it).
+
 The observer is a dependency-free, read-only browser view of GATE's bounded case fleet plus base/unassigned event, supervised-execution, offline-analysis, engagement, and project metadata, with shared learning, upstream, managed-runtime, and host token metadata. Its default view is a compact campaign table. Selecting a row opens one dominant terminal-style live-activity panel; lower-level base and host diagnostics remain available under the collapsed **System health** disclosure. It reads the current `buildStatus` snapshot; it does not connect to a Codex app-server feed. Token availability depends on records that GATE can read from its private runtime state, and unknown measurements remain `null`.
 
 This dashboard remains the detailed diagnostic view and the read-only data source for the separate [local cockpit companion](../docs/local-companion.md). The companion runs on another ephemeral loopback origin and fetches `/api/status` server-side. The static GitHub Pages cockpit does not call this API and cannot receive local state.

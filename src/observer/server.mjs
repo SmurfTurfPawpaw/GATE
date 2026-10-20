@@ -2333,6 +2333,12 @@ function projectWithoutCurrentProfileSetups(status, previous, paths) {
 export function createObserver(options = {}) {
   const paths = options.paths;
   if (!paths?.repo) throw new Error("observer paths.repo is required");
+  const contextToken = options.contextToken === undefined
+    ? process.env.GATE_OBSERVER_CONTEXT_TOKEN ?? null
+    : options.contextToken;
+  if (contextToken !== null && (typeof contextToken !== "string" || !/^[a-f0-9]{64}$/u.test(contextToken))) {
+    throw new Error("observer context token must be 64 lowercase hexadecimal characters");
+  }
   const host = options.host || "127.0.0.1";
   if (!isLoopbackHost(host)) throw new Error("observer must bind to a loopback address");
   const dashboardRoot = path.resolve(options.dashboardRoot || path.join(paths.repo, "dashboard"));
@@ -2442,7 +2448,20 @@ export function createObserver(options = {}) {
       try {
         const current = await snapshot();
         const key = pathname.slice("/api/".length);
-        return json(response, 200, current[key], method);
+        const authorization = request.headers.authorization;
+        const authenticated = contextToken !== null && typeof authorization === "string"
+          && crypto.timingSafeEqual(
+            crypto.createHash("sha256").update(authorization).digest(),
+            crypto.createHash("sha256").update(`Bearer ${contextToken}`).digest()
+          );
+        const value = key === "status" && !authenticated
+          ? {
+              ...current.status,
+              cases: current.status.cases.map((item) => ({ ...item, displayName: "Untitled case" })),
+              profileSetups: current.status.profileSetups.map((item) => ({ ...item, displayName: null }))
+            }
+          : current[key];
+        return json(response, 200, value, method);
       } catch {
         return json(response, 503, { error: "observer status unavailable" }, method);
       }

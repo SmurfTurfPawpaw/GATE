@@ -10,9 +10,10 @@ import {
   programProfileSetupFleetStatus
 } from "../src/lib/bounty-profiles.mjs";
 import { runtimePaths } from "../src/lib/paths.mjs";
-import { projectSnapshot, startObserver } from "../src/observer/server.mjs";
+import { createObserver, projectSnapshot, startObserver } from "../src/observer/server.mjs";
 import { sanitizeStatusPayload } from "../dashboard/model.js";
 import { fleetSummaryPresentation } from "../dashboard/app.js";
+import { createGateFleetProvider } from "../cockpit/companion/gate-fleet.mjs";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const observedAt = "2026-10-16T08:00:00.000Z";
@@ -569,26 +570,49 @@ test("a warm profile scan failure advances status while retaining stale setup ro
   assert.equal(JSON.stringify(second).includes("WARM_PROFILE_SCAN_FAILURE_PRIVATE_CANARY"), false);
 });
 
-test("observer API reads the bounded private fleet and marks cached setup state stale", async (t) => {
+test("observer API authenticates private titles through cached and stale Fleet delivery", async (t) => {
   const { paths } = fixture(t);
   createProgramProfile("http-private-program", {
     metadata: { owner: "http-owner-private-canary" },
     identity: { programName: "HTTP Bug Bounty" }
   }, { paths, now: observedAt });
+  const contextToken = "ab".repeat(32);
   let calls = 0;
   const origin = await listen(t, {
     paths,
+    contextToken,
     statusBuilder: () => {
       calls += 1;
       if (calls > 1) throw new Error("HTTP_STATUS_FAILURE_PRIVATE_CANARY");
-      return rawStatus();
+      return rawStatus({
+        cases: [rawCase("separate-program", { displayName: "Private case title" })],
+        caseScan: { discovered: 1, scanned: 1, omitted: 0, invalid: 0, complete: true, truncated: false }
+      });
     }
   });
 
   const first = await (await fetch(`${origin}/api/status`)).json();
   assert.equal(first.profileSetups.length, 1);
   assert.equal(first.profileSetups[0].freshness, "fresh");
-  assert.equal(first.profileSetups[0].displayName, "HTTP Bug Bounty");
+  assert.equal(first.profileSetups[0].displayName, null);
+  for (const authorization of [undefined, "Bearer wrong", `Bearer ${"cd".repeat(32)}`]) {
+    const publicView = await (await fetch(`${origin}/api/status`, {
+      headers: authorization ? { Authorization: authorization } : {}
+    })).json();
+    assert.equal(JSON.stringify(publicView).includes("HTTP Bug Bounty"), false);
+    assert.equal(JSON.stringify(publicView).includes("Private case title"), false);
+  }
+  const provider = createGateFleetProvider({ observerUrl: `${origin}/api/status`, contextToken, cacheMs: 0 });
+  const fleet = await provider();
+  assert.equal(fleet.campaigns.find((item) => item.kind === "profile").context.label, "HTTP Bug Bounty");
+  assert.equal(fleet.campaigns.find((item) => item.kind === "case").context.label, "Private case title");
+  const authenticated = await (await fetch(`${origin}/api/status`, {
+    headers: { Authorization: `Bearer ${contextToken}` }
+  })).json();
+  assert.equal(authenticated.profileSetups[0].displayName, "HTTP Bug Bounty");
+  assert.equal(authenticated.cases[0].displayName, "Private case title");
+  const afterAuthenticated = await (await fetch(`${origin}/api/status`)).json();
+  assert.equal(afterAuthenticated.profileSetups[0].displayName, null);
   assert.match(first.profileSetups[0].id, /^program_[a-f0-9]{16}$/u);
   assert.equal(JSON.stringify(first).includes("http-private-program"), false);
   assert.equal(JSON.stringify(first).includes("http-owner-private-canary"), false);
@@ -598,10 +622,43 @@ test("observer API reads the bounded private fleet and marks cached setup state 
   const fallback = await fallbackResponse.json();
   assert.equal(fallbackResponse.status, 200);
   assert.equal(fallback.profileSetups[0].freshness, "stale");
+  assert.equal(fallback.profileSetups[0].displayName, null);
+  assert.equal(fallback.cases[0].displayName, "Untitled case");
+  const stalePrivate = await (await fetch(`${origin}/api/status`, {
+    headers: { Authorization: `Bearer ${contextToken}` }
+  })).json();
+  assert.equal(stalePrivate.profileSetups[0].displayName, "HTTP Bug Bounty");
+  assert.equal(stalePrivate.profileSetups[0].freshness, "stale");
   assert.equal(fallback.profileSetupScan.availability, "unavailable");
   assert.equal(fallback.profileSetupScan.complete, false);
   assert.equal(fallback.profileSetupScan.truncated, true);
   assert.equal(JSON.stringify(fallback).includes("HTTP_STATUS_FAILURE_PRIVATE_CANARY"), false);
+});
+
+
+
+test("observer and Fleet reject malformed configured context capabilities", () => {
+  for (const contextToken of ["", "short", "A".repeat(64), 123]) {
+    assert.throws(() => createObserver({ paths: { repo }, contextToken }), /context token must be/u);
+    assert.throws(() => createGateFleetProvider({ contextToken }), /context token must be/u);
+  }
+});
+
+test("observer with no context capability never releases private titles", async (t) => {
+  const { paths } = fixture(t);
+  const origin = await listen(t, {
+    paths, contextToken: null,
+    statusBuilder: () => rawStatus(),
+    profileSetupBuilder: () => ({
+      profiles: [rawSetup("private-profile", { title: "Private title" })],
+      scan: { discovered: 1, scanned: 1, omitted: 0, invalid: 0, complete: true, truncated: false }
+    })
+  });
+  for (const headers of [{}, { Authorization: `Bearer ${"ab".repeat(32)}` }]) {
+    const status = await (await fetch(`${origin}/api/status`, { headers })).json();
+    assert.equal(status.profileSetups.length, 1);
+    assert.equal(status.profileSetups[0].displayName, null);
+  }
 });
 
 test("fleet progress excludes explicitly saved empty required lists", (t) => {

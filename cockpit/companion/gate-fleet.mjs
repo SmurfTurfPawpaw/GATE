@@ -823,6 +823,12 @@ async function boundedJson(response, maximumBytes) {
 }
 
 export function createGateFleetProvider(options = {}) {
+  const contextToken = options.contextToken === undefined
+    ? process.env.GATE_OBSERVER_CONTEXT_TOKEN ?? null
+    : options.contextToken;
+  if (contextToken !== null && (typeof contextToken !== "string" || !/^[a-f0-9]{64}$/u.test(contextToken))) {
+    throw new Error("GATE observer context token must be 64 lowercase hexadecimal characters");
+  }
   const observerUrl = normalizeGateObserverUrl(options.observerUrl || DEFAULT_OBSERVER_URL);
   const fetchImpl = options.fetchImpl || globalThis.fetch;
   if (typeof fetchImpl !== "function") throw new Error("GATE observer fetch is unavailable");
@@ -858,7 +864,7 @@ export function createGateFleetProvider(options = {}) {
           redirect: "error",
           cache: "no-store",
           signal: controller.signal,
-          headers: { Accept: "application/json" }
+          headers: { Accept: "application/json", ...(contextToken === null ? {} : { Authorization: `Bearer ${contextToken}` }) }
         });
         const source = await boundedJson(response, maximumBytes);
         const receivedAt = new Date(typeof options.now === "function" ? options.now() : Date.now());
