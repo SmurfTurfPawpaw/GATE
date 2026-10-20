@@ -1055,7 +1055,7 @@ test("observer publishes multiple isolated cases with opaque bindings and metada
     truncated: false
   });
   assert.equal(status.cases.length, 2);
-  assert.deepEqual(status.cases.map((item) => item.displayName), ["Alpha assessment", "Beta assessment"]);
+  assert.deepEqual(status.cases.map((item) => item.displayName), ["Untitled case", "Untitled case"]);
   for (const item of status.cases) {
     assert.match(item.id, /^case_[a-f0-9]{16}$/u);
     assert.match(item.binding.program.id, /^program_[a-f0-9]{16}$/u);
@@ -1086,6 +1086,7 @@ test("observer publishes multiple isolated cases with opaque bindings and metada
 
   const serialized = JSON.stringify({ status, dashboard });
   for (const forbidden of [
+    "Alpha assessment", "Beta assessment",
     "raw-alpha-case", "raw-beta-case", "raw-alpha-program", "raw-beta-program",
     "raw-alpha-project", "raw-beta-project", "raw-alpha-event-run", "raw-alpha-event-task",
     "raw-alpha-event-agent", "raw-beta-event-run", "raw-beta-event-task", "raw-beta-event-agent",
