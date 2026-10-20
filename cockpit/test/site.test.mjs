@@ -508,7 +508,8 @@ function availableExecutionMirror(at) {
   };
 }
 
-test("authenticated remote fleet renders the selected retained execution attempt", async () => {
+test("authenticated remote fleet renders the selected retained execution attempt", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-10-20T12:00:00.000Z") });
   const page = await browser(JSON.parse(await read("data/status.json")));
   const at = new Date().toISOString();
   page.context.GATE_REMOTE_COCKPIT_BRIDGE = {
@@ -530,6 +531,7 @@ test("authenticated remote fleet renders the selected retained execution attempt
   assert.match(page.elements.get("mode-banner").textContent, /CONNECTED · REMOTE · AUTHENTICATED/u);
 
   const stoppingAt = new Date(Date.parse(at) + 1_000).toISOString();
+  t.mock.timers.setTime(Date.parse(stoppingAt));
   const stoppingFleet = connectedRemoteFleet(stoppingAt);
   stoppingFleet.revision = 2;
   stoppingFleet.campaigns[0].mirror = availableExecutionMirror(stoppingAt);
@@ -549,6 +551,7 @@ test("authenticated remote fleet renders the selected retained execution attempt
   assert.equal(page.elements.get("mirror-terminal").scrollTop, 120);
 
   const finishedAt = new Date(Date.parse(at) + 2_000).toISOString();
+  t.mock.timers.setTime(Date.parse(finishedAt));
   const finishedFleet = connectedRemoteFleet(finishedAt);
   finishedFleet.revision = 3;
   finishedFleet.campaigns[0].mirror = availableExecutionMirror(finishedAt);
@@ -563,6 +566,7 @@ test("authenticated remote fleet renders the selected retained execution attempt
   assert.equal(page.elements.get("mirror-terminal").scrollTop, 35, "completed history retains the reader's position");
 
   const delayedAt = new Date(Date.parse(at) + 3_000).toISOString();
+  t.mock.timers.setTime(Date.parse(delayedAt));
   const delayedFleet = connectedRemoteFleet(delayedAt);
   delayedFleet.revision = 4;
   delayedFleet.sourceFreshness = "delayed";
@@ -574,6 +578,7 @@ test("authenticated remote fleet renders the selected retained execution attempt
   assert.doesNotMatch(page.elements.get("mirror-progress-track").className, /\brunning\b/u);
 
   const queuedAt = new Date(Date.parse(at) + 4_000).toISOString();
+  t.mock.timers.setTime(Date.parse(queuedAt));
   const queuedFleet = connectedRemoteFleet(queuedAt);
   queuedFleet.revision = 5;
   queuedFleet.campaigns[0].mirror = availableExecutionMirror(queuedAt);
@@ -588,6 +593,7 @@ test("authenticated remote fleet renders the selected retained execution attempt
   assert.doesNotMatch(page.elements.get("mirror-live-state").textContent, /Live/u);
 
   const unknownAt = new Date(Date.parse(at) + 5_000).toISOString();
+  t.mock.timers.setTime(Date.parse(unknownAt));
   const unknownFleet = connectedRemoteFleet(unknownAt);
   unknownFleet.revision = 6;
   unknownFleet.campaigns[0].mirror = availableExecutionMirror(unknownAt);
