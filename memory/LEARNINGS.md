@@ -157,6 +157,7 @@ Add proposed lessons here only after removing sensitive context. Promotion must 
 - 2026-10-19 | Cause: Remote setup and doctor accepted assertion headers rejected by coordinator startup. | Change: Reuse the coordinator header validator in initialization and diagnostics and test reserved names and length boundaries. | Evidence: evidence://review/R1-remote-header-contract | Status: proposed
 - 2026-10-20 | Cause: Operator corrected the cockpit because sequential retained updates were being interpreted as live execution. | Change: Reserve Live for a fresh authenticated source concurrently reflecting an active run; label retained or post-run events as history. | Evidence: event://evt_20261020104817_ecd94282 | Status: proposed
 - 2026-10-20 | Cause: The No Mistakes handoff was attempted from an uncommitted working tree and was rejected before creating a run. | Change: Create one exact local commit after focused validation, then hand that immutable head to No Mistakes for broad review, repair, push, PR, and CI. | Evidence: event://evt_20261020105537_952d6fc1 | Status: proposed
+- 2026-10-20 | Cause: No Mistakes reached its Codex review agent, but the stored ChatGPT token returned 401 even though login status reported an existing session. | Change: Before an immutable release handoff, verify the agent with a real authenticated request; if stale, refresh device login and restart the No Mistakes daemon before retrying. | Evidence: event://evt_20261020105657_42199ca3 | Status: proposed
 
 ## Superseded or reverted
 
