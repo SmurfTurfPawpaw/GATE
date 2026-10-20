@@ -38,6 +38,12 @@ test("execution mirror is bounded, exact-keyed, and rejects unmasked secrets", a
   assert.equal(accepted?.attempts[0].state, "running");
   assert.equal(accepted?.attempts[0].usage.toolRuns.value, 1);
 
+  for (const remote of [false, true]) {
+    const spaced = structuredClone(source);
+    spaced.attempts[0].entries[0].text = " checking ";
+    assert.equal(validateExecutionMirror(spaced, { remote })?.attempts[0].entries[0].text, " checking ");
+  }
+
   const nonContiguous = structuredClone(source);
   nonContiguous.attempts[0].alias = "Attempt 150";
   nonContiguous.attempts.push({ ...structuredClone(nonContiguous.attempts[0]), alias: "Attempt 148" });

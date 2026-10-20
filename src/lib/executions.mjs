@@ -2599,6 +2599,7 @@ function readMirrorTail(paths, reference, channel, privateContext) {
       offset += read;
     }
     const rawLines = buffer.subarray(0, offset).toString("utf8").split(/\r?\n/u);
+    if (start > 0) rawLines.shift();
     if (rawLines.at(-1) === "") rawLines.pop();
     return rawLines
       .map((line, index) => ({

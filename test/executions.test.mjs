@@ -476,6 +476,10 @@ test("one-shot loopback execution binds exact argv and strips ambient credential
     /already consumed/
   );
   assert.equal(requests, 1);
+  for (const stream of [result.evidence.stdout.ref, result.evidence.stderr.ref]) {
+    fs.writeFileSync(evidenceFile(paths, stream),
+      `Cookie: pad=${"p".repeat(5000)}; sid=hunter2; padding=${"q".repeat(4000)}\n checking \n`);
+  }
   const execution = executionStatus({
     paths,
     now: new Date("2026-10-20T12:00:00.000Z"),
@@ -504,6 +508,10 @@ test("one-shot loopback execution binds exact argv and strips ambient credential
     assert.equal(mirrorJson.includes(privateValue), false);
   }
   assert.equal(mirrorJson.includes("private://"), false);
+  assert.equal(mirrorJson.includes("hunter2"), false);
+  for (const channel of ["stdout", "stderr"]) {
+    assert.ok(mirrored.entries.some((entry) => entry.channel === channel && entry.text === " checking " && entry.truncated));
+  }
   const later = executionStatus({
     paths,
     now: new Date("2026-10-20T12:05:00.000Z"),

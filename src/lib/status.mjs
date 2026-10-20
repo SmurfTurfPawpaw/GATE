@@ -195,6 +195,11 @@ async function buildRuntimeStatus(paths, options = {}) {
     ? omittedEngagementProjection()
     : boundedEngagements(paths);
   const ctfPilot = readCtfPilotStatus({ paths, now: observedAt });
+  const execution = executionStatus({
+    paths,
+    ...(options.now === undefined ? {} : { now: observedAt }),
+    includeExecutionMirror: options.includeExecutionMirror === true
+  });
   return {
     // Capture the enclosing snapshot after all component reads. A worker may
     // publish while status is being assembled; using the start time would make
@@ -209,11 +214,7 @@ async function buildRuntimeStatus(paths, options = {}) {
       .reverse(),
     engagements: engagementProjection.engagements,
     engagementScan: engagementProjection.scan,
-    execution: executionStatus({
-      paths,
-      now: observedAt,
-      includeExecutionMirror: options.includeExecutionMirror === true
-    }),
+    execution,
     workflows: workflowFleetStatus({ paths, runtimeEnsured: true }),
     ctfPilot,
     offlineAnalysis: offlineAnalysisStatus({ paths }),

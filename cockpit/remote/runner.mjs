@@ -509,7 +509,7 @@ function trimmedMirror(state) {
   const attempts = selected.map((attempt) => {
     const requested = Math.min(state.entryCounts.get(attempt.alias) || 0, attempt.entries.length);
     const keep = attempt === markerHolder ? Math.min(requested, 7) : requested;
-    const entries = attempt.entries.slice(-keep);
+    const entries = keep === 0 ? [] : attempt.entries.slice(-keep);
     return { ...attempt, entries };
   });
   const omittedAttempts = state.source.attempts.length - attempts.length;

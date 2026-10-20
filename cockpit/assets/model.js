@@ -220,7 +220,7 @@ export function validateExecutionMirror(value, options = {}) {
           || at === null || at < priorAt || at > updatedAt
           || !MIRROR_CHANNELS.has(entry.channel) || !MIRROR_ENTRY_STATES.has(entry.state)
           || !MIRROR_FIDELITY.has(entry.fidelity) || typeof entry.truncated !== "boolean"
-          || !safeLocalText(entry.text, 240) || entry.text !== entry.text.normalize("NFC").replace(/\r\n?/gu, "\n").trim()
+          || !safeLocalText(entry.text, 240) || entry.text !== entry.text.normalize("NFC") || /[\r\n\t]/u.test(entry.text)
           || containsUnsafeMirrorText(entry.text, remote)) return null;
       entries.push(Object.freeze({ ...entry }));
       priorSequence = entry.sequence;
