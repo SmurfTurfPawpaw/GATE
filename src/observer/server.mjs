@@ -1086,9 +1086,8 @@ function safeExecutionMirrorText(value, maximum) {
       /(?:private|file):\/\//iu.test(text) || EXECUTION_MIRROR_PROTOCOL_RELATIVE_PATH.test(text) ||
       EXECUTION_MIRROR_LOW_ENTROPY_CREDENTIAL.test(text) ||
       /\b(?:xrun|xmf|wpa|wxr)_[a-f0-9]{32}\b/iu.test(text) ||
-      /(?:[A-Za-z]:[\\/]|\\\\[^\s\\/]+[\\/])[^\s"'`]+/u.test(text) ||
-      /\/(?:home|Users|root|workspace|tmp)(?:\/[^\s"'`]*)?/u.test(text) ||
-      /\/(?:var\/lib|var\/run|run\/user)\/(?:gate[^\s"'`]*|[^\s"'`]*\/gate[^\s"'`]*)/iu.test(text)) return null;
+      /(?:^|[^A-Za-z0-9_./\\-])(?:[A-Za-z]:[\\/]|\\\\[^\s\\/]+[\\/])[^\s"'`<>\])},;]*/u.test(text) ||
+      /(?:^|[^A-Za-z0-9_./\\-])\/(?!\/)[^\s"'`<>\])},;]*/u.test(text)) return null;
   try {
     assertNoLikelySecret(text, "observer execution mirror text");
   } catch {

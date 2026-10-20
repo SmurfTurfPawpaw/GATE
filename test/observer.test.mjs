@@ -2275,3 +2275,30 @@ test("complete registry coverage cannot make unobserved case activity counts exa
   assert.equal(fleetSummaryPresentation(observed).availability, "exact");
   assert.equal(fleetSummaryPresentation(observed).activeLabel, "1");
 });
+
+
+test("observer mirror text distinguishes public URLs from private filesystem paths", () => {
+  for (const field of ["text", "phase", "tool", "action"]) {
+    for (const text of [
+      "GET https://example.invalid/public/path?q=value",
+      "https://example.invalid/home/status",
+      "https://example.invalid/var/lib/gate/status"
+    ]) {
+      const mirror = executionMirrorFixture();
+      const destination = field === "text" ? mirror.attempts[0].entries[0] : mirror.attempts[0];
+      destination[field] = text;
+      const projected = projectSnapshot(statusFixture({ execution: executionFixture({ mirror }) }), paths);
+      assert.equal(projected.status.execution.mirror.availability, "available");
+      const result = field === "text" ? projected.status.execution.mirror.attempts[0].entries[0]
+        : projected.status.execution.mirror.attempts[0];
+      assert.equal(result[field], text);
+    }
+    for (const text of ["C:\\Users\\operator\\capture.txt", "/home/operator/capture.txt", "/var/lib/gate/state", "open (/opt/service/config)"]) {
+      const mirror = executionMirrorFixture();
+      const destination = field === "text" ? mirror.attempts[0].entries[0] : mirror.attempts[0];
+      destination[field] = text;
+      const projected = projectSnapshot(statusFixture({ execution: executionFixture({ mirror }) }), paths);
+      assert.equal(projected.status.execution.mirror.availability, "unavailable");
+    }
+  }
+});
