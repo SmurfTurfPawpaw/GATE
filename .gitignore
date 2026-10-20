@@ -12,6 +12,7 @@ node_modules/
 coverage/
 dist/
 /cockpit/_site/
+/.test-browser/
 *.log
 
 # Tool and editor state
