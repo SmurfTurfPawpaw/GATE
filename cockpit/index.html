@@ -35,12 +35,13 @@
     </header>
 
     <div class="mode-banner mode-preview" id="mode-banner" role="status" aria-live="polite">
-      <strong>PREVIEW · NOT LIVE</strong>
-      <span>Example data. Open the private local companion to steer Codex.</span>
+      <strong>PUBLIC PREVIEW · NO LIVE DATA</strong>
+      <span>Synthetic demonstration data only.</span>
+      <a href="https://gate.giovannicallebaut.com/" rel="noreferrer">Open the authenticated cockpit</a>
     </div>
 
     <main id="cockpit" tabindex="-1">
-      <section class="panel pilot-panel" id="pilot-panel" aria-labelledby="pilot-title">
+      <section class="panel pilot-panel" id="pilot-panel" aria-labelledby="pilot-title" hidden>
         <header class="panel-heading pilot-heading">
           <div>
             <p class="section-kicker">CTF PILOT · CASE WORKER SIGNAL</p>
@@ -108,6 +109,34 @@
         </article>
       </section>
 
+      <section class="panel mirror-panel" id="mirror-panel" aria-labelledby="mirror-title">
+        <header class="panel-heading mirror-heading">
+          <div>
+            <p class="section-kicker">CURRENT STREAM · RETAINED AFTER RECONNECT</p>
+            <h2 id="mirror-title">Operational mirror</h2>
+            <p class="mirror-caption" id="mirror-caption">Current in-progress state above; retained attempt history below.</p>
+          </div>
+          <span class="mirror-live-state unavailable" id="mirror-live-state">Source unavailable</span>
+        </header>
+        <div class="mirror-controls">
+          <label for="mirror-campaign-select"><span>PROJECT</span><select id="mirror-campaign-select" disabled><option value="">Project unavailable</option></select></label>
+          <label for="mirror-attempt-select"><span>ATTEMPT</span><select id="mirror-attempt-select" disabled><option value="">Attempt unavailable</option></select></label>
+        </div>
+        <div class="mirror-overview" aria-label="Selected attempt status">
+          <article><small>STATUS</small><strong id="mirror-state">Unavailable</strong><span id="mirror-updated">No verified update</span></article>
+          <article><small>PROGRESS</small><strong id="mirror-progress-value">Unavailable</strong><span id="mirror-progress-detail">Progress unavailable</span></article>
+          <article><small>ELAPSED</small><strong id="mirror-elapsed">Unavailable</strong><span id="mirror-phase">Phase unavailable</span></article>
+          <article><small>USAGE</small><strong id="mirror-tokens">Unavailable</strong><span id="mirror-usage">Usage unavailable</span></article>
+        </div>
+        <div class="mirror-progress-track unavailable" id="mirror-progress-track" role="progressbar" aria-label="Attempt progress" aria-valuetext="Progress unavailable"><i></i></div>
+        <p class="mirror-action" id="mirror-action">No running action is available.</p>
+        <div class="mirror-history-heading"><strong>Retained event history</strong><span>Ordered events already received from this attempt</span></div>
+        <div class="mirror-terminal" id="mirror-terminal" aria-live="polite" aria-label="Retained execution event history">
+          <div class="mirror-empty">Execution mirror unavailable.</div>
+        </div>
+        <p class="mirror-footnote">Live means a current, near-real-time bounded projection from an authenticated runner. Event rows are retained history; commands and output are bounded and deterministically secret-masked. Fidelity labels distinguish exact, redacted, summarized, and unavailable content.</p>
+      </section>
+
       <div class="workspace-grid">
         <section class="panel fleet-panel" aria-labelledby="fleet-title">
           <header class="panel-heading">
@@ -124,8 +153,8 @@
         <section class="panel activity-panel" aria-labelledby="activity-title">
           <header class="panel-heading">
             <div>
-              <p class="section-kicker">NOW</p>
-              <h2 id="activity-title">Live activity</h2>
+              <p class="section-kicker">RECENT</p>
+              <h2 id="activity-title">Recent activity</h2>
             </div>
           </header>
           <ol class="activity-feed" id="activity-feed" aria-label="Sanitized activity">
@@ -149,12 +178,12 @@
         <div class="choice-list" id="choice-list"></div>
         <form class="message-composer" id="message-composer">
           <label class="sr-only" for="message-input">Message Codex</label>
-          <textarea id="message-input" rows="3" maxlength="1000" disabled aria-describedby="message-status" placeholder="Live connection required"></textarea>
+          <textarea id="message-input" rows="3" maxlength="1000" disabled aria-describedby="message-status" placeholder="Authenticated connection required"></textarea>
           <div class="composer-footer">
             <span id="message-count">0 / 1000</span>
             <button id="message-send" type="submit" disabled>Send</button>
           </div>
-          <p id="message-status" role="status" aria-live="polite">Live connection required.</p>
+          <p id="message-status" role="status" aria-live="polite">Authenticated connection required.</p>
         </form>
       </section>
     </main>

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { unavailablePilotProjection, validatePilotProjection } from "../assets/model.js";
+import { validateExecutionMirror } from "../execution-mirror.mjs";
 
 export const REMOTE_BRIDGE_VERSION = "gate.remote-cockpit-bridge/v1";
 export const REMOTE_MESSAGE_VERSION = "gate.remote-message-request/v1";
@@ -11,7 +12,7 @@ export const REMOTE_COMMAND_STATUS_REQUEST_VERSION = "gate.remote-command-status
 export const REMOTE_COMMAND_STATUS_RESPONSE_VERSION = "gate.remote-command-status-response/v1";
 export const REMOTE_ACTIVITY_EVENT_VERSION = "gate.remote-cockpit-event/v1";
 export const REMOTE_STATE_VERSION = "gate.remote-cockpit-state/v1";
-export const REMOTE_FLEET_VERSION = "gate.remote-fleet/v2";
+export const REMOTE_FLEET_VERSION = "gate.remote-fleet/v3";
 export const REMOTE_EVENTS_PAGE_VERSION = "gate.remote-events-page/v1";
 
 export const MAX_REMOTE_MESSAGE_CHARACTERS = 1_000;
@@ -411,6 +412,12 @@ function safeProjectionJson(value, label) {
   return JSON.parse(serialized);
 }
 
+function deepFreeze(value) {
+  if (value === null || typeof value !== "object" || Object.isFrozen(value)) return value;
+  for (const nested of Object.values(value)) deepFreeze(nested);
+  return Object.freeze(value);
+}
+
 function normalizeConversation(value, observedAt) {
   if (!Array.isArray(value) || value.length > 48) {
     fail(400, "state-projection-invalid", "The remote state projection is invalid.");
@@ -609,7 +616,7 @@ export function normalizeRemoteFleetProjection(value) {
   if (!Array.isArray(value.campaigns) || value.campaigns.length > 64) invalid();
   const aliases = new Set();
   const campaigns = value.campaigns.map((item) => {
-    const campaignKeys = ["alias", "kind", "stage", "state", "progress", "attention", "freshness", "work", "tokens", "pilot", "latestEvent"];
+    const campaignKeys = ["alias", "kind", "stage", "state", "progress", "attention", "freshness", "work", "tokens", "mirror", "pilot", "latestEvent"];
     if (!(exactKeys(item, campaignKeys) || exactKeys(item, campaignKeys.filter((key) => key !== "pilot")))
         || typeof item.alias !== "string" || !/^Campaign [1-9]\d{0,2}$/u.test(item.alias) || aliases.has(item.alias)
         || !FLEET_KINDS.has(item.kind) || !FLEET_STAGES.has(item.stage) || !FLEET_STATES.has(item.state)
@@ -631,8 +638,9 @@ export function normalizeRemoteFleetProjection(value) {
     for (const key of ["runningExecutions", "activeWorkflows", "runningAnalyses", "setupBlockers"]) {
       work[key] = metric(item.work[key]);
     }
+    const mirror = validateExecutionMirror(item.mirror, { isUnsafeText: containsLikelyRemoteCredential });
     const pilot = item.pilot === undefined ? unavailablePilotProjection("missing") : validatePilotProjection(item.pilot);
-    if (!pilot || !exactKeys(item.latestEvent, ["availability", "category", "status", "at"])) invalid();
+    if (!mirror || !pilot || !exactKeys(item.latestEvent, ["availability", "category", "status", "at"])) invalid();
     const latestEvent = item.latestEvent.availability === "unavailable"
       && item.latestEvent.category === null && item.latestEvent.status === null && item.latestEvent.at === null
       ? Object.freeze({ ...item.latestEvent })
@@ -642,11 +650,13 @@ export function normalizeRemoteFleetProjection(value) {
         ) ? Object.freeze({ ...item.latestEvent }) : null;
     if (!latestEvent || latestEvent.availability === "available" && observedAt !== null
         && Date.parse(latestEvent.at) > Date.parse(observedAt)) invalid();
+    if (observedAt !== null && mirror.attempts.some((attempt) => Date.parse(attempt.updatedAt) > Date.parse(observedAt))) invalid();
     return Object.freeze({
       ...item,
       progress,
       work: Object.freeze(work),
       tokens: fleetTokens(item.tokens),
+      mirror,
       pilot,
       latestEvent
     });
@@ -671,7 +681,7 @@ export function normalizeRemoteFleetProjection(value) {
     summary: Object.freeze(summary),
     campaigns: Object.freeze(campaigns)
   }, "fleet-projection");
-  return Object.freeze(copy);
+  return deepFreeze(copy);
 }
 
 export function sanitizeRemoteActivityEvent(value, sequence, at = new Date()) {

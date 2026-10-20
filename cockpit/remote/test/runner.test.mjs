@@ -9,6 +9,7 @@ import test from "node:test";
 import { CodexCompanionAdapter } from "../../companion/app-server.mjs";
 import { ActivityStore } from "../../companion/activity.mjs";
 import {
+  MAX_REMOTE_PROJECTION_BYTES,
   REMOTE_MESSAGE_VERSION,
   REMOTE_QUESTION_VERSION,
   digestRemotePayload
@@ -67,7 +68,7 @@ function localState(overrides = {}) {
 
 function unavailableFleet(overrides = {}) {
   return {
-    apiVersion: "gate.local-fleet/v2",
+    apiVersion: "gate.local-fleet/v3",
     revision: 1,
     selectionEpoch: "0".repeat(32),
     observedAt: null,
@@ -107,6 +108,135 @@ function unavailableFleet(overrides = {}) {
     campaigns: [],
     ...overrides
   };
+}
+
+function largeConnectedFleet() {
+  const observedAt = new Date(NOW).toISOString();
+  const metric = (value) => ({ value, precision: "exact" });
+  const scan = (count, profile = false) => ({
+    availability: "available",
+    discovered: count,
+    scanned: count,
+    omitted: 0,
+    invalid: 0,
+    discoveredAtLeast: false,
+    omittedAtLeast: false,
+    complete: true,
+    truncated: false,
+    ...(profile ? { visible: 0, representedByCases: 0 } : {})
+  });
+  const unavailable = { availability: "unavailable", value: null };
+  const attempts = Array.from({ length: 8 }, (_, attemptIndex) => {
+    const updatedAt = new Date(NOW - attemptIndex * 1_000).toISOString();
+    return {
+      alias: `Attempt ${attemptIndex + 1}`,
+      kind: "supervised-execution",
+      state: attemptIndex === 7 ? "running" : "succeeded",
+      phase: "active-surface-validation",
+      tool: "httpx",
+      action: "metadata-observation",
+      startedAt: null,
+      finishedAt: null,
+      updatedAt,
+      elapsedMs: attemptIndex * 1_000,
+      progress: { availability: "unavailable", completed: null, total: null, percent: null },
+      usage: {
+        tokens: { availability: "unavailable", total: null },
+        cost: { availability: "unavailable", amountMicros: null, unit: null },
+        requests: unavailable,
+        retries: unavailable,
+        toolRuns: { availability: "exact", value: 1 }
+      },
+      entries: Array.from({ length: 8 }, (_, entryIndex) => ({
+        sequence: entryIndex + 1,
+        at: updatedAt,
+        channel: "stdout",
+        state: attemptIndex === 7 ? "running" : "succeeded",
+        fidelity: "exact",
+        truncated: false,
+        text: `${String(entryIndex + 1).padStart(2, "0")}:${"x".repeat(230)}`
+      }))
+    };
+  });
+  const campaigns = Array.from({ length: 16 }, (_, index) => ({
+    alias: `Campaign ${index + 1}`,
+    kind: "case",
+    stage: "active-testing",
+    state: "running",
+    progress: null,
+    attention: "steady",
+    freshness: "current",
+    work: {
+      runningExecutions: metric(1),
+      activeWorkflows: metric(1),
+      runningAnalyses: metric(0),
+      setupBlockers: metric(0)
+    },
+    tokens: { availability: "unavailable", total: null },
+    mirror: { availability: "available", reason: null, attempts },
+    latestEvent: { availability: "unavailable", category: null, status: null, at: null }
+  }));
+  return {
+    apiVersion: "gate.local-fleet/v3",
+    revision: 1,
+    selectionEpoch: "0".repeat(32),
+    observedAt,
+    receivedAt: observedAt,
+    validUntil: new Date(NOW + 15_000).toISOString(),
+    connection: "connected",
+    sourceFreshness: "current",
+    coverage: { state: "exact", cases: scan(16), profiles: scan(0, true) },
+    summary: {
+      campaigns: metric(16), active: metric(16), waiting: metric(0), attention: metric(0),
+      profileAnswers: { answered: 0, total: 0, precision: "exact" },
+      runningExecutions: metric(16), activeWorkflows: metric(16), runningAnalyses: metric(0),
+      setupBlockers: metric(0), blockers: metric(0),
+      campaignTokens: { availability: "unavailable", total: null },
+      hostTokens: {
+        availability: "unavailable", input: null, cachedInput: null, output: null, total: null,
+        cost: { availability: "unavailable", amountMicros: null, unit: null }
+      }
+    },
+    campaigns
+  };
+}
+
+function changingLiveFleet(revision, now) {
+  const fleet = largeConnectedFleet();
+  const observedAt = new Date(now).toISOString();
+  const exact = (value) => ({ value, precision: "exact" });
+  fleet.revision = revision;
+  fleet.observedAt = observedAt;
+  fleet.receivedAt = observedAt;
+  fleet.validUntil = new Date(now + 15_000).toISOString();
+  fleet.coverage.cases = {
+    ...fleet.coverage.cases,
+    discovered: 1,
+    scanned: 1
+  };
+  fleet.summary = {
+    ...fleet.summary,
+    campaigns: exact(1),
+    active: exact(1),
+    runningExecutions: exact(1),
+    activeWorkflows: exact(1)
+  };
+  fleet.campaigns = [fleet.campaigns[0]];
+  const attempt = fleet.campaigns[0].mirror.attempts.at(-1);
+  attempt.startedAt = new Date(now - revision * 1_000).toISOString();
+  attempt.updatedAt = observedAt;
+  attempt.elapsedMs = revision * 1_000;
+  attempt.entries = Array.from({ length: revision }, (_, index) => ({
+    sequence: index + 1,
+    at: new Date(now - (revision - index - 1) * 500).toISOString(),
+    channel: "stdout",
+    state: "running",
+    fidelity: "exact",
+    truncated: false,
+    text: `phase-${index + 1}`
+  }));
+  fleet.campaigns[0].mirror.attempts = [attempt];
+  return fleet;
 }
 
 function adapter(overrides = {}) {
@@ -412,6 +542,50 @@ test("runner keeps signed fleet telemetry live and never leases while its conver
   assert.equal(selectedAdapter.closed, 1);
 });
 
+test("runner uploads changing in-progress mirror snapshots on successive live fleet cycles", async (t) => {
+  let now = NOW;
+  let reads = 0;
+  const requests = [];
+  const prepared = runnerOptions(t, {
+    clock: () => now,
+    options: {
+      fleetIntervalMs: 1_000,
+      fleetProvider: async () => changingLiveFleet(++reads, now)
+    }
+  });
+  let runner;
+  const controlPlane = signedControlPlane({
+    publicKey: prepared.publicKey,
+    commandValue: null,
+    requests
+  });
+  prepared.options.fetch = async (url, init) => {
+    const result = await controlPlane(url, init);
+    if (new URL(url).pathname.endsWith("/fleet")
+        && requests.filter((item) => item.path.endsWith("/fleet")).length === 2) {
+      queueMicrotask(() => { void runner.stop(); });
+    }
+    return result;
+  };
+  prepared.options.delay = async (milliseconds) => {
+    now += milliseconds;
+    await new Promise((resolve) => setImmediate(resolve));
+  };
+  runner = new RemoteCockpitRunner(prepared.options);
+
+  await runner.start();
+  const uploads = requests.filter((item) => item.path.endsWith("/fleet")).map((item) => item.value);
+  assert.equal(uploads.length, 2);
+  const first = uploads[0].campaigns[0].mirror.attempts[0];
+  const second = uploads[1].campaigns[0].mirror.attempts[0];
+  assert.equal(first.state, "running");
+  assert.equal(second.state, "running");
+  assert.deepEqual(first.entries.map((entry) => entry.text), ["phase-1"]);
+  assert.deepEqual(second.entries.map((entry) => entry.text), ["phase-1", "phase-2"]);
+  assert.ok(second.elapsedMs > first.elapsedMs);
+  assert.ok(second.updatedAt > first.updatedAt);
+});
+
 test("runner promptly republishes offline state when a working adapter closes during a state upload", async (t) => {
   let connected = true;
   let turn = "working";
@@ -529,17 +703,20 @@ test("CLI startup publishes signed telemetry when its Codex connection fails", a
   const requests = [];
   const controlPlane = signedControlPlane({ publicKey: prepared.publicKey, commandValue: null, requests });
   let connectCalls = 0;
+  let selectedFleetInterval = null;
   t.mock.method(CodexCompanionAdapter.prototype, "connect", async () => {
     connectCalls += 1;
     throw new Error("conversation unavailable at startup");
   });
   await runnerCliInternals.run({
     ...prepared.options, cwd, journalDirectory, privateKeyFile,
+    includeExecutionMirror: true,
     codexHome: path.join(journalDirectory, "codex-home"),
     threadIdFile: path.join(journalDirectory, "thread.json")
   }, {
     prepareLaunch: () => ({ command: process.execPath, environment: {} }),
     createRunner: (configuration) => {
+      selectedFleetInterval = configuration.fleetIntervalMs;
       const runner = new RemoteCockpitRunner({
         ...prepared.options, ...configuration,
         fleetProvider: async () => unavailableFleet(),
@@ -553,6 +730,7 @@ test("CLI startup publishes signed telemetry when its Codex connection fails", a
     }
   });
   assert.equal(connectCalls, 1);
+  assert.equal(selectedFleetInterval, runnerCliInternals.REMOTE_MIRROR_FLEET_INTERVAL_MS);
   assert.ok(requests.some((item) => item.path.endsWith("/heartbeat")));
   assert.ok(requests.some((item) => item.path.endsWith("/fleet")));
   assert.ok(requests.some((item) => item.path.endsWith("/state") && item.value.codex.state === "offline"));
@@ -969,9 +1147,27 @@ test("state and fleet projection expose only the reviewed remote shape", () => {
   const fleet = projectRemoteFleet(unavailableFleet({
     secretReference: "must-not-cross"
   }), { sessionRevision: SESSION_REVISION });
-  assert.equal(fleet.apiVersion, "gate.remote-fleet/v2");
+  assert.equal(fleet.apiVersion, "gate.remote-fleet/v3");
   assert.equal(fleet.sessionRevision, SESSION_REVISION);
   assert.equal("secretReference" in fleet, false);
+});
+
+test("remote fleet projection trims mirror history deterministically within its byte ceiling", () => {
+  const fleet = projectRemoteFleet(largeConnectedFleet(), { sessionRevision: SESSION_REVISION });
+  assert.ok(Buffer.byteLength(JSON.stringify(fleet), "utf8") <= MAX_REMOTE_PROJECTION_BYTES);
+  const available = fleet.campaigns.filter((campaign) => campaign.mirror.availability === "available");
+  assert.equal(available.length, fleet.campaigns.length);
+  assert.ok(available.every((campaign) => campaign.mirror.attempts.length >= 1));
+  assert.equal(available[0].mirror.attempts[0].state, "running");
+  const marker = available.flatMap((campaign) => campaign.mirror.attempts)
+    .flatMap((attempt) => attempt.entries)
+    .find((entry) => entry.channel === "system" && entry.truncated === true);
+  assert.ok(marker);
+  assert.equal(marker.fidelity, "summarized");
+  assert.match(marker.text, /omitted/u);
+
+  const repeated = projectRemoteFleet(largeConnectedFleet(), { sessionRevision: SESSION_REVISION });
+  assert.deepEqual(repeated, fleet);
 });
 
 test("state projection withholds whole credential-like messages and omits unsafe questions", () => {
@@ -1254,6 +1450,22 @@ test("runner CLI resolves exact environment configuration without accepting an a
   assert.equal(values.controlPlaneUrl, "https://gate.example.test");
   assert.equal(values.codexHome, codexHome);
   assert.equal(values.threadIdFile, threadFile);
+  assert.equal(values.includeExecutionMirror, false);
+  const mirrorValues = runnerCliInternals.parseArguments([], {
+    GATE_REMOTE_CONTROL_PLANE: "https://gate.example.test",
+    GATE_REMOTE_CASE_ID: CASE_ID,
+    GATE_REMOTE_SESSION_REVISION: String(SESSION_REVISION),
+    GATE_REMOTE_RUNNER_ID: RUNNER_ID,
+    GATE_REMOTE_PRIVATE_KEY_FILE: keyFile,
+    GATE_REMOTE_JOURNAL_DIR: directory,
+    GATE_REMOTE_CODEX_HOME: codexHome,
+    GATE_REMOTE_THREAD_ID_FILE: threadFile,
+    GATE_REMOTE_EXECUTION_MIRROR: "true",
+    GATE_REPO: process.cwd()
+  });
+  assert.equal(mirrorValues.includeExecutionMirror, true);
+  assert.equal(runnerCliInternals.DEFAULT_FLEET_INTERVAL_MS, 5_000);
+  assert.ok(runnerCliInternals.REMOTE_MIRROR_FLEET_CACHE_MS < runnerCliInternals.REMOTE_MIRROR_FLEET_INTERVAL_MS);
   assert.throws(() => runnerCliInternals.parseArguments([
     "--control-plane", "https://gate.example.test/"
   ], {

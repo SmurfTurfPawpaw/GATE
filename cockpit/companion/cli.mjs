@@ -106,7 +106,10 @@ async function main() {
   }
   let fleetProvider;
   try {
-    fleetProvider = createGateFleetProvider({ observerUrl: options.gateObserver });
+    fleetProvider = createGateFleetProvider({
+      observerUrl: options.gateObserver,
+      includeExecutionMirror: true
+    });
   } catch (error) {
     process.stderr.write(`${error.message}\n`);
     process.exitCode = 2;

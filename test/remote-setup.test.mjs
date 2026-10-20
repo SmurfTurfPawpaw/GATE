@@ -114,6 +114,7 @@ test("remote init creates one owner-only case bundle outside Git with matching E
   assert.doesNotMatch(JSON.stringify(config), /runner-private|\/runner\//u);
   const environment = fs.readFileSync(locations.runnerEnvironment, "utf8");
   assert.match(environment, new RegExp(`GATE_REMOTE_PRIVATE_KEY_FILE=.*${path.basename(locations.runnerPrivateKey)}`, "u"));
+  assert.match(environment, /(?:^|\n)GATE_REMOTE_EXECUTION_MIRROR='0'\n$/u);
   assert.doesNotMatch(environment, /BEGIN PRIVATE KEY/u);
   assert.equal(fs.existsSync(locations.runnerThreadRecord), false);
   assert.match(result.publicKeyFingerprint, /^sha256:[a-f0-9]{64}$/u);
@@ -265,6 +266,41 @@ test("remote doctor validates local prerequisites without returning probe output
   const serialized = JSON.stringify(report);
   assert.doesNotMatch(serialized, /PROBE_SECRET_CANARY/u);
   assert.doesNotMatch(serialized, /AMBIENT_GITHUB_SECRET_CANARY/u);
+});
+
+test("remote doctor accepts quoted and unquoted operational mirror opt-in", (t) => {
+  const { working, paths } = fixture(t);
+  initializeRemoteCase(input(working), { paths });
+  const locations = remoteSetupInternals.layout(paths, "demo-case");
+  const generated = fs.readFileSync(locations.runnerEnvironment, "utf8");
+  for (const replacement of ["GATE_REMOTE_EXECUTION_MIRROR='1'\n", "GATE_REMOTE_EXECUTION_MIRROR=1\n"]) {
+    const environment = generated.replace(/GATE_REMOTE_EXECUTION_MIRROR='0'\n$/u, replacement);
+    assert.match(environment, /GATE_REMOTE_EXECUTION_MIRROR=(?:1|'1')\n$/u);
+    fs.writeFileSync(locations.runnerEnvironment, environment, { mode: 0o600 });
+
+    const report = inspectRemoteCase("demo-case", {
+      paths,
+      commandRunner: fakeCodexProbe().run,
+      prepareCodexLaunch: (_source, codexHome) => fakeCodexLaunch(codexHome),
+      nodeVersion: "24.0.0",
+      sqliteAvailable: true
+    });
+    assert.equal(report.checks.find((check) => check.id === "runner-config").status, "passed");
+  }
+
+  fs.writeFileSync(
+    locations.runnerEnvironment,
+    generated.replace(/GATE_REMOTE_EXECUTION_MIRROR='0'\n$/u, ""),
+    { mode: 0o600 }
+  );
+  const legacyReport = inspectRemoteCase("demo-case", {
+    paths,
+    commandRunner: fakeCodexProbe().run,
+    prepareCodexLaunch: (_source, codexHome) => fakeCodexLaunch(codexHome),
+    nodeVersion: "24.0.0",
+    sqliteAvailable: true
+  });
+  assert.equal(legacyReport.checks.find((check) => check.id === "runner-config").status, "passed");
 });
 
 test("remote init fails closed on unsafe inputs and never replaces an existing case", (t) => {

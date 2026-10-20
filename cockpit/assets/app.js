@@ -47,7 +47,15 @@ const elements = {
   pilotEfficiency: byId("pilot-efficiency"), pilotEfficiencyDetail: byId("pilot-efficiency-detail"),
   pilotLearning: byId("pilot-learning"), pilotLearningDetail: byId("pilot-learning-detail"),
   pilotCockpit: byId("pilot-cockpit"), pilotCockpitDetail: byId("pilot-cockpit-detail"),
-  pilotIntegrity: byId("pilot-integrity"), pilotIntegrityDetail: byId("pilot-integrity-detail")
+  pilotIntegrity: byId("pilot-integrity"), pilotIntegrityDetail: byId("pilot-integrity-detail"),
+  mirrorCampaignSelect: byId("mirror-campaign-select"), mirrorAttemptSelect: byId("mirror-attempt-select"),
+  mirrorCaption: byId("mirror-caption"), mirrorLiveState: byId("mirror-live-state"),
+  mirrorState: byId("mirror-state"), mirrorUpdated: byId("mirror-updated"),
+  mirrorProgressValue: byId("mirror-progress-value"), mirrorProgressDetail: byId("mirror-progress-detail"),
+  mirrorElapsed: byId("mirror-elapsed"), mirrorPhase: byId("mirror-phase"),
+  mirrorTokens: byId("mirror-tokens"), mirrorUsage: byId("mirror-usage"),
+  mirrorProgressTrack: byId("mirror-progress-track"), mirrorAction: byId("mirror-action"),
+  mirrorTerminal: byId("mirror-terminal")
 };
 
 let latestGeneratedAt;
@@ -99,6 +107,13 @@ let remoteState;
 let remoteFleet;
 let remoteConnection;
 let remoteActivity = [];
+let selectedMirrorCampaignAlias = null;
+let selectedMirrorAttemptAlias = null;
+let mirrorCampaigns = [];
+let mirrorMode = "unavailable";
+let mirrorSourceFreshness = "unavailable";
+let renderedMirrorHistoryKey = null;
+const mirrorHistoryScrollPositions = new Map();
 const remoteCommands = new Map();
 let pendingMessageRequest;
 const pendingQuestionRequests = new Map();
@@ -144,6 +159,214 @@ function compactNumber(value) {
   return new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(value);
 }
 
+function readableMirrorValue(value) {
+  if (!value) return "Unavailable";
+  const words = value.replace(/-/gu, " ");
+  return `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
+}
+
+function mirrorDuration(value) {
+  if (!Number.isSafeInteger(value)) return "Unavailable";
+  const totalSeconds = Math.floor(value / 1_000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  if (minutes < 60) return `${minutes}m ${totalSeconds % 60}s`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+function mirrorTimestamp(value) {
+  if (!value) return "No verified update";
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) return "No verified update";
+  return parsed.toLocaleString(undefined, {
+    year: "numeric", month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", timeZoneName: "short"
+  });
+}
+
+function mirrorMetric(metric, suffix = "") {
+  return metric?.availability === "unavailable" || metric?.value === null || metric?.value === undefined
+    ? "Unavailable"
+    : `${compactNumber(metric.value)}${suffix}`;
+}
+
+function mirrorTokens(tokens) {
+  return tokens?.availability === "unavailable" || tokens?.total === null || tokens?.total === undefined
+    ? "Unavailable"
+    : `${compactNumber(tokens.total)}${tokens.availability === "partial" ? "+" : ""}`;
+}
+
+function mirrorCost(cost) {
+  if (cost?.availability === "unavailable" || cost?.amountMicros === null || !cost?.unit) return "cost unavailable";
+  const amount = cost.amountMicros / 1_000_000;
+  return cost.unit === "USD" ? `${new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(amount)} est.`
+    : `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 3 }).format(amount)} credits est.`;
+}
+
+function setMirrorUnavailable(reason = "source-unavailable", campaigns = []) {
+  const reasonLabels = {
+    disabled: "Mirror disabled for this source.",
+    "not-applicable": "No supervised execution applies to this project.",
+    "no-attempts": "No execution attempts have started yet.",
+    "source-unavailable": "Execution mirror source unavailable."
+  };
+  elements.mirrorAttemptSelect.disabled = true;
+  clear(elements.mirrorAttemptSelect);
+  const option = node("option", "", "Attempt unavailable");
+  option.value = "";
+  elements.mirrorAttemptSelect.append(option);
+  elements.mirrorState.textContent = "Unavailable";
+  elements.mirrorUpdated.textContent = "No verified update";
+  elements.mirrorProgressValue.textContent = "Unavailable";
+  elements.mirrorProgressDetail.textContent = "Progress unavailable";
+  elements.mirrorElapsed.textContent = "Unavailable";
+  elements.mirrorPhase.textContent = "Phase unavailable";
+  elements.mirrorTokens.textContent = "Unavailable";
+  elements.mirrorUsage.textContent = "Usage unavailable";
+  elements.mirrorProgressTrack.className = "mirror-progress-track unavailable";
+  elements.mirrorProgressTrack.removeAttribute("aria-valuemin");
+  elements.mirrorProgressTrack.removeAttribute("aria-valuemax");
+  elements.mirrorProgressTrack.removeAttribute("aria-valuenow");
+  elements.mirrorProgressTrack.setAttribute("aria-valuetext", "Progress unavailable");
+  elements.mirrorAction.textContent = reasonLabels[reason] || reasonLabels["source-unavailable"];
+  clear(elements.mirrorTerminal);
+  elements.mirrorTerminal.append(node("div", "mirror-empty", elements.mirrorAction.textContent));
+  renderedMirrorHistoryKey = null;
+  elements.mirrorLiveState.className = "mirror-live-state unavailable";
+  elements.mirrorLiveState.textContent = mirrorMode === "preview" ? "Synthetic preview" : "Source unavailable";
+  if (campaigns.length === 0) elements.mirrorCaption.textContent = "No project mirror is available in this view.";
+}
+
+function mirrorEntryLine(entry) {
+  const line = node("div", `mirror-line mirror-${entry.channel}`);
+  const identity = node("div", "mirror-line-identity");
+  identity.append(
+    node("time", "", mirrorTimestamp(entry.at)),
+    node("strong", "", entry.channel.replace(/-/gu, " ")),
+    node("span", `mirror-fidelity fidelity-${entry.fidelity}`, `${entry.fidelity}${entry.truncated ? " · truncated" : ""}`)
+  );
+  const text = entry.channel === "command" ? `$ ${entry.text}` : entry.text;
+  line.append(identity, node("pre", "", text));
+  return line;
+}
+
+function rememberMirrorScrollPosition() {
+  if (renderedMirrorHistoryKey && Number.isFinite(elements.mirrorTerminal.scrollTop)) {
+    mirrorHistoryScrollPositions.set(renderedMirrorHistoryKey, elements.mirrorTerminal.scrollTop);
+    while (mirrorHistoryScrollPositions.size > 32) mirrorHistoryScrollPositions.delete(mirrorHistoryScrollPositions.keys().next().value);
+  }
+}
+
+function renderOperationalMirror(campaigns, mode, sourceFreshness = "unavailable") {
+  rememberMirrorScrollPosition();
+  mirrorCampaigns = Array.isArray(campaigns) ? campaigns : [];
+  mirrorMode = mode;
+  mirrorSourceFreshness = sourceFreshness;
+  const candidates = mirrorCampaigns.filter((campaign) => campaign?.mirror);
+  if (!candidates.some((campaign) => campaign.alias === selectedMirrorCampaignAlias)) {
+    selectedMirrorCampaignAlias = candidates.some((campaign) => campaign.alias === selectedPilotAlias)
+      ? selectedPilotAlias : candidates.find((campaign) => campaign.mirror.availability === "available")?.alias || candidates[0]?.alias || null;
+    selectedMirrorAttemptAlias = null;
+  }
+  clear(elements.mirrorCampaignSelect);
+  if (candidates.length === 0) {
+    const unavailable = node("option", "", "Project unavailable");
+    unavailable.value = "";
+    elements.mirrorCampaignSelect.append(unavailable);
+    elements.mirrorCampaignSelect.disabled = true;
+    elements.mirrorCampaignSelect.value = "";
+    setMirrorUnavailable("source-unavailable", candidates);
+    return;
+  }
+  for (const campaign of candidates) {
+    const option = node("option", "", campaign.alias);
+    option.value = campaign.alias;
+    elements.mirrorCampaignSelect.append(option);
+  }
+  elements.mirrorCampaignSelect.disabled = false;
+  elements.mirrorCampaignSelect.value = selectedMirrorCampaignAlias || "";
+  const campaign = candidates.find((item) => item.alias === selectedMirrorCampaignAlias) || null;
+  elements.mirrorCaption.textContent = campaign
+    ? `${campaign.alias} · current in-progress state above; retained attempt history below`
+    : "Select a project and attempt.";
+  if (!campaign || campaign.mirror.availability !== "available") {
+    setMirrorUnavailable(campaign?.mirror?.reason || "source-unavailable", candidates);
+    return;
+  }
+  const attempts = campaign.mirror.attempts;
+  if (!attempts.some((attempt) => attempt.alias === selectedMirrorAttemptAlias)) {
+    selectedMirrorAttemptAlias = [...attempts].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0]?.alias || null;
+  }
+  clear(elements.mirrorAttemptSelect);
+  for (const attempt of attempts) {
+    const option = node("option", "", `${attempt.alias} · ${readableMirrorValue(attempt.state)}`);
+    option.value = attempt.alias;
+    elements.mirrorAttemptSelect.append(option);
+  }
+  elements.mirrorAttemptSelect.disabled = attempts.length < 2;
+  elements.mirrorAttemptSelect.value = selectedMirrorAttemptAlias || "";
+  const attempt = attempts.find((item) => item.alias === selectedMirrorAttemptAlias);
+  if (!attempt) {
+    setMirrorUnavailable("no-attempts", candidates);
+    return;
+  }
+  const active = new Set(["running", "stopping"]).has(attempt.state);
+  const authenticated = new Set(["local", "remote", "remote-conversation-offline"]).has(mode);
+  const current = sourceFreshness === "current" && campaign.freshness === "current";
+  const live = authenticated && current && active;
+  elements.mirrorLiveState.className = `mirror-live-state ${live ? "running" : "available"}`;
+  const terminal = new Set(["succeeded", "failed", "cancelled"]).has(attempt.state);
+  const retainedLabel = terminal ? "Retained result"
+    : attempt.state === "unknown" ? "Retained · state unknown"
+      : `Retained · ${attempt.state}`;
+  elements.mirrorLiveState.textContent = mode === "preview" ? "Synthetic preview"
+    : live ? `Live · ${attempt.state}`
+      : active && authenticated ? "Delayed · retained" : retainedLabel;
+  elements.mirrorState.textContent = readableMirrorValue(attempt.state);
+  elements.mirrorUpdated.textContent = `Updated ${mirrorTimestamp(attempt.updatedAt)}`;
+  elements.mirrorElapsed.textContent = mirrorDuration(attempt.elapsedMs);
+  elements.mirrorPhase.textContent = attempt.phase || "Phase unavailable";
+  elements.mirrorTokens.textContent = mirrorTokens(attempt.usage.tokens);
+  elements.mirrorUsage.textContent = [
+    `${mirrorMetric(attempt.usage.toolRuns)} tools`,
+    `${mirrorMetric(attempt.usage.requests)} requests`,
+    `${mirrorMetric(attempt.usage.retries)} retries`,
+    mirrorCost(attempt.usage.cost)
+  ].join(" · ");
+  if (attempt.progress.availability === "exact") {
+    elements.mirrorProgressValue.textContent = `${attempt.progress.percent}%`;
+    elements.mirrorProgressDetail.textContent = `${attempt.progress.completed} of ${attempt.progress.total} steps`;
+    elements.mirrorProgressTrack.className = `mirror-progress-track${live ? " running" : ""}`;
+    elements.mirrorProgressTrack.setAttribute("aria-valuemin", "0");
+    elements.mirrorProgressTrack.setAttribute("aria-valuemax", "100");
+    elements.mirrorProgressTrack.setAttribute("aria-valuenow", String(attempt.progress.percent));
+    elements.mirrorProgressTrack.removeAttribute("aria-valuetext");
+    elements.mirrorProgressTrack.querySelector("i")?.style.setProperty("--mirror-progress", `${attempt.progress.percent}%`);
+  } else {
+    elements.mirrorProgressValue.textContent = active ? readableMirrorValue(attempt.state) : "Unavailable";
+    elements.mirrorProgressDetail.textContent = "Exact progress unavailable";
+    elements.mirrorProgressTrack.className = `mirror-progress-track unavailable${live ? " running indeterminate" : ""}`;
+    elements.mirrorProgressTrack.removeAttribute("aria-valuemin");
+    elements.mirrorProgressTrack.removeAttribute("aria-valuemax");
+    elements.mirrorProgressTrack.removeAttribute("aria-valuenow");
+    elements.mirrorProgressTrack.setAttribute("aria-valuetext", active ? `${readableMirrorValue(attempt.state)}; exact progress unavailable` : "Progress unavailable");
+  }
+  const action = [attempt.action, attempt.tool].filter(Boolean).join(" · ");
+  elements.mirrorAction.textContent = `${live ? "Current action" : "Last reported action"} · ${action || "Unavailable"}`;
+  const historyKey = `${campaign.alias}/${attempt.alias}`;
+  clear(elements.mirrorTerminal);
+  if (attempt.entries.length === 0) {
+    elements.mirrorTerminal.append(node("div", "mirror-empty", "No visible events have been retained for this attempt."));
+  } else {
+    attempt.entries.forEach((entry) => elements.mirrorTerminal.append(mirrorEntryLine(entry)));
+  }
+  renderedMirrorHistoryKey = historyKey;
+  if (live && Number.isFinite(elements.mirrorTerminal.scrollHeight)) {
+    elements.mirrorTerminal.scrollTop = elements.mirrorTerminal.scrollHeight;
+  } else if (Number.isFinite(elements.mirrorTerminal.scrollTop)) {
+    elements.mirrorTerminal.scrollTop = mirrorHistoryScrollPositions.get(historyKey) ?? 0;
+  }
+}
+
 function readablePilotValue(value) {
   if (!value) return "Unavailable";
   const words = value.replace(/-/gu, " ");
@@ -185,6 +408,9 @@ function renderPilot(fleet) {
     writePilotSelection(null, null);
     pilot = pilotCockpitPresentation(fleet, null);
   }
+  const hasCaseSignal = pilot.aliases.length > 0;
+  elements.pilotPanel.hidden = !hasCaseSignal;
+  if (!hasCaseSignal) return;
   clear(elements.pilotCaseSelect);
   const placeholder = node("option", "", pilot.aliases.length > 0 ? "Select a case" : "Case feed unavailable");
   placeholder.value = "";
@@ -510,27 +736,30 @@ function setMode(mode) {
   clear(elements.modeBanner);
   if (mode === "preview") {
     elements.modeBanner.className = "mode-banner mode-preview";
-    elements.modeBanner.append(node("strong", "", "PREVIEW · NOT LIVE"), node("span", "", "Example data. Open the private local companion to steer Codex."));
+    const liveLink = node("a", "preview-live-link", "Open the authenticated cockpit");
+    liveLink.setAttribute("href", "https://gate.giovannicallebaut.com/");
+    liveLink.setAttribute("rel", "noreferrer");
+    elements.modeBanner.append(node("strong", "", "PUBLIC PREVIEW · NO LIVE DATA"), node("span", "", "Synthetic demonstration data only."), liveLink);
   } else if (mode === "local") {
     elements.modeBanner.className = "mode-banner mode-local";
-    elements.modeBanner.append(node("strong", "", "LIVE · PRIVATE"), node("span", "", "Local companion connected."));
+    elements.modeBanner.append(node("strong", "", "CONNECTED · PRIVATE · AUTHENTICATED"), node("span", "", "Laptop companion and retained execution feed connected."));
   } else if (mode === "remote") {
     elements.modeBanner.className = "mode-banner mode-remote";
-    elements.modeBanner.append(node("strong", "", "LIVE · REMOTE"), node("span", "", "Authenticated control plane connected."));
+    elements.modeBanner.append(node("strong", "", "CONNECTED · REMOTE · AUTHENTICATED"), node("span", "", "Control plane, runner, conversation, and operational telemetry connected."));
   } else if (mode === "remote-conversation-offline") {
     const fleetLive = remoteFleet?.connection === "connected";
     elements.modeBanner.className = "mode-banner mode-remote mode-remote-connecting";
     elements.modeBanner.append(node("strong", "", fleetLive
-      ? "LIVE · FLEET · CODEX OFFLINE" : "RUNNER LIVE · CODEX OFFLINE"),
+      ? "CONNECTED · FLEET · CODEX OFFLINE" : "CONNECTED · RUNNER · CODEX OFFLINE"),
     node("span", "", fleetLive
       ? "Operational telemetry continues; conversation steering is paused."
       : "The signed runner is current; fleet telemetry is unavailable and conversation steering is paused."));
   } else if (mode === "remote-connecting") {
     elements.modeBanner.className = "mode-banner mode-remote mode-remote-connecting";
-    elements.modeBanner.append(node("strong", "", "LIVE · REMOTE · CONNECTING"), node("span", "", "Restoring the live connection."));
+    elements.modeBanner.append(node("strong", "", "REMOTE · CONNECTING"), node("span", "", "Restoring the authenticated connection."));
   } else if (mode === "remote-offline") {
     elements.modeBanner.className = "mode-banner mode-remote mode-remote-offline";
-    elements.modeBanner.append(node("strong", "", "LIVE · REMOTE · OFFLINE"), node("span", "", "Live connection required."));
+    elements.modeBanner.append(node("strong", "", "REMOTE · OFFLINE"), node("span", "", "Authenticated connection required."));
   } else {
     elements.modeBanner.className = "mode-banner mode-unavailable";
     elements.modeBanner.append(node("strong", "", "SNAPSHOT UNAVAILABLE"), node("span", "", "No operational state is being shown."));
@@ -545,7 +774,7 @@ function renderBridgeState(connected, mode = currentDisplay?.mode) {
   const label = connected ? mode === "remote" ? "Remote connected" : "Connected"
     : connecting ? "Connecting"
       : telemetryOnly ? remoteFleet?.connection === "connected"
-        ? "Fleet live · Codex offline" : "Runner live · Codex offline"
+        ? "Fleet connected · Codex offline" : "Runner connected · Codex offline"
       : mode === "preview" ? "Preview · interaction off" : "Offline";
   elements.connectionState.append(node("i", ""), document.createTextNode(label));
 }
@@ -555,6 +784,7 @@ function renderUnavailable() {
   elements.decisionPanel.hidden = false;
   setMode("unavailable");
   renderPilot(null);
+  renderOperationalMirror([], "unavailable");
   elements.siteVersion.textContent = "Unavailable";
   elements.gateVersion.textContent = "Unavailable";
   elements.runningMetricLabel.textContent = "ACTIVE WORK";
@@ -579,7 +809,7 @@ function renderUnavailable() {
   elements.messageInput.disabled = true;
   elements.messageSend.disabled = true;
   updateComposer();
-  elements.messageStatus.textContent = "Live connection required.";
+  elements.messageStatus.textContent = "Authenticated connection required.";
   renderBridgeState(false);
   clear(elements.activityFeed);
   const line = node("li", "activity-row muted");
@@ -656,10 +886,10 @@ function configureComposer(model, bridge) {
     && remoteState?.codex.state === "offline";
   elements.messageInput.disabled = !enabled;
   elements.messageInput.placeholder = enabled ? "Write a short message…"
-    : conversationOffline ? "Codex conversation offline" : "Live connection required";
+    : conversationOffline ? "Codex conversation offline" : "Authenticated connection required";
   elements.messageStatus.textContent = enabled
     ? interactionStatus || "Ready."
-    : conversationOffline ? "Fleet telemetry is live. Conversation commands are paused." : "Live connection required.";
+    : conversationOffline ? "Fleet telemetry is connected. Conversation commands are paused." : "Authenticated connection required.";
   updateComposer();
 }
 
@@ -1048,6 +1278,7 @@ function renderRemoteWithoutState() {
   const mode = remoteConnection?.state === "connecting" ? "remote-connecting" : "remote-offline";
   setMode(mode);
   renderPilot(null);
+  renderOperationalMirror([], mode);
   elements.decisionPanel.hidden = false;
   for (const [count, summary, text] of [
     [elements.runningCount, elements.runningSummary, "Work unavailable"],
@@ -1060,16 +1291,16 @@ function renderRemoteWithoutState() {
   }
   clear(elements.campaignList);
   const empty = node("div", "empty-state");
-  empty.append(node("p", "", "Live connection required."));
+  empty.append(node("p", "", "Authenticated connection required."));
   elements.campaignList.append(empty);
   clear(elements.conversation);
-  elements.conversation.append(node("div", "conversation-empty", "Live connection required."));
+  elements.conversation.append(node("div", "conversation-empty", "Authenticated connection required."));
   clear(elements.choiceList);
   renderBridgeState(false, mode);
   configureComposer(currentDisplay || { mode }, exactBridge());
   clear(elements.activityFeed);
   const line = node("li", "activity-row muted");
-  line.append(node("time", "", "now"), node("span", "", "Live connection required"));
+  line.append(node("time", "", "now"), node("span", "", "Authenticated connection required"));
   elements.activityFeed.append(line);
 }
 
@@ -1096,6 +1327,7 @@ function renderLiveMode() {
       : remoteConnection?.state === "connecting" ? "remote-connecting" : "remote-offline";
   const fleetConnected = fleet?.connection === "connected";
   renderPilot(fleet);
+  renderOperationalMirror(fleetConnected ? fleet.campaigns : [], mode, fleet?.sourceFreshness);
   const fleetSummary = fleet?.summary;
   setMode(mode);
   elements.decisionPanel.hidden = false;
@@ -1160,7 +1392,7 @@ function renderLiveMode() {
     : [];
   if (events.length === 0 && commands.length === 0) {
     const line = node("li", "activity-row muted");
-    line.append(node("time", "", "now"), node("span", "", state.turn === "working" ? "Codex is starting…" : "No live activity yet"));
+    line.append(node("time", "", "now"), node("span", "", state.turn === "working" ? "Codex is starting…" : "No recent activity yet"));
     elements.activityFeed.append(line);
   } else {
     const combined = [
@@ -1202,6 +1434,7 @@ function renderAvailable(model) {
   currentDisplay = model;
   setMode(model.mode);
   renderPilot(null);
+  renderOperationalMirror(model.campaigns, model.mode);
   elements.siteVersion.textContent = `v${model.siteVersion}`;
   elements.gateVersion.textContent = `v${model.gateVersion}`;
   const runningCount = model.campaigns.filter((campaign) => campaign.codex === "working").length;
@@ -1408,3 +1641,13 @@ elements.pilotCaseSelect.addEventListener("change", () => {
   writePilotSelection(selectedPilotAlias, selectedPilotEpoch);
   renderPilot(fleet);
 });
+elements.mirrorCampaignSelect.addEventListener("change", () => {
+  selectedMirrorCampaignAlias = elements.mirrorCampaignSelect.value || null;
+  selectedMirrorAttemptAlias = null;
+  renderOperationalMirror(mirrorCampaigns, mirrorMode, mirrorSourceFreshness);
+});
+elements.mirrorAttemptSelect.addEventListener("change", () => {
+  selectedMirrorAttemptAlias = elements.mirrorAttemptSelect.value || null;
+  renderOperationalMirror(mirrorCampaigns, mirrorMode, mirrorSourceFreshness);
+});
+elements.mirrorTerminal.addEventListener("scroll", rememberMirrorScrollPosition);

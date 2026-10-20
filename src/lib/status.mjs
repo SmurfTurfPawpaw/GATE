@@ -209,7 +209,11 @@ async function buildRuntimeStatus(paths, options = {}) {
       .reverse(),
     engagements: engagementProjection.engagements,
     engagementScan: engagementProjection.scan,
-    execution: executionStatus({ paths }),
+    execution: executionStatus({
+      paths,
+      now: observedAt,
+      includeExecutionMirror: options.includeExecutionMirror === true
+    }),
     workflows: workflowFleetStatus({ paths, runtimeEnsured: true }),
     ctfPilot,
     offlineAnalysis: offlineAnalysisStatus({ paths }),

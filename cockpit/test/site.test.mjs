@@ -56,9 +56,12 @@ test("active document assets resolve within a Pages subpath", async () => {
   assert.ok(references.length >= 5);
   for (const reference of references) {
     const resolved = new URL(reference, base);
+    if (resolved.href === "https://gate.giovannicallebaut.com/") continue;
     assert.equal(resolved.origin, base.origin);
     assert.ok(resolved.pathname.startsWith(base.pathname));
   }
+  const liveLink = all.find(element => element.tag === "a" && element.attributes.href === "https://gate.giovannicallebaut.com/");
+  assert.equal(liveLink?.attributes.rel, "noreferrer");
   assert.equal(all.some(element => element.tag === "base"), false);
 });
 
@@ -100,9 +103,9 @@ test("public snapshot names the exact repository version", async () => {
   assert.equal(snapshot.gate.version, repositoryPackage.version);
 });
 
-test("preview puts the pilot scorecard first, keeps four fleet metrics, and makes steering secondary", async () => {
+test("preview hides the unavailable pilot, keeps four fleet metrics, and makes steering secondary", async () => {
   const { all, byId } = documentModel(await read("index.html"));
-  assert.equal(byId("mode-banner").children.some(element => element.tag === "strong" && element.text === "PREVIEW · NOT LIVE"), true);
+  assert.equal(byId("mode-banner").children.some(element => element.tag === "strong" && element.text === "PUBLIC PREVIEW · NO LIVE DATA"), true);
   for (const id of ["message-input", "message-send"]) assert.ok("disabled" in byId(id).attributes);
   assert.equal("hidden" in byId("decision-panel").attributes, false);
   const visible = element => !("hidden" in element.attributes) && element.attributes["aria-hidden"] !== "true";
@@ -111,19 +114,21 @@ test("preview puts the pilot scorecard first, keeps four fleet metrics, and make
     : "";
   const main = all.find(element => element.tag === "main");
   const sections = [];
+  const headings = [];
   const visit = element => {
     if (!visible(element)) return;
     if (element.tag === "section") sections.push(element);
+    if (/^h[1-6]$/.test(element.tag)) headings.push(element);
     element.children.forEach(visit);
   };
   visit(main);
   const name = element => element.attributes["aria-label"] || text(byId(element.attributes["aria-labelledby"]));
-  assert.deepEqual(sections.map(name), ["Pilot status", "Current status", "Fleet", "Live activity", "Steer the dedicated runner"]);
-  const metrics = sections[1].children.filter(visible);
+  assert.deepEqual(sections.map(name), ["Current status", "Operational mirror", "Fleet", "Recent activity", "Steer the dedicated runner"]);
+  const metrics = sections[0].children.filter(visible);
   assert.deepEqual(metrics.map(metric => text(metric.children.find(element => element.tag === "small"))),
     ["ACTIVE WORK", "NEEDS YOU", "BLOCKERS", "TOKENS"]);
-  assert.deepEqual(all.filter(element => /^h[1-6]$/.test(element.tag) && visible(element)).map(text),
-    ["Pilot status", "Fleet", "Live activity", "Steer the dedicated runner"]);
+  assert.deepEqual(headings.map(text),
+    ["Operational mirror", "Fleet", "Recent activity", "Steer the dedicated runner"]);
   assert.deepEqual(byId("pilot-panel").children.find(element => element.attributes.class === "pilot-primary")
     .children.map(element => text(element.children.find(child => child.tag === "small"))),
     ["SOLVING", "LEARNING", "COCKPIT"]);
@@ -133,6 +138,7 @@ test("preview puts the pilot scorecard first, keeps four fleet metrics, and make
   assert.match(text(byId("pilot-alert")), /Pilot feed unavailable/u);
   assert.match(text(byId("pilot-alert")), /observer and dedicated runner/u);
   assert.ok(byId("pilot-case-select"));
+  assert.equal("hidden" in byId("pilot-panel").attributes, true);
 });
 
 test("robots policy requests no crawling", async () => {
@@ -148,6 +154,8 @@ class Element {
     this.listeners = {};
     this.value = "";
     this.parentElement = { querySelector: () => null };
+    this.scrollTop = 0;
+    this.scrollHeight = 120;
     this.style = { setProperty() {} };
     this.classList = { add() {}, remove() {}, toggle() {} };
   }
@@ -210,6 +218,15 @@ test("public preview renders campaigns and token budget without enabling writes"
   assert.match(elements.get("mode-banner").textContent, /PREVIEW/);
   assert.match(elements.get("token-usage").textContent, /18\.4K \/ 50K/);
   assert.equal(elements.get("running-count").textContent, "1");
+  assert.equal(elements.get("mirror-campaign-select").value, "Campaign 1");
+  assert.equal(elements.get("mirror-state").textContent, "Running");
+  assert.match(elements.get("mirror-tokens").textContent, /6\.2K/u);
+  assert.match(elements.get("mirror-terminal").textContent, /\$ gate ctf inspect/u);
+  assert.equal(elements.get("mirror-live-state").textContent, "Synthetic preview");
+  assert.equal(elements.get("pilot-panel").hidden, true);
+  assert.doesNotMatch(elements.get("mirror-progress-track").className, /\brunning\b/u);
+  assert.match(elements.get("mode-banner").textContent, /PUBLIC PREVIEW · NO LIVE DATA/u);
+  assert.equal(elements.get("mode-banner").children.some(child => child.href === "https://gate.giovannicallebaut.com/" && child.rel === "noreferrer"), true);
   assert.equal(elements.get("message-input").disabled, true);
   assert.equal(elements.get("message-send").disabled, true);
 });
@@ -245,6 +262,8 @@ test("local startup without fleet telemetry renders native choices and submits s
       ]
     }] }]
   } });
+  assert.match(page.elements.get("mode-banner").textContent, /CONNECTED · PRIVATE · AUTHENTICATED/u);
+  assert.doesNotMatch(page.elements.get("mode-banner").textContent, /\bLIVE\b/u);
   assert.match(page.elements.get("conversation").textContent, /Ready to continue/);
   assert.equal(page.elements.get("token-usage").textContent, "Unavailable");
   assert.match(page.elements.get("token-summary").textContent, /unavailable/i);
@@ -371,7 +390,7 @@ function remoteFleet(at, overrides = {}) {
     ...(profile ? { visible: null, representedByCases: null } : {})
   });
   return {
-    apiVersion: "gate.remote-fleet/v2", sessionRevision: 5, revision: 1, selectionEpoch: "0".repeat(32),
+    apiVersion: "gate.remote-fleet/v3", sessionRevision: 5, revision: 1, selectionEpoch: "0".repeat(32),
     observedAt: null, receivedAt: at, validUntil: new Date(Date.parse(at) + 15_000).toISOString(), connection: "unavailable", sourceFreshness: "unavailable",
     coverage: { state: "unavailable", cases: scan(), profiles: scan(true) },
     summary: {
@@ -459,10 +478,124 @@ function connectedRemoteFleet(at) {
       alias: "Campaign 1", kind: "case", stage: "active-testing", state: "running", progress: null,
       attention: "steady", freshness: "current", work,
       tokens: { availability: "exact", total: 12_000 }, pilot: remotePilot(at),
-      latestEvent: { availability: "available", category: "campaign", status: "running", at }
+      latestEvent: { availability: "available", category: "campaign", status: "running", at },
+      mirror: { availability: "unavailable", reason: "disabled", attempts: [] }
     }]
   });
 }
+
+function availableExecutionMirror(at) {
+  const startedAt = new Date(Date.parse(at) - 2_000).toISOString();
+  return {
+    availability: "available", reason: null,
+    attempts: [{
+      alias: "Attempt 1", kind: "supervised-execution", state: "running",
+      phase: "Baseline", tool: "GATE runner", action: "Checking hypothesis",
+      startedAt, finishedAt: null, updatedAt: at, elapsedMs: 2_000,
+      progress: { availability: "exact", completed: 1, total: 2, percent: 50 },
+      usage: {
+        tokens: { availability: "exact", total: 800 },
+        cost: { availability: "estimated", amountMicros: 20_000, unit: "USD" },
+        requests: { availability: "exact", value: 2 },
+        retries: { availability: "exact", value: 0 },
+        toolRuns: { availability: "exact", value: 1 }
+      },
+      entries: [{
+        sequence: 1, at: startedAt, channel: "command", state: "running",
+        fidelity: "redacted", truncated: false, text: "gate execute [redacted]"
+      }]
+    }]
+  };
+}
+
+test("authenticated remote fleet renders the selected retained execution attempt", async () => {
+  const page = await browser(JSON.parse(await read("data/status.json")));
+  const at = new Date().toISOString();
+  page.context.GATE_REMOTE_COCKPIT_BRIDGE = {
+    apiVersion: "gate.remote-cockpit-bridge/v1", caseId: "alpha-case", sessionRevision: 5,
+    async reconcileCommands() { return null; }, async submitMessage() { return null; }, async submitQuestion() { return null; }
+  };
+  page.events["gate:remote-private-state"]({ detail: remoteState(at) });
+  const fleet = connectedRemoteFleet(at);
+  fleet.campaigns[0].mirror = availableExecutionMirror(at);
+  page.events["gate:remote-fleet"]({ detail: fleet });
+  page.events["gate:remote-connection"]({ detail: {
+    apiVersion: "gate.remote-cockpit-connection/v1", state: "connected", at
+  } });
+  assert.equal(page.elements.get("mirror-state").textContent, "Running");
+  assert.equal(page.elements.get("mirror-progress-value").textContent, "50%");
+  assert.match(page.elements.get("mirror-terminal").textContent, /\$ gate execute \[redacted\]/u);
+  assert.match(page.elements.get("mirror-live-state").textContent, /Live · running/u);
+  assert.equal(page.elements.get("mirror-terminal").scrollTop, 120, "an active current attempt follows the newest retained event");
+  assert.match(page.elements.get("mode-banner").textContent, /CONNECTED · REMOTE · AUTHENTICATED/u);
+
+  const stoppingAt = new Date(Date.parse(at) + 1_000).toISOString();
+  const stoppingFleet = connectedRemoteFleet(stoppingAt);
+  stoppingFleet.revision = 2;
+  stoppingFleet.campaigns[0].mirror = availableExecutionMirror(stoppingAt);
+  const stoppingAttempt = stoppingFleet.campaigns[0].mirror.attempts[0];
+  stoppingAttempt.state = "stopping";
+  stoppingAttempt.elapsedMs += 1_000;
+  stoppingAttempt.entries.push({
+    sequence: 2, at: stoppingAt, channel: "stdout", state: "running",
+    fidelity: "exact", truncated: false, text: "phase-two"
+  });
+  page.elements.get("mirror-terminal").scrollTop = 18;
+  page.events["gate:remote-fleet"]({ detail: stoppingFleet });
+  assert.equal(page.elements.get("mirror-live-state").textContent, "Live · stopping");
+  assert.match(page.elements.get("mirror-terminal").textContent, /phase-two/u,
+    "a successive in-progress projection must update the visible mirror immediately");
+  assert.equal(page.elements.get("mirror-elapsed").textContent, "3s");
+  assert.equal(page.elements.get("mirror-terminal").scrollTop, 120);
+
+  const finishedAt = new Date(Date.parse(at) + 2_000).toISOString();
+  const finishedFleet = connectedRemoteFleet(finishedAt);
+  finishedFleet.revision = 3;
+  finishedFleet.campaigns[0].mirror = availableExecutionMirror(finishedAt);
+  const completed = finishedFleet.campaigns[0].mirror.attempts[0];
+  completed.state = "succeeded";
+  completed.finishedAt = finishedAt;
+  completed.progress = { availability: "exact", completed: 2, total: 2, percent: 100 };
+  page.elements.get("mirror-terminal").scrollTop = 35;
+  page.events["gate:remote-fleet"]({ detail: finishedFleet });
+  assert.equal(page.elements.get("mirror-live-state").textContent, "Retained result");
+  assert.doesNotMatch(page.elements.get("mirror-live-state").className, /\brunning\b/u);
+  assert.equal(page.elements.get("mirror-terminal").scrollTop, 35, "completed history retains the reader's position");
+
+  const delayedAt = new Date(Date.parse(at) + 3_000).toISOString();
+  const delayedFleet = connectedRemoteFleet(delayedAt);
+  delayedFleet.revision = 4;
+  delayedFleet.sourceFreshness = "delayed";
+  delayedFleet.campaigns[0].freshness = "delayed";
+  delayedFleet.campaigns[0].mirror = availableExecutionMirror(delayedAt);
+  page.events["gate:remote-fleet"]({ detail: delayedFleet });
+  assert.equal(page.elements.get("mirror-live-state").textContent, "Delayed · retained");
+  assert.doesNotMatch(page.elements.get("mirror-live-state").textContent, /Live/u);
+  assert.doesNotMatch(page.elements.get("mirror-progress-track").className, /\brunning\b/u);
+
+  const queuedAt = new Date(Date.parse(at) + 4_000).toISOString();
+  const queuedFleet = connectedRemoteFleet(queuedAt);
+  queuedFleet.revision = 5;
+  queuedFleet.campaigns[0].mirror = availableExecutionMirror(queuedAt);
+  const queued = queuedFleet.campaigns[0].mirror.attempts[0];
+  queued.state = "queued";
+  queued.startedAt = null;
+  queued.elapsedMs = null;
+  queued.progress = { availability: "unavailable", completed: null, total: null, percent: null };
+  queued.entries[0].state = "queued";
+  page.events["gate:remote-fleet"]({ detail: queuedFleet });
+  assert.equal(page.elements.get("mirror-live-state").textContent, "Retained · queued");
+  assert.doesNotMatch(page.elements.get("mirror-live-state").textContent, /Live/u);
+
+  const unknownAt = new Date(Date.parse(at) + 5_000).toISOString();
+  const unknownFleet = connectedRemoteFleet(unknownAt);
+  unknownFleet.revision = 6;
+  unknownFleet.campaigns[0].mirror = availableExecutionMirror(unknownAt);
+  unknownFleet.campaigns[0].mirror.attempts[0].state = "unknown";
+  page.events["gate:remote-fleet"]({ detail: unknownFleet });
+  assert.equal(page.elements.get("mirror-live-state").textContent, "Retained · state unknown");
+  assert.doesNotMatch(page.elements.get("mirror-live-state").textContent, /Live/u);
+});
 
 test("remote case-worker pilot events become the primary live scorecard", async () => {
   const page = await browser(JSON.parse(await read("data/status.json")));
@@ -477,6 +610,7 @@ test("remote case-worker pilot events become the primary live scorecard", async 
   page.events["gate:remote-connection"]({ detail: {
     apiVersion: "gate.remote-cockpit-connection/v1", state: "connected", at
   } });
+  assert.equal(page.elements.get("pilot-panel").hidden, false);
   assert.equal(page.elements.get("pilot-alert").hidden, true);
   assert.equal(page.elements.get("running-count").textContent, "1", "a running case counts even without an active workflow");
   assert.equal(page.elements.get("pilot-case-alias").textContent, "Campaign 1");
@@ -574,6 +708,8 @@ test("authenticated remote mode queues commands and preserves drafts while disco
     apiVersion: "gate.remote-cockpit-connection/v1", state: "connecting", at
   } });
   assert.equal(page.elements.get("message-input").disabled, true, "state alone must remain read-only");
+  assert.match(page.elements.get("mode-banner").textContent, /REMOTE · CONNECTING/u);
+  assert.doesNotMatch(page.elements.get("mode-banner").textContent, /\bLIVE\b/u);
   page.context.GATE_REMOTE_COCKPIT_BRIDGE = {
     apiVersion: "gate.remote-cockpit-bridge/v1", caseId: "alpha-case", sessionRevision: 5,
     async reconcileCommands() { return null; },
@@ -589,7 +725,7 @@ test("authenticated remote mode queues commands and preserves drafts while disco
   page.events["gate:remote-connection"]({ detail: {
     apiVersion: "gate.remote-cockpit-connection/v1", state: "connected", at
   } });
-  assert.match(page.elements.get("mode-banner").textContent, /LIVE · REMOTE/);
+  assert.match(page.elements.get("mode-banner").textContent, /CONNECTED · REMOTE/);
   assert.equal(page.elements.get("message-input").disabled, false);
   page.events["gate:remote-private-state"]({ detail: remoteState(at, {
     stateRevision: 2, codex: { state: "waiting" }, pendingQuestions: []
@@ -617,7 +753,9 @@ test("authenticated remote mode queues commands and preserves drafts while disco
   } });
   assert.equal(page.elements.get("message-input").disabled, true);
   assert.equal(page.elements.get("message-input").value, "Keep this draft");
-  assert.match(page.elements.get("message-input").placeholder, /Live connection required/);
+  assert.match(page.elements.get("message-input").placeholder, /Authenticated connection required/);
+  assert.match(page.elements.get("mode-banner").textContent, /REMOTE · OFFLINE/u);
+  assert.doesNotMatch(page.elements.get("mode-banner").textContent, /\bLIVE\b/u);
 
   page.events["gate:remote-revoked"]();
   assert.equal(page.elements.get("message-input").value, "");
@@ -641,17 +779,17 @@ test("remote fleet remains visibly live while the Codex conversation is offline 
     apiVersion: "gate.remote-cockpit-connection/v1", state: "connected", at
   } });
 
-  assert.match(page.elements.get("mode-banner").textContent, /LIVE · FLEET · CODEX OFFLINE/u);
-  assert.match(page.elements.get("connection-state").textContent, /Fleet live · Codex offline/u);
+  assert.match(page.elements.get("mode-banner").textContent, /CONNECTED · FLEET · CODEX OFFLINE/u);
+  assert.match(page.elements.get("connection-state").textContent, /Fleet connected · Codex offline/u);
   assert.equal(page.elements.get("running-count").textContent, "1");
   assert.equal(page.elements.get("pilot-case-alias").textContent, "Campaign 1");
   assert.equal(page.elements.get("message-input").disabled, true);
   assert.match(page.elements.get("message-input").placeholder, /Codex conversation offline/u);
-  assert.match(page.elements.get("message-status").textContent, /Fleet telemetry is live/u);
+  assert.match(page.elements.get("message-status").textContent, /Fleet telemetry is connected/u);
 
   const recoveredAt = new Date(Date.parse(at) + 1_000).toISOString();
   page.events["gate:remote-private-state"]({ detail: remoteState(recoveredAt, { stateRevision: 2 }) });
-  assert.match(page.elements.get("mode-banner").textContent, /LIVE · REMOTE/u);
+  assert.match(page.elements.get("mode-banner").textContent, /CONNECTED · REMOTE/u);
   assert.equal(page.elements.get("message-input").disabled, false);
 });
 
@@ -669,7 +807,7 @@ test("remote projection loss clears state and fleet while preserving the connect
     apiVersion: "gate.remote-cockpit-connection/v1", state: "connected", at
   } });
   page.elements.get("message-input").value = "Keep this draft";
-  assert.match(page.elements.get("mode-banner").textContent, /LIVE · REMOTE/);
+  assert.match(page.elements.get("mode-banner").textContent, /CONNECTED · REMOTE/);
   assert.equal(page.elements.get("message-input").disabled, false);
 
   page.events["gate:remote-projection-unavailable"]({ detail: {
@@ -679,13 +817,13 @@ test("remote projection loss clears state and fleet while preserving the connect
   assert.equal(vm.runInContext("remoteFleet", page.context), undefined);
   assert.equal(vm.runInContext("remoteConnection.state", page.context), "connected");
   assert.match(page.elements.get("mode-banner").textContent, /REMOTE · OFFLINE/);
-  assert.match(page.elements.get("conversation").textContent, /Live connection required/);
+  assert.match(page.elements.get("conversation").textContent, /Authenticated connection required/);
   assert.equal(page.elements.get("message-input").disabled, true);
   assert.equal(page.elements.get("message-input").value, "Keep this draft");
 
   const recoveredAt = new Date().toISOString();
   page.events["gate:remote-private-state"]({ detail: remoteState(recoveredAt, { stateRevision: 2 }) });
-  assert.match(page.elements.get("mode-banner").textContent, /LIVE · REMOTE/);
+  assert.match(page.elements.get("mode-banner").textContent, /CONNECTED · REMOTE/);
   assert.equal(page.elements.get("message-input").disabled, false);
   assert.equal(page.elements.get("message-input").value, "Keep this draft");
 });
@@ -963,8 +1101,8 @@ test("cockpit fails closed when local and remote bridges are both present", asyn
   } });
   page.events["gate:remote-private-state"]({ detail: remoteState(at) });
   assert.equal(page.elements.get("message-input").disabled, true);
-  assert.match(page.elements.get("message-status").textContent, /Live connection required/);
-  assert.doesNotMatch(page.elements.get("mode-banner").textContent, /LIVE · REMOTE/);
+  assert.match(page.elements.get("message-status").textContent, /Authenticated connection required/);
+  assert.doesNotMatch(page.elements.get("mode-banner").textContent, /CONNECTED · REMOTE/);
 });
 
 test("remote client withdraws live state on departure and reloads cached restorations", async () => {
@@ -1187,7 +1325,7 @@ test("remote client replays expired fleet history after resync, reaches newer fr
       ...(profile ? { visible: null, representedByCases: null } : {})
     });
     return {
-      apiVersion: "gate.remote-fleet/v2", sessionRevision: 5, revision, selectionEpoch: "0".repeat(32),
+      apiVersion: "gate.remote-fleet/v3", sessionRevision: 5, revision, selectionEpoch: "0".repeat(32),
       observedAt: null, receivedAt: new Date().toISOString(),
       validUntil: new Date(Date.now() + 15_000).toISOString(),
       connection: "unavailable", sourceFreshness: "unavailable",

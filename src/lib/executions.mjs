@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 import { checkEngagement, targetMatches } from "./engagements.mjs";
 import { recordEvent } from "./events.mjs";
@@ -21,10 +21,12 @@ import {
   openPrivateFileExclusive,
   readPrivateFileBounded,
   securePrivateDirectory,
+  syncPrivateDirectory,
   writePrivateFileAtomic,
   writePrivateFileExclusive
 } from "./private-fs.mjs";
 import { assertValidDocument } from "./schema.mjs";
+import { assertNoLikelySecret, escapeUnsafeText, redactSensitiveHeaders } from "./text.mjs";
 import { toolPlan } from "./tools.mjs";
 import {
   cancelWorkflowExecution,
@@ -45,6 +47,28 @@ const MAX_MANIFEST_BYTES = 2 * 1024 * 1024;
 const MAX_RUN_BYTES = 512 * 1024;
 const MAX_EXECUTABLE_BYTES = 4 * 1024 * 1024 * 1024;
 const MAX_RECENT_EXECUTIONS = 100;
+const MAX_MIRROR_ATTEMPTS = 8;
+const MAX_MIRROR_ENTRIES = 8;
+const MAX_MIRROR_TEXT = 240;
+const MAX_MIRROR_TAIL_BYTES = 4 * 1024;
+const MAX_MIRROR_OUTPUT_LINES = 4;
+const MAX_ATTEMPT_SEQUENCE_BYTES = 1024;
+const ATTEMPT_SEQUENCE_VERSION = "gate.execution-attempt-sequence/v1";
+const MIRROR_STATES = new Set([
+  "queued", "running", "stopping", "succeeded", "failed", "cancelled", "blocked", "unknown"
+]);
+const MIRROR_ENTRY_STATES = new Set([
+  "queued", "running", "waiting", "blocked", "succeeded", "failed", "cancelled", "unknown"
+]);
+const MIRROR_CHANNELS = new Set([
+  "work-order", "command", "stdout", "stderr", "browser", "tool", "file", "test", "agent", "system", "result"
+]);
+const MIRROR_FIDELITIES = new Set(["exact", "redacted", "summarized", "unavailable"]);
+const MIRROR_UNAVAILABLE_REASONS = new Set([
+  "disabled", "not-applicable", "no-attempts", "source-unavailable"
+]);
+const MIRROR_ATTEMPT_ALIAS = /^Attempt ([1-9][0-9]{0,15})$/u;
+const MIRROR_LOW_ENTROPY_CREDENTIAL = /(?:["'](?:api[_-]?key|access[_-]?token|auth(?:entication|orization)?|bearer|client[_-]?secret|credential|key|password|passwd|secret|session[_-]?(?:id|key|token)|token)["']\s*:\s*(?!["']?\[secret withheld\]["']?(?:$|[\s,}\]]))(?:(?:"[^"]*"|'[^']*'|[^,\s}\]]+))|\b(?:auth(?:entication|orization)?|bearer|credential|key|secret|token)\b\s*[:=]\s*(?!["']?\[secret withheld\]["']?(?:$|[\s,}\]]))(?:(?:"[^"]*"|'[^']*'|\S+))|(?:^|\s)--?(?:api[_-]?key|access[_-]?token|auth(?:entication|orization)?|bearer|client[_-]?secret|credential|key|password|passwd|secret|session[_-]?(?:id|key|token)|token)(?:\s+|=)(?!["']?\[secret withheld\]["']?(?:$|[\s,}\]]))(?:(?:"[^"]*"|'[^']*'|\S+))|\bcurl\b[^\n]*?\s(?:-u|--user)(?:\s+|=)(?!["']?\[secret withheld\]["']?(?:$|[\s,}\]]))(?:(?:"[^"]*"|'[^']*'|\S+)))/iu;
 
 export const EXECUTION_ENFORCED = Object.freeze([
   "engagement-binding",
@@ -506,6 +530,146 @@ function claimFile(paths, id) {
   return executionFile(paths.executionClaims, id, "xmf");
 }
 
+function attemptSequenceFile(paths) {
+  return path.join(paths.executions, ".attempt-sequence.json");
+}
+
+function attemptSerializationFile(paths) {
+  return path.join(paths.executions, ".attempt-sequence.serialization");
+}
+
+function trustedExecutionFlock() {
+  for (const candidate of ["/usr/bin/flock", "/bin/flock"]) {
+    try {
+      if (fs.realpathSync(candidate) !== candidate) continue;
+      const stat = fs.lstatSync(candidate);
+      if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o111) === 0 || (stat.mode & 0o022) !== 0) continue;
+      if (typeof process.geteuid === "function" && stat.uid === process.geteuid()) continue;
+      try {
+        fs.accessSync(candidate, fs.constants.W_OK);
+        continue;
+      } catch (error) {
+        if (!new Set(["EACCES", "EPERM", "EROFS"]).has(error.code)) throw error;
+      }
+      return candidate;
+    } catch {
+      // Try the next protected fixed path.
+    }
+  }
+  throw new Error("execution attempt serialization requires flock from a protected system path");
+}
+
+function withAttemptSequenceLock(paths, action) {
+  if (process.platform !== "linux") throw new Error("execution attempt serialization requires Linux/WSL2");
+  securePrivateDirectory(paths.executions, { create: false, label: "private executions directory" });
+  const file = attemptSerializationFile(paths);
+  const descriptor = fs.openSync(
+    file,
+    fs.constants.O_CREAT | fs.constants.O_RDWR | (fs.constants.O_NOFOLLOW || 0) |
+      (fs.constants.O_NONBLOCK || 0),
+    0o600
+  );
+  const identity = fs.fstatSync(descriptor);
+  try {
+    if (!identity.isFile() || identity.nlink !== 1 ||
+        (identity.mode & 0o7777) !== 0o600 ||
+        (typeof process.geteuid === "function" && identity.uid !== process.geteuid())) {
+      throw new Error("execution attempt serialization file is not owner-only");
+    }
+    const locked = spawnSync(trustedExecutionFlock(), ["--exclusive", "--timeout", "2", "3"], {
+      stdio: ["ignore", "pipe", "pipe", descriptor],
+      env: { PATH: "/usr/bin:/bin", LANG: "C", LC_ALL: "C" },
+      shell: false,
+      timeout: 5_000,
+      maxBuffer: 16 * 1024
+    });
+    if (locked.error || locked.status !== 0) {
+      throw new Error("execution attempt sequence is already being updated or its lock is indeterminate", {
+        cause: locked.error
+      });
+    }
+    const current = fs.lstatSync(file);
+    if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1 ||
+        current.dev !== identity.dev || current.ino !== identity.ino ||
+        (current.mode & 0o7777) !== 0o600 ||
+        (typeof process.geteuid === "function" && current.uid !== process.geteuid())) {
+      throw new Error("execution attempt serialization identity changed while acquiring the lock");
+    }
+    return action();
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+function readAttemptSequence(paths) {
+  let value;
+  try {
+    value = JSON.parse(readPrivateFileBounded(
+      attemptSequenceFile(paths),
+      MAX_ATTEMPT_SEQUENCE_BYTES,
+      "utf8",
+      { label: "private execution attempt sequence" }
+    ));
+  } catch (error) {
+    if (error?.code === "ENOENT" || error?.cause?.code === "ENOENT") return null;
+    if (error instanceof SyntaxError) {
+      throw new Error("execution attempt sequence is malformed", { cause: error });
+    }
+    throw error;
+  }
+  if (!exactKeys(value, ["apiVersion", "lastOrdinal"]) ||
+      value.apiVersion !== ATTEMPT_SEQUENCE_VERSION ||
+      !Number.isSafeInteger(value.lastOrdinal) || value.lastOrdinal < 0) {
+    throw new Error("execution attempt sequence is invalid");
+  }
+  return value;
+}
+
+function initializeAttemptSequence(paths) {
+  let validManifests = 0;
+  let maximumOrdinal = 0;
+  const ordinals = new Set();
+  for (const entry of directoryEntries(paths.executionManifests)) {
+    if (!/^xmf_[a-f0-9]{32}\.json$/u.test(entry.name)) {
+      throw new Error(`execution manifest history contains an unexpected entry: ${entry.name}`);
+    }
+    const manifest = readManifest(paths, entry.name.slice(0, -5));
+    validManifests += 1;
+    if (Number.isSafeInteger(manifest.metadata.attemptOrdinal) && manifest.metadata.attemptOrdinal > 0) {
+      if (ordinals.has(manifest.metadata.attemptOrdinal)) {
+        throw new Error("execution manifest history contains a duplicate attempt ordinal");
+      }
+      ordinals.add(manifest.metadata.attemptOrdinal);
+      maximumOrdinal = Math.max(maximumOrdinal, manifest.metadata.attemptOrdinal);
+    }
+  }
+  return {
+    apiVersion: ATTEMPT_SEQUENCE_VERSION,
+    // Legacy manifests have no public ordinal. Reserving their historical
+    // positions avoids reusing a label while keeping those records private.
+    lastOrdinal: Math.max(validManifests, maximumOrdinal)
+  };
+}
+
+function reserveExecutionAttemptOrdinal(paths) {
+  return withAttemptSequenceLock(paths, () => {
+    const current = readAttemptSequence(paths) || initializeAttemptSequence(paths);
+    if (current.lastOrdinal >= Number.MAX_SAFE_INTEGER) {
+      throw new Error("execution attempt ordinal space is exhausted");
+    }
+    const next = {
+      apiVersion: ATTEMPT_SEQUENCE_VERSION,
+      lastOrdinal: current.lastOrdinal + 1
+    };
+    writePrivateFileAtomic(attemptSequenceFile(paths), `${JSON.stringify(next)}\n`, {
+      encoding: "utf8",
+      label: "private execution attempt sequence"
+    });
+    syncPrivateDirectory(paths.executions, { label: "private executions directory" });
+    return next.lastOrdinal;
+  });
+}
+
 function exactArray(value, expected) {
   return Array.isArray(value) && value.length === expected.length && value.every((item, index) => item === expected[index]);
 }
@@ -513,6 +677,10 @@ function exactArray(value, expected) {
 function assertManifestInvariants(manifest, paths) {
   const runId = manifest.metadata.runId;
   const managed = manifest.operation.adapter !== null;
+  if (Object.hasOwn(manifest.metadata, "attemptOrdinal") &&
+      (!Number.isSafeInteger(manifest.metadata.attemptOrdinal) || manifest.metadata.attemptOrdinal < 1)) {
+    throw new Error("execution manifest attempt ordinal is invalid");
+  }
   if (
     workflowRuntimeInternals.canonicalDigest(
       manifest.workflow.effectiveStops,
@@ -956,11 +1124,18 @@ function createPreparedExecutionManifest(engagementId, normalized, options, mana
     const evidence = evidenceRefs(runId);
     const maxEvidenceBytesPerStream = Math.floor(normalized.declaredBounds.maxEvidenceBytes / 2);
     const argv0 = path.basename(plannedTool.executable);
+    const attemptOrdinal = reserveExecutionAttemptOrdinal(paths);
     const manifest = {
       $schema: "../../schemas/execution-manifest.schema.json",
       apiVersion: "gate.execution/v2",
       kind: "ExecutionManifest",
-      metadata: { id: manifestId, runId, createdAt: now.toISOString(), expiresAt: expiresAt.toISOString() },
+      metadata: {
+        id: manifestId,
+        runId,
+        attemptOrdinal,
+        createdAt: now.toISOString(),
+        expiresAt: expiresAt.toISOString()
+      },
       engagement: {
         id: currentBinding.engagementId,
         planSha256: currentBinding.planSha256,
@@ -2173,6 +2348,20 @@ function retainRecentExecution(recent, metadata) {
   if (recent.length > MAX_RECENT_EXECUTIONS) recent.pop();
 }
 
+function mirrorAttemptOrdinal(value) {
+  const match = typeof value === "string" ? MIRROR_ATTEMPT_ALIAS.exec(value) : null;
+  if (!match) return null;
+  const ordinal = Number(match[1]);
+  return Number.isSafeInteger(ordinal) && ordinal > 0 ? ordinal : null;
+}
+
+function mirrorAttemptAlias(attemptOrdinal) {
+  if (!Number.isSafeInteger(attemptOrdinal) || attemptOrdinal < 1) {
+    throw new Error("execution mirror attempt ordinal is invalid");
+  }
+  return `Attempt ${attemptOrdinal}`;
+}
+
 function* directoryEntries(directory) {
   const handle = fs.opendirSync(directory);
   try {
@@ -2181,6 +2370,465 @@ function* directoryEntries(directory) {
   } finally {
     handle.closeSync();
   }
+}
+
+function deepFreeze(value) {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  for (const child of Object.values(value)) deepFreeze(child);
+  return Object.freeze(value);
+}
+
+function exactKeys(value, keys) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+function mirrorTimestamp(value) {
+  return typeof value === "string" && Number.isFinite(Date.parse(value))
+    ? new Date(value).toISOString()
+    : null;
+}
+
+function unavailableExecutionMirror(reason) {
+  if (!MIRROR_UNAVAILABLE_REASONS.has(reason)) throw new Error("execution mirror unavailable reason is invalid");
+  return deepFreeze({ availability: "unavailable", reason, attempts: [] });
+}
+
+function derivedTargetValues(manifest) {
+  const candidates = [
+    manifest?.operation?.targetArgument,
+    manifest?.operation?.targetSelector?.value,
+    manifest?.operation?.adapter?.operation?.allowedIp,
+    manifest?.operation?.adapter?.operation?.resolver,
+    manifest?.labCampaign?.origin,
+    manifest?.labCampaign?.pathPrefix,
+    manifest?.labCampaign?.requestUrl,
+    manifest?.labCampaign?.allowedIp
+  ].filter((value) => typeof value === "string" && value.length > 0);
+  const values = new Set(candidates);
+  for (const candidate of candidates) {
+    let parsed;
+    try {
+      parsed = new URL(candidate);
+    } catch {
+      continue;
+    }
+    for (const value of [
+      parsed.origin,
+      parsed.host,
+      parsed.hostname,
+      parsed.pathname !== "/" ? parsed.pathname : null,
+      parsed.search || null,
+      parsed.search.length > 1 ? parsed.search.slice(1) : null,
+      parsed.hash || null,
+      parsed.hash.length > 1 ? parsed.hash.slice(1) : null,
+      ...[...parsed.searchParams.values()]
+    ]) {
+      if (value) values.add(value);
+    }
+  }
+  return [...values].sort((left, right) => right.length - left.length);
+}
+
+function mirrorPrivateValues(run, manifest) {
+  const strings = (values) => values.filter((value) => typeof value === "string" && value.length > 0)
+    .sort((left, right) => right.length - left.length);
+  return {
+    privateIdentifiers: strings([
+      run?.runId,
+      run?.manifestId,
+      run?.engagementId,
+      run?.workflow?.instanceId,
+      run?.workflow?.phaseAttemptId,
+      run?.workflow?.reservationId,
+      manifest?.metadata?.id,
+      manifest?.metadata?.runId,
+      manifest?.engagement?.id,
+      manifest?.workflow?.instanceId,
+      manifest?.workflow?.phaseAttemptId,
+      manifest?.workflow?.reservationId
+    ]),
+    targetValues: strings(derivedTargetValues(manifest))
+  };
+}
+
+function privatePathReplacement() {
+  return "[private path withheld]";
+}
+
+function escapeRegularExpression(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function replacePrivateValues(value, options = {}) {
+  const replacements = new Map();
+  const add = (values, replacement) => {
+    for (const item of values || []) {
+      if (typeof item === "string" && item && !replacements.has(item)) replacements.set(item, replacement);
+    }
+  };
+  add(options.targetValues, "[target withheld]");
+  add(options.privateIdentifiers || options.privateValues, "[private id withheld]");
+  const values = [...replacements].sort(([left], [right]) => right.length - left.length);
+  if (values.length === 0) return value;
+  const byValue = new Map(values);
+  return value.replace(
+    new RegExp(values.map(([item]) => escapeRegularExpression(item)).join("|"), "gu"),
+    (match) => byValue.get(match)
+  );
+}
+
+function maskPrivatePaths(value, privatePaths = []) {
+  let text = value;
+  const roots = [...new Set(privatePaths.filter((item) => typeof item === "string" && item))]
+    .sort((left, right) => right.length - left.length);
+  if (roots.length > 0) {
+    const rootedPath = new RegExp(
+      `(?:${roots.map(escapeRegularExpression).join("|")})(?:[\\/][^\\s\"'\x60]*)?`,
+      "gu"
+    );
+    text = text.replace(rootedPath, (candidate) => privatePathReplacement(candidate));
+  }
+  // A file URI can expose a local path or a network host. Protocol-relative
+  // paths are also withheld because no scheme establishes a public web URL.
+  text = text.replace(
+    /\bfile:\/\/[^\s"'`<>\])},;]*/gimu,
+    () => privatePathReplacement()
+  );
+  text = text.replace(
+    /(^|[^A-Za-z0-9_+.:/\\-])\/\/[^\s"'`<>\])},;]*/gmu,
+    (_candidate, prefix) => `${prefix}${privatePathReplacement()}`
+  );
+  // Require a path boundary before drive letters so URI schemes such as
+  // `https://` cannot be mistaken for a Windows path beginning at `s:/`.
+  text = text.replace(
+    /(^|[^A-Za-z0-9_./\\-])(?:[A-Za-z]:[\\/]|\\\\[^\s\\/]+[\\/])[^\s"'`<>\])},;]*/gmu,
+    (_candidate, prefix) => `${prefix}${privatePathReplacement()}`
+  );
+  // Withhold every absolute POSIX path, not only known GATE roots. Requiring
+  // the leading boundary and rejecting a double slash leaves URI authorities
+  // intact while still catching paths inside assignments and punctuation.
+  return text.replace(
+    /(^|[^A-Za-z0-9_./\\-])\/(?!\/)[^\s"'`<>\])},;]*/gmu,
+    (_candidate, prefix) => `${prefix}${privatePathReplacement()}`
+  );
+}
+
+function sanitizeMirrorText(value, options = {}) {
+  let text = escapeUnsafeText(String(value))
+    .replaceAll("\n", "\\n")
+    .replaceAll("\t", "\\t");
+  const original = text;
+  text = text.normalize("NFC");
+  text = replacePrivateValues(text, options);
+  text = maskPrivatePaths(text, options.privatePaths).replace(
+    /private:\/\/[^\s"'`]+/giu,
+    "[private reference withheld]"
+  )
+    .replace(/\b(?:xrun|xmf|wpa|wxr)_[a-f0-9]{32}\b/giu, "[private id withheld]")
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^/@\s]+@/giu, "$1[secret withheld]@")
+    .replace(/([?&#](?:api[_-]?key|auth(?:entication|orization)?|bearer|client[_-]?secret|code|credential|key|password|passwd|sas|secret|session(?:[_-]?(?:id|key|token))?|sig(?:nature)?|token)=)[^&#\s"']+/giu, "$1[secret withheld]")
+    .replace(/((?:^|\s)--?(?:api[_-]?key|access[_-]?token|auth(?:entication|orization)?|bearer|client[_-]?secret|credential|key|password|passwd|secret|session[_-]?(?:id|key|token)|token)(?:\s+|=))(?:"[^"]*"|'[^']*'|\S+)/gimu, "$1[secret withheld]")
+    .replace(/(\bcurl\b[^\n]*?\s(?:-u|--user)(?:\s+|=))(?:"[^"]*"|'[^']*'|\S+)/giu, "$1[secret withheld]")
+    .replace(/(["'](?:api[_-]?key|access[_-]?token|auth(?:entication|orization)?|bearer|client[_-]?secret|credential|key|password|passwd|secret|session[_-]?(?:id|key|token)|token)["']\s*:\s*)(?:"[^"]*"|'[^']*'|[^,\s}\]]+)/giu, "$1[secret withheld]")
+    .replace(/((?<![A-Za-z0-9_-])(?:api[_-]?key|access[_-]?token|client[_-]?secret|session[_-]?(?:id|key|token)|password|passwd)\b(?:\s*[:=]\s*|\s+))(?!\[secret withheld\])(?:"[^"]*"|'[^']*'|\S+)/giu, "$1[secret withheld]")
+    .replace(/((?<![A-Za-z0-9_-])(?:auth(?:entication|orization)?|bearer|credential|key|secret|token)\b\s*[:=]\s*)(?!\[secret withheld\])(?:"[^"]*"|'[^']*'|\S+)/giu, "$1[secret withheld]")
+    .replace(/\bgh[pousr]_[A-Za-z0-9_]{20,}\b/gu, "[secret withheld]")
+    .replace(/\bgithub_pat_[A-Za-z0-9_]{20,}\b/giu, "[secret withheld]")
+    .replace(/\bxox[a-z]-[A-Za-z0-9-]{10,}\b/giu, "[secret withheld]")
+    .replace(/\bsk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{16,}\b/giu, "[secret withheld]");
+  text = redactSensitiveHeaders(text, "[secret withheld]");
+  let fidelity = text === original ? "exact" : "redacted";
+  try {
+    assertNoLikelySecret(text, "execution mirror text");
+  } catch {
+    text = "[withheld: possible secret]";
+    fidelity = "redacted";
+  }
+  const codePoints = [...text];
+  const truncated = codePoints.length > MAX_MIRROR_TEXT;
+  text = codePoints.slice(0, MAX_MIRROR_TEXT).join("");
+  try {
+    assertNoLikelySecret(text, "bounded execution mirror text");
+  } catch {
+    text = "[withheld: possible secret]";
+    fidelity = "redacted";
+  }
+  return { text, fidelity, truncated };
+}
+
+function containsPrivateMirrorReference(value) {
+  return /(?:private|file):\/\//iu.test(value) ||
+    /(?:^|[^A-Za-z0-9_+.:/\\-])\/\/[^\s"'`<>\])},;]*/mu.test(value) ||
+    /\b(?:xrun|xmf|wpa|wxr)_[a-f0-9]{32}\b/iu.test(value) ||
+    /(?:^|[^A-Za-z0-9_./\\-])(?:[A-Za-z]:[\\/]|\\\\[^\s\\/]+[\\/])[^\s"'`<>\])},;]*/mu.test(value) ||
+    /(?:^|[^A-Za-z0-9_./\\-])\/(?!\/)[^\s"'`<>\])},;]*/mu.test(value);
+}
+
+function safeMirrorLabel(value, maximum, privateContext) {
+  if (typeof value !== "string" || !value || value !== value.normalize("NFC") || [...value].length > maximum ||
+      Buffer.byteLength(value, "utf8") > maximum * 4 || /[\r\n\t]/u.test(value)) return null;
+  const projected = sanitizeMirrorText(value, privateContext);
+  return projected.text === value && !projected.truncated ? value : null;
+}
+
+function quoteMirrorArgument(value) {
+  const text = String(value);
+  return /^[A-Za-z0-9_./:@%+,=-]+$/u.test(text)
+    ? text
+    : `'${text.replaceAll("'", `'"'"'`)}'`;
+}
+
+function readMirrorTail(paths, reference, channel, privateContext) {
+  let descriptor;
+  try {
+    const file = evidencePath(paths, reference);
+    descriptor = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+    const stat = fs.fstatSync(descriptor);
+    if (!stat.isFile() || !Number.isSafeInteger(stat.size) || stat.size < 0) return [];
+    const length = Math.min(stat.size, MAX_MIRROR_TAIL_BYTES);
+    if (length === 0) return [];
+    const start = stat.size - length;
+    const buffer = Buffer.alloc(length);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const read = fs.readSync(descriptor, buffer, offset, buffer.length - offset, start + offset);
+      if (read === 0) break;
+      offset += read;
+    }
+    const rawLines = buffer.subarray(0, offset).toString("utf8").split(/\r?\n/u);
+    if (rawLines.at(-1) === "") rawLines.pop();
+    return rawLines
+      .map((line, index) => ({
+        ...sanitizeMirrorText(line, {
+          ...privateContext,
+          privatePaths: [paths.home, paths.evidence, paths.executions]
+        }),
+        channel,
+        sourceAt: new Date(stat.mtimeMs).toISOString(),
+        sourceTruncated: stat.size > MAX_MIRROR_TAIL_BYTES && index === 0
+      }))
+      .filter((line) => line.text.length > 0);
+  } catch {
+    return [];
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
+  }
+}
+
+function mirrorEntry(sequence, at, channel, state, projection, fidelity = projection.fidelity) {
+  return {
+    sequence,
+    at,
+    channel,
+    state,
+    fidelity,
+    truncated: Boolean(projection.truncated || projection.sourceTruncated),
+    text: projection.text
+  };
+}
+
+function clampMirrorTimestamp(value, minimum, maximum) {
+  const parsed = mirrorTimestamp(value);
+  if (!parsed) return minimum;
+  const milliseconds = Math.max(Date.parse(minimum), Math.min(Date.parse(parsed), Date.parse(maximum)));
+  return new Date(milliseconds).toISOString();
+}
+
+function mirrorEntryState(state) {
+  return state === "stopping" ? "running" : MIRROR_ENTRY_STATES.has(state) ? state : "unknown";
+}
+
+function executionMirrorAttempt(paths, metadata, run, manifest, alias, observedAt) {
+  const privateContext = mirrorPrivateValues(run || metadata, manifest);
+  const state = MIRROR_STATES.has(metadata.status) ? metadata.status : "unknown";
+  const entryState = mirrorEntryState(state);
+  const startedAt = mirrorTimestamp(metadata.startedAt);
+  const finishedAt = mirrorTimestamp(metadata.finishedAt);
+  const createdAt = mirrorTimestamp(metadata.createdAt) || observedAt;
+  const updatedAt = new Set(["queued", "running", "stopping"]).has(state)
+    ? observedAt
+    : finishedAt || startedAt || createdAt;
+  const phase = safeMirrorLabel(manifest.workflow?.phaseId, 80, privateContext);
+  const tool = safeMirrorLabel(manifest.operation?.tool?.id, 64, privateContext);
+  const action = safeMirrorLabel(manifest.operation?.action, 64, privateContext);
+  const entries = [];
+  const addEntry = (channel, projection, fidelity = projection.fidelity, at = updatedAt, stateOverride = entryState) => {
+    if (entries.length >= MAX_MIRROR_ENTRIES) return;
+    entries.push(mirrorEntry(entries.length + 1, at, channel, stateOverride, projection, fidelity));
+  };
+  const workOrder = sanitizeMirrorText(
+    `Run ${tool || "the selected tool"} for ${action || "the approved action"} during ${phase || "the active phase"}.`,
+    privateContext
+  );
+  addEntry("work-order", workOrder, "summarized", createdAt, "queued");
+  const command = sanitizeMirrorText(
+    [manifest.operation.argv0, ...(Array.isArray(manifest.operation.argv) ? manifest.operation.argv : [])]
+      .map(quoteMirrorArgument)
+      .join(" "),
+    { ...privateContext, privatePaths: [paths.home, paths.evidence, paths.executions] }
+  );
+  const commandAt = startedAt || createdAt;
+  addEntry("command", command, command.fidelity, commandAt, startedAt ? "running" : "queued");
+  const allOutput = [
+    ...readMirrorTail(paths, manifest.runtime?.evidence?.stdoutRef, "stdout", privateContext),
+    ...readMirrorTail(paths, manifest.runtime?.evidence?.stderrRef, "stderr", privateContext)
+  ];
+  allOutput.sort((left, right) => Date.parse(left.sourceAt) - Date.parse(right.sourceAt) ||
+    left.channel.localeCompare(right.channel));
+  const output = allOutput.slice(-MAX_MIRROR_OUTPUT_LINES);
+  if (output.length > 0 && (allOutput.length > output.length || allOutput.some((line) => line.sourceTruncated))) {
+    output[0] = { ...output[0], sourceTruncated: true };
+  }
+  for (const line of output) {
+    addEntry(line.channel, line, line.fidelity, clampMirrorTimestamp(line.sourceAt, commandAt, updatedAt));
+  }
+  if (finishedAt && new Set(["succeeded", "failed", "cancelled", "blocked", "unknown"]).has(state)) {
+    const suffix = Number.isInteger(metadata.exitCode) ? ` with exit code ${metadata.exitCode}` : "";
+    addEntry(
+      "result",
+      sanitizeMirrorText(`Execution ${state}${suffix}.`, privateContext),
+      "summarized",
+      finishedAt,
+      entryState
+    );
+  }
+  let elapsedMs = null;
+  if (Number.isSafeInteger(run?.result?.durationMs) && run.result.durationMs >= 0) elapsedMs = run.result.durationMs;
+  else if (startedAt && new Set(["running", "stopping"]).has(state)) {
+    elapsedMs = Math.max(0, Date.parse(observedAt) - Date.parse(startedAt));
+  }
+  return {
+    alias,
+    kind: "supervised-execution",
+    state,
+    phase,
+    tool,
+    action,
+    startedAt,
+    finishedAt,
+    updatedAt,
+    elapsedMs,
+    progress: { availability: "unavailable", completed: null, total: null, percent: null },
+    usage: {
+      tokens: { availability: "unavailable", total: null },
+      cost: { availability: "unavailable", amountMicros: null, unit: null },
+      requests: { availability: "unavailable", value: null },
+      retries: { availability: "unavailable", value: null },
+      toolRuns: { availability: "exact", value: 1 }
+    },
+    entries
+  };
+}
+
+function validateExecutionMirror(value) {
+  if (!exactKeys(value, ["availability", "reason", "attempts"]) || !Array.isArray(value.attempts)) {
+    throw new Error("execution mirror shape is invalid");
+  }
+  if (value.availability === "unavailable") {
+    if (!MIRROR_UNAVAILABLE_REASONS.has(value.reason) || value.attempts.length !== 0) {
+      throw new Error("unavailable execution mirror is inconsistent");
+    }
+    return deepFreeze(value);
+  }
+  if (value.availability !== "available" || value.reason !== null || value.attempts.length < 1 ||
+      value.attempts.length > MAX_MIRROR_ATTEMPTS) throw new Error("available execution mirror is inconsistent");
+  const aliases = new Set();
+  for (const attempt of value.attempts) {
+    if (!exactKeys(attempt, [
+      "alias", "kind", "state", "phase", "tool", "action", "startedAt", "finishedAt", "updatedAt",
+      "elapsedMs", "progress", "usage", "entries"
+    ]) || mirrorAttemptOrdinal(attempt.alias) === null || aliases.has(attempt.alias) ||
+      attempt.kind !== "supervised-execution" ||
+      !MIRROR_STATES.has(attempt.state) || mirrorTimestamp(attempt.updatedAt) !== attempt.updatedAt ||
+      (attempt.startedAt !== null && mirrorTimestamp(attempt.startedAt) !== attempt.startedAt) ||
+      (attempt.finishedAt !== null && mirrorTimestamp(attempt.finishedAt) !== attempt.finishedAt) ||
+      (attempt.elapsedMs !== null && (!Number.isSafeInteger(attempt.elapsedMs) || attempt.elapsedMs < 0)) ||
+      !exactKeys(attempt.progress, ["availability", "completed", "total", "percent"]) ||
+      attempt.progress.availability !== "unavailable" ||
+      [attempt.progress.completed, attempt.progress.total, attempt.progress.percent].some((item) => item !== null) ||
+      !exactKeys(attempt.usage, ["tokens", "cost", "requests", "retries", "toolRuns"]) ||
+      !Array.isArray(attempt.entries) || attempt.entries.length > MAX_MIRROR_ENTRIES) {
+      throw new Error("execution mirror attempt is invalid");
+    }
+    aliases.add(attempt.alias);
+    const updatedAtMs = Date.parse(attempt.updatedAt);
+    if (attempt.startedAt && Date.parse(attempt.startedAt) > updatedAtMs ||
+        attempt.finishedAt && (Date.parse(attempt.finishedAt) > updatedAtMs ||
+          attempt.startedAt && Date.parse(attempt.finishedAt) < Date.parse(attempt.startedAt))) {
+      throw new Error("execution mirror attempt chronology is invalid");
+    }
+    for (const [key, maximum] of [["phase", 80], ["tool", 64], ["action", 64]]) {
+      if (attempt[key] !== null && safeMirrorLabel(attempt[key], maximum, {}) !== attempt[key]) {
+        throw new Error(`execution mirror ${key} is invalid`);
+      }
+    }
+    const metric = (candidate, availability, field) => exactKeys(candidate, ["availability", field]) &&
+      candidate.availability === availability && Number.isSafeInteger(candidate[field]) && candidate[field] >= 0;
+    if (!exactKeys(attempt.usage.tokens, ["availability", "total"]) ||
+        attempt.usage.tokens.availability !== "unavailable" || attempt.usage.tokens.total !== null ||
+        !exactKeys(attempt.usage.cost, ["availability", "amountMicros", "unit"]) ||
+        attempt.usage.cost.availability !== "unavailable" || attempt.usage.cost.amountMicros !== null ||
+        attempt.usage.cost.unit !== null ||
+        !exactKeys(attempt.usage.requests, ["availability", "value"]) ||
+        attempt.usage.requests.availability !== "unavailable" || attempt.usage.requests.value !== null ||
+        !exactKeys(attempt.usage.retries, ["availability", "value"]) ||
+        attempt.usage.retries.availability !== "unavailable" || attempt.usage.retries.value !== null ||
+        !metric(attempt.usage.toolRuns, "exact", "value") || attempt.usage.toolRuns.value !== 1) {
+      throw new Error("execution mirror usage is invalid");
+    }
+    let previousEntryAt = -Infinity;
+    attempt.entries.forEach((entry, index) => {
+      if (!exactKeys(entry, ["sequence", "at", "channel", "state", "fidelity", "truncated", "text"]) ||
+          entry.sequence !== index + 1 || mirrorTimestamp(entry.at) !== entry.at || !MIRROR_CHANNELS.has(entry.channel) ||
+          !MIRROR_ENTRY_STATES.has(entry.state) || !MIRROR_FIDELITIES.has(entry.fidelity) ||
+          typeof entry.truncated !== "boolean" || typeof entry.text !== "string" || !entry.text ||
+          entry.text !== entry.text.normalize("NFC") || [...entry.text].length > MAX_MIRROR_TEXT ||
+          Buffer.byteLength(entry.text, "utf8") > MAX_MIRROR_TEXT * 4 || /[\r\n\t]/u.test(entry.text)) {
+        throw new Error("execution mirror entry is invalid");
+      }
+      const entryAt = Date.parse(entry.at);
+      if (entryAt < previousEntryAt || entryAt > updatedAtMs) throw new Error("execution mirror entry chronology is invalid");
+      previousEntryAt = entryAt;
+      assertNoLikelySecret(entry.text, "execution mirror entry");
+      if (containsPrivateMirrorReference(entry.text) || MIRROR_LOW_ENTROPY_CREDENTIAL.test(entry.text)) {
+        throw new Error("execution mirror entry contains private execution metadata");
+      }
+    });
+  }
+  return deepFreeze(value);
+}
+
+function buildExecutionMirror(paths, recent, seenRuns, invalid, observedAt) {
+  if (recent.length === 0) return unavailableExecutionMirror(invalid > 0 ? "source-unavailable" : "no-attempts");
+  const attempts = [];
+  for (const metadata of recent) {
+    if (attempts.length >= MAX_MIRROR_ATTEMPTS) break;
+    try {
+      const run = seenRuns.has(metadata.runId) ? readRun(paths, metadata.runId) : null;
+      const manifest = readManifest(paths, metadata.manifestId);
+      // Manifests created before durable public ordinals existed remain valid
+      // private execution history, but cannot be assigned a stable mirror
+      // identity after the fact. Omit them instead of publishing a label that
+      // could change across refreshes.
+      if (!Number.isSafeInteger(manifest.metadata.attemptOrdinal) || manifest.metadata.attemptOrdinal < 1) continue;
+      attempts.push(executionMirrorAttempt(
+        paths,
+        metadata,
+        run,
+        manifest,
+        mirrorAttemptAlias(manifest.metadata.attemptOrdinal),
+        observedAt
+      ));
+    } catch {
+      // A private source that cannot be validated is omitted from the public projection.
+    }
+  }
+  return attempts.length > 0
+    ? validateExecutionMirror({ availability: "available", reason: null, attempts })
+    : unavailableExecutionMirror("source-unavailable");
 }
 
 export function executionStatus(options = {}) {
@@ -2229,16 +2877,30 @@ export function executionStatus(options = {}) {
     }
   }
   counts.unknown += invalid;
+  const mirror = options.includeExecutionMirror === true
+    ? buildExecutionMirror(
+        paths,
+        recent,
+        seenRuns,
+        invalid,
+        mirrorTimestamp(options.now instanceof Date ? options.now.toISOString() : options.now) || new Date().toISOString()
+      )
+    : unavailableExecutionMirror("disabled");
   return {
     capability: executionCapability(),
     counts,
-    recent
+    recent,
+    mirror
   };
 }
 
 export const executionInternals = Object.freeze({
   manifestDigest,
   processIdentity,
+  reserveExecutionAttemptOrdinal,
   sameProcessIdentity,
+  mirrorAttemptAlias,
+  sanitizeMirrorText,
+  validateExecutionMirror,
   TARGET_PLACEHOLDER
 });

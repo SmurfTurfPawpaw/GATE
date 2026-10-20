@@ -406,7 +406,7 @@ npm run cockpit:build
 python3 -m http.server 4174 --bind 127.0.0.1 -d cockpit/_site
 ```
 
-Open `http://127.0.0.1:4174/`. This is a static `PREVIEW · NOT LIVE`; it has no companion bridge, private API, observer response, or runtime state.
+Open `http://127.0.0.1:4174/`. This is a static **PUBLIC PREVIEW · NO LIVE DATA**; it has no companion bridge, private API, observer response, or runtime state. The deployed preview at `https://smurfturfpawpaw.github.io/GATE/` links to the authoritative authenticated cockpit at `https://gate.giovannicallebaut.com/`.
 
 ### Optional authenticated remote cockpit
 
@@ -443,6 +443,14 @@ npm run cockpit:remote:server -- --config /etc/gate-remote/example-case/server.j
 npm run cockpit:remote:runner
 ```
 
+The remote operational mirror is disabled by default. To project secret-masked supervised-execution commands and bounded stdout/stderr into the authenticated cockpit, add this variable to the owner-only generated runner environment before starting or restarting the case runner:
+
+```bash
+GATE_REMOTE_EXECUTION_MIRROR=1
+```
+
+Leave it unset or set it to `0` to keep the mirror unavailable. When enabled, the runner refreshes active state and the bounded output tail at approximately one-second cadence; this is near-real-time snapshot projection, not byte or PTY streaming. The flag does not expand the remote Codex thread's read-only posture and does not authorize execution; it only lets the runner observe the existing local fleet projection. See [Operational execution mirror](execution-mirror.md) for the data bounds and restart checks.
+
 One coordinator and runner instance owns one operator/case/session binding in this release. Give concurrent cases separate VPSes, hostnames, databases, keys, journal directories, and runner processes; another port or coordinator process on the same VPS is unsupported. The bridge controls its own dedicated Codex app-server thread, not the current cloud chat.
 
 The remote runner is conversation-only. It uses a read-only sandbox and disables local filesystem, shell, image, skill, worktree, workspace-dependency, and unified-execution tools together with network, ambient credentials, environments, MCP, apps, plug-ins, hooks, and browser/computer use. The dedicated thread cannot inspect or edit a checkout, run tests, contact a target, access case authority state, or execute an active-operation manifest. It is separate from the current chat, and the typed active-target relay remains unimplemented.
@@ -459,7 +467,7 @@ The startup banner and browser case terminals use `operator.displayName` from th
 }
 ```
 
-Browser case terminals show sanitized structured lifecycle state rather than a shell. They never expose raw PTY data, stdout or stderr, argv, commands, targets, evidence, or private paths. Their spinner and progress bar remain indeterminate while active unless a producer supplies a trustworthy completed and total count. See the [companion display rules](local-companion.md#what-is-working) for compact status and token attribution.
+Browser case terminals show a bounded operational mirror rather than a shell. The initial producer can expose the operator-visible work order, deterministic secret-masked command, and at most four combined output lines selected from the final 4 KiB of each supervised run's stdout and stderr. It never exposes a raw PTY, hidden reasoning, credentials, target selectors, raw evidence, private IDs, private paths, or unbounded logs. Fidelity and truncation are explicit. Its spinner and progress bar remain indeterminate while active unless a producer supplies a trustworthy completed and total count. See the [companion display rules](local-companion.md#what-is-working) for compact status and token attribution.
 
 Run the smoke suite after a runtime, dependency, or host change:
 

@@ -25,6 +25,9 @@ const RUNNER_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/u;
 const CASE_ID = /^[a-z][a-z0-9-]{1,62}$/u;
 const MAX_PRIVATE_KEY_BYTES = 16 * 1024;
 const MAX_THREAD_RECORD_BYTES = 4 * 1024;
+const REMOTE_MIRROR_FLEET_INTERVAL_MS = 1_000;
+const REMOTE_MIRROR_FLEET_CACHE_MS = 750;
+const DEFAULT_FLEET_INTERVAL_MS = 5_000;
 const REMOTE_CODEX_ENVIRONMENT_KEYS = new Set([
   "COMSPEC",
   "LANG",
@@ -82,6 +85,8 @@ Required options (or matching environment variables):
 Optional:
   --cwd PATH                Dedicated Codex thread working directory (GATE_REPO)
   --gate-observer URL       Exact loopback /api/status endpoint (GATE_OBSERVER_URL)
+                            Set GATE_REMOTE_EXECUTION_MIRROR=1 or true to include
+                            the bounded supervised-execution mirror.
   --help                    Show this help
 `;
 }
@@ -92,6 +97,11 @@ function nonempty(value) {
 
 function resolved(value) {
   return value === null ? null : path.resolve(value);
+}
+
+function enabled(value) {
+  const normalized = nonempty(value)?.toLowerCase();
+  return normalized === "1" || normalized === "true";
 }
 
 function parseRevision(value) {
@@ -114,7 +124,8 @@ function parseArguments(argv, env = process.env) {
     codexHome: resolved(nonempty(env.GATE_REMOTE_CODEX_HOME)),
     threadIdFile: resolved(nonempty(env.GATE_REMOTE_THREAD_ID_FILE)),
     cwd: resolved(nonempty(env.GATE_REPO)) ?? DEFAULT_CWD,
-    gateObserver: nonempty(env.GATE_OBSERVER_URL) ?? gateFleetInternals.DEFAULT_OBSERVER_URL
+    gateObserver: nonempty(env.GATE_OBSERVER_URL) ?? gateFleetInternals.DEFAULT_OBSERVER_URL,
+    includeExecutionMirror: enabled(env.GATE_REMOTE_EXECUTION_MIRROR)
   };
   const optionNames = new Map([
     ["--control-plane", "controlPlaneUrl"],
@@ -585,7 +596,11 @@ async function run(options, { prepareLaunch = prepareRemoteCodexLaunch, createRu
   let runner;
   let runnerStarted = false;
   try {
-    const fleetProvider = createGateFleetProvider({ observerUrl: options.gateObserver });
+    const fleetProvider = createGateFleetProvider({
+      observerUrl: options.gateObserver,
+      includeExecutionMirror: options.includeExecutionMirror === true,
+      ...(options.includeExecutionMirror === true ? { cacheMs: REMOTE_MIRROR_FLEET_CACHE_MS } : {})
+    });
     const threadRecord = new ThreadRecord({
       file: options.threadIdFile,
       runnerId: options.runnerId,
@@ -617,7 +632,10 @@ async function run(options, { prepareLaunch = prepareRemoteCodexLaunch, createRu
       journalDirectory,
       adapter,
       adapterFactory: createAdapter,
-      fleetProvider
+      fleetProvider,
+      fleetIntervalMs: options.includeExecutionMirror === true
+        ? REMOTE_MIRROR_FLEET_INTERVAL_MS
+        : DEFAULT_FLEET_INTERVAL_MS
     });
     process.stdout.write("Remote cockpit runner starting signed telemetry and its dedicated Codex connection.\n");
     process.stdout.write("Keep this terminal open. Press Ctrl+C to stop cleanly.\n");
@@ -673,6 +691,9 @@ if (isMain) await main();
 export const runnerCliInternals = Object.freeze({
   THREAD_RECORD_VERSION,
   REMOTE_TOOL_BOUNDARY_REVISION,
+  DEFAULT_FLEET_INTERVAL_MS,
+  REMOTE_MIRROR_FLEET_CACHE_MS,
+  REMOTE_MIRROR_FLEET_INTERVAL_MS,
   ThreadRecord,
   acquireInstanceLock,
   assertWorkingDirectoryBoundary,

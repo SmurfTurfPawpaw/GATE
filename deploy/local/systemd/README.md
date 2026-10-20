@@ -106,6 +106,9 @@ gate_home=/home/USER/.local/share/gate
 runner_state="$gate_home/remote/CASE_ID/runner"
 service_environment="$HOME/.config/gate/remote-runner-first-pilot.env"
 install -m 600 "$runner_state/runner.env" "$service_environment"
+# Set the existing GATE_REMOTE_EXECUTION_MIRROR line in this installed file to
+# 1 for this case when the authenticated cockpit should receive the bounded
+# operational mirror. The running unit reads this copy, not runner_state.
 cat >>"$service_environment" <<'EOF'
 PATH=/opt/codex-0.159.2/bin:/opt/nodejs/node-v24.19.0-linux-x64/bin:/usr/bin:/bin
 EOF

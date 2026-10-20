@@ -19,14 +19,88 @@ async function fixture() {
 }
 
 test("accepts the exact gate.public-cockpit/v1 fixture", async () => {
-  const parsed = parsePublicSnapshot(await fixture(), { now });
+  const source = await fixture();
+  const parsed = parsePublicSnapshot(source, { now });
   assert.equal(parsed.kind, "available");
   assert.equal(parsed.schema, publicCockpitModel.schema);
   assert.equal(parsed.campaigns.length, 2);
   assert.equal(toDisplayModel(parsed).waitingCount, 1);
   assert.equal(toDisplayModel(parsed).mode, "preview");
-  assert.equal(toDisplayModel(parsed).siteVersion, "0.5.0");
-  assert.equal(toDisplayModel(parsed).gateVersion, "0.2.0");
+  assert.equal(toDisplayModel(parsed).siteVersion, source.site.version);
+  assert.equal(toDisplayModel(parsed).gateVersion, source.gate.version);
+  assert.equal(parsed.campaigns[0].mirror.attempts[0].entries[1].channel, "command");
+});
+
+test("execution mirror is bounded, exact-keyed, and rejects unmasked secrets", async () => {
+  const { validateExecutionMirror } = await import("../assets/model.js");
+  const source = (await fixture()).campaigns[0].mirror;
+  const accepted = validateExecutionMirror(source, { upperBound: "2026-10-16T11:15:00Z", remote: true });
+  assert.equal(accepted?.attempts[0].state, "running");
+  assert.equal(accepted?.attempts[0].usage.toolRuns.value, 1);
+
+  const nonContiguous = structuredClone(source);
+  nonContiguous.attempts[0].alias = "Attempt 150";
+  nonContiguous.attempts.push({ ...structuredClone(nonContiguous.attempts[0]), alias: "Attempt 148" });
+  assert.deepEqual(
+    validateExecutionMirror(nonContiguous, { upperBound: "2026-10-16T11:15:00Z", remote: true })
+      ?.attempts.map((attempt) => attempt.alias),
+    ["Attempt 150", "Attempt 148"]
+  );
+  for (const alias of ["Attempt 0", "Attempt 9007199254740992", "Attempt 1"]) {
+    const invalidAlias = structuredClone(source);
+    invalidAlias.attempts.push({ ...structuredClone(invalidAlias.attempts[0]), alias });
+    assert.equal(validateExecutionMirror(invalidAlias, { upperBound: "2026-10-16T11:15:00Z", remote: true }), null);
+  }
+
+  const secret = structuredClone(source);
+  secret.attempts[0].entries[1].text = `curl -H "Authorization: Bearer ${"a".repeat(32)}" example.invalid`;
+  assert.equal(validateExecutionMirror(secret, { upperBound: "2026-10-16T11:15:00Z", remote: true }), null);
+
+  for (const unsafeText of [
+    "/srv/unrelated/service/output.txt",
+    "open (/etc/passwd)",
+    "inspect [/opt/application/config.json]",
+    "echo result>/var/output/result.txt",
+    "--token abc123",
+    "--auth abc123",
+    "token=abc123",
+    "auth=abc123",
+    '{"token":"abc123"}',
+    '{"secret":"abc123"}',
+    "file:///etc/passwd",
+    "file://localhost/etc/passwd",
+    "//server/share/file",
+    "curl -u alice:hunter2 https://example.invalid/path"
+  ]) {
+    const unsafe = structuredClone(source);
+    unsafe.attempts[0].entries[1].text = unsafeText;
+    assert.equal(validateExecutionMirror(unsafe, { upperBound: "2026-10-16T11:15:00Z", remote: true }), null);
+  }
+
+  for (const redactedText of ["tool --token=[secret withheld]", '{"token":[secret withheld]}']) {
+    const redacted = structuredClone(source);
+    redacted.attempts[0].entries[1].text = redactedText;
+    assert.ok(validateExecutionMirror(redacted, { upperBound: "2026-10-16T11:15:00Z", remote: true }));
+  }
+
+  const publicUrl = structuredClone(source);
+  publicUrl.attempts[0].entries[1].text = "GET https://example.invalid/public/path?q=value";
+  assert.ok(validateExecutionMirror(publicUrl, { upperBound: "2026-10-16T11:15:00Z", remote: true }));
+
+  const rawField = structuredClone(source);
+  rawField.attempts[0].entries[0].rawOutput = "CANARY";
+  assert.equal(validateExecutionMirror(rawField), null);
+
+  const inconsistent = structuredClone(source);
+  inconsistent.attempts[0].progress.percent = 44;
+  assert.equal(validateExecutionMirror(inconsistent), null);
+
+  const tooMany = structuredClone(source);
+  tooMany.attempts[0].entries = Array.from({ length: 9 }, (_, index) => ({
+    ...source.attempts[0].entries[0], sequence: index + 1,
+    at: new Date(Date.parse("2026-10-16T11:00:00Z") + index * 1_000).toISOString()
+  }));
+  assert.equal(validateExecutionMirror(tooMany), null);
 });
 
 test("preview is an explicit non-expiring, never-observed union", async () => {
@@ -298,7 +372,7 @@ function unavailableRemoteFleet(overrides = {}) {
     ...(profile ? { visible: null, representedByCases: null } : {})
   });
   return {
-    apiVersion: "gate.remote-fleet/v2", sessionRevision: 9, revision: 1, selectionEpoch: "0".repeat(32),
+    apiVersion: "gate.remote-fleet/v3", sessionRevision: 9, revision: 1, selectionEpoch: "0".repeat(32),
     observedAt: null, receivedAt: "2026-10-16T12:00:00.000Z",
     validUntil: "2026-10-16T12:00:15.000Z",
     connection: "unavailable", sourceFreshness: "unavailable",

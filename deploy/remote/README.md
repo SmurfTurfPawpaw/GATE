@@ -256,7 +256,7 @@ CODEX_HOME="$remote_codex_home" "$remote_codex" login
 CODEX_HOME="$remote_codex_home" "$remote_codex" login status
 ```
 
-Transfer `runner-public.pem` through the operator's reviewed private channel. Do not copy the private key to the coordinator. `remote init` already wrote the case-bound owner-only `runner/runner.env`; load that generated file unchanged for a foreground run. `runner.env.example` is only a public shape and layout reference and must not overwrite the generated configuration:
+Transfer `runner-public.pem` through the operator's reviewed private channel. Do not copy the private key to the coordinator. `remote init` already wrote the case-bound owner-only `runner/runner.env`; it includes `GATE_REMOTE_EXECUTION_MIRROR=0`. Change only that reviewed flag to `1` when this case should upload the bounded, secret-masked operational mirror. `remote doctor` accepts either value and legacy bundles without the flag. `runner.env.example` is only a public shape and layout reference and must not overwrite the generated configuration:
 
 ```bash
 generated_runner_environment="$runner_state/runner.env"

@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { readFile } from "node:fs/promises";
 import http from "node:http";
 import test from "node:test";
+import vm from "node:vm";
 
 import { ActivityStore } from "../companion/activity.mjs";
 import { createUnavailableFleetProvider } from "../companion/gate-fleet.mjs";
@@ -88,6 +90,35 @@ test("loopback companion injects its bridge before the public app without embedd
   assert.doesNotMatch(page.body, new RegExp(credentials(started).session, "u"));
   assert.equal(page.headers["cache-control"], "no-store, max-age=0");
   assert.match(page.headers["content-security-policy"], /connect-src 'self'/u);
+});
+
+test("local client dispatches v3 fleet projections and rejects obsolete protocol data", async () => {
+  const source = await readFile(new URL("../companion/client.js", import.meta.url), "utf8");
+  const events = [];
+  const fleet = { apiVersion: "gate.local-fleet/v3", mirrorCanary: "retained-by-browser-event" };
+  const context = {
+    URLSearchParams,
+    location: { hash: "" },
+    fetch: async (url) => {
+      assert.equal(url, "./api/fleet");
+      return { ok: true, async json() { return { ok: true, fleet }; } };
+    },
+    dispatchEvent: event => events.push(event),
+    CustomEvent: class CustomEvent {
+      constructor(type, options) { this.type = type; this.detail = options.detail; }
+    }
+  };
+  vm.createContext(context);
+  const body = source.slice(source.indexOf("const parameters"), source.indexOf("if (tokenPattern.test"));
+  vm.runInContext(body, context);
+  await vm.runInContext("readFleet()", context);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].type, "gate:companion-fleet");
+  assert.equal(events[0].detail, fleet);
+
+  fleet.apiVersion = "gate.local-fleet/v2";
+  await vm.runInContext("readFleet()", context);
+  assert.equal(events.length, 1, "obsolete fleet protocol data must fail closed");
 });
 
 test("message submission requires the local session, same-origin CSRF, and exact idempotency", async (t) => {
@@ -215,7 +246,7 @@ test("private fleet projection requires the fragment session and stays on its re
   assert.deepEqual(acceptedBody, {
     ok: true,
     fleet: {
-      apiVersion: "gate.local-fleet/v2",
+      apiVersion: "gate.local-fleet/v3",
       revision: 1,
       selectionEpoch: acceptedBody.fleet.selectionEpoch,
       observedAt: null,
