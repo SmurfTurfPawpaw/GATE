@@ -390,7 +390,7 @@ function remoteFleet(at, overrides = {}) {
     ...(profile ? { visible: null, representedByCases: null } : {})
   });
   return {
-    apiVersion: "gate.remote-fleet/v3", sessionRevision: 5, revision: 1, selectionEpoch: "0".repeat(32),
+    apiVersion: "gate.remote-fleet/v4", sessionRevision: 5, revision: 1, selectionEpoch: "0".repeat(32),
     observedAt: null, receivedAt: at, validUntil: new Date(Date.parse(at) + 15_000).toISOString(), connection: "unavailable", sourceFreshness: "unavailable",
     coverage: { state: "unavailable", cases: scan(), profiles: scan(true) },
     summary: {
@@ -475,7 +475,8 @@ function connectedRemoteFleet(at) {
       }
     },
     campaigns: [{
-      alias: "Campaign 1", kind: "case", stage: "active-testing", state: "running", progress: null,
+      alias: "Campaign 1", context: { label: "Hacker101 CTF", nextSection: null },
+      kind: "case", stage: "active-testing", state: "running", progress: null,
       attention: "steady", freshness: "current", work,
       tokens: { availability: "exact", total: 12_000 }, pilot: remotePilot(at),
       latestEvent: { availability: "available", category: "campaign", status: "running", at },
@@ -483,6 +484,114 @@ function connectedRemoteFleet(at) {
     }]
   });
 }
+
+test("authenticated Fleet cards explain profile context and keep richer detail behind disclosure", async () => {
+  const page = await browser(JSON.parse(await read("data/status.json")));
+  const at = new Date().toISOString();
+  page.context.GATE_REMOTE_COCKPIT_BRIDGE = {
+    apiVersion: "gate.remote-cockpit-bridge/v1", caseId: "alpha-case", sessionRevision: 5,
+    async reconcileCommands() { return null; }, async submitMessage() { return null; }, async submitQuestion() { return null; }
+  };
+  page.events["gate:remote-private-state"]({ detail: remoteState(at) });
+  const questionnaire = connectedRemoteFleet(at);
+  const campaign = questionnaire.campaigns[0];
+  campaign.context = { label: "Uber Bug Bounty", nextSection: "authority-sources" };
+  campaign.kind = "profile";
+  campaign.stage = "profile-questionnaire";
+  campaign.state = "waiting";
+  campaign.progress = { completed: 27, total: 74, percent: 36 };
+  campaign.attention = "response-needed";
+  campaign.work.setupBlockers = { value: 0, precision: "exact" };
+  campaign.latestEvent = { availability: "available", category: "operator", status: "waiting", at };
+  delete campaign.pilot;
+  questionnaire.summary.profileAnswers = { answered: 27, total: 74, precision: "exact" };
+  questionnaire.summary.waiting = { value: 1, precision: "exact" };
+  questionnaire.summary.attention = { value: 1, precision: "exact" };
+  questionnaire.summary.setupBlockers = { value: 0, precision: "exact" };
+  questionnaire.summary.blockers = { value: 0, precision: "exact" };
+  page.events["gate:remote-fleet"]({ detail: questionnaire });
+  page.events["gate:remote-connection"]({ detail: {
+    apiVersion: "gate.remote-cockpit-connection/v1", state: "connected", at
+  } });
+
+  let card = page.elements.get("campaign-list").children[0];
+  let heading = card.children[0].children[0].children[1];
+  assert.equal(heading.children[0].textContent, "Uber Bug Bounty");
+  assert.equal(heading.children[1].textContent, "Campaign 1 · Profile setup");
+  assert.equal(card.children[3].textContent, "47 questions remaining·Next: answer Authority and source ledger");
+  assert.equal(card.children[4].tagName, "details");
+  assert.equal(card.children[4].children[0].tagName, "summary");
+  assert.match(card.children[4].textContent, /27 of 74 answered/u);
+  assert.match(card.children[4].textContent, /Next sectionAuthority and source ledger/u);
+  assert.doesNotMatch(card.textContent, /blocker/iu);
+  assert.equal(page.elements.get("mirror-campaign-select").children[0].textContent, "Uber Bug Bounty · Campaign 1");
+
+  assert.match(card.children[4].textContent, /FreshnessCurrent observation from the fleet source/u);
+  card.children[4].open = true;
+  const operatorReview = structuredClone(questionnaire);
+  operatorReview.revision = 2;
+  operatorReview.campaigns[0].context = { label: null, nextSection: null };
+  operatorReview.campaigns[0].stage = "profile-operator-review";
+  operatorReview.campaigns[0].progress = { completed: 74, total: 74, percent: 100 };
+  operatorReview.campaigns[0].work.setupBlockers = { value: 2, precision: "exact" };
+  operatorReview.summary.profileAnswers = { answered: 74, total: 74, precision: "exact" };
+  operatorReview.summary.setupBlockers = { value: 2, precision: "exact" };
+  operatorReview.summary.blockers = { value: 2, precision: "exact" };
+  page.events["gate:remote-fleet"]({ detail: operatorReview });
+
+  card = page.elements.get("campaign-list").children[0];
+  heading = card.children[0].children[0].children[1];
+  assert.equal(heading.children[0].textContent, "Untitled profile");
+  assert.match(card.children[3].textContent, /^2 review issues·Next: review unresolved profile requirements$/u);
+  assert.match(card.children[4].textContent, /Review issues2/u);
+  assert.equal(card.children[4].open, true);
+  assert.doesNotMatch(card.textContent, /blocker/iu);
+});
+
+
+test("authenticated Fleet preserves case disclosures and gives state-based guidance and freshness", async () => {
+  const page = await browser(JSON.parse(await read("data/status.json")));
+  const at = new Date().toISOString();
+  page.context.GATE_REMOTE_COCKPIT_BRIDGE = {
+    apiVersion: "gate.remote-cockpit-bridge/v1", caseId: "alpha-case", sessionRevision: 5,
+    async reconcileCommands() { return null; }, async submitMessage() { return null; }, async submitQuestion() { return null; }
+  };
+  page.events["gate:remote-private-state"]({ detail: remoteState(at) });
+  const fleet = connectedRemoteFleet(at);
+  page.events["gate:remote-fleet"]({ detail: fleet });
+  page.events["gate:remote-connection"]({ detail: {
+    apiVersion: "gate.remote-cockpit-connection/v1", state: "connected", at
+  } });
+  const card = () => page.elements.get("campaign-list").children[0];
+  card().children[4].open = true;
+  const reasons = {
+    waiting: "Waiting for a dependency", idle: "No work is active", running: "Work is in progress"
+  };
+  for (const [state, reason] of Object.entries(reasons)) {
+    fleet.revision += 1;
+    fleet.campaigns[0].state = state;
+    fleet.campaigns[0].attention = "response-needed";
+    page.events["gate:remote-fleet"]({ detail: structuredClone(fleet) });
+    assert.equal(card().children[4].open, true);
+    assert.ok(card().children[3].textContent.startsWith(reason));
+    assert.ok(card().children[4].textContent.includes(`Why${reason}`));
+    assert.doesNotMatch(card().textContent, /answer the pending request/u);
+  }
+  for (const [freshness, explanation] of [
+    ["current", "Current observation from the fleet source"],
+    ["delayed", "Delayed observation; current state may have changed"],
+    ["unknown", "Observation freshness unavailable"]
+  ]) {
+    fleet.revision += 1;
+    fleet.campaigns[0].freshness = freshness;
+    page.events["gate:remote-fleet"]({ detail: structuredClone(fleet) });
+    assert.ok(card().children[4].textContent.includes(`Freshness${explanation}`));
+  }
+  fleet.revision += 1;
+  fleet.selectionEpoch = "1".repeat(32);
+  page.events["gate:remote-fleet"]({ detail: fleet });
+  assert.equal(card().children[4].open, false);
+});
 
 function availableExecutionMirror(at) {
   const startedAt = new Date(Date.parse(at) - 2_000).toISOString();
@@ -619,7 +728,15 @@ test("remote case-worker pilot events become the primary live scorecard", async 
   assert.equal(page.elements.get("pilot-panel").hidden, false);
   assert.equal(page.elements.get("pilot-alert").hidden, true);
   assert.equal(page.elements.get("running-count").textContent, "1", "a running case counts even without an active workflow");
-  assert.equal(page.elements.get("pilot-case-alias").textContent, "Campaign 1");
+  assert.equal(page.elements.get("pilot-title").textContent, "Hacker101 CTF");
+  assert.equal(page.elements.get("pilot-case-alias").textContent, "Campaign 1 · Case");
+  assert.equal(page.elements.get("pilot-case-select").children[1].textContent, "Hacker101 CTF · Campaign 1");
+  assert.equal(page.elements.get("mirror-campaign-select").children[0].textContent, "Hacker101 CTF · Campaign 1");
+  const campaignCard = page.elements.get("campaign-list").children[0];
+  assert.equal(campaignCard.children[0].children[0].children[1].children[0].textContent, "Hacker101 CTF");
+  assert.match(campaignCard.children[3].textContent, /^Work is in progress·Next: monitor the active attempt$/u);
+  assert.equal(campaignCard.children[4].tagName, "details");
+  assert.match(campaignCard.children[4].textContent, /Tokens12K · exact/u);
   assert.equal(page.elements.get("pilot-heartbeat").textContent, "Observer heartbeat current");
   assert.equal(page.elements.get("pilot-solving-verdict").textContent, "Pass");
   assert.equal(page.elements.get("pilot-learning-verdict").textContent, "Provisional");
@@ -667,6 +784,7 @@ test("multiple case scorecards retain an explicit safe alias selection across re
   const fleet = connectedRemoteFleet(at);
   const second = structuredClone(fleet.campaigns[0]);
   second.alias = "Campaign 2";
+  second.context.label = "PortSwigger Lab";
   fleet.campaigns.push(second);
   fleet.coverage.cases.discovered = 2;
   fleet.coverage.cases.scanned = 2;
@@ -686,22 +804,26 @@ test("multiple case scorecards retain an explicit safe alias selection across re
   const first = await browser(JSON.parse(await read("data/status.json")), { sessionStorage });
   connect(first);
   assert.equal(first.elements.get("pilot-case-alias").textContent, "No case selected");
+  assert.equal(first.elements.get("pilot-title").textContent, "Pilot status");
   first.elements.get("pilot-case-select").value = "Campaign 2";
   first.elements.get("pilot-case-select").listeners.change();
-  assert.equal(first.elements.get("pilot-case-alias").textContent, "Campaign 2");
+  assert.equal(first.elements.get("pilot-title").textContent, "PortSwigger Lab");
+  assert.equal(first.elements.get("pilot-case-alias").textContent, "Campaign 2 · Case");
   assert.deepEqual(JSON.parse(sessionStorage.getItem("gate.pilot-case-selection/v2")), {
     apiVersion: "gate.pilot-case-selection/v2", selectionEpoch: "0".repeat(32), alias: "Campaign 2"
   });
 
   const reloaded = await browser(JSON.parse(await read("data/status.json")), { sessionStorage });
   connect(reloaded);
-  assert.equal(reloaded.elements.get("pilot-case-alias").textContent, "Campaign 2");
+  assert.equal(reloaded.elements.get("pilot-title").textContent, "PortSwigger Lab");
+  assert.equal(reloaded.elements.get("pilot-case-alias").textContent, "Campaign 2 · Case");
 
   const restartedFleet = structuredClone(fleet);
   restartedFleet.revision = 2;
   restartedFleet.selectionEpoch = "1".repeat(32);
   reloaded.events["gate:remote-fleet"]({ detail: restartedFleet });
   assert.equal(reloaded.elements.get("pilot-case-alias").textContent, "No case selected");
+  assert.equal(reloaded.elements.get("pilot-title").textContent, "Pilot status");
   assert.equal(sessionStorage.getItem("gate.pilot-case-selection/v2"), null);
 });
 
@@ -788,7 +910,8 @@ test("remote fleet remains visibly live while the Codex conversation is offline 
   assert.match(page.elements.get("mode-banner").textContent, /CONNECTED · FLEET · CODEX OFFLINE/u);
   assert.match(page.elements.get("connection-state").textContent, /Fleet connected · Codex offline/u);
   assert.equal(page.elements.get("running-count").textContent, "1");
-  assert.equal(page.elements.get("pilot-case-alias").textContent, "Campaign 1");
+  assert.equal(page.elements.get("pilot-title").textContent, "Hacker101 CTF");
+  assert.equal(page.elements.get("pilot-case-alias").textContent, "Campaign 1 · Case");
   assert.equal(page.elements.get("message-input").disabled, true);
   assert.match(page.elements.get("message-input").placeholder, /Codex conversation offline/u);
   assert.match(page.elements.get("message-status").textContent, /Fleet telemetry is connected/u);
@@ -1331,7 +1454,7 @@ test("remote client replays expired fleet history after resync, reaches newer fr
       ...(profile ? { visible: null, representedByCases: null } : {})
     });
     return {
-      apiVersion: "gate.remote-fleet/v3", sessionRevision: 5, revision, selectionEpoch: "0".repeat(32),
+      apiVersion: "gate.remote-fleet/v4", sessionRevision: 5, revision, selectionEpoch: "0".repeat(32),
       observedAt: null, receivedAt: new Date().toISOString(),
       validUntil: new Date(Date.now() + 15_000).toISOString(),
       connection: "unavailable", sourceFreshness: "unavailable",

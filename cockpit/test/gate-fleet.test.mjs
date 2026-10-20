@@ -109,7 +109,7 @@ function profileScan(overrides = {}) {
 function sourceCase(overrides = {}) {
   const value = {
     id: "case_0123456789abcdef",
-    displayName: "PRIVATE TARGET CANARY",
+    displayName: "HackerOne CTF",
     status: "ready",
     binding: { privateTarget: "https://TARGET_CANARY.invalid" },
     isolation: { privatePath: "/private/PATH_CANARY" },
@@ -146,7 +146,7 @@ function sourceCase(overrides = {}) {
 function sourceProfile(overrides = {}) {
   return {
     id: "program_fedcba9876543210",
-    displayName: null,
+    displayName: "Uber Bug Bounty",
     stage: "questionnaire",
     readiness: "not-ready",
     progress: { answered: 14, total: 70 },
@@ -196,13 +196,14 @@ function observer(overrides = {}) {
 
 test("projects exact GATE campaign numbers without private observer prose", () => {
   const fleet = projectGateObserverStatus(observer(), { receivedAt: NOW, revision: 7 });
-  assert.equal(fleet.apiVersion, "gate.local-fleet/v3");
+  assert.equal(fleet.apiVersion, "gate.local-fleet/v4");
   assert.equal(fleet.coverage.state, "exact");
   assert.deepEqual(fleet.summary.campaigns, { value: 2, precision: "exact" });
   assert.deepEqual(fleet.summary.profileAnswers, { answered: 14, total: 70, precision: "exact" });
   assert.deepEqual(fleet.summary.activeWorkflows, { value: 1, precision: "exact" });
   assert.deepEqual(fleet.summary.runningExecutions, { value: 1, precision: "exact" });
-  assert.deepEqual(fleet.summary.blockers, { value: 2, precision: "exact" });
+  assert.deepEqual(fleet.summary.setupBlockers, { value: 0, precision: "exact" });
+  assert.deepEqual(fleet.summary.blockers, { value: 0, precision: "exact" });
   assert.deepEqual(fleet.summary.campaignTokens, { availability: "exact", total: 1200 });
   assert.deepEqual(fleet.summary.hostTokens, {
     availability: "exact",
@@ -215,14 +216,76 @@ test("projects exact GATE campaign numbers without private observer prose", () =
   assert.equal(fleet.campaigns[0].progress, null, "case completion must remain indeterminate");
   assert.deepEqual(fleet.campaigns[1].progress, { completed: 14, total: 70, percent: 20 });
   assert.deepEqual(fleet.campaigns.map((item) => item.alias), ["Campaign 1", "Campaign 2"]);
+  assert.deepEqual(fleet.campaigns.map((item) => item.context), [
+    { label: "HackerOne CTF", nextSection: null },
+    { label: "Uber Bug Bounty", nextSection: "authority-sources" }
+  ]);
   assert.ok(validateLocalFleet(fleet, { now: NOW }));
 
   const serialized = JSON.stringify(fleet);
   for (const canary of [
-    "PRIVATE TARGET CANARY", "TARGET_CANARY", "PATH_CANARY", "PROMPT_CANARY", "COMMAND_CANARY", "TOOL_CANARY",
+    "TARGET_CANARY", "PATH_CANARY", "PROMPT_CANARY", "COMMAND_CANARY", "TOOL_CANARY",
     "AUTH_CANARY", "EVIDENCE_CANARY", "RAW_OUTPUT_CANARY", "HOST_TOKEN_CANARY",
     "OPERATOR_CANARY", "ENGAGEMENT_CANARY", "PROJECT_CANARY", "UPSTREAM_CANARY", "0123456789abcdef", "fedcba9876543210"
   ]) assert.equal(serialized.includes(canary), false, `projection leaked ${canary}`);
+});
+
+test("unsafe campaign labels become null without invalidating campaigns", () => {
+  const unsafeLabels = [
+    "https://example.invalid/program",
+    "/home/operator/program",
+    "C:\\Users\\operator\\program",
+    "password=private-canary",
+    "Bearer abcdefghijklmnopqrstuvwxyz",
+    "Basic abcdefghijklmnopqrstuvwxyz",
+    "Bad\u0007Title",
+    "A".repeat(81),
+    "portal.example.com",
+    "Project (api.example.com)",
+    "Project example.com, next",
+    "Target 10.0.0.1",
+    "ghp_ABCDEFGHIJKL1234",
+    "glpat-ABCDEFGHIJKLMNOPQRST",
+    "eyJabcdefgh.abcdefghijkl.abcdefghijkl"
+  ];
+  for (const displayName of unsafeLabels) {
+    const fleet = projectGateObserverStatus(observer({
+      cases: [sourceCase({ displayName })],
+      profileSetups: [sourceProfile({ displayName })]
+    }), { receivedAt: NOW });
+    assert.deepEqual(fleet.campaigns.map((item) => item.context), [
+      { label: null, nextSection: null },
+      { label: null, nextSection: "authority-sources" }
+    ]);
+    assert.deepEqual(fleet.campaigns.map((item) => item.alias), ["Campaign 1", "Campaign 2"]);
+  }
+});
+
+test("questionnaire findings remain remaining work instead of becoming blocker totals", () => {
+  const fleet = projectGateObserverStatus(observer({
+    profileSetups: [sourceProfile({ blockerCount: 255 })]
+  }), { receivedAt: NOW });
+  const profile = fleet.campaigns.find((item) => item.kind === "profile");
+
+  assert.deepEqual(profile.progress, { completed: 14, total: 70, percent: 20 });
+  assert.equal(profile.attention, "response-needed");
+  assert.equal(profile.context.nextSection, "authority-sources");
+  assert.deepEqual(profile.work.setupBlockers, { value: 0, precision: "exact" });
+  assert.deepEqual(fleet.summary.setupBlockers, { value: 0, precision: "exact" });
+  assert.deepEqual(fleet.summary.blockers, { value: 0, precision: "exact" });
+
+  const reviewFleet = projectGateObserverStatus(observer({
+    profileSetups: [sourceProfile({
+      stage: "operator-review",
+      progress: { answered: 70, total: 70 },
+      blockerCount: 2,
+      nextSection: null
+    })]
+  }), { receivedAt: NOW });
+  const reviewProfile = reviewFleet.campaigns.find((item) => item.kind === "profile");
+  assert.deepEqual(reviewProfile.work.setupBlockers, { value: 2, precision: "exact" });
+  assert.deepEqual(reviewFleet.summary.setupBlockers, { value: 2, precision: "exact" });
+  assert.deepEqual(reviewFleet.summary.blockers, { value: 2, precision: "exact" });
 });
 
 test("execution mirror is opt-in, strictly bounded, and suppressed for unavailable runtimes", () => {

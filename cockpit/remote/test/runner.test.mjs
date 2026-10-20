@@ -68,7 +68,7 @@ function localState(overrides = {}) {
 
 function unavailableFleet(overrides = {}) {
   return {
-    apiVersion: "gate.local-fleet/v3",
+    apiVersion: "gate.local-fleet/v4",
     revision: 1,
     selectionEpoch: "0".repeat(32),
     observedAt: null,
@@ -160,6 +160,7 @@ function largeConnectedFleet() {
   });
   const campaigns = Array.from({ length: 16 }, (_, index) => ({
     alias: `Campaign ${index + 1}`,
+    context: { label: `CTF Challenge ${index + 1}`, nextSection: null },
     kind: "case",
     stage: "active-testing",
     state: "running",
@@ -177,7 +178,7 @@ function largeConnectedFleet() {
     latestEvent: { availability: "unavailable", category: null, status: null, at: null }
   }));
   return {
-    apiVersion: "gate.local-fleet/v3",
+    apiVersion: "gate.local-fleet/v4",
     revision: 1,
     selectionEpoch: "0".repeat(32),
     observedAt,
@@ -1147,7 +1148,7 @@ test("state and fleet projection expose only the reviewed remote shape", () => {
   const fleet = projectRemoteFleet(unavailableFleet({
     secretReference: "must-not-cross"
   }), { sessionRevision: SESSION_REVISION });
-  assert.equal(fleet.apiVersion, "gate.remote-fleet/v3");
+  assert.equal(fleet.apiVersion, "gate.remote-fleet/v4");
   assert.equal(fleet.sessionRevision, SESSION_REVISION);
   assert.equal("secretReference" in fleet, false);
 });

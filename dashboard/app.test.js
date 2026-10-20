@@ -867,10 +867,10 @@ test("sanitized contradictory available scan counts remain lower bounds", () => 
   );
 });
 
-test("private profile setup rows show guided progress without inventing a target identity", () => {
+test("profile setup rows show bounded context and guided progress", () => {
   const display = profileSetupPresentation({
     id: `program_${"c".repeat(16)}`,
-    displayName: null,
+    displayName: "HackerOne CTF",
     stage: "questionnaire",
     readiness: "not-ready",
     progress: { answered: 41, total: 66 },
@@ -883,12 +883,12 @@ test("private profile setup rows show guided progress without inventing a target
     answers: "PRIVATE_ANSWER_CANARY"
   }, Date.parse(at) + 1_000);
 
-  assert.equal(display.displayName, "Private profile · cccccc");
+  assert.equal(display.displayName, "HackerOne CTF");
   assert.equal(display.state, "waiting");
   assert.equal(display.phaseLabel, "Scope assets");
   assert.equal(display.toolLabel, "Mixed recommendations");
   assert.equal(display.activeWorkLabel, "41 / 66 answered");
-  assert.equal(display.attentionLabel, "2 blockers");
+  assert.equal(display.attentionLabel, "25 questions remaining");
   assert.equal(display.tokensLabel, "Unavailable");
   assert.equal(display.findingsLabel, "Unavailable");
   assert.equal(JSON.stringify(display).includes("PRIVATE_TARGET_CANARY"), false);

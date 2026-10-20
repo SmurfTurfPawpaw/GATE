@@ -1055,7 +1055,7 @@ test("observer publishes multiple isolated cases with opaque bindings and metada
     truncated: false
   });
   assert.equal(status.cases.length, 2);
-  assert.deepEqual(status.cases.map((item) => item.displayName), ["Alpha assessment", "Beta assessment"]);
+  assert.deepEqual(status.cases.map((item) => item.displayName), ["Untitled case", "Untitled case"]);
   for (const item of status.cases) {
     assert.match(item.id, /^case_[a-f0-9]{16}$/u);
     assert.match(item.binding.program.id, /^program_[a-f0-9]{16}$/u);
@@ -1086,6 +1086,7 @@ test("observer publishes multiple isolated cases with opaque bindings and metada
 
   const serialized = JSON.stringify({ status, dashboard });
   for (const forbidden of [
+    "Alpha assessment", "Beta assessment",
     "raw-alpha-case", "raw-beta-case", "raw-alpha-program", "raw-beta-program",
     "raw-alpha-project", "raw-beta-project", "raw-alpha-event-run", "raw-alpha-event-task",
     "raw-alpha-event-agent", "raw-beta-event-run", "raw-beta-event-task", "raw-beta-event-agent",
@@ -1099,6 +1100,32 @@ test("observer publishes multiple isolated cases with opaque bindings and metada
     "CASE_EXECUTION_EVIDENCE_CANARY", "CASE_ARGV_CANARY", "CASE_STDOUT_CANARY",
     "CASE_TARGET_CANARY", "CASE_PRIVATE_DATA_CANARY"
   ]) assert.equal(serialized.includes(forbidden), false, `case observer projection leaked ${forbidden}`);
+});
+
+test("case labels with target or credential shapes retain an untitled aggregate row", () => {
+  const unsafeNames = ["Bearer abcdefghijklmnop", "api.example.com", "Target 10.0.0.1"];
+  const raw = statusFixture({
+    cases: unsafeNames.map((displayName, index) => caseFixture({
+      id: `unsafe-case-${index}`,
+      displayName,
+      programId: `unsafe-program-${index}`,
+      projectId: null
+    })),
+    caseScan: {
+      discovered: unsafeNames.length,
+      scanned: unsafeNames.length,
+      omitted: 0,
+      invalid: 0,
+      complete: true,
+      truncated: false
+    }
+  });
+
+  const status = projectSnapshot(raw, paths).status;
+  assert.equal(status.cases.length, unsafeNames.length);
+  assert.deepEqual(status.cases.map((item) => item.displayName), unsafeNames.map(() => "Untitled case"));
+  const serialized = JSON.stringify(status);
+  for (const unsafeName of unsafeNames) assert.equal(serialized.includes(unsafeName), false);
 });
 
 test("stale cases retain sanitized monitoring while invalid rows become blocked tombstones", () => {

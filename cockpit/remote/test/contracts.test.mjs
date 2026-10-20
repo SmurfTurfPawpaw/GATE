@@ -62,7 +62,7 @@ function fleetProjection(overrides = {}) {
     ...(profile ? { visible: 1, representedByCases: 1 } : {})
   });
   return {
-    apiVersion: "gate.remote-fleet/v3",
+    apiVersion: "gate.remote-fleet/v4",
     sessionRevision,
     revision: 4,
     selectionEpoch: "0".repeat(32),
@@ -95,6 +95,7 @@ function fleetProjection(overrides = {}) {
     },
     campaigns: [{
       alias: "Campaign 1",
+      context: { label: "HackerOne CTF", nextSection: null },
       kind: "case",
       stage: "active-testing",
       state: "running",
@@ -361,7 +362,14 @@ test("state projections bind freshness and sanitize the bounded visible conversa
 });
 
 test("fleet projections are exact, revision-bound, and byte bounded", () => {
-  assert.equal(normalizeRemoteFleetProjection(fleetProjection()).revision, 4);
+  const normalized = normalizeRemoteFleetProjection(fleetProjection());
+  assert.equal(normalized.revision, 4);
+  assert.equal(normalized.campaigns[0].alias, "Campaign 1");
+  assert.deepEqual(normalized.campaigns[0].context, {
+    label: "HackerOne CTF",
+    nextSection: null
+  });
+  assert.equal(Object.isFrozen(normalized.campaigns[0].context), true);
   const withPilot = fleetProjection({
     campaigns: [{ ...fleetProjection().campaigns[0], pilot: pilotProjection() }]
   });
@@ -386,6 +394,108 @@ test("fleet projections are exact, revision-bound, and byte bounded", () => {
     connection: "unavailable",
     sourceFreshness: "unavailable"
   })), /invalid/u);
+});
+
+test("fleet campaign context accepts bounded labels and valid profile sections only", () => {
+  const source = fleetProjection();
+  const campaign = source.campaigns[0];
+  const { context: _context, ...withoutContext } = campaign;
+  assert.throws(() => normalizeRemoteFleetProjection({
+    ...source,
+    apiVersion: "gate.remote-fleet/v3"
+  }), /invalid/u);
+  assert.throws(() => normalizeRemoteFleetProjection(fleetProjection({
+    campaigns: [withoutContext]
+  })), /invalid/u);
+  assert.throws(() => normalizeRemoteFleetProjection(fleetProjection({
+    campaigns: [{ ...campaign, context: { ...campaign.context, extra: true } }]
+  })), /invalid/u);
+  assert.equal(normalizeRemoteFleetProjection(fleetProjection({
+    campaigns: [{ ...campaign, context: { label: null, nextSection: null } }]
+  })).campaigns[0].context.label, null);
+
+  const questionnaire = {
+    ...campaign,
+    context: { label: "Uber Bug Bounty", nextSection: "authority-sources" },
+    kind: "profile",
+    stage: "profile-questionnaire",
+    state: "waiting",
+    progress: { completed: 14, total: 70, percent: 20 }
+  };
+  assert.deepEqual(normalizeRemoteFleetProjection(fleetProjection({
+    campaigns: [questionnaire]
+  })).campaigns[0].context, {
+    label: "Uber Bug Bounty",
+    nextSection: "authority-sources"
+  });
+
+  for (const label of [
+    " leading space",
+    "line\nbreak",
+    "control\u0007value",
+    "<script>alert(1)</script>",
+    "https://example.com/program",
+    "www.example.com",
+    "example.com",
+    "Project (api.example.com)",
+    "Project example.com, next",
+    "Target 10.0.0.1",
+    "/private/program",
+    "C:\\private\\program",
+    "Bearer abcdefghijklmnop",
+    "A".repeat(81)
+  ]) {
+    assert.throws(() => normalizeRemoteFleetProjection(fleetProjection({
+      campaigns: [{ ...campaign, context: { label, nextSection: null } }]
+    })), /invalid/u);
+  }
+
+  const invalidCampaigns = [
+    { ...campaign, context: { label: "HackerOne CTF", nextSection: "not-a-section" } },
+    { ...campaign, context: { label: "HackerOne CTF", nextSection: "scope-assets" } },
+    { ...questionnaire, context: { label: "Uber Bug Bounty", nextSection: null } },
+    {
+      ...questionnaire,
+      context: { label: "Uber Bug Bounty", nextSection: "scope-assets" },
+      stage: "profile-ready"
+    }
+  ];
+  for (const invalidCampaign of invalidCampaigns) {
+    assert.throws(() => normalizeRemoteFleetProjection(fleetProjection({
+      campaigns: [invalidCampaign]
+    })), /invalid/u);
+  }
+});
+
+test("fleet blocker metrics stay bound to kind, stage, and visible aggregates", () => {
+  const caseFleet = fleetProjection();
+  caseFleet.campaigns[0].work.setupBlockers = { value: 7, precision: "exact" };
+  caseFleet.summary.setupBlockers = { value: 7, precision: "exact" };
+  caseFleet.summary.blockers = { value: 7, precision: "exact" };
+  assert.throws(() => normalizeRemoteFleetProjection(caseFleet), /invalid/u);
+
+  const questionnaire = fleetProjection();
+  questionnaire.campaigns[0] = {
+    ...questionnaire.campaigns[0],
+    context: { label: "Example Program", nextSection: "authority-sources" },
+    kind: "profile",
+    stage: "profile-questionnaire",
+    state: "waiting",
+    progress: { completed: 14, total: 70, percent: 20 },
+    work: { ...questionnaire.campaigns[0].work, setupBlockers: { value: 5, precision: "exact" } }
+  };
+  questionnaire.summary.setupBlockers = { value: 5, precision: "exact" };
+  questionnaire.summary.blockers = { value: 5, precision: "exact" };
+  assert.throws(() => normalizeRemoteFleetProjection(questionnaire), /invalid/u);
+
+  const inconsistent = fleetProjection();
+  inconsistent.summary.blockers = { value: 1, precision: "exact" };
+  assert.throws(() => normalizeRemoteFleetProjection(inconsistent), /invalid/u);
+
+  const blocked = fleetProjection();
+  blocked.campaigns[0].state = "blocked";
+  blocked.summary.blockers = { value: 1, precision: "exact" };
+  assert.equal(normalizeRemoteFleetProjection(blocked).summary.blockers.value, 1);
 });
 
 test("remote fleet validates and deeply freezes the exact execution mirror", () => {

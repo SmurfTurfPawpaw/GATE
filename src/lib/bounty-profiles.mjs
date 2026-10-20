@@ -2432,9 +2432,11 @@ function programProfileSetupStage(profile, verification, progress) {
   return verification.ready === true ? "ready" : "operator-review";
 }
 
-// This read-only fleet view deliberately contains no title, target, source,
-// answer, digest, path, authorization, or blocker detail. The observer applies
-// its process-local opaque identifier after this bounded, binding-checked read.
+// This read-only fleet view exposes the profile title only so the observer can
+// derive a bounded private cockpit label. It deliberately contains no
+// target, objective, source, answer, digest, path, authorization, or blocker
+// detail. The observer applies its process-local opaque identifier and rejects
+// unsafe titles after this bounded, binding-checked read.
 export function programProfileSetupFleetStatus(options = {}) {
   const paths = ensureProgramProfileSetupRoot(options);
   const result = scanProgramProfileSetupNames(paths);
@@ -2456,6 +2458,7 @@ export function programProfileSetupFleetStatus(options = {}) {
       const stage = programProfileSetupStage(stored.profile, verification, progress);
       profiles.push({
         id: name,
+        title: stored.profile.metadata.title,
         stage,
         readiness: stage === "ready" ? "ready" : "not-ready",
         progress: { answered: progress.answered, total: progress.total },

@@ -92,10 +92,10 @@ test("loopback companion injects its bridge before the public app without embedd
   assert.match(page.headers["content-security-policy"], /connect-src 'self'/u);
 });
 
-test("local client dispatches v3 fleet projections and rejects obsolete protocol data", async () => {
+test("local client dispatches v4 fleet projections and rejects obsolete protocol data", async () => {
   const source = await readFile(new URL("../companion/client.js", import.meta.url), "utf8");
   const events = [];
-  const fleet = { apiVersion: "gate.local-fleet/v3", mirrorCanary: "retained-by-browser-event" };
+  const fleet = { apiVersion: "gate.local-fleet/v4", mirrorCanary: "retained-by-browser-event" };
   const context = {
     URLSearchParams,
     location: { hash: "" },
@@ -246,7 +246,7 @@ test("private fleet projection requires the fragment session and stays on its re
   assert.deepEqual(acceptedBody, {
     ok: true,
     fleet: {
-      apiVersion: "gate.local-fleet/v3",
+      apiVersion: "gate.local-fleet/v4",
       revision: 1,
       selectionEpoch: acceptedBody.fleet.selectionEpoch,
       observedAt: null,

@@ -12,7 +12,7 @@ export const REMOTE_COMMAND_STATUS_REQUEST_VERSION = "gate.remote-command-status
 export const REMOTE_COMMAND_STATUS_RESPONSE_VERSION = "gate.remote-command-status-response/v1";
 export const REMOTE_ACTIVITY_EVENT_VERSION = "gate.remote-cockpit-event/v1";
 export const REMOTE_STATE_VERSION = "gate.remote-cockpit-state/v1";
-export const REMOTE_FLEET_VERSION = "gate.remote-fleet/v3";
+export const REMOTE_FLEET_VERSION = "gate.remote-fleet/v4";
 export const REMOTE_EVENTS_PAGE_VERSION = "gate.remote-events-page/v1";
 
 export const MAX_REMOTE_MESSAGE_CHARACTERS = 1_000;
@@ -71,6 +71,16 @@ const FLEET_STAGES = new Set([
 const FLEET_STATES = new Set(["queued", "running", "waiting", "blocked", "succeeded", "failed", "cancelled", "unknown", "idle"]);
 const FLEET_ATTENTION = new Set(["steady", "watch", "response-needed"]);
 const FLEET_FRESHNESS = new Set(["current", "delayed", "unknown"]);
+const FLEET_PROFILE_SECTIONS = new Set([
+  "identity-objectives", "authority-sources", "actions-techniques", "limits-schedule", "scope-assets",
+  "accounts-identities", "architecture-data-flows", "workflow-coverage", "data-evidence",
+  "stops-escalation-cleanup", "reporting-disclosure", "ambiguities-attestation", "conditional-modules"
+]);
+const FLEET_CONTEXT_LABEL = /^[A-Za-z0-9][A-Za-z0-9 &().,'+_-]{0,79}$/u;
+const FLEET_CONTEXT_URL = /(?:\b(?:https?|file|ftp):\/\/|\bwww\.)/iu;
+const FLEET_CONTEXT_HOSTNAME = /\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\b/iu;
+const FLEET_CONTEXT_IPV4 = /\b(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}\b/u;
+const FLEET_CONTEXT_PATH = /(?:^|\s)(?:~?[\\/]|[A-Za-z]:[\\/]|\\\\)/u;
 const FLEET_EVENT_CATEGORIES = new Set(["campaign", "workflow", "execution", "test", "evidence", "learning", "analysis", "tool", "operator", "system", "other"]);
 const FLEET_EVENT_STATUSES = new Set(["queued", "running", "waiting", "blocked", "succeeded", "failed", "cancelled", "unknown"]);
 const FLEET_TOKEN_AVAILABILITY = new Set(["exact", "estimated", "partial", "unavailable"]);
@@ -100,6 +110,25 @@ function exactKeys(value, expected) {
   const actual = Object.keys(value).sort();
   const wanted = [...expected].sort();
   return actual.length === wanted.length && actual.every((key, index) => key === wanted[index]);
+}
+
+function normalizeFleetContext(value, kind, stage) {
+  const invalid = () => fail(400, "fleet-projection-invalid", "The remote fleet projection is invalid.");
+  if (!exactKeys(value, ["label", "nextSection"])) invalid();
+  let label = null;
+  if (value.label !== null) {
+    if (typeof value.label !== "string") invalid();
+    label = value.label.normalize("NFC").trim();
+    if (label !== value.label || !FLEET_CONTEXT_LABEL.test(label) || FLEET_CONTEXT_URL.test(label)
+        || FLEET_CONTEXT_HOSTNAME.test(label) || FLEET_CONTEXT_IPV4.test(label)
+        || FLEET_CONTEXT_PATH.test(label) || containsLikelyRemoteCredential(label)) invalid();
+  }
+  const nextSection = value.nextSection === null ? null
+    : typeof value.nextSection === "string" && FLEET_PROFILE_SECTIONS.has(value.nextSection) ? value.nextSection : undefined;
+  if (nextSection === undefined || kind === "case" && nextSection !== null
+      || kind === "profile" && stage === "profile-questionnaire" && nextSection === null
+      || kind === "profile" && stage !== "profile-questionnaire" && nextSection !== null) invalid();
+  return Object.freeze({ label, nextSection });
 }
 
 function boundedInteger(value, minimum, maximum) {
@@ -616,12 +645,13 @@ export function normalizeRemoteFleetProjection(value) {
   if (!Array.isArray(value.campaigns) || value.campaigns.length > 64) invalid();
   const aliases = new Set();
   const campaigns = value.campaigns.map((item) => {
-    const campaignKeys = ["alias", "kind", "stage", "state", "progress", "attention", "freshness", "work", "tokens", "mirror", "pilot", "latestEvent"];
+    const campaignKeys = ["alias", "context", "kind", "stage", "state", "progress", "attention", "freshness", "work", "tokens", "mirror", "pilot", "latestEvent"];
     if (!(exactKeys(item, campaignKeys) || exactKeys(item, campaignKeys.filter((key) => key !== "pilot")))
         || typeof item.alias !== "string" || !/^Campaign [1-9]\d{0,2}$/u.test(item.alias) || aliases.has(item.alias)
         || !FLEET_KINDS.has(item.kind) || !FLEET_STAGES.has(item.stage) || !FLEET_STATES.has(item.state)
         || !FLEET_ATTENTION.has(item.attention) || !FLEET_FRESHNESS.has(item.freshness)) invalid();
     aliases.add(item.alias);
+    const context = normalizeFleetContext(item.context, item.kind, item.stage);
     let progress = null;
     if (item.kind === "case") {
       if (item.progress !== null || item.stage.startsWith("profile-")) invalid();
@@ -653,6 +683,7 @@ export function normalizeRemoteFleetProjection(value) {
     if (observedAt !== null && mirror.attempts.some((attempt) => Date.parse(attempt.updatedAt) > Date.parse(observedAt))) invalid();
     return Object.freeze({
       ...item,
+      context,
       progress,
       work: Object.freeze(work),
       tokens: fleetTokens(item.tokens),
@@ -661,6 +692,18 @@ export function normalizeRemoteFleetProjection(value) {
       latestEvent
     });
   });
+  const setupBlockerTotal = campaigns
+    .filter((item) => item.kind === "profile" && item.work.setupBlockers.precision !== "unavailable")
+    .reduce((total, item) => total + item.work.setupBlockers.value, 0);
+  if (campaigns.some((item) => item.kind === "case" && item.work.setupBlockers.precision !== "unavailable"
+      && item.work.setupBlockers.value !== 0)
+      || campaigns.some((item) => item.kind === "profile" && item.stage !== "profile-operator-review"
+        && item.work.setupBlockers.precision !== "unavailable" && item.work.setupBlockers.value !== 0)
+      || campaigns.some((item) => item.kind === "profile" && item.stage === "profile-operator-review"
+        && (item.work.setupBlockers.precision === "unavailable" || item.work.setupBlockers.value < 1))
+      || summary.setupBlockers.precision !== "unavailable" && summary.setupBlockers.value !== setupBlockerTotal
+      || summary.blockers.precision !== "unavailable" && summary.blockers.value !== setupBlockerTotal
+        + campaigns.filter((item) => item.kind === "case" && item.state === "blocked").length) invalid();
   if (value.connection === "connected" && campaigns.some((item) => item.pilot.availability === "available"
       && (Date.parse(item.pilot.observedAt) > Date.parse(observedAt)
         || Date.parse(validUntil) > Date.parse(item.pilot.validUntil)))) invalid();

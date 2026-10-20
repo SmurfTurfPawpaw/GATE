@@ -70,7 +70,7 @@ test("adapter creates one isolated app-server thread and starts or steers turns"
     ["request", "thread/start"]
   ]);
   assert.deepEqual(transport.calls[0].params, {
-    clientInfo: { name: "gate-cockpit", title: "GATE Local Cockpit", version: "0.6.0" },
+    clientInfo: { name: "gate-cockpit", title: "GATE Local Cockpit", version: "0.7.0" },
     capabilities: { experimentalApi: true }
   });
   assert.deepEqual(transport.calls[2].params, {
@@ -122,7 +122,7 @@ test("remote adapter pins and verifies a read-only posture on thread and turn st
   await adapter.connect();
   assert.deepEqual(lifecycle, ["creating", "provisional"]);
   assert.deepEqual(transport.calls[0].params, {
-    clientInfo: { name: "gate-cockpit", title: "GATE Remote Cockpit", version: "0.6.0" },
+    clientInfo: { name: "gate-cockpit", title: "GATE Remote Cockpit", version: "0.7.0" },
     capabilities: { experimentalApi: true }
   });
   assert.deepEqual(transport.calls[2], {

@@ -294,7 +294,12 @@ function displayName(value, maximum = 80) {
   if (typeof value !== "string") return null;
   const normalized = value.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
   if (!normalized || normalized.length > maximum) return null;
-  if (/[:][/][/]|[\\/]|\b(?:authorization|cookie|set-cookie|api[-_ ]?key|access[-_ ]?token)\b/i.test(normalized)) {
+  if (/[:][/][/]|[\\/]|\bwww\./i.test(normalized) ||
+      /\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\b/iu.test(normalized) ||
+      /\b(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}\b/u.test(normalized) ||
+      /\b(?:authorization|cookie|set-cookie|api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|client[-_ ]?secret|password|passwd|private[-_ ]?key|session[-_ ]?(?:id|key|token))\b/i.test(normalized) ||
+      /\b(?:bearer|basic)\s+[A-Za-z0-9._~+/-]{12,}/iu.test(normalized) ||
+      /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/u.test(normalized)) {
     return null;
   }
   return /^[\p{L}\p{N}][\p{L}\p{N} ._()'&+:-]*$/u.test(normalized) ? normalized : null;
@@ -302,7 +307,9 @@ function displayName(value, maximum = 80) {
 
 function caseDisplayName(value) {
   if (typeof value !== "string" || !value || value.length > 60) return null;
-  return /^[A-Za-z][A-Za-z0-9 .'-]*$/u.test(value) ? value.trim() : null;
+  if (!/^[A-Za-z][A-Za-z0-9 .'-]*$/u.test(value)) return null;
+  const normalized = value.trim();
+  return displayName(normalized, 60) || "Untitled case";
 }
 
 /**
@@ -730,6 +737,7 @@ function profileSetupShape(input) {
   const value = record(input);
   const hasNextSection = Object.hasOwn(value, "nextSection");
   const id = typeof value.id === "string" && PROGRAM_ID.test(value.id) ? value.id : null;
+  const profileName = value.displayName === null ? null : displayName(value.displayName, 80);
   const stage = enumValue(value.stage, PROFILE_SETUP_STAGES, null);
   const readiness = enumValue(value.readiness, PROFILE_SETUP_READINESS, null);
   const progress = record(value.progress);
@@ -756,13 +764,13 @@ function profileSetupShape(input) {
       : stage === "ready"
         ? readiness === "ready" && completeProgress && blockerCount === 0 && nextSection === null
         : stage === "superseded" && readiness === "not-ready" && boundedProgress && nextSection === null;
-  if (!id || value.displayName !== null || !stage || !readiness || answered === null || total === null || answered > total ||
+  if (!id || !(value.displayName === null || profileName !== null) || !stage || !readiness || answered === null || total === null || answered > total ||
       blockerCount === null || !updatedAt || !setupFreshness || !hasNextSection || !stateConsistent ||
       (value.nextSection !== null && nextSection === null) ||
       (value.recommendationMode !== null && recommendationMode === null)) return null;
   return {
     id,
-    displayName: null,
+    displayName: profileName,
     stage,
     readiness,
     progress: { answered, total },
