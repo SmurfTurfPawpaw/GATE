@@ -258,6 +258,16 @@ function readyProfile() {
   return value;
 }
 
+function dedicatedLabProfile() {
+  const value = readyProfile();
+  value.authorization.basis = "dedicated-lab";
+  value.authorization.safeHarbor = {
+    ...decision("unknown", ["program-rules"]),
+    rationale: "The cited dedicated challenge permission establishes lab scope but makes no legal safe-harbor promise."
+  };
+  return value;
+}
+
 function answerEnvelope(answers) {
   return {
     $schema: "https://gate.local/schemas/bug-bounty-program-profile-answers.schema.json",
@@ -698,6 +708,70 @@ test("ready profiles require exact per-asset policies, execution intent, and a c
   assert.ok(validation.errors.some((error) =>
     error.includes("attestation.attestedRevision must equal metadata.revision")
   ));
+});
+
+test("ready dedicated-lab profiles may retain documented unknown legal safe harbor", () => {
+  for (const type of ["program-rules", "platform-page"]) {
+    const value = dedicatedLabProfile();
+    value.sources[0].type = type;
+    const validation = validateProgramProfile(value, { repo });
+    assert.equal(validation.ok, true, `${type}: ${validation.errors.join("; ")}`);
+    assert.equal(value.authorization.safeHarbor.disposition, "unknown");
+    assert.equal(value.authorization.safeHarbor.claimState, "unverified");
+  }
+});
+
+test("unknown safe harbor remains blocked for every non-lab authorization basis", () => {
+  for (const basis of ["owner", "client-written-authorization", "contract", "public-bug-bounty-program"]) {
+    const value = dedicatedLabProfile();
+    value.authorization.basis = basis;
+    const validation = validateProgramProfile(value, { repo });
+    assert.equal(validation.ok, false, basis);
+    assert.ok(validation.errors.some((error) => error.includes("/authorization/safeHarbor remains unknown")), basis);
+  }
+  assert.equal(validateProgramProfile(draftProfile(), { repo }).ok, true);
+});
+
+test("a dedicated-lab safe-harbor exception requires shared observed content-bound lab permission", () => {
+  const changes = [
+    ["missing authorization provenance", (value) => { value.authorization.sourceRefs = []; }],
+    ["missing safe-harbor provenance", (value) => { value.authorization.safeHarbor.sourceRefs = []; }],
+    ["missing source body digest", (value) => { value.sources[0].contentSha256 = null; }],
+    ["inferred lab permission", (value) => { value.sources[0].claimState = "inferred"; }],
+    ["unverified lab permission", (value) => { value.sources[0].claimState = "unverified"; }],
+    ["operator statement only", (value) => { value.sources[0].type = "operator-statement"; }],
+    ["scope list only", (value) => { value.sources[0].type = "scope-list"; }],
+    ["other source only", (value) => { value.sources[0].type = "other"; }],
+    ["disjoint authorization sources", (value) => {
+      value.sources.push({ ...value.sources[0], id: "separate-lab-rules" });
+      value.authorization.safeHarbor.sourceRefs = ["separate-lab-rules"];
+    }],
+    ["missing explanation", (value) => { value.authorization.safeHarbor.rationale = null; }],
+    ["invented observed legal certainty", (value) => { value.authorization.safeHarbor.claimState = "observed"; }]
+  ];
+  for (const [label, change] of changes) {
+    const value = dedicatedLabProfile();
+    change(value);
+    const validation = validateProgramProfile(value, { repo });
+    assert.equal(validation.ok, false, label);
+    assert.ok(validation.errors.length > 0, label);
+  }
+});
+
+test("dedicated-lab intake retains unrelated decision and manual attestation gates", () => {
+  const changes = [
+    ["unresolved coverage", (value) => { value.coverage.inputs = decision("unknown", ["program-rules"]); }, "/coverage/inputs remains unknown"],
+    ["unconfirmed authority", (value) => { value.authorization.operatorConfirmed = false; }, "authorization must be confirmed by the operator"],
+    ["incomplete attestation", (value) => { value.attestation.sourceClaimsReviewed = false; }, "attestation.sourceClaimsReviewed must be true"],
+    ["stale attestation", (value) => { value.attestation.attestedRevision += 1; }, "attestation.attestedRevision must equal metadata.revision"]
+  ];
+  for (const [label, change, expected] of changes) {
+    const value = dedicatedLabProfile();
+    change(value);
+    const validation = validateProgramProfile(value, { repo });
+    assert.equal(validation.ok, false, label);
+    assert.ok(validation.errors.some((error) => error.includes(expected)), `${label}: ${validation.errors.join("; ")}`);
+  }
 });
 
 test("conditional and unknown decisions cannot masquerade as allowed decisions", () => {

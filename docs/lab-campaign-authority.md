@@ -6,6 +6,22 @@ single-request `httpx-url-fetch` jobs after one exact operator confirmation. It
 does not change the ordinary production engagement lane: every non-lab
 execution still requires its own exact `EXECUTE … UNMETERED` confirmation.
 
+## Lab intake and legal safe harbor
+
+A dedicated-lab profile can retain an unknown legal safe-harbor decision when
+its authorization and that decision cite the same `program-rules` or
+`platform-page` source record marked observed with a captured content SHA-256.
+This is declared provenance; the operator still reviews the cited source
+contents. The profile preserves
+`disposition: unknown` and `claimState: unverified` and reports the explicit
+`dedicated-lab-safe-harbor-unknown` warning. Published permission to use a
+training lab and a promise of legal protection are separate claims.
+
+This intake exception covers only that legal decision and only the
+`dedicated-lab` basis. It leaves every other readiness check, source integrity
+check, operator attestation, immutable case binding, exact engagement receipt,
+and lab-campaign confirmation in place. Readiness alone cannot contact a lab.
+
 ## What the authority binds
 
 The private proposal and receipt bind all of the following before confirmation:

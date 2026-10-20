@@ -631,6 +631,27 @@ function visitSourceRefs(value, callback, location = "") {
   }
 }
 
+// This is structural provenance for lab intake, not a legal assurance or
+// execution permission. Source content and meaning still require operator review.
+export function supportsUnknownLabSafeHarbor(profile) {
+  const authorization = profile?.authorization;
+  const safeHarbor = authorization?.safeHarbor;
+  if (authorization?.basis !== "dedicated-lab" ||
+      safeHarbor?.disposition !== "unknown" ||
+      safeHarbor.claimState !== "unverified" ||
+      typeof safeHarbor.rationale !== "string" || !meaningfulText(safeHarbor.rationale)) return false;
+  if (!Array.isArray(authorization.sourceRefs) || !Array.isArray(safeHarbor.sourceRefs) ||
+      !Array.isArray(profile.sources)) return false;
+  const authorityRefs = new Set(authorization.sourceRefs);
+  const sharedRefs = new Set(safeHarbor.sourceRefs.filter((id) => authorityRefs.has(id)));
+  return profile.sources.some((source) =>
+    sharedRefs.has(source?.id) &&
+    ["program-rules", "platform-page"].includes(source.type) &&
+    source.claimState === "observed" &&
+    typeof source.contentSha256 === "string" && /^[a-f0-9]{64}$/u.test(source.contentSha256)
+  );
+}
+
 function decisionEntries(value) {
   return [
     ["/authorization/safeHarbor", value.authorization.safeHarbor],
@@ -1036,7 +1057,10 @@ function semanticProfileErrors(value, paths) {
 
   if (!value.authorization.operatorConfirmed) errors.push("authorization must be confirmed by the operator when ready");
   for (const [location, item] of decisionEntries(value)) {
-    if (item.disposition === "unknown") errors.push(`${location} remains unknown`);
+    if (item.disposition === "unknown" &&
+        !(location === "/authorization/safeHarbor" && supportsUnknownLabSafeHarbor(value))) {
+      errors.push(`${location} remains unknown`);
+    }
     if (typeof item.rationale !== "string" || !meaningfulText(item.rationale)) {
       errors.push(`${location} requires a rationale when ready`);
     }
