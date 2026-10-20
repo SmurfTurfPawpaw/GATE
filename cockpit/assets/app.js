@@ -1238,9 +1238,6 @@ function fleetCampaignGuidance(campaign) {
     return { reason: "Replaced by a newer profile", next: "Next: open the current profile" };
   }
 
-  if (campaign.attention === "response-needed" && !new Set(["blocked", "failed"]).has(campaign.state)) {
-    return { reason: "Your response is needed", next: "Next: answer the pending request" };
-  }
   const guidance = {
     queued: ["Queued for the runner", "Next: wait for the runner"],
     running: ["Work is in progress", "Next: monitor the active attempt"],
@@ -1273,7 +1270,12 @@ function fleetCampaignDetails(campaign, guidance) {
     ["Context", campaign.kind === "profile" ? "Profile setup" : "Case"],
     ["Status", fleetStateLabel(campaign)],
     ["Why", guidance.reason],
-    ["Attention", fleetAttentionLabel(campaign.attention)]
+    ["Attention", fleetAttentionLabel(campaign.attention)],
+    ["Freshness", campaign.freshness === "current"
+      ? "Current observation from the fleet source"
+      : campaign.freshness === "delayed"
+        ? "Delayed observation; current state may have changed"
+        : "Observation freshness unavailable"]
   ];
   if (campaign.kind === "profile") {
     details.push(["Progress", `${campaign.progress.completed} of ${campaign.progress.total} answered`]);
@@ -1485,9 +1487,19 @@ function renderLiveMode() {
       ? `${pendingCount} question${pendingCount === 1 ? "" : "s"} · ${fleetMetricText(attentionMetric)} fleet alert${attentionMetric.value === 1 ? "" : "s"}`
       : `${pendingCount} question${pendingCount === 1 ? "" : "s"} · fleet status unavailable`;
 
+  const openDetails = new Set([...elements.campaignList.children]
+    .map((card) => card.querySelector("details"))
+    .filter((details) => details?.open)
+    .map((details) => details.campaignSelectionKey));
   clear(elements.campaignList);
   if (fleetConnected && fleet.campaigns.length > 0) {
-    fleet.campaigns.forEach((campaign) => elements.campaignList.append(localFleetCampaignCard(campaign)));
+    fleet.campaigns.forEach((campaign) => {
+      const card = localFleetCampaignCard(campaign);
+      const details = card.querySelector("details");
+      details.campaignSelectionKey = `${fleet.selectionEpoch}:${campaign.alias}`;
+      details.open = openDetails.has(details.campaignSelectionKey);
+      elements.campaignList.append(card);
+    });
   } else {
     const empty = node("div", "empty-state");
     empty.append(node("p", "", fleetConnected

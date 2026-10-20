@@ -526,6 +526,8 @@ test("authenticated Fleet cards explain profile context and keep richer detail b
   assert.doesNotMatch(card.textContent, /blocker/iu);
   assert.equal(page.elements.get("mirror-campaign-select").children[0].textContent, "Uber Bug Bounty · Campaign 1");
 
+  assert.match(card.children[4].textContent, /FreshnessCurrent observation from the fleet source/u);
+  card.children[4].open = true;
   const operatorReview = structuredClone(questionnaire);
   operatorReview.revision = 2;
   operatorReview.campaigns[0].context = { label: null, nextSection: null };
@@ -542,7 +544,53 @@ test("authenticated Fleet cards explain profile context and keep richer detail b
   assert.equal(heading.children[0].textContent, "Untitled profile");
   assert.match(card.children[3].textContent, /^2 review issues·Next: review unresolved profile requirements$/u);
   assert.match(card.children[4].textContent, /Review issues2/u);
+  assert.equal(card.children[4].open, true);
   assert.doesNotMatch(card.textContent, /blocker/iu);
+});
+
+
+test("authenticated Fleet preserves case disclosures and gives state-based guidance and freshness", async () => {
+  const page = await browser(JSON.parse(await read("data/status.json")));
+  const at = new Date().toISOString();
+  page.context.GATE_REMOTE_COCKPIT_BRIDGE = {
+    apiVersion: "gate.remote-cockpit-bridge/v1", caseId: "alpha-case", sessionRevision: 5,
+    async reconcileCommands() { return null; }, async submitMessage() { return null; }, async submitQuestion() { return null; }
+  };
+  page.events["gate:remote-private-state"]({ detail: remoteState(at) });
+  const fleet = connectedRemoteFleet(at);
+  page.events["gate:remote-fleet"]({ detail: fleet });
+  page.events["gate:remote-connection"]({ detail: {
+    apiVersion: "gate.remote-cockpit-connection/v1", state: "connected", at
+  } });
+  const card = () => page.elements.get("campaign-list").children[0];
+  card().children[4].open = true;
+  const reasons = {
+    waiting: "Waiting for a dependency", idle: "No work is active", running: "Work is in progress"
+  };
+  for (const [state, reason] of Object.entries(reasons)) {
+    fleet.revision += 1;
+    fleet.campaigns[0].state = state;
+    fleet.campaigns[0].attention = "response-needed";
+    page.events["gate:remote-fleet"]({ detail: structuredClone(fleet) });
+    assert.equal(card().children[4].open, true);
+    assert.ok(card().children[3].textContent.startsWith(reason));
+    assert.ok(card().children[4].textContent.includes(`Why${reason}`));
+    assert.doesNotMatch(card().textContent, /answer the pending request/u);
+  }
+  for (const [freshness, explanation] of [
+    ["current", "Current observation from the fleet source"],
+    ["delayed", "Delayed observation; current state may have changed"],
+    ["unknown", "Observation freshness unavailable"]
+  ]) {
+    fleet.revision += 1;
+    fleet.campaigns[0].freshness = freshness;
+    page.events["gate:remote-fleet"]({ detail: structuredClone(fleet) });
+    assert.ok(card().children[4].textContent.includes(`Freshness${explanation}`));
+  }
+  fleet.revision += 1;
+  fleet.selectionEpoch = "1".repeat(32);
+  page.events["gate:remote-fleet"]({ detail: fleet });
+  assert.equal(card().children[4].open, false);
 });
 
 function availableExecutionMirror(at) {
