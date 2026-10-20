@@ -2329,6 +2329,9 @@ function publicRunMetadata(run) {
 }
 
 function compareRecentExecutions(left, right) {
+  const priority = (status) => status === "running" || status === "stopping" ? 0 : status === "queued" ? 1 : 2;
+  const active = priority(left.status) - priority(right.status);
+  if (active !== 0) return active;
   const created = Date.parse(right.createdAt) - Date.parse(left.createdAt);
   if (created !== 0) return created;
   const run = left.runId.localeCompare(right.runId);
@@ -2896,6 +2899,7 @@ export function executionStatus(options = {}) {
 }
 
 export const executionInternals = Object.freeze({
+  retainRecentExecution,
   manifestDigest,
   processIdentity,
   reserveExecutionAttemptOrdinal,

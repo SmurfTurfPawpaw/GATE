@@ -1330,3 +1330,25 @@ test("audit effect uses the higher catalog risk and stale supervisors project un
   assert.equal(status.recent[0].status, "unknown");
   assert.equal(status.counts.unknown, 1);
 });
+
+
+test("bounded execution history retains active attempts before newer terminal records", () => {
+  for (const reverse of [false, true]) {
+    const active = ["running", "stopping", "queued"].map((status, index) => ({
+      status, runId: `active-${index}`, manifestId: `manifest-${index}`,
+      createdAt: "2026-10-20T10:00:00.000Z"
+    }));
+    const completed = Array.from({ length: 110 }, (_, index) => ({
+      status: "succeeded", runId: `terminal-${index}`, manifestId: `terminal-manifest-${index}`,
+      createdAt: new Date(Date.parse("2026-10-20T11:00:00.000Z") + index).toISOString()
+    }));
+    const input = [...active, ...completed];
+    if (reverse) input.reverse();
+    const retained = [];
+    for (const record of input) executionInternals.retainRecentExecution(retained, record);
+    assert.equal(retained.length, 100);
+    assert.deepEqual(retained.slice(0, 3).map((record) => record.status), ["running", "stopping", "queued"]);
+    assert.ok(active.every((record) => retained.slice(0, 8).includes(record)));
+    assert.equal(retained[3].runId, "terminal-109");
+  }
+});
