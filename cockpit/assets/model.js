@@ -1322,3 +1322,12 @@ export const publicCockpitModel = Object.freeze({
   prompts: Object.freeze([...PROMPTS]),
   choices: Object.freeze([...CHOICES])
 });
+
+
+export function executionMirrorIsFresh(attempt, observedAt, now = Date.now()) {
+  const observed = Date.parse(observedAt);
+  const updated = Date.parse(attempt?.updatedAt);
+  return Number.isFinite(observed) && Number.isFinite(updated)
+    && observed <= now && now - observed <= 30_000
+    && updated <= observed && observed - updated <= 30_000;
+}

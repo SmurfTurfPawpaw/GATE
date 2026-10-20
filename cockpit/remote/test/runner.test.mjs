@@ -1712,3 +1712,19 @@ test("runner CLI lock release never removes a replacement path", (t) => {
   assert.equal(fs.readFileSync(lock, "utf8"), "replacement\n");
   assert.ok(fs.existsSync(displaced));
 });
+
+
+test("mirror pruning preserves a 32-case fleet when not every attempt fits", () => {
+  const source = largeConnectedFleet();
+  source.campaigns = Array.from({ length: 32 }, (_, index) => ({
+    ...structuredClone(source.campaigns[index % 16]),
+    alias: `Campaign ${index + 1}`,
+    mirror: { ...source.campaigns[0].mirror, attempts: [structuredClone(source.campaigns[0].mirror.attempts[0])] }
+  }));
+  source.campaigns[31].mirror.attempts[0].state = "running";
+  const fleet = projectRemoteFleet(source, { sessionRevision: SESSION_REVISION });
+  assert.equal(fleet.campaigns.length, 32);
+  assert.equal(fleet.campaigns[31].mirror.availability, "available");
+  assert.ok(fleet.campaigns.some((campaign) => campaign.mirror.availability === "unavailable"));
+  assert.ok(Buffer.byteLength(JSON.stringify(fleet)) <= MAX_REMOTE_PROJECTION_BYTES);
+});

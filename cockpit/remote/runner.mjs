@@ -581,15 +581,10 @@ function projectionWithMirrorBudget(candidate) {
   const attempts = states.flatMap((state) => state.source.availability === "available"
     ? state.source.attempts.map((attempt) => ({ state, attempt, campaignIndex: state.campaignIndex }))
     : []).sort(attemptPriority);
-  for (const state of states) {
-    if (state.source.availability !== "available") continue;
-    const [first] = state.source.attempts
-      .map((item) => ({ state, attempt: item, campaignIndex: state.campaignIndex }))
-      .sort(attemptPriority);
-    state.selected.add(first.attempt.alias);
-    if (!consider(state, trimmedMirror(state))) {
-      fail("fleet-projection-too-large", "The remote fleet projection is too large.", 413);
-    }
+  for (const { state, attempt } of attempts) {
+    if (state.selected.size > 0) continue;
+    state.selected.add(attempt.alias);
+    if (!consider(state, trimmedMirror(state))) state.selected.delete(attempt.alias);
   }
   for (const { state, attempt } of attempts) {
     if (state.selected.has(attempt.alias)) continue;

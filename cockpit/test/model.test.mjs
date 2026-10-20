@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
+  executionMirrorIsFresh,
   hasAvailableFleetMetric,
   parseRemoteSseFrame,
   parsePublicSnapshot,
@@ -526,4 +527,15 @@ test("remote SSE frames use exact bounded cursor and control contracts", () => {
   assert.equal(parseRemoteSseFrame('id: 01\nevent: activity\ndata: {}'), null);
   assert.equal(parseRemoteSseFrame('id: 1\nevent: activity\ndata: {}\ndata: {}'), null);
   assert.equal(parseRemoteSseFrame(`id: 1\nevent: activity\ndata: {"x":"${"a".repeat(200)}"}`, 64), null);
+});
+
+
+test("mirror freshness follows observations and attempt updates during long runs", () => {
+  const clock = Date.parse("2026-10-20T12:05:00.000Z");
+  const at = new Date(clock).toISOString();
+  assert.equal(executionMirrorIsFresh({ startedAt: "2026-10-20T12:00:00.000Z", updatedAt: at }, at, clock), true);
+  assert.equal(executionMirrorIsFresh({ updatedAt: at }, at, clock + 30_001), false);
+  assert.equal(executionMirrorIsFresh({ updatedAt: new Date(clock - 30_001).toISOString() }, at, clock), false);
+  assert.equal(executionMirrorIsFresh({ updatedAt: new Date(clock + 1).toISOString() }, at, clock), false);
+  assert.equal(executionMirrorIsFresh({ updatedAt: at }, null, clock), false);
 });

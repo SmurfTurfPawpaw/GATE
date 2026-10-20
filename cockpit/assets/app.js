@@ -1,4 +1,5 @@
 import {
+  executionMirrorIsFresh,
   hasAvailableFleetMetric,
   pilotCockpitPresentation,
   readPublicSnapshotResponse,
@@ -112,6 +113,7 @@ let selectedMirrorAttemptAlias = null;
 let mirrorCampaigns = [];
 let mirrorMode = "unavailable";
 let mirrorSourceFreshness = "unavailable";
+let mirrorObservedAt = null;
 let renderedMirrorHistoryKey = null;
 const mirrorHistoryScrollPositions = new Map();
 const remoteCommands = new Map();
@@ -256,11 +258,12 @@ function rememberMirrorScrollPosition() {
   }
 }
 
-function renderOperationalMirror(campaigns, mode, sourceFreshness = "unavailable") {
+function renderOperationalMirror(campaigns, mode, sourceFreshness = "unavailable", observedAt = null) {
   rememberMirrorScrollPosition();
   mirrorCampaigns = Array.isArray(campaigns) ? campaigns : [];
   mirrorMode = mode;
   mirrorSourceFreshness = sourceFreshness;
+  mirrorObservedAt = observedAt;
   const candidates = mirrorCampaigns.filter((campaign) => campaign?.mirror);
   if (!candidates.some((campaign) => campaign.alias === selectedMirrorCampaignAlias)) {
     selectedMirrorCampaignAlias = candidates.some((campaign) => campaign.alias === selectedPilotAlias)
@@ -311,7 +314,7 @@ function renderOperationalMirror(campaigns, mode, sourceFreshness = "unavailable
   }
   const active = new Set(["running", "stopping"]).has(attempt.state);
   const authenticated = new Set(["local", "remote", "remote-conversation-offline"]).has(mode);
-  const current = sourceFreshness === "current" && campaign.freshness === "current";
+  const current = sourceFreshness === "current" && executionMirrorIsFresh(attempt, observedAt);
   const live = authenticated && current && active;
   elements.mirrorLiveState.className = `mirror-live-state ${live ? "running" : "available"}`;
   const terminal = new Set(["succeeded", "failed", "cancelled"]).has(attempt.state);
@@ -1327,7 +1330,7 @@ function renderLiveMode() {
       : remoteConnection?.state === "connecting" ? "remote-connecting" : "remote-offline";
   const fleetConnected = fleet?.connection === "connected";
   renderPilot(fleet);
-  renderOperationalMirror(fleetConnected ? fleet.campaigns : [], mode, fleet?.sourceFreshness);
+  renderOperationalMirror(fleetConnected ? fleet.campaigns : [], mode, fleet?.sourceFreshness, fleet?.observedAt);
   const fleetSummary = fleet?.summary;
   setMode(mode);
   elements.decisionPanel.hidden = false;
@@ -1644,10 +1647,10 @@ elements.pilotCaseSelect.addEventListener("change", () => {
 elements.mirrorCampaignSelect.addEventListener("change", () => {
   selectedMirrorCampaignAlias = elements.mirrorCampaignSelect.value || null;
   selectedMirrorAttemptAlias = null;
-  renderOperationalMirror(mirrorCampaigns, mirrorMode, mirrorSourceFreshness);
+  renderOperationalMirror(mirrorCampaigns, mirrorMode, mirrorSourceFreshness, mirrorObservedAt);
 });
 elements.mirrorAttemptSelect.addEventListener("change", () => {
   selectedMirrorAttemptAlias = elements.mirrorAttemptSelect.value || null;
-  renderOperationalMirror(mirrorCampaigns, mirrorMode, mirrorSourceFreshness);
+  renderOperationalMirror(mirrorCampaigns, mirrorMode, mirrorSourceFreshness, mirrorObservedAt);
 });
 elements.mirrorTerminal.addEventListener("scroll", rememberMirrorScrollPosition);
