@@ -222,6 +222,43 @@ function executionFixture(overrides = {}) {
   };
 }
 
+function executionMirrorFixture(overrides = {}) {
+  return {
+    availability: "available",
+    reason: null,
+    attempts: [{
+      alias: "Attempt 1",
+      kind: "supervised-execution",
+      state: "running",
+      phase: "active-surface-validation",
+      tool: "httpx",
+      action: "observe",
+      startedAt: at,
+      finishedAt: null,
+      updatedAt: at,
+      elapsedMs: 1_000,
+      progress: { availability: "exact", completed: 1, total: 4, percent: 25 },
+      usage: {
+        tokens: { availability: "partial", total: 120 },
+        cost: { availability: "estimated", amountMicros: 2500, unit: "credits" },
+        requests: { availability: "estimated", value: 2 },
+        retries: { availability: "exact", value: 0 },
+        toolRuns: { availability: "exact", value: 1 }
+      },
+      entries: [{
+        sequence: 1,
+        at,
+        channel: "command",
+        state: "running",
+        fidelity: "redacted",
+        truncated: false,
+        text: "httpx -silent [target withheld]"
+      }]
+    }],
+    ...overrides
+  };
+}
+
 function offlineAnalysisFixture(overrides = {}) {
   return {
     capability: {
@@ -655,6 +692,18 @@ function request({ port, method = "GET", pathname = "/", headers = {} }) {
     operation.end();
   });
 }
+
+test("observer explicitly requests the local execution mirror from status", async (t) => {
+  let received = null;
+  const { origin } = await listen(t, (options) => {
+    received = options;
+    return statusFixture();
+  });
+  const response = await fetch(`${origin}/api/status`);
+  assert.equal(response.status, 200);
+  assert.equal(received.includeExecutionMirror, true);
+  assert.equal(received.paths, paths);
+});
 
 test("observer endpoints coalesce status reads and expose metadata-only projections", async (t) => {
   let calls = 0;
@@ -1528,6 +1577,65 @@ test("execution metadata keeps opaque joins while excluding command and evidence
   }
 });
 
+test("observer preserves only a strict frozen execution mirror and fails malformed mirrors closed", () => {
+  const valid = projectSnapshot(statusFixture({
+    execution: executionFixture({ mirror: executionMirrorFixture() })
+  }), paths);
+  assert.deepEqual(valid.status.execution.mirror, executionMirrorFixture());
+  assert.equal(Object.isFrozen(valid.status.execution.mirror), true);
+  assert.equal(Object.isFrozen(valid.status.execution.mirror.attempts[0].entries[0]), true);
+
+  const nonContiguousMirror = executionMirrorFixture();
+  nonContiguousMirror.attempts[0].alias = "Attempt 150";
+  nonContiguousMirror.attempts.push({
+    ...structuredClone(nonContiguousMirror.attempts[0]),
+    alias: "Attempt 148"
+  });
+  const nonContiguous = projectSnapshot(statusFixture({
+    execution: executionFixture({ mirror: nonContiguousMirror })
+  }), paths);
+  assert.deepEqual(nonContiguous.status.execution.mirror.attempts.map((attempt) => attempt.alias),
+    ["Attempt 150", "Attempt 148"]);
+
+  const malformed = executionMirrorFixture();
+  malformed.attempts[0].entries[0].privateValue = "PRIVATE_MIRROR_CANARY";
+  const failedClosed = projectSnapshot(statusFixture({
+    execution: executionFixture({ mirror: malformed })
+  }), paths);
+  assert.deepEqual(failedClosed.status.execution.mirror, {
+    availability: "unavailable",
+    reason: "source-unavailable",
+    attempts: []
+  });
+  assert.equal(JSON.stringify(failedClosed).includes("PRIVATE_MIRROR_CANARY"), false);
+
+  for (const unsafeText of [
+    "/home/operator/GATE_HOME/evidence/output.txt",
+    "C:\\Users\\Operator\\capture.pcap",
+    "\\\\laptop\\Users\\Operator\\capture.pcap",
+    "file:///etc/passwd",
+    "file://localhost/etc/passwd",
+    "//server/share/file",
+    '{"token":"abc123"}',
+    '{"secret":"abc123"}',
+    `xrun_${"a".repeat(32)}`,
+    "Authorization: Bearer abcdefghijklmnopqrstuvwxyz012345"
+  ]) {
+    const unsafe = executionMirrorFixture();
+    unsafe.attempts[0].entries[0].text = unsafeText;
+    const projected = projectSnapshot(statusFixture({ execution: executionFixture({ mirror: unsafe }) }), paths);
+    assert.equal(projected.status.execution.mirror.availability, "unavailable");
+    assert.equal(JSON.stringify(projected).includes(unsafeText), false);
+  }
+  for (const redactedText of ["tool --token=[secret withheld]", '{"token":[secret withheld]}']) {
+    const redacted = executionMirrorFixture();
+    redacted.attempts[0].entries[0].text = redactedText;
+    const projected = projectSnapshot(statusFixture({ execution: executionFixture({ mirror: redacted }) }), paths);
+    assert.equal(projected.status.execution.mirror.availability, "available");
+    assert.equal(projected.status.execution.mirror.attempts[0].entries[0].text, redactedText);
+  }
+});
+
 test("execution availability fails closed on incomplete capabilities and malformed recent records", () => {
   const execution = executionFixture();
   execution.capability.enforced = execution.capability.enforced.filter((value) => value !== "shell-disabled");
@@ -2166,4 +2274,31 @@ test("complete registry coverage cannot make unobserved case activity counts exa
   }), paths).status);
   assert.equal(fleetSummaryPresentation(observed).availability, "exact");
   assert.equal(fleetSummaryPresentation(observed).activeLabel, "1");
+});
+
+
+test("observer mirror text distinguishes public URLs from private filesystem paths", () => {
+  for (const field of ["text", "phase", "tool", "action"]) {
+    for (const text of [
+      "GET https://example.invalid/public/path?q=value",
+      "https://example.invalid/home/status",
+      "https://example.invalid/var/lib/gate/status"
+    ]) {
+      const mirror = executionMirrorFixture();
+      const destination = field === "text" ? mirror.attempts[0].entries[0] : mirror.attempts[0];
+      destination[field] = text;
+      const projected = projectSnapshot(statusFixture({ execution: executionFixture({ mirror }) }), paths);
+      assert.equal(projected.status.execution.mirror.availability, "available");
+      const result = field === "text" ? projected.status.execution.mirror.attempts[0].entries[0]
+        : projected.status.execution.mirror.attempts[0];
+      assert.equal(result[field], text);
+    }
+    for (const text of ["C:\\Users\\operator\\capture.txt", "/home/operator/capture.txt", "/var/lib/gate/state", "open (/opt/service/config)"]) {
+      const mirror = executionMirrorFixture();
+      const destination = field === "text" ? mirror.attempts[0].entries[0] : mirror.attempts[0];
+      destination[field] = text;
+      const projected = projectSnapshot(statusFixture({ execution: executionFixture({ mirror }) }), paths);
+      assert.equal(projected.status.execution.mirror.availability, "unavailable");
+    }
+  }
 });

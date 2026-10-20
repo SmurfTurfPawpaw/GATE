@@ -5,7 +5,7 @@ const SITE_KEYS = ["version"];
 const GATE_KEYS = ["version"];
 const SNAPSHOT_KEYS = ["generatedAt", "validUntil"];
 const AGGREGATE_KEYS = ["overallProgress", "testsPassed", "testsTotal", "tokenStatus", "tokensUsed", "tokenBudget", "learningCount", "blockerCount"];
-const CAMPAIGN_KEYS = ["alias", "stage", "progress", "attention", "freshness", "codex", "currentAction"];
+const CAMPAIGN_KEYS = ["alias", "stage", "progress", "attention", "freshness", "codex", "currentAction", "mirror"];
 const DECISION_KEYS = ["id", "revision", "expiresAt", "state", "campaign", "prompt", "choices", "recommended"];
 const ACTIVITY_KEYS = ["at", "campaign", "category", "completed", "total", "result", "progress"];
 
@@ -20,6 +20,20 @@ const PROMPTS = new Set(["choose-depth", "confirm-priority", "select-next-step"]
 const CHOICES = new Set(["recommended-depth", "balanced-depth", "focused-depth", "continue", "review-first", "pause"]);
 const ACTIVITY_CATEGORIES = new Set(["profile", "map", "test", "validate", "report", "learn"]);
 const ACTIVITY_RESULTS = new Set(["progress", "passed", "attention", "recorded"]);
+const MIRROR_AVAILABILITY = new Set(["available", "unavailable"]);
+const MIRROR_REASONS = new Set(["disabled", "not-applicable", "no-attempts", "source-unavailable"]);
+const MIRROR_ATTEMPT_STATES = new Set(["queued", "running", "stopping", "succeeded", "failed", "cancelled", "blocked", "unknown"]);
+const MIRROR_ENTRY_STATES = new Set(["queued", "running", "waiting", "blocked", "succeeded", "failed", "cancelled", "unknown"]);
+const MIRROR_CHANNELS = new Set(["work-order", "command", "stdout", "stderr", "browser", "tool", "file", "test", "agent", "system", "result"]);
+const MIRROR_FIDELITY = new Set(["exact", "redacted", "summarized", "unavailable"]);
+const MIRROR_TOKEN_AVAILABILITY = new Set(["exact", "estimated", "partial", "unavailable"]);
+const MIRROR_METRIC_AVAILABILITY = new Set(["exact", "estimated", "unavailable"]);
+const MIRROR_POSIX_ABSOLUTE_PATH = /(?:^|[^A-Za-z0-9_./\\-])\/(?!\/)[^\s"'`<>\])},;]*/u;
+const MIRROR_WINDOWS_DRIVE_PATH = /(?:^|[^A-Za-z0-9_./\\-])[A-Za-z]:[\\/][^\s"'`<>\])},;]*/u;
+const MIRROR_WINDOWS_UNC_PATH = /(?:^|[^A-Za-z0-9_./\\-])\\\\[^\s\\"'<>]+\\[^\s"'`<>\])},;]*/u;
+const MIRROR_PROTOCOL_RELATIVE_PATH = /(?:^|[^A-Za-z0-9_+.:/\\-])\/\/[^\s"'`<>\])},;]*/u;
+const MIRROR_FILE_URI_PATH = /\bfile:\/\/[^\s"'`<>\])},;]*/iu;
+const MIRROR_LOW_ENTROPY_CREDENTIAL = /(?:["'](?:api[_-]?key|access[_-]?token|auth(?:entication|orization)?|bearer|client[_-]?secret|credential|key|password|passwd|secret|session[_-]?(?:id|key|token)|token)["']\s*:\s*(?!["']?\[secret withheld\]["']?(?:$|[\s,}\]]))(?:(?:"[^"]*"|'[^']*'|[^,\s}\]]+))|\b(?:auth(?:entication|orization)?|bearer|credential|key|secret|token)\b\s*[:=]\s*(?!["']?\[secret withheld\]["']?(?:$|[\s,}\]]))(?:(?:"[^"]*"|'[^']*'|\S+))|(?:^|\s)--?(?:api[_-]?key|access[_-]?token|auth(?:entication|orization)?|bearer|client[_-]?secret|credential|key|password|passwd|secret|session[_-]?(?:id|key|token)|token)(?:\s+|=)(?!["']?\[secret withheld\]["']?(?:$|[\s,}\]]))(?:(?:"[^"]*"|'[^']*'|\S+))|\bcurl\b[^\n]*?\s(?:-u|--user)(?:\s+|=)(?!["']?\[secret withheld\]["']?(?:$|[\s,}\]]))(?:(?:"[^"]*"|'[^']*'|\S+)))/iu;
 
 const ACTION_LABELS = Object.freeze({
   profiling: "Building the campaign profile",
@@ -107,6 +121,122 @@ function unavailable(reason) {
   return Object.freeze({ kind: "unavailable", reason });
 }
 
+function nullableMirrorText(value, maximum) {
+  return value === null || safeLocalText(value, maximum) && value === value.normalize("NFC").trim()
+    && !containsUnsafeMirrorText(value, false);
+}
+
+function containsUnsafeMirrorText(value, remote) {
+  return MIRROR_POSIX_ABSOLUTE_PATH.test(value) || MIRROR_WINDOWS_DRIVE_PATH.test(value)
+    || MIRROR_WINDOWS_UNC_PATH.test(value) || MIRROR_PROTOCOL_RELATIVE_PATH.test(value)
+    || MIRROR_FILE_URI_PATH.test(value) || MIRROR_LOW_ENTROPY_CREDENTIAL.test(value)
+    || (remote ? containsLikelyRemoteCredential(value) : containsLikelyLocalCredential(value));
+}
+
+function validateMirrorMetric(value) {
+  if (!exactKeys(value, ["availability", "value"]) || !MIRROR_METRIC_AVAILABILITY.has(value.availability)) return null;
+  if (value.availability === "unavailable") return value.value === null ? Object.freeze({ ...value }) : null;
+  return boundedInteger(value.value, 0, Number.MAX_SAFE_INTEGER) ? Object.freeze({ ...value }) : null;
+}
+
+function validateMirrorTokens(value) {
+  if (!exactKeys(value, ["availability", "total"]) || !MIRROR_TOKEN_AVAILABILITY.has(value.availability)) return null;
+  if (value.availability === "unavailable") return value.total === null ? Object.freeze({ ...value }) : null;
+  return boundedInteger(value.total, 0, Number.MAX_SAFE_INTEGER) ? Object.freeze({ ...value }) : null;
+}
+
+function validateMirrorCost(value) {
+  if (!exactKeys(value, ["availability", "amountMicros", "unit"])
+      || !new Set(["estimated", "unavailable"]).has(value.availability)) return null;
+  if (value.availability === "unavailable") {
+    return value.amountMicros === null && value.unit === null ? Object.freeze({ ...value }) : null;
+  }
+  return boundedInteger(value.amountMicros, 0, Number.MAX_SAFE_INTEGER) && new Set(["USD", "credits"]).has(value.unit)
+    ? Object.freeze({ ...value }) : null;
+}
+
+function validMirrorAttemptAlias(value) {
+  const match = typeof value === "string" ? /^Attempt ([1-9][0-9]{0,15})$/u.exec(value) : null;
+  return Boolean(match && Number.isSafeInteger(Number(match[1])));
+}
+
+/** Validate the bounded, operator-visible execution stream shared by preview and live fleet projections. */
+export function validateExecutionMirror(value, options = {}) {
+  if (!exactKeys(value, ["availability", "reason", "attempts"]) || !MIRROR_AVAILABILITY.has(value.availability)
+      || !Array.isArray(value.attempts) || value.attempts.length > 8) return null;
+  if (value.availability === "unavailable") {
+    return MIRROR_REASONS.has(value.reason) && value.attempts.length === 0
+      ? Object.freeze({ availability: "unavailable", reason: value.reason, attempts: Object.freeze([]) }) : null;
+  }
+  if (value.reason !== null || value.attempts.length === 0) return null;
+  const remote = options.remote === true;
+  const upperBound = options.upperBound === undefined ? null : timestamp(options.upperBound);
+  if (options.upperBound !== undefined && upperBound === null) return null;
+  const aliases = new Set();
+  const attempts = [];
+  for (const attempt of value.attempts) {
+    if (!exactKeys(attempt, [
+      "alias", "kind", "state", "phase", "tool", "action", "startedAt", "finishedAt", "updatedAt", "elapsedMs", "progress", "usage", "entries"
+    ]) || !validMirrorAttemptAlias(attempt.alias) || aliases.has(attempt.alias)
+      || attempt.kind !== "supervised-execution" || !MIRROR_ATTEMPT_STATES.has(attempt.state)
+      || !nullableMirrorText(attempt.phase, 80) || !nullableMirrorText(attempt.tool, 64) || !nullableMirrorText(attempt.action, 64)) return null;
+    const startedAt = attempt.startedAt === null ? null : timestamp(attempt.startedAt);
+    const finishedAt = attempt.finishedAt === null ? null : timestamp(attempt.finishedAt);
+    const updatedAt = timestamp(attempt.updatedAt);
+    if (updatedAt === null || upperBound !== null && updatedAt > upperBound
+      || attempt.startedAt !== null && startedAt === null || attempt.finishedAt !== null && finishedAt === null
+      || startedAt !== null && startedAt > updatedAt || finishedAt !== null && (finishedAt > updatedAt || startedAt !== null && finishedAt < startedAt)
+      || !(attempt.elapsedMs === null || boundedInteger(attempt.elapsedMs, 0, Number.MAX_SAFE_INTEGER))) return null;
+    if (!exactKeys(attempt.progress, ["availability", "completed", "total", "percent"])
+        || !new Set(["exact", "unavailable"]).has(attempt.progress.availability)) return null;
+    let progress;
+    if (attempt.progress.availability === "unavailable") {
+      if (attempt.progress.completed !== null || attempt.progress.total !== null || attempt.progress.percent !== null) return null;
+      progress = Object.freeze({ ...attempt.progress });
+    } else {
+      if (!boundedInteger(attempt.progress.completed, 0, Number.MAX_SAFE_INTEGER)
+          || !boundedInteger(attempt.progress.total, 1, Number.MAX_SAFE_INTEGER)
+          || attempt.progress.completed > attempt.progress.total
+          || !boundedInteger(attempt.progress.percent, 0, 100)
+          || attempt.progress.percent !== Math.round(attempt.progress.completed / attempt.progress.total * 100)) return null;
+      progress = Object.freeze({ ...attempt.progress });
+    }
+    if (!exactKeys(attempt.usage, ["tokens", "cost", "requests", "retries", "toolRuns"])) return null;
+    const tokens = validateMirrorTokens(attempt.usage.tokens);
+    const cost = validateMirrorCost(attempt.usage.cost);
+    const requests = validateMirrorMetric(attempt.usage.requests);
+    const retries = validateMirrorMetric(attempt.usage.retries);
+    const toolRuns = validateMirrorMetric(attempt.usage.toolRuns);
+    if (!tokens || !cost || !requests || !retries || !toolRuns
+        || toolRuns.availability !== "exact" || toolRuns.value !== 1
+        || !Array.isArray(attempt.entries) || attempt.entries.length > 8) return null;
+    const entries = [];
+    let priorSequence = 0;
+    let priorAt = Number.NEGATIVE_INFINITY;
+    for (const entry of attempt.entries) {
+      const at = timestamp(entry?.at);
+      if (!exactKeys(entry, ["sequence", "at", "channel", "state", "fidelity", "truncated", "text"])
+          || !boundedInteger(entry.sequence, 1, Number.MAX_SAFE_INTEGER) || entry.sequence <= priorSequence
+          || at === null || at < priorAt || at > updatedAt
+          || !MIRROR_CHANNELS.has(entry.channel) || !MIRROR_ENTRY_STATES.has(entry.state)
+          || !MIRROR_FIDELITY.has(entry.fidelity) || typeof entry.truncated !== "boolean"
+          || !safeLocalText(entry.text, 240) || entry.text !== entry.text.normalize("NFC") || /[\r\n\t]/u.test(entry.text)
+          || containsUnsafeMirrorText(entry.text, remote)) return null;
+      entries.push(Object.freeze({ ...entry }));
+      priorSequence = entry.sequence;
+      priorAt = at;
+    }
+    attempts.push(Object.freeze({
+      ...attempt,
+      progress,
+      usage: Object.freeze({ tokens, cost, requests, retries, toolRuns }),
+      entries: Object.freeze(entries)
+    }));
+    aliases.add(attempt.alias);
+  }
+  return Object.freeze({ availability: "available", reason: null, attempts: Object.freeze(attempts) });
+}
+
 export function parsePublicSnapshot(input, options = {}) {
   const now = options.now instanceof Date ? options.now.getTime() : Date.now();
 
@@ -148,8 +278,10 @@ export function parsePublicSnapshot(input, options = {}) {
     if (!ATTENTION.has(item.attention) || !FRESHNESS.has(item.freshness) || !CODEX_STATES.has(item.codex) || !ACTIONS.has(item.currentAction)) {
       return unavailable("invalid");
     }
+    const mirror = validateExecutionMirror(item.mirror, { upperBound: input.snapshot.generatedAt });
+    if (!mirror) return unavailable("invalid");
     aliases.add(item.alias);
-    campaigns.push(Object.freeze({ ...item }));
+    campaigns.push(Object.freeze({ ...item, mirror }));
   }
 
   if (!exactKeys(input.decision, DECISION_KEYS) || !DECISION_STATES.has(input.decision.state)) return unavailable("invalid");
@@ -235,7 +367,8 @@ export function toDisplayModel(snapshot) {
     freshness: campaign.freshness,
     codex: campaign.codex,
     currentAction: ACTION_LABELS[campaign.currentAction],
-    waiting: campaign.codex === "waiting"
+    waiting: campaign.codex === "waiting",
+    mirror: campaign.mirror
   }));
 
   const activity = snapshot.activity.map((entry) => Object.freeze({
@@ -1063,7 +1196,7 @@ export function pilotCockpitPresentation(fleet, selectedAlias = null) {
 export function validateLocalFleet(value, options = {}) {
   if (!exactKeys(value, [
     "apiVersion", "revision", "selectionEpoch", "observedAt", "receivedAt", "validUntil", "connection", "sourceFreshness", "coverage", "summary", "campaigns"
-  ]) || value.apiVersion !== "gate.local-fleet/v2" || !boundedInteger(value.revision, 1, 2_147_483_647)
+  ]) || value.apiVersion !== "gate.local-fleet/v3" || !boundedInteger(value.revision, 1, 2_147_483_647)
       || typeof value.selectionEpoch !== "string" || !/^[a-f0-9]{32}$/u.test(value.selectionEpoch)
       || !LOCAL_FLEET_CONNECTION.has(value.connection) || !LOCAL_FLEET_SOURCE_FRESHNESS.has(value.sourceFreshness)) return null;
   const receivedAt = timestamp(value.receivedAt);
@@ -1107,7 +1240,7 @@ export function validateLocalFleet(value, options = {}) {
   const aliases = new Set();
   const campaigns = [];
   for (const item of value.campaigns) {
-    const campaignKeys = ["alias", "kind", "stage", "state", "progress", "attention", "freshness", "work", "tokens", "pilot", "latestEvent"];
+    const campaignKeys = ["alias", "kind", "stage", "state", "progress", "attention", "freshness", "work", "tokens", "pilot", "latestEvent", "mirror"];
     if (!(exactKeys(item, campaignKeys) || exactKeys(item, campaignKeys.filter((key) => key !== "pilot")))
         || typeof item.alias !== "string" || !/^Campaign [1-9]\d{0,2}$/u.test(item.alias) || aliases.has(item.alias)
         || !LOCAL_FLEET_KINDS.has(item.kind) || !LOCAL_FLEET_STAGES.has(item.stage) || !LOCAL_FLEET_STATES.has(item.state)
@@ -1133,7 +1266,11 @@ export function validateLocalFleet(value, options = {}) {
     const pilot = item.pilot === undefined
       ? unavailablePilot("missing")
       : validatePilotProjection(item.pilot, { now: new Date(now) });
-    if (!tokens || !pilot || !exactKeys(item.latestEvent, ["availability", "category", "status", "at"])) return null;
+    const mirror = validateExecutionMirror(item.mirror, {
+      remote: options.remote === true,
+      ...(observedAt === null ? {} : { upperBound: value.observedAt })
+    });
+    if (!tokens || !pilot || !mirror || !exactKeys(item.latestEvent, ["availability", "category", "status", "at"])) return null;
     const latestEvent = item.latestEvent.availability === "unavailable"
       && item.latestEvent.category === null && item.latestEvent.status === null && item.latestEvent.at === null
       ? Object.freeze({ ...item.latestEvent })
@@ -1142,7 +1279,7 @@ export function validateLocalFleet(value, options = {}) {
         ? Object.freeze({ ...item.latestEvent }) : null;
     if (!latestEvent || latestEvent.availability === "available" && observedAt !== null
         && timestamp(latestEvent.at) > observedAt) return null;
-    campaigns.push(Object.freeze({ ...item, progress, work: Object.freeze(work), tokens, pilot, latestEvent }));
+    campaigns.push(Object.freeze({ ...item, progress, work: Object.freeze(work), tokens, pilot, latestEvent, mirror }));
   }
   if (value.connection === "connected" && campaigns.some((item) => item.pilot.availability === "available"
       && (timestamp(item.pilot.observedAt) > observedAt || validUntil > timestamp(item.pilot.validUntil)))) return null;
@@ -1157,13 +1294,13 @@ export function validateLocalFleet(value, options = {}) {
 }
 
 export function validateRemoteFleet(value, options = {}) {
-  if (!record(value) || value.apiVersion !== "gate.remote-fleet/v2") return null;
+  if (!record(value) || value.apiVersion !== "gate.remote-fleet/v3") return null;
   if (!exactKeys(value, [
     "apiVersion", "sessionRevision", "revision", "selectionEpoch", "observedAt", "receivedAt", "validUntil", "connection", "sourceFreshness", "coverage", "summary", "campaigns"
   ]) || !boundedInteger(value.sessionRevision, 1, 2_147_483_647)
       || options.sessionRevision !== undefined && value.sessionRevision !== options.sessionRevision) return null;
   const { sessionRevision, ...withoutSession } = value;
-  const local = validateLocalFleet({ ...withoutSession, apiVersion: "gate.local-fleet/v2" }, options);
+  const local = validateLocalFleet({ ...withoutSession, apiVersion: "gate.local-fleet/v3" }, { ...options, remote: true });
   return local && boundedProjection(value) ? Object.freeze({ ...local, apiVersion: value.apiVersion, sessionRevision }) : null;
 }
 
@@ -1185,3 +1322,12 @@ export const publicCockpitModel = Object.freeze({
   prompts: Object.freeze([...PROMPTS]),
   choices: Object.freeze([...CHOICES])
 });
+
+
+export function executionMirrorIsFresh(attempt, observedAt, now = Date.now()) {
+  const observed = Date.parse(observedAt);
+  const updated = Date.parse(attempt?.updatedAt);
+  return Number.isFinite(observed) && Number.isFinite(updated)
+    && observed <= now && now - observed <= 30_000
+    && updated <= observed && observed - updated <= 30_000;
+}

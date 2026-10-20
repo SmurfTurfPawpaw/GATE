@@ -11,6 +11,43 @@ import {
 const NOW = new Date("2026-10-16T14:40:00.000Z");
 const pilotMetric = (value) => ({ availability: "available", value });
 
+function executionMirror(overrides = {}) {
+  return {
+    availability: "available",
+    reason: null,
+    attempts: [{
+      alias: "Attempt 1",
+      kind: "supervised-execution",
+      state: "running",
+      phase: "active-surface-validation",
+      tool: "httpx",
+      action: "metadata-observation",
+      startedAt: "2026-10-16T14:39:50.000Z",
+      finishedAt: null,
+      updatedAt: "2026-10-16T14:39:59.000Z",
+      elapsedMs: 9_000,
+      progress: { availability: "unavailable", completed: null, total: null, percent: null },
+      usage: {
+        tokens: { availability: "unavailable", total: null },
+        cost: { availability: "unavailable", amountMicros: null, unit: null },
+        requests: { availability: "unavailable", value: null },
+        retries: { availability: "unavailable", value: null },
+        toolRuns: { availability: "exact", value: 1 }
+      },
+      entries: [{
+        sequence: 1,
+        at: "2026-10-16T14:39:50.000Z",
+        channel: "command",
+        state: "running",
+        fidelity: "redacted",
+        truncated: false,
+        text: "httpx -u [redacted]"
+      }]
+    }],
+    ...overrides
+  };
+}
+
 function pilotProjection(overrides = {}) {
   return {
     availability: "available",
@@ -70,7 +107,7 @@ function profileScan(overrides = {}) {
 }
 
 function sourceCase(overrides = {}) {
-  return {
+  const value = {
     id: "case_0123456789abcdef",
     displayName: "PRIVATE TARGET CANARY",
     status: "ready",
@@ -81,7 +118,11 @@ function sourceCase(overrides = {}) {
     counts: { privateSummary: "PROMPT_CANARY" },
     telemetry: { freshness: "fresh", lastActivityAt: "2026-10-16T14:39:59.000Z", ageSeconds: 1 },
     usage: { availability: "exact", totalTokens: 1200 },
-    execution: { runningCount: 1, privateCommand: "COMMAND_CANARY" },
+    execution: {
+      runningCount: 1,
+      privateCommand: "COMMAND_CANARY",
+      mirror: { availability: "unavailable", reason: "no-attempts", attempts: [] }
+    },
     workflows: {
       counts: { active: 1 },
       scan: { complete: true, truncated: false },
@@ -94,7 +135,11 @@ function sourceCase(overrides = {}) {
       { summary: "RAW_OUTPUT_CANARY" }
     ],
     learningCount: 99,
-    ...overrides
+  };
+  return {
+    ...value,
+    ...overrides,
+    execution: { ...value.execution, ...(overrides.execution || {}) }
   };
 }
 
@@ -151,7 +196,7 @@ function observer(overrides = {}) {
 
 test("projects exact GATE campaign numbers without private observer prose", () => {
   const fleet = projectGateObserverStatus(observer(), { receivedAt: NOW, revision: 7 });
-  assert.equal(fleet.apiVersion, "gate.local-fleet/v2");
+  assert.equal(fleet.apiVersion, "gate.local-fleet/v3");
   assert.equal(fleet.coverage.state, "exact");
   assert.deepEqual(fleet.summary.campaigns, { value: 2, precision: "exact" });
   assert.deepEqual(fleet.summary.profileAnswers, { answered: 14, total: 70, precision: "exact" });
@@ -178,6 +223,45 @@ test("projects exact GATE campaign numbers without private observer prose", () =
     "AUTH_CANARY", "EVIDENCE_CANARY", "RAW_OUTPUT_CANARY", "HOST_TOKEN_CANARY",
     "OPERATOR_CANARY", "ENGAGEMENT_CANARY", "PROJECT_CANARY", "UPSTREAM_CANARY", "0123456789abcdef", "fedcba9876543210"
   ]) assert.equal(serialized.includes(canary), false, `projection leaked ${canary}`);
+});
+
+test("execution mirror is opt-in, strictly bounded, and suppressed for unavailable runtimes", () => {
+  const source = observer({ cases: [sourceCase({ execution: { mirror: executionMirror() } })] });
+  const disabled = projectGateObserverStatus(source, { receivedAt: NOW, revision: 19 });
+  assert.deepEqual(disabled.campaigns[0].mirror, { availability: "unavailable", reason: "disabled", attempts: [] });
+
+  const enabled = projectGateObserverStatus(source, {
+    receivedAt: NOW,
+    revision: 20,
+    includeExecutionMirror: true
+  });
+  assert.equal(enabled.campaigns[0].mirror.availability, "available");
+  assert.equal(enabled.campaigns[0].mirror.attempts[0].entries[0].text, "httpx -u [redacted]");
+  assert.equal(Object.isFrozen(enabled.campaigns[0].mirror.attempts[0].entries), true);
+  assert.ok(validateLocalFleet(enabled, { now: NOW }));
+
+  const unavailable = projectGateObserverStatus(observer({
+    cases: [sourceCase({
+      status: "invalid",
+      runtimeHealth: { status: "unavailable", reason: "invalid-case" },
+      state: "blocked",
+      usage: { availability: "unavailable", totalTokens: null },
+      execution: { runningCount: null, mirror: executionMirror() },
+      workflows: { counts: { active: null }, scan: { complete: false, truncated: true }, instances: [] },
+      offlineAnalysis: { runningCount: null }
+    })]
+  }), { receivedAt: NOW, revision: 21, includeExecutionMirror: true });
+  assert.deepEqual(unavailable.campaigns[0].mirror, {
+    availability: "unavailable", reason: "source-unavailable", attempts: []
+  });
+
+  const unsafe = sourceCase({ execution: { mirror: executionMirror() } });
+  unsafe.execution.mirror.attempts[0].entries[0].text = `password=${"C".repeat(32)}`;
+  assert.throws(() => projectGateObserverStatus(observer({ cases: [unsafe] }), {
+    receivedAt: NOW,
+    revision: 22,
+    includeExecutionMirror: true
+  }), /invalid GATE observer campaign/u);
 });
 
 test("active cases and blocked cases remain visible when workflow and profile blocker counts are zero", () => {
@@ -566,6 +650,28 @@ test("provider bounds streamed bodies and observer response time", async () => {
   const before = Date.now();
   assert.equal((await timedOut()).connection, "unavailable");
   assert.ok(Date.now() - before < 1_000, "timeout should fail closed promptly");
+});
+
+test("provider includes execution mirrors only when explicitly enabled", async () => {
+  const source = observer({ cases: [sourceCase({ execution: { mirror: executionMirror() } })] });
+  const response = () => new Response(JSON.stringify(source), {
+    status: 200,
+    headers: { "Content-Type": "application/json" }
+  });
+  const disabled = createGateFleetProvider({
+    fetchImpl: async () => response(),
+    cacheMs: 0,
+    now: () => NOW.getTime()
+  });
+  const enabled = createGateFleetProvider({
+    fetchImpl: async () => response(),
+    cacheMs: 0,
+    now: () => NOW.getTime(),
+    includeExecutionMirror: true
+  });
+  assert.equal((await disabled()).campaigns[0].mirror.reason, "disabled");
+  assert.equal((await enabled()).campaigns[0].mirror.availability, "available");
+  assert.throws(() => createGateFleetProvider({ includeExecutionMirror: "yes" }), /option is invalid/u);
 });
 
 test("provider keeps host/session and canonical case token scopes separate", async () => {

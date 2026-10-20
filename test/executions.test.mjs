@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -424,7 +424,7 @@ test("one-shot loopback execution binds exact argv and strips ambient credential
     "const http=require('node:http');",
     "const target=process.argv[1];",
     "http.get(target,(response)=>{response.resume();response.on('end',()=>{",
-    "process.stdout.write(JSON.stringify({target,argv:process.argv.slice(1),env:Object.keys(process.env).sort()}));",
+    "process.stdout.write(JSON.stringify({target,hostname:new URL(target).hostname,argv:process.argv.slice(1),env:Object.keys(process.env).sort()}));",
     "});}).on('error',(error)=>{console.error(error.message);process.exitCode=2;});"
   ].join("");
   const created = createExecutionManifest(
@@ -432,6 +432,11 @@ test("one-shot loopback execution binds exact argv and strips ambient credential
     manifestInput(scope, ["-e", script, "{{GATE_TARGET}}"]),
     { paths, resolveTool: resolver(scope.toolId) }
   );
+  const createdManifest = JSON.parse(fs.readFileSync(
+    path.join(paths.executionManifests, `${created.manifestId}.json`),
+    "utf8"
+  ));
+  assert.equal(createdManifest.metadata.attemptOrdinal, 1);
 
   assert.deepEqual(created.operation.argv.slice(0, 2), ["-e", script]);
   assert.equal(created.operation.argv[2], target);
@@ -460,6 +465,7 @@ test("one-shot loopback execution binds exact argv and strips ambient credential
   assert.equal(result.evidence.resultAvailable, true);
   const captured = JSON.parse(fs.readFileSync(evidenceFile(paths, result.evidence.stdout.ref), "utf8"));
   assert.equal(captured.target, target);
+  assert.equal(captured.hostname, new URL(target).hostname);
   assert.deepEqual(captured.argv, [target]);
   assert.deepEqual(captured.env, ["HOME", "LANG", "LC_ALL", "NO_COLOR", "PATH", "TERM", "TMPDIR"]);
   for (const ref of [result.evidence.stdout.ref, result.evidence.stderr.ref, result.evidence.resultRef]) {
@@ -470,7 +476,81 @@ test("one-shot loopback execution binds exact argv and strips ambient credential
     /already consumed/
   );
   assert.equal(requests, 1);
-  assert.equal(executionStatus({ paths }).counts.succeeded, 1);
+  for (const stream of [result.evidence.stdout.ref, result.evidence.stderr.ref]) {
+    fs.writeFileSync(evidenceFile(paths, stream),
+      `Cookie: pad=${"p".repeat(5000)}; sid=hunter2; padding=${"q".repeat(4000)}\n checking \n`);
+  }
+  const execution = executionStatus({
+    paths,
+    now: new Date("2026-10-20T12:00:00.000Z"),
+    includeExecutionMirror: true
+  });
+  assert.equal(execution.counts.succeeded, 1);
+  assert.equal(execution.mirror.availability, "available");
+  assert.equal(Object.isFrozen(execution.mirror), true);
+  assert.equal(execution.mirror.attempts.length, 1);
+  const mirrored = execution.mirror.attempts[0];
+  assert.equal(mirrored.alias, "Attempt 1");
+  assert.equal(mirrored.kind, "supervised-execution");
+  assert.equal(mirrored.state, "succeeded");
+  assert.equal(mirrored.usage.toolRuns.availability, "exact");
+  assert.equal(mirrored.usage.toolRuns.value, 1);
+  const workOrderEntry = mirrored.entries.find((entry) => entry.channel === "work-order");
+  const commandEntry = mirrored.entries.find((entry) => entry.channel === "command");
+  const resultEntry = mirrored.entries.find((entry) => entry.channel === "result");
+  assert.equal(workOrderEntry.at, execution.recent[0].createdAt);
+  assert.equal(commandEntry.at, execution.recent[0].startedAt);
+  assert.equal(resultEntry.at, execution.recent[0].finishedAt);
+  assert.ok(mirrored.entries.some((entry) => entry.channel === "stdout"));
+  const mirrorJson = JSON.stringify(execution.mirror);
+  for (const privateValue of [target, created.runId, created.manifestId, scope.id, scope.workflowId,
+    scope.phaseAttemptId, created.workflow.reservationId, new URL(target).hostname]) {
+    assert.equal(mirrorJson.includes(privateValue), false);
+  }
+  assert.equal(mirrorJson.includes("private://"), false);
+  assert.equal(mirrorJson.includes("hunter2"), false);
+  for (const channel of ["stdout", "stderr"]) {
+    assert.ok(mirrored.entries.some((entry) => entry.channel === channel && entry.text === " checking " && entry.truncated));
+  }
+  const later = executionStatus({
+    paths,
+    now: new Date("2026-10-20T12:05:00.000Z"),
+    includeExecutionMirror: true
+  });
+  assert.deepEqual(later.mirror, execution.mirror);
+  const nonContiguous = structuredClone(execution.mirror);
+  nonContiguous.attempts[0].alias = "Attempt 150";
+  nonContiguous.attempts.push({ ...structuredClone(mirrored), alias: "Attempt 148" });
+  assert.doesNotThrow(() => executionInternals.validateExecutionMirror(nonContiguous));
+  for (const alias of ["Attempt 0", "Attempt 9007199254740992", "Attempt 1"]) {
+    const invalidAlias = structuredClone(execution.mirror);
+    invalidAlias.attempts.push({ ...structuredClone(mirrored), alias });
+    assert.throws(() => executionInternals.validateExecutionMirror(invalidAlias), /attempt is invalid/u);
+  }
+  for (const unsafeText of [
+    "/home/operator/GATE_HOME/evidence/output.txt",
+    "/srv/unrelated/service/output.txt",
+    "open (/etc/passwd)",
+    "inspect [/opt/application/config.json]",
+    "echo result>/var/output/result.txt",
+    "C:\\Users\\Operator\\capture.pcap",
+    "\\\\laptop\\Users\\Operator\\capture.pcap",
+    "--token abc123",
+    "auth=abc123",
+    "curl -u alice:hunter2 https://example.invalid/path"
+  ]) {
+    const unsafeMirror = structuredClone(execution.mirror);
+    unsafeMirror.attempts[0].entries[1].text = unsafeText;
+    assert.throws(() => executionInternals.validateExecutionMirror(unsafeMirror), /private execution metadata/);
+  }
+  for (const redactedText of [
+    executionInternals.sanitizeMirrorText("tool --token=abc123").text,
+    executionInternals.sanitizeMirrorText('{"token":"abc123"}').text
+  ]) {
+    const redactedMirror = structuredClone(execution.mirror);
+    redactedMirror.attempts[0].entries[1].text = redactedText;
+    assert.doesNotThrow(() => executionInternals.validateExecutionMirror(redactedMirror));
+  }
   const workflow = workflowStatus(scope.workflowId, { paths });
   assert.deepEqual(workflow.executionReservations, []);
   assert.equal(workflow.activePhase.allocation.conservativelyReserved.maxMinutes, 1);
@@ -487,6 +567,250 @@ test("one-shot loopback execution binds exact argv and strips ambient credential
   }, { paths });
   assert.equal(reconciled.status, "succeeded");
   assert.equal(reconciled.workflow.reservationId, created.workflow.reservationId);
+});
+
+test("execution mirror text sanitization masks credentials, private paths, controls, and opaque secrets", () => {
+  const sanitize = executionInternals.sanitizeMirrorText;
+  const privatePaths = ["/srv/operator/gate-state"];
+  for (const credential of [
+    "Authorization: Bearer abcdefghijklmnopqrstuvwxyz012345 trailing",
+    "api_key=github_pat_abcdefghijklmnopqrstuvwxyz012345 useful",
+    "--token abc123 --mode useful",
+    "--auth abc123 --mode useful",
+    "token=abc123 useful",
+    "auth=abc123 useful",
+    '{"token":"abc123","mode":"useful"}',
+    '{"secret":"abc123","mode":"useful"}',
+    "curl -u alice:hunter2 https://example.invalid/path"
+  ]) {
+    const projected = sanitize(credential);
+    assert.equal(projected.fidelity, "redacted");
+    assert.equal(projected.text.includes("abcdefghijklmnopqrstuvwxyz012345"), false);
+  }
+  const projected = sanitize([
+    "/home/giovanni/GATE_HOME/evidence/result.json",
+    "(/etc/passwd)",
+    "[/opt/application/config.json]",
+    "echo result>/var/output/result.txt",
+    "C:\\Users\\Giovanni\\private\\capture.pcap",
+    "\\\\laptop\\Users\\Giovanni\\notes.txt",
+    "/srv/operator/gate-state/runs/output.log",
+    "\u001b[31mcolored\u001b[0m"
+  ].join(" "), { privatePaths });
+  assert.equal(projected.fidelity, "redacted");
+  assert.equal(projected.text.includes("giovanni"), false);
+  assert.equal(projected.text.includes("Giovanni"), false);
+  assert.equal(projected.text.includes("laptop"), false);
+  assert.equal(projected.text.includes("/srv/operator/gate-state"), false);
+  assert.equal(projected.text.includes("/runs/output.log"), false);
+  assert.equal(projected.text.includes("passwd"), false);
+  assert.equal(projected.text.includes("config.json"), false);
+  assert.equal(projected.text.includes("\\u001B"), true);
+  assert.equal(projected.text.includes("[private path withheld"), true);
+
+  const networkPaths = sanitize([
+    "file:///etc/shadow",
+    "file://laptop/private/share.txt",
+    "//laptop/private/share.txt"
+  ].join(" "));
+  assert.equal(networkPaths.fidelity, "redacted");
+  assert.equal(networkPaths.text, [
+    "[private path withheld]",
+    "[private path withheld]",
+    "[private path withheld]"
+  ].join(" "));
+
+  assert.deepEqual(sanitize("tool --token=abc123"), {
+    text: "tool --token=[secret withheld]",
+    fidelity: "redacted",
+    truncated: false
+  });
+
+  const overlappingMarker = sanitize("value", { privateValues: ["value"] });
+  assert.equal(overlappingMarker.text, "[private id withheld]");
+
+  const target = "https://private.example/account/123";
+  const targeted = sanitize(`tool --url ${target} --flag useful`, { targetValues: [target] });
+  assert.equal(targeted.text.includes(target), false);
+  assert.equal(targeted.text.includes("[target withheld]"), true);
+  assert.equal(targeted.text.includes("--flag useful"), true);
+
+  const publicUrl = "https://example.invalid/public/path?q=value";
+  assert.deepEqual(sanitize(publicUrl), { text: publicUrl, fidelity: "exact", truncated: false });
+
+  const opaque = sanitize("mF9/4xJ7Qp2_Za8+Vr6Ls1Nd0Kc5Ty3H");
+  assert.deepEqual(opaque, {
+    text: "[withheld: possible secret]",
+    fidelity: "redacted",
+    truncated: false
+  });
+
+  const unicode = sanitize("😀".repeat(241));
+  assert.equal(unicode.truncated, true);
+  assert.equal([...unicode.text].length, 240);
+  assert.equal([...unicode.text].at(-1), "😀");
+});
+
+test("execution mirror reflects output and elapsed time while the supervised process is still running", async (t) => {
+  requireLane(t);
+  const { root, paths } = fixture(t);
+  const scope = approve(paths, root, { id: "live-mirror", target: "127.0.0.1" });
+  const releaseSecondLine = path.join(root, "release-second-line");
+  const releaseExit = path.join(root, "release-exit");
+  const script = [
+    "const fs=require('node:fs');",
+    "const second=process.argv[1];const finish=process.argv[2];",
+    "process.stdout.write('phase-one\\n');",
+    "let emitted=false;",
+    "const timer=setInterval(()=>{",
+    "if(!emitted&&fs.existsSync(second)){emitted=true;process.stdout.write('phase-two\\n');}",
+    "if(emitted&&fs.existsSync(finish)){clearInterval(timer);process.exit(0);}",
+    "},10);"
+  ].join("");
+  const created = createExecutionManifest(
+    scope.id,
+    manifestInput(scope, ["-e", script, releaseSecondLine, releaseExit, "{{GATE_TARGET}}"]),
+    { paths, resolveTool: resolver(scope.toolId) }
+  );
+  let spawnedResolve;
+  const spawned = new Promise((resolve) => { spawnedResolve = resolve; });
+  const running = executeExecutionManifest(scope.id, {
+    manifestId: created.manifestId,
+    confirm: created.confirmationRequired
+  }, {
+    paths,
+    pollIntervalMs: 20,
+    terminationGraceMs: 50,
+    afterSpawn: () => spawnedResolve()
+  });
+  try {
+    await withTimeout(spawned);
+    const stdoutFile = path.join(paths.evidence, `execution-${created.runId}-stdout.bin`);
+    await waitFor(() => fs.existsSync(stdoutFile) && fs.readFileSync(stdoutFile, "utf8").includes("phase-one"));
+
+    const first = executionStatus({ paths, includeExecutionMirror: true });
+    const firstAttempt = first.mirror.attempts.find((attempt) => attempt.state === "running");
+    assert.ok(firstAttempt, "the active attempt must be visible before the process exits");
+    assert.ok(firstAttempt.entries.some((entry) => entry.channel === "stdout" && entry.text === "phase-one"));
+    assert.equal(firstAttempt.entries.some((entry) => entry.text === "phase-two"), false);
+
+    fs.writeFileSync(releaseSecondLine, "continue\n", { mode: 0o600 });
+    await waitFor(() => fs.readFileSync(stdoutFile, "utf8").includes("phase-two"));
+    const secondObservedAt = new Date(Date.parse(firstAttempt.updatedAt) + 1_000);
+    const second = executionStatus({ paths, includeExecutionMirror: true, now: secondObservedAt });
+    const secondAttempt = second.mirror.attempts.find((attempt) => attempt.alias === firstAttempt.alias);
+    assert.equal(secondAttempt.state, "running");
+    assert.equal(secondAttempt.elapsedMs, firstAttempt.elapsedMs + 1_000);
+    assert.ok(secondAttempt.entries.some((entry) => entry.channel === "stdout" && entry.text === "phase-two"),
+      "a later in-progress snapshot must contain newly written output");
+
+    fs.writeFileSync(releaseExit, "finish\n", { mode: 0o600 });
+    const result = await withTimeout(running);
+    assert.equal(result.status, "succeeded");
+    const finished = executionStatus({ paths, includeExecutionMirror: true });
+    const finishedAttempt = finished.mirror.attempts.find((attempt) => attempt.alias === firstAttempt.alias);
+    assert.equal(finishedAttempt.state, "succeeded");
+    assert.ok(finishedAttempt.entries.some((entry) => entry.channel === "result"));
+  } finally {
+    if (!fs.existsSync(releaseSecondLine)) fs.writeFileSync(releaseSecondLine, "continue\n", { mode: 0o600 });
+    if (!fs.existsSync(releaseExit)) fs.writeFileSync(releaseExit, "finish\n", { mode: 0o600 });
+    await running.catch(() => {});
+  }
+});
+
+test("execution mirror aliases use persisted positive ordinals", () => {
+  const alias = executionInternals.mirrorAttemptAlias;
+  assert.equal(alias(1), "Attempt 1");
+  assert.equal(alias(2), "Attempt 2");
+  assert.equal(alias(150), "Attempt 150");
+  for (const value of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => alias(value), /ordinal is invalid/u);
+  }
+});
+
+test("execution attempt ordinals stay append-only across tied and backdated manifests", (t) => {
+  requireLane(t);
+  const { root, paths } = fixture(t);
+  const scope = approve(paths, root, { id: "attempt-ordinals", target: "ordinal.example.test" });
+  const createdAt = Date.now() - 5_000;
+  const create = (at) => createExecutionManifest(
+    scope.id,
+    manifestInput(scope, ["{{GATE_TARGET}}"]),
+    { paths, now: () => new Date(at), resolveTool: resolver(scope.toolId) }
+  );
+  const readOrdinal = (created) => JSON.parse(fs.readFileSync(
+    path.join(paths.executionManifests, `${created.manifestId}.json`),
+    "utf8"
+  )).metadata.attemptOrdinal;
+  const retireAndReplan = (created) => {
+    cancelWorkflowExecution(scope.workflowId, {
+      reservationId: created.workflow.reservationId,
+      reason: "The ordinal fixture does not launch its reserved execution."
+    }, { paths });
+    finalizeFixtureCycle(scope, paths, { finish: false, disposition: "invalid-test" });
+    planFixtureCycle(scope, paths);
+  };
+
+  const first = create(createdAt);
+  assert.equal(readOrdinal(first), 1);
+  retireAndReplan(first);
+
+  const tied = create(createdAt);
+  assert.equal(readOrdinal(tied), 2);
+  retireAndReplan(tied);
+
+  const backdated = create(createdAt - 1_000);
+  assert.equal(readOrdinal(backdated), 3);
+  retireAndReplan(backdated);
+
+  // Simulate a pre-ordinal manifest and a missing derived sequence. Recovery
+  // reserves every retained historical manifest position without relabeling
+  // the legacy record.
+  const legacyFile = path.join(paths.executionManifests, `${first.manifestId}.json`);
+  const legacy = JSON.parse(fs.readFileSync(legacyFile, "utf8"));
+  delete legacy.metadata.attemptOrdinal;
+  legacy.manifestSha256 = executionInternals.manifestDigest(legacy);
+  fs.writeFileSync(legacyFile, `${JSON.stringify(legacy, null, 2)}\n`, { mode: 0o600 });
+  fs.rmSync(path.join(paths.executions, ".attempt-sequence.json"));
+
+  const afterRecovery = create(createdAt - 2_000);
+  assert.equal(readOrdinal(afterRecovery), 4);
+  assert.equal(fs.statSync(path.join(paths.executions, ".attempt-sequence.json")).mode & 0o777, 0o600);
+});
+
+test("execution attempt ordinal allocation is serialized across processes", async (t) => {
+  requireLane(t);
+  const { paths } = fixture(t);
+  executionStatus({ paths });
+  const script = [
+    "import { executionInternals } from './src/lib/executions.mjs';",
+    "import { runtimePaths } from './src/lib/paths.mjs';",
+    "const paths=runtimePaths({home:process.env.GATE_ORDINAL_HOME,repo:process.cwd()});",
+    "process.stdout.write(String(executionInternals.reserveExecutionAttemptOrdinal(paths)));"
+  ].join("");
+  const allocate = () => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--input-type=module", "-e", script], {
+      cwd: repo,
+      env: {
+        PATH: process.env.PATH || "/usr/bin:/bin",
+        LANG: "C",
+        LC_ALL: "C",
+        GATE_ORDINAL_HOME: paths.home
+      },
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk) => { stdout += chunk; });
+    child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk; });
+    child.once("error", reject);
+    child.once("close", (code) => {
+      if (code === 0) resolve(Number(stdout));
+      else reject(new Error(`ordinal child exited ${code}: ${stderr}`));
+    });
+  });
+  const ordinals = await withTimeout(Promise.all([allocate(), allocate(), allocate(), allocate()]), 10_000);
+  assert.deepEqual(ordinals.toSorted((left, right) => left - right), [1, 2, 3, 4]);
 });
 
 test("fast descriptor execution cannot outrun lifecycle listeners or the one-shot claim", async (t) => {
@@ -1005,4 +1329,26 @@ test("audit effect uses the higher catalog risk and stale supervisors project un
   const status = executionStatus({ paths });
   assert.equal(status.recent[0].status, "unknown");
   assert.equal(status.counts.unknown, 1);
+});
+
+
+test("bounded execution history retains active attempts before newer terminal records", () => {
+  for (const reverse of [false, true]) {
+    const active = ["running", "stopping", "queued"].map((status, index) => ({
+      status, runId: `active-${index}`, manifestId: `manifest-${index}`,
+      createdAt: "2026-10-20T10:00:00.000Z"
+    }));
+    const completed = Array.from({ length: 110 }, (_, index) => ({
+      status: "succeeded", runId: `terminal-${index}`, manifestId: `terminal-manifest-${index}`,
+      createdAt: new Date(Date.parse("2026-10-20T11:00:00.000Z") + index).toISOString()
+    }));
+    const input = [...active, ...completed];
+    if (reverse) input.reverse();
+    const retained = [];
+    for (const record of input) executionInternals.retainRecentExecution(retained, record);
+    assert.equal(retained.length, 100);
+    assert.deepEqual(retained.slice(0, 3).map((record) => record.status), ["running", "stopping", "queued"]);
+    assert.ok(active.every((record) => retained.slice(0, 8).includes(record)));
+    assert.equal(retained[3].runId, "terminal-109");
+  }
 });

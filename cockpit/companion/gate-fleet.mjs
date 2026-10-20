@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
+import { unavailableExecutionMirror, validateExecutionMirror } from "../execution-mirror.mjs";
+import { containsLikelyCredential } from "./contracts.mjs";
 
-const LOCAL_FLEET_VERSION = "gate.local-fleet/v2";
+const LOCAL_FLEET_VERSION = "gate.local-fleet/v3";
 const OBSERVER_VERSION = "gate.observer/v1";
 const DEFAULT_OBSERVER_URL = "http://127.0.0.1:4173/api/status";
 const DEFAULT_TIMEOUT_MS = 3_500;
@@ -384,7 +386,7 @@ function scanPrecision(scan, visible, profile = false) {
     : "lower-bound";
 }
 
-function validateCase(value) {
+function validateCase(value, options = {}) {
   const caseKeysValid = exactKeys(value, CASE_KEYS) || exactKeys(value, CASE_KEYS.filter((key) => key !== "ctfPilot"));
   if (!caseKeysValid || typeof value.id !== "string" || !/^case_[a-f0-9]{16}$/u.test(value.id)
       || !CASE_STATUSES.has(value.status) || !CASE_STATES.has(value.state)) return null;
@@ -403,6 +405,8 @@ function validateCase(value) {
     ? value.usage.totalTokens !== null
     : !(value.usage.totalTokens === null || tokenCount(value.usage.totalTokens) !== null)) return null;
   if (!record(value.execution) || !record(value.offlineAnalysis)) return null;
+  const sourceMirror = validateExecutionMirror(value.execution.mirror, { isUnsafeText: containsLikelyCredential });
+  if (!sourceMirror) return null;
   const executionRunning = value.execution.runningCount === null ? null : count(value.execution.runningCount);
   const analysisRunning = value.offlineAnalysis.runningCount === null ? null : count(value.offlineAnalysis.runningCount);
   const workflowActive = value.workflows?.counts?.active === null ? null : count(value.workflows?.counts?.active);
@@ -441,6 +445,9 @@ function validateCase(value) {
     workflowComplete: value.workflows.scan.complete === true && value.workflows.scan.truncated === false,
     analysisRunning,
     stage: lanes.size === 1 ? [...lanes][0] : lanes.size > 1 ? "multiple" : value.state === "idle" ? "idle" : "unknown",
+    mirror: value.runtimeHealth.status === "unavailable"
+      ? unavailableExecutionMirror("source-unavailable")
+      : options.includeExecutionMirror === true ? sourceMirror : unavailableExecutionMirror("disabled"),
     ctfPilot,
     latestEvent
   });
@@ -514,6 +521,7 @@ function caseCampaign(item, alias, fleetPrecision, receivedTime) {
       setupBlockers: unavailableMetric()
     }),
     tokens: Object.freeze({ availability: item.usage.availability, total: item.usage.total }),
+    mirror: item.mirror,
     pilot,
     latestEvent: item.latestEvent
   });
@@ -536,6 +544,7 @@ function profileCampaign(item, alias, profilePrecision) {
       setupBlockers: metric(item.blockerCount, profilePrecision)
     }),
     tokens: Object.freeze({ availability: "unavailable", total: null }),
+    mirror: unavailableExecutionMirror("not-applicable"),
     pilot: pilotUnavailable("not-case-scoped"),
     latestEvent: Object.freeze({ availability: "unavailable", category: null, status: null, at: null })
   });
@@ -637,6 +646,7 @@ export function projectGateObserverStatus(value, options = {}) {
   const aliases = options.aliases || new Map();
   const selectionEpoch = options.selectionEpoch ?? crypto.randomBytes(16).toString("hex");
   if (!Number.isSafeInteger(revision) || revision < 1 || !(aliases instanceof Map)
+      || !(options.includeExecutionMirror === undefined || typeof options.includeExecutionMirror === "boolean")
       || !SELECTION_EPOCH.test(selectionEpoch)
       || !(exactKeys(value, OBSERVER_ROOT_KEYS) || exactKeys(value, [...OBSERVER_ROOT_KEYS, "ctfPilot"]))
       || value.apiVersion !== OBSERVER_VERSION || !timestamp(value.at) || !CASE_STATES.has(value.state)
@@ -649,7 +659,9 @@ export function projectGateObserverStatus(value, options = {}) {
   const caseScan = validateScan(value.caseScan, false);
   const profileScan = validateScan(value.profileSetupScan, true);
   if (!caseScan || !profileScan) throw new Error("invalid GATE observer coverage");
-  const sourceCases = value.cases.map(validateCase);
+  const sourceCases = value.cases.map((item) => validateCase(item, {
+    includeExecutionMirror: options.includeExecutionMirror === true
+  }));
   const sourceProfiles = value.profileSetups.map(validateProfile);
   if (sourceCases.some((item) => !item) || sourceProfiles.some((item) => !item)) throw new Error("invalid GATE observer campaign");
   if (sourceCases.some((item) => item.ctfPilot.availability === "available"
@@ -781,6 +793,9 @@ export function createGateFleetProvider(options = {}) {
   const observerUrl = normalizeGateObserverUrl(options.observerUrl || DEFAULT_OBSERVER_URL);
   const fetchImpl = options.fetchImpl || globalThis.fetch;
   if (typeof fetchImpl !== "function") throw new Error("GATE observer fetch is unavailable");
+  if (!(options.includeExecutionMirror === undefined || typeof options.includeExecutionMirror === "boolean")) {
+    throw new Error("GATE execution mirror option is invalid");
+  }
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const cacheMs = options.cacheMs ?? DEFAULT_CACHE_MS;
   const maximumBytes = options.maximumBytes ?? MAX_OBSERVER_BYTES;
@@ -814,11 +829,23 @@ export function createGateFleetProvider(options = {}) {
         });
         const source = await boundedJson(response, maximumBytes);
         const receivedAt = new Date(typeof options.now === "function" ? options.now() : Date.now());
-        let projection = projectGateObserverStatus(source, { aliases, revision, receivedAt, selectionEpoch });
+        let projection = projectGateObserverStatus(source, {
+          aliases,
+          revision,
+          receivedAt,
+          selectionEpoch,
+          includeExecutionMirror: options.includeExecutionMirror === true
+        });
         const aliasSignature = aliasBindingSignature(aliases);
         if (aliasSignature !== publishedAliasSignature) {
           selectionEpoch = crypto.randomBytes(16).toString("hex");
-          projection = projectGateObserverStatus(source, { aliases, revision, receivedAt, selectionEpoch });
+          projection = projectGateObserverStatus(source, {
+            aliases,
+            revision,
+            receivedAt,
+            selectionEpoch,
+            includeExecutionMirror: options.includeExecutionMirror === true
+          });
           publishedAliasSignature = aliasSignature;
         }
         return projection;

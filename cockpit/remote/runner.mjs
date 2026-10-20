@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { unavailableExecutionMirror, validateExecutionMirror } from "../execution-mirror.mjs";
 
 import {
   REMOTE_COMMAND_VERSION,
@@ -27,6 +28,7 @@ const LEASE_RESPONSE_VERSION = "gate.remote-runner-lease/v1";
 const TRANSITION_VERSION = "gate.remote-runner-transition/v1";
 const ACTIVITY_UPLOAD_VERSION = "gate.remote-runner-activity/v1";
 const ACK_VERSION = "gate.remote-runner-ack/v1";
+const LOCAL_FLEET_VERSION = "gate.local-fleet/v3";
 
 const RUNNER_API_PREFIX = "/api/runner/v1";
 const JSON_CONTENT_TYPE = "application/json";
@@ -34,6 +36,8 @@ const JSON_RESPONSE_CONTENT_TYPE = "application/json; charset=utf-8";
 const MAX_RESPONSE_BYTES = 128 * 1024;
 const MAX_JOURNAL_BYTES = 2 * 1024 * 1024;
 const MAX_JOURNAL_ENTRIES = 2_048;
+const MAX_PROJECTION_NODES = 5_000;
+const MAX_FOOTPRINT_NODES = 100_000;
 const PROJECTION_REVISION_RESERVATION = 64;
 const MAX_ACTIVITY_PER_CYCLE = 16;
 const TERMINAL_STATES = new Set(["completed", "failed"]);
@@ -460,9 +464,159 @@ export function projectRemoteState(privateState, {
   });
 }
 
+function projectionFootprint(value) {
+  let nodes = 0;
+  const seen = new WeakSet();
+  const visit = (item, depth) => {
+    nodes += 1;
+    if (nodes > MAX_FOOTPRINT_NODES || depth > 12) {
+      fail("fleet-projection-invalid", "The local fleet projection is invalid.");
+    }
+    if (item === null || typeof item !== "object") return;
+    if (seen.has(item)) fail("fleet-projection-invalid", "The local fleet projection is invalid.");
+    seen.add(item);
+    for (const nested of Array.isArray(item) ? item : Object.values(item)) visit(nested, depth + 1);
+  };
+  visit(value, 0);
+  return Object.freeze({ bytes: Buffer.byteLength(JSON.stringify(value), "utf8"), nodes });
+}
+
+function attemptPriority(left, right) {
+  const active = (attempt) => new Set(["running", "stopping"]).has(attempt.state) ? 0 : 1;
+  return active(left.attempt) - active(right.attempt)
+    || Date.parse(right.attempt.updatedAt) - Date.parse(left.attempt.updatedAt)
+    || left.attempt.alias.localeCompare(right.attempt.alias)
+    || left.campaignIndex - right.campaignIndex;
+}
+
+function projectedAttemptState(value) {
+  return value === "stopping" ? "running" : value;
+}
+
+function trimmedMirror(state) {
+  if (state.source.availability === "unavailable") return state.source;
+  const selected = state.source.attempts
+    .filter((attempt) => state.selected.has(attempt.alias))
+    .map((attempt) => ({ attempt, campaignIndex: state.campaignIndex }))
+    .sort(attemptPriority)
+    .map(({ attempt }) => attempt);
+  if (selected.length === 0) return unavailableExecutionMirror("source-unavailable");
+  const allAttemptsSelected = selected.length === state.source.attempts.length;
+  const allEntriesSelected = selected.every((attempt) => (state.entryCounts.get(attempt.alias) || 0) >= attempt.entries.length);
+  if (allAttemptsSelected && allEntriesSelected) return state.source;
+
+  const markerHolder = selected[0];
+  const attempts = selected.map((attempt) => {
+    const requested = Math.min(state.entryCounts.get(attempt.alias) || 0, attempt.entries.length);
+    const keep = attempt === markerHolder ? Math.min(requested, 7) : requested;
+    const entries = keep === 0 ? [] : attempt.entries.slice(-keep);
+    return { ...attempt, entries };
+  });
+  const omittedAttempts = state.source.attempts.length - attempts.length;
+  const retainedEntries = attempts.reduce((total, attempt) => total + attempt.entries.length, 0);
+  const sourceEntries = state.source.attempts.reduce((total, attempt) => total + attempt.entries.length, 0);
+  const omittedEntries = sourceEntries - retainedEntries;
+  const holder = attempts[0];
+  const retained = holder.entries.map((entry, index) => ({ ...entry, sequence: index + 1 }));
+  retained.push({
+    sequence: retained.length + 1,
+    at: holder.updatedAt,
+    channel: "system",
+    state: projectedAttemptState(holder.state),
+    fidelity: "summarized",
+    truncated: true,
+    text: `Remote mirror omitted ${omittedAttempts} attempt${omittedAttempts === 1 ? "" : "s"} and ${omittedEntries} entr${omittedEntries === 1 ? "y" : "ies"} to stay within 128 KiB.`
+  });
+  attempts[0] = { ...holder, entries: retained };
+  return { availability: "available", reason: null, attempts };
+}
+
+function projectionWithMirrorBudget(candidate) {
+  if (!Array.isArray(candidate.campaigns)) return normalizeRemoteFleetProjection(candidate);
+  const observedMs = candidate.observedAt === null ? null : Date.parse(candidate.observedAt);
+  const states = candidate.campaigns.map((campaign, campaignIndex) => {
+    const source = validateExecutionMirror(campaign?.mirror, { isUnsafeText: containsLikelyRemoteCredential });
+    if (!source || observedMs !== null && source.attempts.some((attempt) => Date.parse(attempt.updatedAt) > observedMs)) {
+      fail("fleet-invalid", "The local fleet projection is unavailable.");
+    }
+    return { campaignIndex, source, selected: new Set(), entryCounts: new Map() };
+  });
+  const base = {
+    ...candidate,
+    campaigns: candidate.campaigns.map((campaign, index) => ({
+      ...campaign,
+      mirror: states[index].source.availability === "available"
+        ? unavailableExecutionMirror("source-unavailable")
+        : states[index].source
+    }))
+  };
+  const normalizedBase = normalizeRemoteFleetProjection(base);
+  const validatedCandidate = {
+    ...normalizedBase,
+    campaigns: normalizedBase.campaigns.map((campaign, index) => ({
+      ...campaign,
+      mirror: states[index].source
+    }))
+  };
+  const fullFootprint = projectionFootprint(validatedCandidate);
+  if (fullFootprint.bytes <= MAX_REMOTE_PROJECTION_BYTES && fullFootprint.nodes <= MAX_PROJECTION_NODES) {
+    return normalizeRemoteFleetProjection(validatedCandidate);
+  }
+  const baseFootprint = projectionFootprint(normalizedBase);
+  const mirrorFootprints = normalizedBase.campaigns.map((campaign) => projectionFootprint(campaign.mirror));
+  let totalBytes = baseFootprint.bytes;
+  let totalNodes = baseFootprint.nodes;
+  const consider = (state, nextMirror) => {
+    const next = projectionFootprint(nextMirror);
+    const previous = mirrorFootprints[state.campaignIndex];
+    const nextBytes = totalBytes - previous.bytes + next.bytes;
+    const nextNodes = totalNodes - previous.nodes + next.nodes;
+    if (nextBytes > MAX_REMOTE_PROJECTION_BYTES || nextNodes > MAX_PROJECTION_NODES) return false;
+    totalBytes = nextBytes;
+    totalNodes = nextNodes;
+    mirrorFootprints[state.campaignIndex] = next;
+    return true;
+  };
+
+  const attempts = states.flatMap((state) => state.source.availability === "available"
+    ? state.source.attempts.map((attempt) => ({ state, attempt, campaignIndex: state.campaignIndex }))
+    : []).sort(attemptPriority);
+  for (const { state, attempt } of attempts) {
+    if (state.selected.size > 0) continue;
+    state.selected.add(attempt.alias);
+    if (!consider(state, trimmedMirror(state))) state.selected.delete(attempt.alias);
+  }
+  for (const { state, attempt } of attempts) {
+    if (state.selected.has(attempt.alias)) continue;
+    state.selected.add(attempt.alias);
+    if (!consider(state, trimmedMirror(state))) state.selected.delete(attempt.alias);
+  }
+  for (const { state, attempt } of attempts) {
+    if (!state.selected.has(attempt.alias)) continue;
+    for (let retained = 1; retained <= attempt.entries.length; retained += 1) {
+      state.entryCounts.set(attempt.alias, retained);
+      if (!consider(state, trimmedMirror(state))) {
+        state.entryCounts.set(attempt.alias, retained - 1);
+        break;
+      }
+    }
+  }
+  const projected = {
+    ...normalizedBase,
+    campaigns: normalizedBase.campaigns.map((campaign, index) => ({ ...campaign, mirror: trimmedMirror(states[index]) }))
+  };
+  const footprint = projectionFootprint(projected);
+  if (footprint.bytes > MAX_REMOTE_PROJECTION_BYTES || footprint.nodes > MAX_PROJECTION_NODES) {
+    fail("fleet-projection-too-large", "The remote fleet projection is too large.", 413);
+  }
+  return normalizeRemoteFleetProjection(projected);
+}
+
 export function projectRemoteFleet(localFleet, { sessionRevision, revision = localFleet?.revision } = {}) {
-  if (!record(localFleet)) fail("fleet-invalid", "The local fleet projection is unavailable.");
-  return normalizeRemoteFleetProjection({
+  if (!record(localFleet) || localFleet.apiVersion !== LOCAL_FLEET_VERSION) {
+    fail("fleet-invalid", "The local fleet projection is unavailable.");
+  }
+  const candidate = {
     apiVersion: REMOTE_FLEET_VERSION,
     sessionRevision,
     revision,
@@ -475,7 +629,8 @@ export function projectRemoteFleet(localFleet, { sessionRevision, revision = loc
     coverage: localFleet.coverage,
     summary: localFleet.summary,
     campaigns: localFleet.campaigns
-  });
+  };
+  return projectionWithMirrorBudget(candidate);
 }
 
 function normalizeLeaseResponse(value, configuration) {

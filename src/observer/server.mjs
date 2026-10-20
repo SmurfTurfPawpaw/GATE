@@ -9,7 +9,7 @@ import { programProfileSetupFleetStatus } from "../lib/bounty-profiles.mjs";
 import { buildStatus } from "../lib/status.mjs";
 import { ctfPilotInternals } from "../lib/ctf-pilot.mjs";
 import { sanitizeOperatorDisplayName, terminalWelcomeBanner } from "../lib/terminal-ui.mjs";
-import { assertNoLikelySecret, redactSensitiveHeaders } from "../lib/text.mjs";
+import { assertNoLikelySecret, escapeUnsafeText, redactSensitiveHeaders } from "../lib/text.mjs";
 
 const EVENT_STATUSES = new Set([
   "queued",
@@ -142,6 +142,22 @@ const EXECUTION_UNAVAILABLE = new Set([
   "supervisor-crash-containment",
   "immutable-executable-snapshot"
 ]);
+const EXECUTION_MIRROR_AVAILABILITY = new Set(["available", "unavailable"]);
+const EXECUTION_MIRROR_REASONS = new Set(["disabled", "not-applicable", "no-attempts", "source-unavailable"]);
+const EXECUTION_MIRROR_STATES = new Set([
+  "queued", "running", "stopping", "succeeded", "failed", "cancelled", "blocked", "unknown"
+]);
+const EXECUTION_MIRROR_ENTRY_STATES = new Set([
+  "queued", "running", "waiting", "blocked", "succeeded", "failed", "cancelled", "unknown"
+]);
+const EXECUTION_MIRROR_CHANNELS = new Set([
+  "work-order", "command", "stdout", "stderr", "browser", "tool", "file", "test", "agent", "system", "result"
+]);
+const EXECUTION_MIRROR_FIDELITIES = new Set(["exact", "redacted", "summarized", "unavailable"]);
+const EXECUTION_MIRROR_TOKEN_AVAILABILITY = new Set(["exact", "estimated", "partial", "unavailable"]);
+const EXECUTION_MIRROR_METRIC_AVAILABILITY = new Set(["exact", "estimated", "unavailable"]);
+const EXECUTION_MIRROR_PROTOCOL_RELATIVE_PATH = /(?:^|[^A-Za-z0-9_+.:/\\-])\/\/[^\s"'`<>\])},;]*/u;
+const EXECUTION_MIRROR_LOW_ENTROPY_CREDENTIAL = /(?:["'](?:api[_-]?key|access[_-]?token|auth(?:entication|orization)?|bearer|client[_-]?secret|credential|key|password|passwd|secret|session[_-]?(?:id|key|token)|token)["']\s*:\s*(?!["']?\[secret withheld\]["']?(?:$|[\s,}\]]))(?:(?:"[^"]*"|'[^']*'|[^,\s}\]]+))|\b(?:auth(?:entication|orization)?|bearer|credential|key|secret|token)\b\s*[:=]\s*(?!["']?\[secret withheld\]["']?(?:$|[\s,}\]]))(?:(?:"[^"]*"|'[^']*'|\S+))|(?:^|\s)--?(?:api[_-]?key|access[_-]?token|auth(?:entication|orization)?|bearer|client[_-]?secret|credential|key|password|passwd|secret|session[_-]?(?:id|key|token)|token)(?:\s+|=)(?!["']?\[secret withheld\]["']?(?:$|[\s,}\]]))(?:(?:"[^"]*"|'[^']*'|\S+))|\bcurl\b[^\n]*?\s(?:-u|--user)(?:\s+|=)(?!["']?\[secret withheld\]["']?(?:$|[\s,}\]]))(?:(?:"[^"]*"|'[^']*'|\S+)))/iu;
 const OFFLINE_ANALYSIS_MODES = new Set(["bubblewrap-offline"]);
 const OFFLINE_ANALYSIS_STATUSES = new Set([
   "queued",
@@ -280,6 +296,12 @@ function exactObjectKeys(value, keys) {
   const actual = Object.keys(candidate).sort();
   const expected = [...keys].sort();
   return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+function deepFreeze(value) {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  for (const child of Object.values(value)) deepFreeze(child);
+  return Object.freeze(value);
 }
 
 function unavailablePilot(reason = "invalid") {
@@ -1052,6 +1074,165 @@ function summarizeExecutionRun(value) {
   };
 }
 
+function unavailableExecutionMirror(reason = "source-unavailable") {
+  const normalizedReason = EXECUTION_MIRROR_REASONS.has(reason) ? reason : "source-unavailable";
+  return deepFreeze({ availability: "unavailable", reason: normalizedReason, attempts: [] });
+}
+
+function safeExecutionMirrorText(value, maximum) {
+  const text = typeof value === "string" && value && !/[\r\n]/u.test(value) ? value : null;
+  if (!text || text !== text.normalize("NFC") || [...text].length > maximum ||
+      Buffer.byteLength(text, "utf8") > maximum * 4 || /[\t]/u.test(text) || escapeUnsafeText(text) !== text ||
+      /(?:private|file):\/\//iu.test(text) || EXECUTION_MIRROR_PROTOCOL_RELATIVE_PATH.test(text) ||
+      EXECUTION_MIRROR_LOW_ENTROPY_CREDENTIAL.test(text) ||
+      /\b(?:xrun|xmf|wpa|wxr)_[a-f0-9]{32}\b/iu.test(text) ||
+      /(?:^|[^A-Za-z0-9_./\\-])(?:[A-Za-z]:[\\/]|\\\\[^\s\\/]+[\\/])[^\s"'`<>\])},;]*/u.test(text) ||
+      /(?:^|[^A-Za-z0-9_./\\-])\/(?!\/)[^\s"'`<>\])},;]*/u.test(text)) return null;
+  try {
+    assertNoLikelySecret(text, "observer execution mirror text");
+  } catch {
+    return null;
+  }
+  return text;
+}
+
+function projectExecutionMirrorProgress(value) {
+  if (!exactObjectKeys(value, ["availability", "completed", "total", "percent"])) return null;
+  if (value.availability === "unavailable") {
+    return value.completed === null && value.total === null && value.percent === null
+      ? { availability: "unavailable", completed: null, total: null, percent: null }
+      : null;
+  }
+  const completed = nonNegativeInteger(value.completed);
+  const total = nonNegativeInteger(value.total);
+  const percent = nonNegativeInteger(value.percent);
+  return value.availability === "exact" && completed !== null && total !== null && total > 0 &&
+    completed <= total && percent !== null && percent <= 100 &&
+    percent === Math.round(completed / total * 100)
+    ? { availability: "exact", completed, total, percent }
+    : null;
+}
+
+function projectExecutionMirrorCountMetric(value) {
+  if (!exactObjectKeys(value, ["availability", "value"]) ||
+      !EXECUTION_MIRROR_METRIC_AVAILABILITY.has(value.availability)) return null;
+  if (value.availability === "unavailable") {
+    return value.value === null ? { availability: "unavailable", value: null } : null;
+  }
+  const count = nonNegativeInteger(value.value);
+  return count === null ? null : { availability: value.availability, value: count };
+}
+
+function projectExecutionMirrorUsage(value) {
+  if (!exactObjectKeys(value, ["tokens", "cost", "requests", "retries", "toolRuns"])) return null;
+  if (!exactObjectKeys(value.tokens, ["availability", "total"]) ||
+      !EXECUTION_MIRROR_TOKEN_AVAILABILITY.has(value.tokens.availability)) return null;
+  const tokens = value.tokens.availability === "unavailable"
+    ? value.tokens.total === null ? { availability: "unavailable", total: null } : null
+    : nonNegativeInteger(value.tokens.total) === null
+      ? null
+      : { availability: value.tokens.availability, total: value.tokens.total };
+  if (!exactObjectKeys(value.cost, ["availability", "amountMicros", "unit"])) return null;
+  let cost = null;
+  if (value.cost.availability === "unavailable" && value.cost.amountMicros === null && value.cost.unit === null) {
+    cost = { availability: "unavailable", amountMicros: null, unit: null };
+  } else if (value.cost.availability === "estimated" && nonNegativeInteger(value.cost.amountMicros) !== null &&
+      new Set(["USD", "credits"]).has(value.cost.unit)) {
+    cost = { availability: "estimated", amountMicros: value.cost.amountMicros, unit: value.cost.unit };
+  }
+  const requests = projectExecutionMirrorCountMetric(value.requests);
+  const retries = projectExecutionMirrorCountMetric(value.retries);
+  const toolRuns = projectExecutionMirrorCountMetric(value.toolRuns);
+  return tokens && cost && requests && retries && toolRuns && toolRuns.availability === "exact" && toolRuns.value === 1
+    ? { tokens, cost, requests, retries, toolRuns }
+    : null;
+}
+
+function projectExecutionMirrorEntry(value) {
+  if (!exactObjectKeys(value, ["sequence", "at", "channel", "state", "fidelity", "truncated", "text"])) return null;
+  const sequence = nonNegativeInteger(value.sequence);
+  const at = timestamp(value.at);
+  const text = safeExecutionMirrorText(value.text, 240);
+  if (sequence === null || sequence < 1 || !at || at !== value.at || !EXECUTION_MIRROR_CHANNELS.has(value.channel) ||
+      !EXECUTION_MIRROR_ENTRY_STATES.has(value.state) || !EXECUTION_MIRROR_FIDELITIES.has(value.fidelity) ||
+      typeof value.truncated !== "boolean" || !text) return null;
+  return {
+    sequence,
+    at,
+    channel: value.channel,
+    state: value.state,
+    fidelity: value.fidelity,
+    truncated: value.truncated,
+    text
+  };
+}
+
+function projectExecutionMirrorAttempt(value) {
+  if (!exactObjectKeys(value, [
+    "alias", "kind", "state", "phase", "tool", "action", "startedAt", "finishedAt", "updatedAt",
+    "elapsedMs", "progress", "usage", "entries"
+  ]) || typeof value.alias !== "string" || !/^Attempt ([1-9][0-9]{0,15})$/u.test(value.alias) ||
+      !Number.isSafeInteger(Number(value.alias.slice("Attempt ".length))) ||
+      value.kind !== "supervised-execution" || !EXECUTION_MIRROR_STATES.has(value.state)) return null;
+  const phase = value.phase === null ? null : safeExecutionMirrorText(value.phase, 80);
+  const tool = value.tool === null ? null : safeExecutionMirrorText(value.tool, 64);
+  const action = value.action === null ? null : safeExecutionMirrorText(value.action, 64);
+  const startedAt = value.startedAt === null ? null : timestamp(value.startedAt);
+  const finishedAt = value.finishedAt === null ? null : timestamp(value.finishedAt);
+  const updatedAt = timestamp(value.updatedAt);
+  const elapsedMs = value.elapsedMs === null ? null : nonNegativeInteger(value.elapsedMs);
+  const progress = projectExecutionMirrorProgress(value.progress);
+  const usage = projectExecutionMirrorUsage(value.usage);
+  if ((value.phase !== null && !phase) || (value.tool !== null && !tool) || (value.action !== null && !action) ||
+      (value.startedAt !== null && (!startedAt || startedAt !== value.startedAt)) ||
+      (value.finishedAt !== null && (!finishedAt || finishedAt !== value.finishedAt)) ||
+      !updatedAt || updatedAt !== value.updatedAt ||
+      (value.elapsedMs !== null && elapsedMs === null) || !progress || !usage || !Array.isArray(value.entries) ||
+      value.entries.length > 8) return null;
+  const entries = value.entries.map(projectExecutionMirrorEntry);
+  if (entries.some((entry) => !entry) || entries.some((entry, index) => entry.sequence !== index + 1)) return null;
+  if (startedAt && Date.parse(startedAt) > Date.parse(updatedAt) ||
+      finishedAt && (Date.parse(finishedAt) > Date.parse(updatedAt) ||
+        startedAt && Date.parse(finishedAt) < Date.parse(startedAt))) return null;
+  if (entries.some((entry) => Date.parse(entry.at) > Date.parse(updatedAt))) return null;
+  return {
+    alias: value.alias,
+    kind: "supervised-execution",
+    state: value.state,
+    phase,
+    tool,
+    action,
+    startedAt,
+    finishedAt,
+    updatedAt,
+    elapsedMs,
+    progress,
+    usage,
+    entries
+  };
+}
+
+function projectExecutionMirror(value) {
+  if (!exactObjectKeys(value, ["availability", "reason", "attempts"]) ||
+      !EXECUTION_MIRROR_AVAILABILITY.has(value.availability) || !Array.isArray(value.attempts)) {
+    return unavailableExecutionMirror();
+  }
+  if (value.availability === "unavailable") {
+    return EXECUTION_MIRROR_REASONS.has(value.reason) && value.attempts.length === 0
+      ? unavailableExecutionMirror(value.reason)
+      : unavailableExecutionMirror();
+  }
+  if (value.reason !== null || value.attempts.length < 1 || value.attempts.length > 8) {
+    return unavailableExecutionMirror();
+  }
+  const attempts = value.attempts.map(projectExecutionMirrorAttempt);
+  if (attempts.some((attempt) => !attempt) ||
+      new Set(attempts.map((attempt) => attempt.alias)).size !== attempts.length) {
+    return unavailableExecutionMirror();
+  }
+  return deepFreeze({ availability: "available", reason: null, attempts });
+}
+
 function summarizeExecution(value) {
   const execution = object(value) || {};
   const capability = object(execution.capability) || {};
@@ -1080,6 +1261,7 @@ function summarizeExecution(value) {
     enforced,
     bestEffort,
     unavailable,
+    mirror: projectExecutionMirror(execution.mirror),
     recent: Array.isArray(execution.recent)
       ? execution.recent
         .slice(0, 100)
@@ -2150,8 +2332,8 @@ export function createObserver(options = {}) {
   const profileSetupBuilder = options.profileSetupBuilder === null
     ? null
     : options.profileSetupBuilder || (paths.home ? programProfileSetupFleetStatus : null);
-  const requestedRefreshMs = Number(options.refreshMs ?? 2_000);
-  const refreshMs = Number.isFinite(requestedRefreshMs) ? Math.max(250, requestedRefreshMs) : 2_000;
+  const requestedRefreshMs = Number(options.refreshMs ?? 1_000);
+  const refreshMs = Number.isFinite(requestedRefreshMs) ? Math.max(250, requestedRefreshMs) : 1_000;
   let cached = null;
   let cachedAt = 0;
   let inFlight = null;
@@ -2160,7 +2342,7 @@ export function createObserver(options = {}) {
     const now = Date.now();
     if (cached && now - cachedAt < refreshMs) return cached;
     if (inFlight) return inFlight;
-    const statusPromise = Promise.resolve().then(() => statusBuilder({ paths }));
+    const statusPromise = Promise.resolve().then(() => statusBuilder({ paths, includeExecutionMirror: true }));
     const profileSetupPromise = profileSetupBuilder
       ? Promise.resolve().then(() => profileSetupBuilder({ paths }))
       : Promise.resolve(null);

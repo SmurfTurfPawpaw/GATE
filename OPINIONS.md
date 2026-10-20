@@ -1,6 +1,6 @@
 # Operator opinions for GATE
 
-Last reviewed: 19 October 2026 (Europe/Brussels)
+Last reviewed: 20 October 2026 (Europe/Brussels)
 
 This document records the operator's durable operating preferences for GATE. It explains how to choose between reasonable options when a task, policy, or implementation leaves room for judgment.
 
@@ -190,7 +190,7 @@ Order work by value, urgency, dependency, risk, effort, and current evidence. Re
 
 **Sources:** `SRC-GATE`
 
-For work performed on the operator's machine, make the exact command or planned action, live output or current phase, resulting effect, and token use visible through the terminal or control surface. Chat updates may summarize the work, but should not hide what is being run.
+For each project, job, and attempt on the operator's machine, provide a retained operational mirror: the operator-visible work order, exact command after deterministic secret masking, bounded output, tool/browser/file/test/agent actions when observable, real progress, timestamps, elapsed time, state, token and cost provenance, and result. During an active run, update that mirror concurrently so the operator can follow the work rather than receiving only sequential checkpoints afterward. Retained entries are history. Make fidelity, truncation, freshness, connection state, and unavailable fields explicit, and use `Live` only for a current connected source. Chat updates may summarize the work, but should not hide what is being run. Never present hidden chain-of-thought as part of the mirror.
 
 ### OP-WRK-010 — Make operator interviews choice-first
 
@@ -209,6 +209,14 @@ The operator should be able to accept a reviewed recommendation question by ques
 **Sources:** `SRC-GATE`
 
 Use the smallest model, agent, tool, and test effort that produces sufficient evidence for the current decision. Prefer focused regressions during implementation, one final release gate, and reused evidence that is still bound to unchanged inputs. Avoid overlapping agents, repeated full suites, duplicate research, and open-ended perfection work. Broaden validation when the change is cross-cutting, security- or recovery-sensitive, required by the release contract, or explicitly requested by the operator. Missing evidence must remain visible rather than being relabeled as a credit-saving success.
+
+### OP-WRK-012 — Publish one cockpit in two trust modes
+
+**Labels:** explicit · high confidence · partial
+
+**Sources:** `SRC-GATE`
+
+Keep the current cockpit interface available on both the operator's personal domain and GitHub Pages. The authenticated personal domain is the authoritative connected surface for steering, telemetry, and operational mirrors, and it may identify itself as `Live` only while its sources are current. GitHub Pages is a clearly labelled synthetic preview that demonstrates the current interface and links directly to the authenticated cockpit; it must never impersonate a live connection or receive private operational data.
 
 ## Knowledge and synchronization
 

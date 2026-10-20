@@ -62,7 +62,7 @@ function fleetProjection(overrides = {}) {
     ...(profile ? { visible: 1, representedByCases: 1 } : {})
   });
   return {
-    apiVersion: "gate.remote-fleet/v2",
+    apiVersion: "gate.remote-fleet/v3",
     sessionRevision,
     revision: 4,
     selectionEpoch: "0".repeat(32),
@@ -108,7 +108,45 @@ function fleetProjection(overrides = {}) {
         setupBlockers: metric()
       },
       tokens: { availability: "exact", total: 100 },
+      mirror: { availability: "unavailable", reason: "disabled", attempts: [] },
       latestEvent: { availability: "available", category: "campaign", status: "running", at: observedAt }
+    }],
+    ...overrides
+  };
+}
+
+function executionMirror(overrides = {}) {
+  return {
+    availability: "available",
+    reason: null,
+    attempts: [{
+      alias: "Attempt 1",
+      kind: "supervised-execution",
+      state: "running",
+      phase: "active-surface-validation",
+      tool: "httpx",
+      action: "metadata-observation",
+      startedAt: "2026-10-18T11:59:50.000Z",
+      finishedAt: null,
+      updatedAt: observedAt,
+      elapsedMs: 10_000,
+      progress: { availability: "exact", completed: 1, total: 2, percent: 50 },
+      usage: {
+        tokens: { availability: "unavailable", total: null },
+        cost: { availability: "unavailable", amountMicros: null, unit: null },
+        requests: { availability: "unavailable", value: null },
+        retries: { availability: "unavailable", value: null },
+        toolRuns: { availability: "exact", value: 1 }
+      },
+      entries: [{
+        sequence: 1,
+        at: observedAt,
+        channel: "stdout",
+        state: "running",
+        fidelity: "redacted",
+        truncated: false,
+        text: "HTTP 200 [credential redacted]"
+      }]
     }],
     ...overrides
   };
@@ -348,6 +386,75 @@ test("fleet projections are exact, revision-bound, and byte bounded", () => {
     connection: "unavailable",
     sourceFreshness: "unavailable"
   })), /invalid/u);
+});
+
+test("remote fleet validates and deeply freezes the exact execution mirror", () => {
+  const source = fleetProjection({
+    campaigns: [{ ...fleetProjection().campaigns[0], mirror: executionMirror() }]
+  });
+  const normalized = normalizeRemoteFleetProjection(source);
+  assert.equal(normalized.campaigns[0].mirror.attempts[0].progress.percent, 50);
+  assert.equal(Object.isFrozen(normalized.campaigns[0].mirror.attempts[0].entries[0]), true);
+
+  const nonContiguous = executionMirror();
+  nonContiguous.attempts[0].alias = "Attempt 150";
+  nonContiguous.attempts.push({ ...structuredClone(nonContiguous.attempts[0]), alias: "Attempt 148" });
+  const stableAliases = normalizeRemoteFleetProjection(fleetProjection({
+    campaigns: [{ ...fleetProjection().campaigns[0], mirror: nonContiguous }]
+  })).campaigns[0].mirror.attempts.map((attempt) => attempt.alias);
+  assert.deepEqual(stableAliases, ["Attempt 150", "Attempt 148"]);
+
+  const badProgress = executionMirror();
+  badProgress.attempts[0].progress.percent = 49;
+  assert.throws(() => normalizeRemoteFleetProjection(fleetProjection({
+    campaigns: [{ ...fleetProjection().campaigns[0], mirror: badProgress }]
+  })), /invalid/u);
+
+  const unsafe = executionMirror();
+  unsafe.attempts[0].entries[0].text = `${"gh"}p_${"A".repeat(36)}`;
+  assert.throws(() => normalizeRemoteFleetProjection(fleetProjection({
+    campaigns: [{ ...fleetProjection().campaigns[0], mirror: unsafe }]
+  })), /invalid/u);
+
+  for (const privateText of [
+    "saved /home/operator/.gate/evidence/result.txt",
+    "saved /srv/unrelated/service/result.txt",
+    "opened (/etc/passwd)",
+    "inspected [/opt/application/config.json]",
+    "wrote result>/var/output/result.txt",
+    "saved C:\\Users\\operator\\gate\\result.txt",
+    "saved \\\\private-host\\gate\\result.txt",
+    "evidence://private-result",
+    `run xrun_${"a".repeat(32)}`,
+    "--token abc123",
+    "auth=abc123",
+    '{"token":"abc123"}',
+    '{"secret":"abc123"}',
+    "file:///etc/passwd",
+    "file://localhost/etc/passwd",
+    "//server/share/file",
+    "curl -u alice:hunter2 https://example.invalid/path"
+  ]) {
+    const privateMirror = executionMirror();
+    privateMirror.attempts[0].entries[0].text = privateText;
+    assert.throws(() => normalizeRemoteFleetProjection(fleetProjection({
+      campaigns: [{ ...fleetProjection().campaigns[0], mirror: privateMirror }]
+    })), /invalid/u);
+  }
+
+  for (const redactedText of ["tool --token=[secret withheld]", '{"token":[secret withheld]}']) {
+    const redactedMirror = executionMirror();
+    redactedMirror.attempts[0].entries[0].text = redactedText;
+    assert.equal(normalizeRemoteFleetProjection(fleetProjection({
+      campaigns: [{ ...fleetProjection().campaigns[0], mirror: redactedMirror }]
+    })).campaigns[0].mirror.attempts[0].entries[0].text, redactedText);
+  }
+
+  const publicUrl = executionMirror();
+  publicUrl.attempts[0].entries[0].text = "GET https://example.invalid/public/path?q=value";
+  assert.equal(normalizeRemoteFleetProjection(fleetProjection({
+    campaigns: [{ ...fleetProjection().campaigns[0], mirror: publicUrl }]
+  })).campaigns[0].mirror.attempts[0].entries[0].text, publicUrl.attempts[0].entries[0].text);
 });
 
 test("activity events accept only exact categorical summaries", () => {

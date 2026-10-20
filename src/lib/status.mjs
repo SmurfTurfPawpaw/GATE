@@ -195,11 +195,12 @@ async function buildRuntimeStatus(paths, options = {}) {
     ? omittedEngagementProjection()
     : boundedEngagements(paths);
   const ctfPilot = readCtfPilotStatus({ paths, now: observedAt });
+  const execution = executionStatus({
+    paths,
+    ...(options.now === undefined ? {} : { now: observedAt }),
+    includeExecutionMirror: options.includeExecutionMirror === true
+  });
   return {
-    // Capture the enclosing snapshot after all component reads. A worker may
-    // publish while status is being assembled; using the start time would make
-    // that legitimate component update appear to come from the future.
-    at: options.now === undefined ? new Date().toISOString() : observedAt.toISOString(),
     repository: paths.repo,
     gate_home: paths.home,
     events: events.slice(-30).reverse(),
@@ -209,7 +210,7 @@ async function buildRuntimeStatus(paths, options = {}) {
       .reverse(),
     engagements: engagementProjection.engagements,
     engagementScan: engagementProjection.scan,
-    execution: executionStatus({ paths }),
+    execution,
     workflows: workflowFleetStatus({ paths, runtimeEnsured: true }),
     ctfPilot,
     offlineAnalysis: offlineAnalysisStatus({ paths }),
@@ -226,7 +227,8 @@ async function buildRuntimeStatus(paths, options = {}) {
           staticIntegrity: false,
           now: observedAt
         })
-      : null
+      : null,
+    at: options.now === undefined ? new Date().toISOString() : observedAt.toISOString()
   };
 }
 
@@ -324,6 +326,7 @@ export async function buildStatus(options = {}) {
     selection: { mode: "aggregate", caseId: null },
     selectedCaseId: null,
     cases,
-    caseScan: { ...fleet.scan, attempted: true }
+    caseScan: { ...fleet.scan, attempted: true },
+    at: options.now === undefined ? new Date().toISOString() : base.at
   };
 }

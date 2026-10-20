@@ -1,6 +1,6 @@
 # Local cockpit companion
 
-The local companion turns the static cockpit into a private operator surface on the same laptop. It serves the checked-in cockpit, injects an exact browser bridge, owns one dedicated Codex app-server thread, streams categorical activity and aggregate token events, and reads a separate bounded fleet projection from GATE's loopback observer. It does not connect to the current Codex cloud chat or take over an arbitrary Codex Desktop thread.
+The local companion turns the static cockpit into a private operator surface on the same laptop. It serves the checked-in cockpit, injects an exact browser bridge, owns one dedicated Codex app-server thread, streams categorical activity and aggregate token events, and reads a separate bounded fleet and execution-mirror projection from GATE's loopback observer. It does not connect to the current Codex cloud chat or take over an arbitrary Codex Desktop thread.
 
 ## Start it
 
@@ -46,7 +46,7 @@ Keep the terminal open. The session and CSRF capabilities exist only for that pr
 
 Resuming restores the bounded operator and final Codex messages returned by app-server, with notices when history is unavailable, unsafe, unsupported, or too large to display. The adapter retains at most 48 conversation entries including notices; the browser displays the latest 12. This is a recent conversation view, not a complete transcript.
 
-The checked-in `cockpit/data/status.json` is a presentation preview. Static GitHub Pages and a normal preview server remain read-only because neither has the private bridge or capabilities. Through the loopback companion, private conversation, native Codex questions, and the local GATE fleet work independently of that preview snapshot. Missing or invalid preview data does not clear an unsent local message. Public snapshots accept only preview mode; example decisions are disabled. Private choices use native Codex questions.
+The checked-in `cockpit/data/status.json` is a presentation preview. Static GitHub Pages and a normal preview server remain read-only because neither has the private bridge or capabilities. They display synthetic mirror entries and link to the authenticated live cockpit without calling it. Through the loopback companion, private conversation, native Codex questions, and the local GATE fleet work independently of that preview snapshot. Missing or invalid preview data does not clear an unsent local message. Public snapshots accept only preview mode; example decisions are disabled. Private choices use native Codex questions.
 
 ## What is working
 
@@ -56,6 +56,8 @@ The four compact status cards are **Active work**, **Needs you**, **Blockers**, 
 
 The Tokens card prefers the case-bound fleet total and labels its exact, estimated, or partial provenance, with the dedicated-session total alongside when available. Without available fleet tokens it shows the exact dedicated-session total, or marks telemetry unavailable. Detailed input, cached-input, output, reasoning, and cost fields remain in the private API rather than separate visible counters. Host-wide usage stays separate from case attribution; case rows without canonical token data show `Awaiting attribution`. The public preview shows only an example token budget.
 
+The selected case also has an **Operational mirror** grouped by recent supervised-execution attempt. The initial producer can show the operator-visible work order, deterministic secret-masked command, a bounded stdout/stderr tail, lifecycle state, timestamps and elapsed time, trustworthy progress when available, usage provenance, and result. Each entry is labelled `exact`, `redacted`, `summarized`, or `unavailable`; truncation is explicit. The local companion enables this local projection. See the complete [operational mirror contract](execution-mirror.md).
+
 The companion currently provides:
 
 - an exact `gate.local-cockpit-bridge/v1` browser adapter exposing `submitMessage` and `submitQuestion`;
@@ -64,7 +66,7 @@ The companion currently provides:
 - bounded native `item/tool/requestUserInput` choice capture and response in the adapter API;
 - a capability-protected private-state API containing only user-visible operator and final Codex messages, dedicated-thread input/cached-input/output/reasoning/total counters, optional estimated cost, turn state, and bounded questions;
 - an authenticated server-sent event stream containing only fixed activity categories, lifecycle state, optional completed/total counts, and aggregate token totals;
-- an authenticated read-only `/api/fleet` endpoint containing only the exact `gate.local-fleet/v2` projection from GATE's observer. Every projection carries a 15-second `validUntil`; the browser and remote coordinator remove it at expiry without clearing a still-current conversation;
+- an authenticated read-only `/api/fleet` endpoint containing only the exact `gate.local-fleet/v3` projection from GATE's observer. Every projection carries a 15-second `validUntil`; the browser and remote coordinator remove it at expiry without clearing a still-current conversation;
 - immediate browser snapshot refresh signals when an event arrives.
 
 Private operator messages may include URLs and project context. They are limited to 1,000 characters and must not contain credentials or secrets. Native Codex questions are rendered as bounded one-to-three-choice controls, with the recommended option identified explicitly.
@@ -84,7 +86,7 @@ The observer reads `CODEX_HOME/sessions`. If those files live on Windows, either
 
 ## Visibility boundary
 
-The browser may show the operator's own bounded message and Codex's final user-visible answer in its authenticated private state. It never receives hidden reasoning, system or developer instructions, command lines, arguments, stdout or stderr, file paths, tool names, target selectors, evidence, credentials, internal thread IDs, raw errors, or request bodies through the activity stream. The fleet projection also omits source IDs, case names, program names, targets, tools, prompts, evidence, contacts, raw events, session records, and session paths. It projects only token counters and categorical provenance from host usage.
+The browser may show the operator's own bounded message and Codex's final user-visible answer in its authenticated private state. The categorical activity stream never receives hidden reasoning, system or developer instructions, command lines, arguments, stdout or stderr, file paths, tool names, target selectors, evidence, credentials, internal thread IDs, raw errors, or request bodies. The fleet projection omits source IDs, program names, targets, contacts, raw evidence, session records, and session paths. Its separate execution-mirror field is the narrow exception: it can include an opaque attempt label, an operator-visible work order, a deterministic secret-masked command, and up to four bounded lines selected from the final 4 KiB of each supervised run's stdout and stderr. Terminal controls are escaped; a still secret-shaped line is withheld as a whole. Private paths, target selectors, raw evidence, credentials, private IDs, hidden reasoning, and unbounded output remain excluded.
 
 Item types become fixed categories such as `tool`, `file-change`, `research`, or `agent`. Progress is determinate only when a producer supplies a real completed count and total. Dedicated-thread token state contains exact input, cached-input, output, reasoning-output, and total counters from Codex notifications. When `account/usage/read` returns a matching thread estimate, the browser receives only the estimated USD or credit micros and unit; account summaries, groups, model metadata, thread IDs, and raw responses remain private. Likely credentials are rejected from operator messages and withheld from mirrored Codex answers.
 
@@ -98,7 +100,7 @@ Public snapshots are static examples and cannot accept operator choices or claim
 
 Before copying or serving the checked-in snapshot, both the builder and the companion's file provider validate the bytes against the strict public contract in `cockpit/assets/model.js` (`parsePublicSnapshot`), rejecting unknown fields and snapshots larger than 65,536 bytes. They publish the exact bytes that passed validation. The builder also requires the snapshot's GATE version to match `package.json`; invalid data aborts the build, while the companion returns an unavailable response. Schema validation is not a substitute for reviewing sample values for sensitive content.
 
-The Pages workflow deploys that allowlisted artifact at `https://smurfturfpawpaw.github.io/GATE/` after GitHub Pages is configured to use GitHub Actions. The page stays an explicit `PREVIEW · NOT LIVE` and does not accept observed snapshots. Serving it under a path such as `giovannicallebaut.com/bugbounty/` requires that site's host or proxy; a project Pages workflow cannot claim that path by itself.
+The Pages workflow deploys that allowlisted artifact at `https://smurfturfpawpaw.github.io/GATE/` after GitHub Pages is configured to use GitHub Actions. The page stays an explicit **PUBLIC PREVIEW · NO LIVE DATA**, accepts no observed snapshots, and links directly to the authoritative authenticated cockpit at `https://gate.giovannicallebaut.com/`. The two surfaces use the same checked-in interface but different data adapters and trust boundaries.
 
 The visible Site and GATE badges identify the loaded static shell and repository package. The current fleet protocol does not carry the observer executable build or remote runner executable build, so these badges do not detect a live-process build mismatch. `/healthz` exposes the observer build locally for diagnostics, while runner attestation remains a separate deployment concern. Adding a cross-process build attestation would require a new signed, bounded runner/observer contract and is intentionally outside this cockpit KPI migration.
 

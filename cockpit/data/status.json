@@ -2,10 +2,10 @@
   "schema": "gate.public-cockpit/v1",
   "mode": "preview",
   "site": {
-    "version": "0.5.0"
+    "version": "0.6.0"
   },
   "gate": {
-    "version": "0.2.0"
+    "version": "0.2.1"
   },
   "snapshot": {
     "generatedAt": "2026-10-16T11:15:00Z",
@@ -29,7 +29,85 @@
       "attention": "steady",
       "freshness": "preview",
       "codex": "working",
-      "currentAction": "running-tests"
+      "currentAction": "running-tests",
+      "mirror": {
+        "availability": "available",
+        "reason": null,
+        "attempts": [
+          {
+            "alias": "Attempt 1",
+            "kind": "supervised-execution",
+            "state": "running",
+            "phase": "Baseline mapping",
+            "tool": "GATE runner",
+            "action": "Testing the next hypothesis",
+            "startedAt": "2026-10-16T11:00:00Z",
+            "finishedAt": null,
+            "updatedAt": "2026-10-16T11:14:30Z",
+            "elapsedMs": 870000,
+            "progress": {
+              "availability": "exact",
+              "completed": 3,
+              "total": 7,
+              "percent": 43
+            },
+            "usage": {
+              "tokens": { "availability": "estimated", "total": 6200 },
+              "cost": { "availability": "estimated", "amountMicros": 184000, "unit": "USD" },
+              "requests": { "availability": "exact", "value": 12 },
+              "retries": { "availability": "exact", "value": 1 },
+              "toolRuns": { "availability": "exact", "value": 1 }
+            },
+            "entries": [
+              {
+                "sequence": 1,
+                "at": "2026-10-16T11:00:00Z",
+                "channel": "work-order",
+                "state": "running",
+                "fidelity": "summarized",
+                "truncated": false,
+                "text": "Establish a repeatable CTF baseline, test the cheapest discriminating checks first, and preserve evidence for adaptation."
+              },
+              {
+                "sequence": 2,
+                "at": "2026-10-16T11:01:10Z",
+                "channel": "command",
+                "state": "succeeded",
+                "fidelity": "exact",
+                "truncated": false,
+                "text": "gate ctf inspect --campaign synthetic-baseline"
+              },
+              {
+                "sequence": 3,
+                "at": "2026-10-16T11:01:12Z",
+                "channel": "stdout",
+                "state": "succeeded",
+                "fidelity": "summarized",
+                "truncated": true,
+                "text": "Surface inventory complete: 7 checks planned; 3 high-signal checks selected for the first pass."
+              },
+              {
+                "sequence": 4,
+                "at": "2026-10-16T11:08:42Z",
+                "channel": "test",
+                "state": "succeeded",
+                "fidelity": "summarized",
+                "truncated": false,
+                "text": "Baseline behavior reproduced twice; one branch promoted for deeper validation."
+              },
+              {
+                "sequence": 5,
+                "at": "2026-10-16T11:14:30Z",
+                "channel": "tool",
+                "state": "running",
+                "fidelity": "redacted",
+                "truncated": false,
+                "text": "GATE runner is executing the next bounded validation step; private values are redacted."
+              }
+            ]
+          }
+        ]
+      }
     },
     {
       "alias": "Campaign 2",
@@ -38,7 +116,12 @@
       "attention": "response-needed",
       "freshness": "preview",
       "codex": "waiting",
-      "currentAction": "awaiting-reply"
+      "currentAction": "awaiting-reply",
+      "mirror": {
+        "availability": "unavailable",
+        "reason": "no-attempts",
+        "attempts": []
+      }
     }
   ],
   "decision": {

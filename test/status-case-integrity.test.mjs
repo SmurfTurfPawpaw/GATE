@@ -180,3 +180,32 @@ test("status rejects redirected, relabelled, and phantom case path tables", asyn
   );
   assert.equal(fs.existsSync(phantom.caseRoot), false);
 });
+
+
+test("aggregate observation bounds every case runtime and preserves injected time", async (t) => {
+  const { base } = fixture(t);
+  seedStaleCase(base, "first-case", "first-record");
+  seedStaleCase(base, "second-case", "second-record");
+  const RealDate = Date;
+  let clock = RealDate.parse(observedAt);
+  globalThis.Date = class extends RealDate {
+    constructor(...args) {
+      super(...(args.length ? args : [clock++]));
+    }
+    static now() { return clock++; }
+  };
+  try {
+    const aggregate = await buildStatus({ paths: base, tokens: { roots: [] }, includeExecutionMirror: true });
+    assert.equal(aggregate.cases.length, 2);
+    for (const item of aggregate.cases) {
+      assert.equal(item.runtimeHealth.status, "available");
+      assert.ok(Date.parse(aggregate.at) >= Date.parse(item.runtime.at),
+        "an enclosing observation cannot precede its case observation");
+    }
+    const injected = await buildStatus({ paths: base, tokens: { roots: [] }, now: observedAt });
+    assert.equal(injected.at, observedAt);
+    for (const item of injected.cases) assert.equal(item.runtime.at, observedAt);
+  } finally {
+    globalThis.Date = RealDate;
+  }
+});

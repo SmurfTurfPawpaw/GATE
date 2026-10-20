@@ -61,7 +61,7 @@ function fleetProjection(revision = 1, overrides = {}) {
     ...(profile ? { visible: 1, representedByCases: 1 } : {})
   });
   return {
-    apiVersion: "gate.remote-fleet/v2",
+    apiVersion: "gate.remote-fleet/v3",
     sessionRevision,
     revision,
     selectionEpoch: "0".repeat(32),

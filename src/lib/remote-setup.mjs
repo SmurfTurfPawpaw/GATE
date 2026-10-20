@@ -144,13 +144,25 @@ function runnerEnvironment(values) {
     GATE_REMOTE_CODEX_HOME: values.codexHome,
     GATE_REMOTE_THREAD_ID_FILE: values.threadIdFile,
     GATE_REPO: values.cwd,
-    GATE_OBSERVER_URL: values.gateObserver
+    GATE_OBSERVER_URL: values.gateObserver,
+    GATE_REMOTE_EXECUTION_MIRROR: "0"
   });
 }
 
 function renderRunnerEnvironment(values) {
   const environment = runnerEnvironment(values);
   return `${Object.entries(environment).map(([key, value]) => `${key}=${shellQuote(value)}`).join("\n")}\n`;
+}
+
+function acceptedRunnerEnvironment(bytes, values) {
+  const expected = renderRunnerEnvironment(values);
+  const enabledQuoted = expected.replace(/GATE_REMOTE_EXECUTION_MIRROR='0'\n$/u, "GATE_REMOTE_EXECUTION_MIRROR='1'\n");
+  const enabledUnquoted = expected.replace(/GATE_REMOTE_EXECUTION_MIRROR='0'\n$/u, "GATE_REMOTE_EXECUTION_MIRROR=1\n");
+  const legacy = expected.replace(/GATE_REMOTE_EXECUTION_MIRROR='?0'?\n$/u, "");
+  return bytes.equals(Buffer.from(expected))
+    || bytes.equals(Buffer.from(enabledQuoted))
+    || bytes.equals(Buffer.from(enabledUnquoted))
+    || bytes.equals(Buffer.from(legacy));
 }
 
 function coordinatorConfiguration(manifest, input) {
@@ -559,11 +571,14 @@ export function inspectRemoteCase(caseId, options = {}) {
     if (!manifest) manifest = readManifest(locations.manifest);
     remoteRunner = runnerValues(manifest, locations);
     const actual = readOwnerFile(locations.runnerEnvironment, 32 * 1024, "runner environment");
-    const expected = Buffer.from(renderRunnerEnvironment(remoteRunner));
-    if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)) {
+    if (!acceptedRunnerEnvironment(actual, remoteRunner)) {
       throw new Error("runner environment no longer matches the case manifest");
     }
-    runnerCliInternals.parseArguments([], runnerEnvironment(remoteRunner));
+    const actualEnvironment = {
+      ...runnerEnvironment(remoteRunner),
+      GATE_REMOTE_EXECUTION_MIRROR: /(?:^|\n)GATE_REMOTE_EXECUTION_MIRROR=(?:1|'1')\n$/u.test(actual.toString("utf8")) ? "1" : "0"
+    };
+    runnerCliInternals.parseArguments([], actualEnvironment);
   }));
   checks.push(checkResult("runner-keypair", "The laptop private key matches both enrolled Ed25519 public keys.", () => {
     const privateKey = runnerCliInternals.readPrivateKey(locations.runnerPrivateKey);
@@ -658,6 +673,7 @@ export const remoteSetupInternals = Object.freeze({
   normalizeInput,
   pathsOverlap,
   readManifest,
+  acceptedRunnerEnvironment,
   renderRunnerEnvironment,
   runnerEnvironment,
   runnerValues,

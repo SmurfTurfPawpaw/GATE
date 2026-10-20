@@ -8,13 +8,13 @@ The repository contains the coordinator, browser adapter, durable protocol store
 
 | Surface | Where it runs | Interactive | Runtime connection |
 | --- | --- | --- | --- |
-| Public Pages preview | GitHub Pages | No | Checked-in example data only |
+| Public Pages preview | `https://smurfturfpawpaw.github.io/GATE/` | No | Checked-in synthetic data only |
 | Local companion | Operator laptop, loopback only | Yes | One dedicated local Codex app-server thread |
-| Remote cockpit | Authenticated HTTPS coordinator plus an outbound laptop runner | Yes | One dedicated Codex app-server thread owned by that runner |
+| Remote cockpit | `https://gate.giovannicallebaut.com/` behind the authenticated HTTPS coordinator | Yes | One dedicated Codex app-server thread plus the runner's bounded current projections |
 
-The remote runner does not attach to this Codex cloud conversation, an arbitrary Codex Desktop conversation, or a hidden existing thread. Starting it creates or resumes a separately configured dedicated app-server thread. The browser can send bounded messages and answer native choice questions in that thread. It receives the operator-visible conversation, categorical activity, bounded fleet state, and token counters that the runner is allowed to project.
+The remote runner does not attach to this Codex cloud conversation, an arbitrary Codex Desktop conversation, or a hidden existing thread. Starting it creates or resumes a separately configured dedicated app-server thread. The browser can send bounded messages and answer native choice questions in that thread. It receives the operator-visible conversation, categorical activity, bounded fleet state, token counters, and an optional operational-mirror projection that the runner is allowed to project.
 
-GitHub Pages remains an explicit `PREVIEW · NOT LIVE` build. It publishes only the static allowlist documented in [Public snapshot integration](local-companion.md#public-snapshot-integration). The remote browser adapter and every coordinator or runner module stay out of that artifact.
+GitHub Pages remains an explicit **PUBLIC PREVIEW · NO LIVE DATA** build. It publishes only the static allowlist documented in [Public snapshot integration](local-companion.md#public-snapshot-integration), shows synthetic mirror entries, and links to the authenticated personal-domain cockpit. The remote browser adapter and every coordinator or runner module stay out of that artifact.
 
 ## Architecture
 
@@ -73,7 +73,7 @@ dedicated Codex app-server is unavailable at startup or closes later, the
 runner process keeps sending signed
 heartbeats, explicit `codex.state=offline` state projections, and observer
 fleet/campaign projections. It clears unanswerable pending questions and
-withholds stale session-token totals. The cockpit labels this state `LIVE ·
+withholds stale session-token totals. The cockpit labels this state `CONNECTED ·
 FLEET · CODEX OFFLINE`, keeps current campaign and pilot KPIs visible, and
 disables message and question submission. The runner does not call the lease
 endpoint while conversation delivery is unavailable or quarantined.
@@ -126,14 +126,20 @@ The coordinator persists only the remote protocol's bounded records:
 - command digests, leases, lifecycle events, expiry, and idempotency identifiers;
 - bounded operator-visible messages and final Codex replies;
 - bounded native choice questions;
-- categorical activity, bounded fleet state, and aggregate token counters;
+- categorical activity, bounded fleet state, aggregate token counters, and the optional bounded operational mirror;
 - case, operator-subject, runner, browser-session, and session-revision bindings.
 
 Resumed threads use the companion's [bounded conversation restoration](local-companion.md#start-it). The remote projection further bounds each message to 1,000 Unicode characters, 2,000 UTF-8 bytes, and 24 lines, adding an explicit truncation notice. It also marks omitted earlier entries. Questions whose headers, text, or options exceed the remote display contract are withheld as a whole, preserving answer identity; the conversation directs the operator to answer locally. When Codex is waiting without a displayable question, the cockpit shows `Open laptop`.
 
-Automatic fleet and activity projections, and the structural fields of the state projection, do not carry hidden reasoning, system or developer instructions, command lines, arguments, stdout or stderr, file paths, raw evidence, dedicated target fields, credentials, internal Codex thread IDs, or arbitrary observer responses. Operator messages, final visible replies, and rendered native questions are different: they can contain URLs, project context, target names, or a described command, and the coordinator stores their bounded text. Pattern filtering rejects common credential assignments, authorization headers, private-key markers, credential-bearing URLs, and several standalone token families from remote messages, answers, questions, and mirrored conversation text. It is not an exhaustive secret or target-data scanner. Treat the coordinator database as sensitive operator data, keep its service-writable state directory on encrypted persistent storage with owner-only access, and apply a deliberate backup and retention policy. Keep the separate production configuration and runner public key root-owned and read-only to the service. Do not send credentials, raw evidence, or unnecessary exact target details through the remote conversation.
+Automatic categorical activity and ordinary fleet/state fields do not carry hidden reasoning, system or developer instructions, command lines, arguments, stdout or stderr, file paths, raw evidence, dedicated target fields, credentials, internal Codex thread IDs, or arbitrary observer responses. The operational mirror is a separate, explicit exception. When `GATE_REMOTE_EXECUTION_MIRROR=1`, the runner can upload an operator-visible work order, deterministic secret-masked command, and up to four bounded lines selected from the final 4 KiB of each supervised run's stdout and stderr, plus structured state, timing, progress, usage, and result fields. Terminal controls are escaped, fidelity and truncation are labelled, and a line that still resembles a credential is withheld as a whole. Private paths, target selectors, raw evidence, credentials, private IDs, hidden reasoning, and unbounded logs remain excluded.
 
-Raw captures, reports, tool output, client material, exact target state, and other private operational evidence remain under `GATE_HOME` on the laptop. The remote projection does not replace the repository's data policy, case binding, engagement receipts, or execution adapters, and a browser message does not itself grant active-operation authority.
+With `GATE_REMOTE_EXECUTION_MIRROR=1`, the runner polls and projects active supervised-run state and the bounded output tail at approximately one-second cadence. This is a near-real-time sequence of bounded snapshots, not byte or PTY streaming. Ordered entries are retained history; the active state and tail change during execution. Transport and browser latency still apply. The cockpit uses `Live` only for a concurrently active run whose runner and projection are connected, current, and authenticated; retained, delayed, stale, disconnected, and unavailable views remain labelled as such.
+
+Remote fleet limits can prune mirror history or leave a campaign's mirror unavailable; see the [operational mirror contract](execution-mirror.md#what-the-mirror-means) for selection and truncation behavior.
+
+Operator messages, final visible replies, rendered native questions, and enabled mirror lines can contain URLs, project context, target names, or a described command, and the coordinator stores their bounded text. Pattern filtering rejects common credential assignments, authorization headers, private-key markers, credential-bearing URLs, and several standalone token families from remote messages, answers, questions, mirrored conversation text, and mirror entries. It is not an exhaustive secret or target-data scanner. Treat the coordinator database as sensitive operator data, keep its service-writable state directory on encrypted persistent storage with owner-only access, and apply a deliberate backup and retention policy. Keep the separate production configuration and runner public key root-owned and read-only to the service. Do not send credentials, raw evidence, or unnecessary exact target details through the remote conversation or mirror.
+
+Raw captures, reports, complete tool output, client material, exact target state, and other private operational evidence remain under `GATE_HOME` on the laptop. The remote projection does not replace the repository's data policy, case binding, engagement receipts, or execution adapters, and a browser message or displayed mirror entry does not itself grant active-operation authority. The [operational mirror contract](execution-mirror.md) defines producer coverage and display bounds.
 
 ## Deployment prerequisites
 
@@ -159,7 +165,7 @@ After the identity application exists and its exact origin, issuer, audience, JW
 npm run cockpit:remote:server -- --config /etc/gate-remote/CASE/server.json
 ```
 
-The laptop runner accepts the coordinator origin, case/session/runner binding, private-key path, journal directory, dedicated Codex home, and thread-record path as flags or `GATE_REMOTE_*` environment variables. The Codex home must be an existing owner-only directory directly under the journal. The runner posture is fixed in code to conversation-only with a read-only sandbox and disabled local tools. `GATE_REPO` selects the dedicated thread's working directory for configuration lookup, but the remote thread has no local filesystem or execution tools. That directory must exist and its resolved path must not traverse symbolic links. `remote init` and `remote doctor` reject overlap in either direction with `GATE_HOME`; runner startup independently rejects overlap with the journal, dedicated Codex home, private-key directory, or thread-record path. Keep the working directory outside private state rather than using a parent directory that contains it. `GATE_OBSERVER_URL` selects the exact loopback fleet endpoint. Give each concurrent case its own `GATE_REPO` directory or checkout even when the source revision is the same. Create and authenticate the dedicated home, then start the runner after loading the owner-only configuration:
+The laptop runner accepts the coordinator origin, case/session/runner binding, private-key path, journal directory, dedicated Codex home, and thread-record path as flags or `GATE_REMOTE_*` environment variables. The Codex home must be an existing owner-only directory directly under the journal. The runner posture is fixed in code to conversation-only with a read-only sandbox and disabled local tools. `GATE_REPO` selects the dedicated thread's working directory for configuration lookup, but the remote thread has no local filesystem or execution tools. That directory must exist and its resolved path must not traverse symbolic links. `remote init` and `remote doctor` reject overlap in either direction with `GATE_HOME`; runner startup independently rejects overlap with the journal, dedicated Codex home, private-key directory, or thread-record path. Keep the working directory outside private state rather than using a parent directory that contains it. `GATE_OBSERVER_URL` selects the exact loopback fleet endpoint. `GATE_REMOTE_EXECUTION_MIRROR=1` explicitly enables the secret-masked, bounded execution projection; its default is disabled. Give each concurrent case its own `GATE_REPO` directory or checkout even when the source revision is the same. Create and authenticate the dedicated home, then start the runner after loading the owner-only configuration:
 
 ```bash
 runner_state="${GATE_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/gate}/remote/example-case/runner"
@@ -176,6 +182,8 @@ test -f "$generated_runner_environment"
 set -a
 . "$generated_runner_environment"
 set +a
+# Optional: set this to 1 in the owner-only runner.env before startup.
+# export GATE_REMOTE_EXECUTION_MIRROR=1
 npm run cockpit:remote:runner
 ```
 
@@ -214,12 +222,13 @@ A deployment is ready only when all of these are observed:
 - `/readyz` reports ready from the platform health path;
 - a request receives a durable `queued` receipt, its dispatch lifecycle reaches a terminal state, and the separate state/activity stream later shows the expected Codex turn result;
 - the enrolled runner is visible as current, not stale or offline;
+- when the operational mirror is enabled, a supervised local fixture appears under the selected attempt with fidelity labels, bounded output, and no secret or private-path disclosure;
 - stopping only the dedicated Codex app-server leaves observer fleet telemetry current, shows Codex offline, and prevents command leasing until a reviewed idle replacement resumes;
 - state expires when runner updates stop instead of remaining falsely live;
 - restarting the coordinator preserves queued state and restarting the runner preserves its deduplication journal;
 - the runner rejects an ambient Codex home and stops before thread creation when effective MCP or external-tool configuration is present;
 - sustained unsigned runner requests are limited at the gateway without spending the coordinator budgets for the authenticated browser or enrolled runner;
-- the public Pages artifact still contains only the static allowlist.
+- the public Pages artifact still contains only the static allowlist, says `PUBLIC PREVIEW · NO LIVE DATA`, and shows only synthetic mirror entries.
 
 Until those checks pass on an actual host, describe the remote cockpit as deployable code rather than a live bridge. Neither this repository nor ChatGPT Sites supplies the always-on coordinator, DNS, TLS, identity gateway, persistent volume, or laptop runner automatically.
 
