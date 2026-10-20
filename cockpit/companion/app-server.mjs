@@ -490,8 +490,8 @@ export class CodexCompanionAdapter extends EventEmitter {
     await this.#transport.start();
     const initialized = await this.#transport.request("initialize", {
       clientInfo: this.#executionPosture === REMOTE_READ_ONLY_EXECUTION_POSTURE
-        ? { name: "gate-cockpit", title: "GATE Remote Cockpit", version: "0.6.0" }
-        : { name: "gate-cockpit", title: "GATE Local Cockpit", version: "0.6.0" },
+        ? { name: "gate-cockpit", title: "GATE Remote Cockpit", version: "0.7.0" }
+        : { name: "gate-cockpit", title: "GATE Local Cockpit", version: "0.7.0" },
       capabilities: { experimentalApi: true }
     });
     this.#transport.notify("initialized", {});

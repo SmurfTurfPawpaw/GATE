@@ -1,8 +1,9 @@
 import crypto from "node:crypto";
 import { unavailableExecutionMirror, validateExecutionMirror } from "../execution-mirror.mjs";
+import { assertNoLikelySecret } from "../../src/lib/text.mjs";
 import { containsLikelyCredential } from "./contracts.mjs";
 
-const LOCAL_FLEET_VERSION = "gate.local-fleet/v3";
+const LOCAL_FLEET_VERSION = "gate.local-fleet/v4";
 const OBSERVER_VERSION = "gate.observer/v1";
 const DEFAULT_OBSERVER_URL = "http://127.0.0.1:4173/api/status";
 const DEFAULT_TIMEOUT_MS = 3_500;
@@ -64,6 +65,13 @@ const PILOT_EXTERNAL_ACCEPTANCE = new Set(["accepted", "pending", "rejected", "n
 const EVENT_STATUSES = new Set(["queued", "running", "waiting", "blocked", "succeeded", "failed", "cancelled", "unknown"]);
 const EVENT_CATEGORIES = new Set(["campaign", "workflow", "execution", "test", "evidence", "learning", "analysis", "tool", "operator", "system"]);
 const SELECTION_EPOCH = /^[a-f0-9]{32}$/u;
+const CAMPAIGN_LABEL = /^[A-Za-z0-9][A-Za-z0-9 &().,'+_-]{0,79}$/u;
+const CAMPAIGN_LABEL_URL = /(?:\b(?:https?|file|ftp):\/\/|\bwww\.)/iu;
+const CAMPAIGN_LABEL_HOSTNAME = /\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\b/iu;
+const CAMPAIGN_LABEL_IPV4 = /\b(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}\b/u;
+const CAMPAIGN_LABEL_PATH = /(?:^|\s)(?:~?[\\/]|[A-Za-z]:[\\/]|\\\\)/u;
+const CAMPAIGN_LABEL_CREDENTIAL = /(?:\b(?:api[_ -]?key|access[_ -]?token|refresh[_ -]?token|client[_ -]?secret|password|passwd|private[_ -]?key|session[_ -]?(?:id|key|token))\s*[:=]|\b(?:bearer|basic)\s+[A-Za-z0-9._~+/-]{12,}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\b(?:sk|pk|ghp|github_pat|xox[baprs])[_-][A-Za-z0-9_-]{12,}\b)/iu;
+const CAMPAIGN_LABEL_TOKEN = /(?:\b(?:github_pat_[A-Za-z0-9_]{20,255}|gh[pousr]_[A-Za-z0-9]{20,255}|glpat-[A-Za-z0-9_-]{20,255}|sk-(?:proj-|ant-api\d{2}-)?[A-Za-z0-9_-]{16,255}|(?:sk|rk)_live_[A-Za-z0-9]{16,255}|xox[baprs]-[A-Za-z0-9-]{10,255}|npm_[A-Za-z0-9]{30,255}|pypi-[A-Za-z0-9_-]{30,255}|hf_[A-Za-z0-9]{20,255}|ya29\.[A-Za-z0-9_-]{20,255}|AIza[A-Za-z0-9_-]{35}|(?:AKIA|ASIA)[A-Z0-9]{16})\b|\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b)/u;
 
 function record(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -74,6 +82,22 @@ function exactKeys(value, expected) {
   const actual = Object.keys(value).sort();
   const wanted = [...expected].sort();
   return actual.length === wanted.length && actual.every((key, index) => key === wanted[index]);
+}
+
+function campaignLabel(value) {
+  if (typeof value !== "string") return null;
+  const text = value.normalize("NFC").trim();
+  if ([...text].length < 1 || [...text].length > 80 || !CAMPAIGN_LABEL.test(text)
+      || CAMPAIGN_LABEL_URL.test(text) || CAMPAIGN_LABEL_HOSTNAME.test(text) || CAMPAIGN_LABEL_IPV4.test(text)
+      || CAMPAIGN_LABEL_PATH.test(text)
+      || CAMPAIGN_LABEL_CREDENTIAL.test(text) || CAMPAIGN_LABEL_TOKEN.test(text)
+      || containsLikelyCredential(text)) return null;
+  try {
+    assertNoLikelySecret(text, "local fleet campaign label");
+  } catch {
+    return null;
+  }
+  return text;
 }
 
 function timestamp(value) {
@@ -430,8 +454,10 @@ function validateCase(value, options = {}) {
   const ctfPilot = value.ctfPilot === undefined ? pilotUnavailable("missing") : validatePilot(value.ctfPilot);
   const latestEvent = latestCaseEvent(value.activity);
   if (!ctfPilot || !latestEvent) return null;
+  const label = campaignLabel(value.displayName);
   return Object.freeze({
     sourceId: value.id,
+    label,
     sourceStatus: value.status,
     runtimeAvailable: value.runtimeHealth.status === "available",
     state: value.state,
@@ -455,7 +481,8 @@ function validateCase(value, options = {}) {
 
 function validateProfile(value) {
   if (!exactKeys(value, PROFILE_KEYS) || typeof value.id !== "string" || !/^program_[a-f0-9]{16}$/u.test(value.id)
-      || value.displayName !== null || !PROFILE_STAGES.has(value.stage) || !PROFILE_READINESS.has(value.readiness)
+      || !(value.displayName === null || typeof value.displayName === "string")
+      || !PROFILE_STAGES.has(value.stage) || !PROFILE_READINESS.has(value.readiness)
       || !exactKeys(value.progress, ["answered", "total"]) || count(value.progress.answered) === null
       || count(value.progress.total) === null || value.progress.answered > value.progress.total
       || count(value.blockerCount) === null || !(value.recommendationMode === null
@@ -474,11 +501,13 @@ function validateProfile(value) {
   if (!consistent) return null;
   return Object.freeze({
     sourceId: value.id,
+    label: campaignLabel(value.displayName),
     stage: value.stage,
     readiness: value.readiness,
     answered: value.progress.answered,
     total: value.progress.total,
     blockerCount: value.blockerCount,
+    nextSection: value.nextSection,
     freshness: value.freshness === "fresh" ? "current" : "delayed"
   });
 }
@@ -508,6 +537,7 @@ function caseCampaign(item, alias, fleetPrecision, receivedTime) {
     : item.ctfPilot;
   return Object.freeze({
     alias,
+    context: Object.freeze({ label: item.label, nextSection: null }),
     kind: "case",
     stage: item.stage,
     state: item.state,
@@ -529,8 +559,10 @@ function caseCampaign(item, alias, fleetPrecision, receivedTime) {
 
 function profileCampaign(item, alias, profilePrecision) {
   const percent = item.total > 0 ? Math.round(item.answered / item.total * 100) : null;
+  const setupBlockers = item.stage === "operator-review" ? item.blockerCount : 0;
   return Object.freeze({
     alias,
+    context: Object.freeze({ label: item.label, nextSection: item.nextSection }),
     kind: "profile",
     stage: `profile-${item.stage}`,
     state: item.stage === "ready" ? "idle" : item.stage === "superseded" ? "cancelled" : "waiting",
@@ -541,7 +573,7 @@ function profileCampaign(item, alias, profilePrecision) {
       runningExecutions: unavailableMetric(),
       activeWorkflows: unavailableMetric(),
       runningAnalyses: unavailableMetric(),
-      setupBlockers: metric(item.blockerCount, profilePrecision)
+      setupBlockers: metric(setupBlockers, profilePrecision)
     }),
     tokens: Object.freeze({ availability: "unavailable", total: null }),
     mirror: unavailableExecutionMirror("not-applicable"),
@@ -738,7 +770,8 @@ export function projectGateObserverStatus(value, options = {}) {
       runningAnalyses: addMetrics(campaigns, "runningAnalyses", casePrecision),
       setupBlockers: profilePrecision === "unavailable"
         ? unavailableMetric()
-        : metric(visibleProfiles.reduce((sum, item) => sum + item.blockerCount, 0), profilePrecision),
+        : metric(campaigns.filter((item) => item.kind === "profile")
+          .reduce((sum, item) => sum + item.work.setupBlockers.value, 0), profilePrecision),
       blockers: aggregateBlockers(campaigns, casePrecision, profilePrecision),
       campaignTokens: aggregateCampaignTokens(visibleCases, casePrecision),
       hostTokens: projectHostTokens(value.usage)

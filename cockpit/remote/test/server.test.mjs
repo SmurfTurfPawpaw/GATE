@@ -207,7 +207,7 @@ function fleetProjection(revision = 1) {
     discoveredAtLeast: false, omittedAtLeast: false, complete: false, truncated: true
   };
   return {
-    apiVersion: "gate.remote-fleet/v3",
+    apiVersion: "gate.remote-fleet/v4",
     sessionRevision: SESSION_REVISION,
     revision,
     selectionEpoch: "0".repeat(32),

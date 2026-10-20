@@ -379,7 +379,7 @@ function unavailableRemoteFleet(overrides = {}) {
     ...(profile ? { visible: null, representedByCases: null } : {})
   });
   return {
-    apiVersion: "gate.remote-fleet/v3", sessionRevision: 9, revision: 1, selectionEpoch: "0".repeat(32),
+    apiVersion: "gate.remote-fleet/v4", sessionRevision: 9, revision: 1, selectionEpoch: "0".repeat(32),
     observedAt: null, receivedAt: "2026-10-16T12:00:00.000Z",
     validUntil: "2026-10-16T12:00:15.000Z",
     connection: "unavailable", sourceFreshness: "unavailable",
@@ -397,6 +397,48 @@ function unavailableRemoteFleet(overrides = {}) {
     campaigns: [],
     ...overrides
   };
+}
+
+function connectedRemoteFleet(overrides = {}) {
+  const fleet = unavailableRemoteFleet();
+  const metric = (value = 0) => ({ value, precision: "exact" });
+  const scan = (profile = false) => ({
+    availability: "available", discovered: 1, scanned: 1, omitted: 0, invalid: 0,
+    discoveredAtLeast: false, omittedAtLeast: false, complete: true, truncated: false,
+    ...(profile ? { visible: 1, representedByCases: 1 } : {})
+  });
+  fleet.observedAt = fleet.receivedAt;
+  fleet.connection = "connected";
+  fleet.sourceFreshness = "current";
+  fleet.coverage = { state: "exact", cases: scan(), profiles: scan(true) };
+  fleet.summary = {
+    campaigns: metric(1), active: metric(1), waiting: metric(), attention: metric(),
+    profileAnswers: { answered: 1, total: 2, precision: "exact" },
+    runningExecutions: metric(), activeWorkflows: metric(1), runningAnalyses: metric(),
+    setupBlockers: metric(), blockers: metric(), campaignTokens: { availability: "unavailable", total: null },
+    hostTokens: {
+      availability: "unavailable", input: null, cachedInput: null, output: null, total: null,
+      cost: { availability: "unavailable", amountMicros: null, unit: null }
+    }
+  };
+  fleet.campaigns = [{
+    alias: "Campaign 1",
+    context: { label: "HackerOne CTF", nextSection: null },
+    kind: "case",
+    stage: "active-testing",
+    state: "running",
+    progress: null,
+    attention: "steady",
+    freshness: "current",
+    work: {
+      runningExecutions: metric(), activeWorkflows: metric(1),
+      runningAnalyses: metric(), setupBlockers: metric()
+    },
+    tokens: { availability: "unavailable", total: null },
+    mirror: { availability: "unavailable", reason: "disabled", attempts: [] },
+    latestEvent: { availability: "unavailable", category: null, status: null, at: null }
+  }];
+  return { ...fleet, ...overrides };
 }
 
 test("remote live contracts are exact, session-bound, and freshness-bounded", async () => {
@@ -493,6 +535,116 @@ test("remote live contracts are exact, session-bound, and freshness-bounded", as
     ...statusResponse,
     commands: [{ requestId, commandId: `cmd_${"b".repeat(36)}`, state: "completed" }]
   }, statusRequest), null);
+});
+
+test("remote fleet campaign context is exact, bounded, and state-consistent", async () => {
+  const { validateRemoteFleet } = await import("../assets/model.js");
+  const source = connectedRemoteFleet();
+  const accepted = validateRemoteFleet(source, { now, sessionRevision: 9 });
+  assert.equal(accepted?.campaigns[0].alias, "Campaign 1");
+  assert.deepEqual(accepted?.campaigns[0].context, {
+    label: "HackerOne CTF",
+    nextSection: null
+  });
+  assert.equal(Object.isFrozen(accepted.campaigns[0].context), true);
+
+  const campaign = source.campaigns[0];
+  const { context: _context, ...withoutContext } = campaign;
+  assert.equal(validateRemoteFleet({
+    ...source,
+    apiVersion: "gate.remote-fleet/v3"
+  }, { now, sessionRevision: 9 }), null);
+  assert.equal(validateRemoteFleet(connectedRemoteFleet({
+    campaigns: [withoutContext]
+  }), { now, sessionRevision: 9 }), null);
+  assert.equal(validateRemoteFleet(connectedRemoteFleet({
+    campaigns: [{ ...campaign, context: { ...campaign.context, extra: true } }]
+  }), { now, sessionRevision: 9 }), null);
+  assert.equal(validateRemoteFleet(connectedRemoteFleet({
+    campaigns: [{ ...campaign, context: { label: null, nextSection: null } }]
+  }), { now, sessionRevision: 9 })?.campaigns[0].context.label, null);
+
+  const questionnaire = {
+    ...campaign,
+    context: { label: "Uber Bug Bounty", nextSection: "authority-sources" },
+    kind: "profile",
+    stage: "profile-questionnaire",
+    state: "waiting",
+    progress: { completed: 14, total: 70, percent: 20 }
+  };
+  assert.equal(validateRemoteFleet(connectedRemoteFleet({
+    campaigns: [questionnaire]
+  }), { now, sessionRevision: 9 })?.campaigns[0].context.nextSection, "authority-sources");
+
+  for (const label of [
+    " trailing space ",
+    "line\nbreak",
+    "control\u0007value",
+    "<script>alert(1)</script>",
+    "https://example.com/program",
+    "www.example.com",
+    "example.com",
+    "Project (api.example.com)",
+    "Project example.com, next",
+    "Target 10.0.0.1",
+    "/private/program",
+    "C:\\private\\program",
+    "Bearer abcdefghijklmnop",
+    "A".repeat(81)
+  ]) {
+    assert.equal(validateRemoteFleet(connectedRemoteFleet({
+      campaigns: [{ ...campaign, context: { label, nextSection: null } }]
+    }), { now, sessionRevision: 9 }), null);
+  }
+
+  const invalidCampaigns = [
+    { ...campaign, context: { label: "HackerOne CTF", nextSection: "not-a-section" } },
+    { ...campaign, context: { label: "HackerOne CTF", nextSection: "scope-assets" } },
+    { ...questionnaire, context: { label: "Uber Bug Bounty", nextSection: null } },
+    {
+      ...questionnaire,
+      context: { label: "Uber Bug Bounty", nextSection: "scope-assets" },
+      stage: "profile-ready"
+    }
+  ];
+  for (const invalidCampaign of invalidCampaigns) {
+    assert.equal(validateRemoteFleet(connectedRemoteFleet({
+      campaigns: [invalidCampaign]
+    }), { now, sessionRevision: 9 }), null);
+  }
+});
+
+test("remote fleet blocker metrics stay bound to kind, stage, and visible aggregates", async () => {
+  const { validateRemoteFleet } = await import("../assets/model.js");
+
+  const caseFleet = connectedRemoteFleet();
+  caseFleet.campaigns[0].work.setupBlockers = { value: 7, precision: "exact" };
+  caseFleet.summary.setupBlockers = { value: 7, precision: "exact" };
+  caseFleet.summary.blockers = { value: 7, precision: "exact" };
+  assert.equal(validateRemoteFleet(caseFleet, { now, sessionRevision: 9 }), null);
+
+  const questionnaire = connectedRemoteFleet();
+  questionnaire.campaigns[0] = {
+    ...questionnaire.campaigns[0],
+    context: { label: "Example Program", nextSection: "authority-sources" },
+    kind: "profile",
+    stage: "profile-questionnaire",
+    state: "waiting",
+    progress: { completed: 14, total: 70, percent: 20 },
+    work: { ...questionnaire.campaigns[0].work, setupBlockers: { value: 5, precision: "exact" } }
+  };
+  questionnaire.summary.setupBlockers = { value: 5, precision: "exact" };
+  questionnaire.summary.blockers = { value: 5, precision: "exact" };
+  assert.equal(validateRemoteFleet(questionnaire, { now, sessionRevision: 9 }), null);
+
+  const inconsistent = connectedRemoteFleet();
+  inconsistent.summary.blockers = { value: 1, precision: "exact" };
+  assert.equal(validateRemoteFleet(inconsistent, { now, sessionRevision: 9 }), null);
+
+  const blocked = connectedRemoteFleet();
+  blocked.campaigns[0].state = "blocked";
+  blocked.summary.blockers = { value: 1, precision: "exact" };
+  assert.equal(validateRemoteFleet(blocked, { now, sessionRevision: 9 })?.summary.blockers.value, 1);
 });
 
 test("remote JSON boundary rejects redirects, types, malformed lengths, and oversized bodies", async () => {

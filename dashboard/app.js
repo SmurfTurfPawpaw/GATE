@@ -417,7 +417,9 @@ export function profileSetupPresentation(setup = {}, now = Date.now()) {
   const attention = [];
   if (stale) attention.push("Status stale");
   if (stage === "superseded") attention.push("Superseded");
-  if (blockerCount > 0) attention.push(countedLabel(blockerCount, "blocker"));
+  const remaining = answered !== null && total !== null ? Math.max(0, total - answered) : null;
+  if (stage === "questionnaire" && remaining > 0) attention.push(countedLabel(remaining, "question") + " remaining");
+  else if (blockerCount > 0) attention.push(countedLabel(blockerCount, "review issue"));
   const progressLabel = answered !== null && total !== null ? `${answered} / ${total} answered` : "Unavailable";
   const nextSectionLabel = setup.nextSection ? readableCapability(setup.nextSection) : ready ? "Ready for case" : "Review required";
   const recommendationLabel = setup.recommendationMode
@@ -426,7 +428,7 @@ export function profileSetupPresentation(setup = {}, now = Date.now()) {
   return {
     id: setup.id || null,
     kind: "profile-setup",
-    displayName: privateProfileName(setup.id),
+    displayName: setup.displayName || privateProfileName(setup.id),
     state: stage === "superseded" ? "cancelled" : ready ? "succeeded" : "waiting",
     status: stale ? "stale" : "ready",
     stage,
@@ -1333,7 +1335,7 @@ function renderProfileSetupDetail(setup) {
   const header = element("header", "case-detail-header profile-setup-header");
   const identity = element("div", "case-detail-identity");
   identity.append(
-    element("p", "eyebrow", "Program intake · private identity withheld"),
+    element("p", "eyebrow", setup.displayName ? "Program intake · bounded context" : "Program intake · private identity withheld"),
     element("h2", "", display.displayName),
     element("code", "", shortId(display.id))
   );
@@ -1346,7 +1348,9 @@ function renderProfileSetupDetail(setup) {
     element(
       "p",
       "",
-      "Target-specific details remain in the private local profile editor. This observer receives no target identity, answers, sources, or editor launch authority."
+      setup.displayName
+        ? "This bounded label identifies the intake. Target details, answers, and sources remain in the private local profile editor."
+        : "Target-specific details remain in the private local profile editor. This observer receives no target identity, answers, sources, or editor launch authority."
     )
   );
   const progressLabel = display.answered !== null && display.total !== null
@@ -1377,7 +1381,12 @@ function renderProfileSetupDetail(setup) {
   fact("Readiness", readableCapability(display.readiness));
   fact("Next section", display.nextSection ? readableCapability(display.nextSection) : display.phaseLabel);
   fact("Recommendations", display.recommendationMode ? readableCapability(display.recommendationMode) : "Unavailable");
-  fact("Blockers", Number.isFinite(display.blockerCount) ? String(display.blockerCount) : "Unavailable");
+  fact(
+    display.stage === "questionnaire" ? "Questions remaining" : "Review issues",
+    display.stage === "questionnaire" && Number.isFinite(display.answered) && Number.isFinite(display.total)
+      ? String(Math.max(0, display.total - display.answered))
+      : Number.isFinite(display.blockerCount) ? String(display.blockerCount) : "Unavailable"
+  );
   fact("Last update", display.updatedAt ? `${readableCapability(display.freshness)} · ${relativeTime(display.updatedAt)}` : "Unavailable");
   fact("Tokens", "Unavailable", "tracking-unavailable");
   fact("Findings tracking", "Unavailable", "tracking-unavailable");

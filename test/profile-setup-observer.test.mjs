@@ -95,10 +95,11 @@ async function listen(t, options) {
   return `http://127.0.0.1:${server.address().port}`;
 }
 
-test("bounded profile setup scan returns aggregate intake state without private profile content", (t) => {
+test("bounded profile setup scan exposes only the profile title alongside aggregate intake state", (t) => {
   const { paths } = fixture(t);
   createProgramProfile("private-program-canary", {
-    identity: { programName: "PROFILE_TITLE_PRIVATE_CANARY" }
+    metadata: { owner: "private-owner-canary" },
+    identity: { programName: "Example Bug Bounty" }
   }, { paths, now: observedAt });
 
   const fleet = programProfileSetupFleetStatus({ paths, now: observedAt });
@@ -116,6 +117,7 @@ test("bounded profile setup scan returns aggregate intake state without private 
   });
   assert.deepEqual(fleet.profiles, [{
     id: "private-program-canary",
+    title: "Example Bug Bounty",
     stage: "questionnaire",
     readiness: "not-ready",
     progress: { answered: 1, total: 66 },
@@ -125,7 +127,7 @@ test("bounded profile setup scan returns aggregate intake state without private 
     updatedAt: observedAt
   }]);
   assert.ok(fleet.profiles[0].blockerCount > 0);
-  assert.equal(JSON.stringify(fleet).includes("PROFILE_TITLE_PRIVATE_CANARY"), false);
+  assert.equal(JSON.stringify(fleet).includes("private-owner-canary"), false);
 });
 
 test("profile setup scan bounds discovery and fails closed on invalid entries", (t) => {
@@ -188,7 +190,7 @@ test("observer projects opaque intake aggregates, rejects malformed rows, and re
       },
       {
         id: visibleProgram,
-        displayName: "VISIBLE_PROFILE_TITLE_PRIVATE_CANARY",
+        title: "Visible Bug Bounty",
         stage: "operator-review",
         readiness: "not-ready",
         progress: { answered: 66, total: 66 },
@@ -226,7 +228,7 @@ test("observer projects opaque intake aggregates, rejects malformed rows, and re
   assert.equal(status.profileSetups.length, 1);
   assert.deepEqual(status.profileSetups[0], {
     id: status.profileSetups[0].id,
-    displayName: null,
+    displayName: "Visible Bug Bounty",
     stage: "operator-review",
     readiness: "not-ready",
     progress: { answered: 66, total: 66 },
@@ -257,11 +259,47 @@ test("observer projects opaque intake aggregates, rejects malformed rows, and re
     visibleProgram,
     "MALFORMED_PROGRAM_PRIVATE_CANARY",
     "DUPLICATE_TARGET_PRIVATE_CANARY",
-    "VISIBLE_PROFILE_TITLE_PRIVATE_CANARY",
     "EXACT_BLOCKER_TEXT_PRIVATE_CANARY",
     "SOURCE_ID_PRIVATE_CANARY",
     "PROFILE_PATH_PRIVATE_CANARY"
   ]) assert.equal(serialized.includes(canary), false, `profile setup projection leaked ${canary}`);
+});
+
+test("observer withholds unsafe profile labels without dropping aggregate rows", () => {
+  const titles = [
+    "https://example.invalid/program",
+    "/home/operator/program",
+    "C:\\Users\\operator\\program",
+    "password=private-canary",
+    "Bearer abcdefghijklmnopqrstuvwxyz",
+    "Basic abcdefghijklmnopqrstuvwxyz",
+    "Bad\u0007Title",
+    "A".repeat(81),
+    "portal.example.com",
+    "Project (api.example.com)",
+    "Project example.com, next",
+    "Target 10.0.0.1",
+    "ghp_ABCDEFGHIJKL1234",
+    "glpat-ABCDEFGHIJKLMNOPQRST",
+    "eyJabcdefgh.abcdefghijkl.abcdefghijkl"
+  ];
+  const profileSetups = titles.map((title, index) => rawSetup(`unsafe-label-${index}`, { title }));
+  const status = projectSnapshot(rawStatus({
+    profileSetups,
+    profileSetupScan: {
+      discovered: profileSetups.length,
+      scanned: profileSetups.length,
+      omitted: 0,
+      invalid: 0,
+      complete: true,
+      truncated: false
+    }
+  }), { repo }).status;
+
+  assert.equal(status.profileSetups.length, titles.length);
+  assert.ok(status.profileSetups.every((item) => item.displayName === null));
+  assert.equal(status.profileSetupScan.invalid, 0);
+  assert.equal(status.profileSetupScan.complete, true);
 });
 
 test("a stale case program binding does not hide the current profile setup", () => {
@@ -534,7 +572,8 @@ test("a warm profile scan failure advances status while retaining stale setup ro
 test("observer API reads the bounded private fleet and marks cached setup state stale", async (t) => {
   const { paths } = fixture(t);
   createProgramProfile("http-private-program", {
-    identity: { programName: "HTTP_PROFILE_TITLE_PRIVATE_CANARY" }
+    metadata: { owner: "http-owner-private-canary" },
+    identity: { programName: "HTTP Bug Bounty" }
   }, { paths, now: observedAt });
   let calls = 0;
   const origin = await listen(t, {
@@ -549,10 +588,10 @@ test("observer API reads the bounded private fleet and marks cached setup state 
   const first = await (await fetch(`${origin}/api/status`)).json();
   assert.equal(first.profileSetups.length, 1);
   assert.equal(first.profileSetups[0].freshness, "fresh");
-  assert.equal(first.profileSetups[0].displayName, null);
+  assert.equal(first.profileSetups[0].displayName, "HTTP Bug Bounty");
   assert.match(first.profileSetups[0].id, /^program_[a-f0-9]{16}$/u);
   assert.equal(JSON.stringify(first).includes("http-private-program"), false);
-  assert.equal(JSON.stringify(first).includes("HTTP_PROFILE_TITLE_PRIVATE_CANARY"), false);
+  assert.equal(JSON.stringify(first).includes("http-owner-private-canary"), false);
 
   await new Promise((resolve) => setTimeout(resolve, 275));
   const fallbackResponse = await fetch(`${origin}/api/status`);

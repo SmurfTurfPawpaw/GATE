@@ -538,6 +538,29 @@ function localDisplayName(value, maximum = 60) {
   return text;
 }
 
+const CAMPAIGN_LABEL = /^[A-Za-z0-9][A-Za-z0-9 &().,'+_-]{0,79}$/u;
+const CAMPAIGN_LABEL_URL = /(?:\b(?:https?|file|ftp):\/\/|\bwww\.)/iu;
+const CAMPAIGN_LABEL_HOSTNAME = /\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\b/iu;
+const CAMPAIGN_LABEL_IPV4 = /\b(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}\b/u;
+const CAMPAIGN_LABEL_PATH = /(?:^|\s)(?:~?[\\/]|[A-Za-z]:[\\/]|\\\\)/u;
+const CAMPAIGN_LABEL_CREDENTIAL = /(?:\b(?:api[_ -]?key|access[_ -]?token|refresh[_ -]?token|client[_ -]?secret|password|passwd|private[_ -]?key|session[_ -]?(?:id|key|token))\s*[:=]|\b(?:bearer|basic)\s+[A-Za-z0-9._~+/-]{12,}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\b(?:sk|pk|ghp|github_pat|xox[baprs])[_-][A-Za-z0-9_-]{12,}\b)/iu;
+const CAMPAIGN_LABEL_TOKEN = /(?:\b(?:github_pat_[A-Za-z0-9_]{20,255}|gh[pousr]_[A-Za-z0-9]{20,255}|glpat-[A-Za-z0-9_-]{20,255}|sk-(?:proj-|ant-api\d{2}-)?[A-Za-z0-9_-]{16,255}|(?:sk|rk)_live_[A-Za-z0-9]{16,255}|xox[baprs]-[A-Za-z0-9-]{10,255}|npm_[A-Za-z0-9]{30,255}|pypi-[A-Za-z0-9_-]{30,255}|hf_[A-Za-z0-9]{20,255}|ya29\.[A-Za-z0-9_-]{20,255}|AIza[A-Za-z0-9_-]{35}|(?:AKIA|ASIA)[A-Z0-9]{16})\b|\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b)/u;
+
+function campaignLabel(value) {
+  if (typeof value !== "string") return null;
+  const text = value.normalize("NFC").trim();
+  if ([...text].length < 1 || [...text].length > 80 || !CAMPAIGN_LABEL.test(text)
+      || CAMPAIGN_LABEL_URL.test(text) || CAMPAIGN_LABEL_HOSTNAME.test(text) || CAMPAIGN_LABEL_IPV4.test(text)
+      || CAMPAIGN_LABEL_PATH.test(text)
+      || CAMPAIGN_LABEL_CREDENTIAL.test(text) || CAMPAIGN_LABEL_TOKEN.test(text)) return null;
+  try {
+    assertNoLikelySecret(text, "observer campaign label");
+  } catch {
+    return null;
+  }
+  return text;
+}
+
 function id(value) {
   const text = boundedString(value, 128);
   return text && /^[A-Za-z0-9][A-Za-z0-9_.-]{1,127}$/u.test(text) ? text : null;
@@ -1634,7 +1657,8 @@ function summarizeCase(value, paths) {
       ctfPilot: unavailablePilot("invalid")
     };
   }
-  const displayName = localDisplayName(item?.displayName);
+  const rawDisplayName = localDisplayName(item?.displayName);
+  const displayName = rawDisplayName === null ? null : campaignLabel(rawDisplayName) || "Untitled case";
   const binding = object(item?.binding);
   const program = summarizeCaseBinding(binding?.program, "program");
   const project = binding?.project === null ? null : summarizeCaseBinding(binding?.project, "project");
@@ -1812,7 +1836,7 @@ function summarizeProfileSetup(value) {
   }
   return {
     id: opaqueId("program", privateId),
-    displayName: null,
+    displayName: campaignLabel(setup?.title),
     stage,
     readiness,
     progress: { answered, total },

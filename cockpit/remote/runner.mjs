@@ -28,7 +28,7 @@ const LEASE_RESPONSE_VERSION = "gate.remote-runner-lease/v1";
 const TRANSITION_VERSION = "gate.remote-runner-transition/v1";
 const ACTIVITY_UPLOAD_VERSION = "gate.remote-runner-activity/v1";
 const ACK_VERSION = "gate.remote-runner-ack/v1";
-const LOCAL_FLEET_VERSION = "gate.local-fleet/v3";
+const LOCAL_FLEET_VERSION = "gate.local-fleet/v4";
 
 const RUNNER_API_PREFIX = "/api/runner/v1";
 const JSON_CONTENT_TYPE = "application/json";

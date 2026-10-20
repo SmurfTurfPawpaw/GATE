@@ -1354,7 +1354,7 @@ test("case status is normalized from current binding metadata and runtime failur
   assert.equal(JSON.stringify(status).includes("PRIVATE_RUNTIME_FAILURE"), false);
 });
 
-test("profile setup projection preserves guided progress while withholding private profile identity", () => {
+test("profile setup projection preserves guided progress and bounded profile context", () => {
   const status = sanitizeStatusPayload({
     profileSetups: [{
       id: `program_${"a".repeat(16)}`,
@@ -1371,7 +1371,18 @@ test("profile setup projection preserves guided progress while withholding priva
       source: "PRIVATE_SOURCE_CANARY"
     }, {
       id: `program_${"b".repeat(16)}`,
-      displayName: "PRIVATE_DISPLAY_CANARY",
+      displayName: "HackerOne CTF",
+      stage: "ready",
+      readiness: "ready",
+      progress: { answered: 66, total: 66 },
+      blockerCount: 0,
+      nextSection: null,
+      recommendationMode: null,
+      updatedAt: "2026-10-16T08:00:00.000Z",
+      freshness: "fresh"
+    }, {
+      id: `program_${"c".repeat(16)}`,
+      displayName: "https://PRIVATE_DISPLAY_CANARY.invalid",
       stage: "ready",
       readiness: "ready",
       progress: { answered: 66, total: 66 },
@@ -1383,12 +1394,12 @@ test("profile setup projection preserves guided progress while withholding priva
     }],
     profileSetupScan: {
       availability: "available",
-      discovered: 3,
-      scanned: 2,
+      discovered: 4,
+      scanned: 3,
       omitted: 1,
       invalid: 1,
-      visible: 1,
-      representedByCases: 1,
+      visible: 2,
+      representedByCases: 0,
       discoveredAtLeast: true,
       omittedAtLeast: false,
       complete: false,
@@ -1408,15 +1419,26 @@ test("profile setup projection preserves guided progress while withholding priva
     recommendationMode: "mixed",
     updatedAt: "2026-10-16T08:00:00.000Z",
     freshness: "fresh"
+  }, {
+    id: `program_${"b".repeat(16)}`,
+    displayName: "HackerOne CTF",
+    stage: "ready",
+    readiness: "ready",
+    progress: { answered: 66, total: 66 },
+    blockerCount: 0,
+    nextSection: null,
+    recommendationMode: null,
+    updatedAt: "2026-10-16T08:00:00.000Z",
+    freshness: "fresh"
   }]);
   assert.deepEqual(status.profileSetupScan, {
     availability: "available",
-    discovered: 3,
-    scanned: 2,
+    discovered: 4,
+    scanned: 3,
     omitted: 1,
     invalid: 1,
-    visible: 1,
-    representedByCases: 1,
+    visible: 2,
+    representedByCases: 0,
     discoveredAtLeast: true,
     omittedAtLeast: false,
     complete: false,
@@ -1427,6 +1449,29 @@ test("profile setup projection preserves guided progress while withholding priva
     "PRIVATE_ANSWERS_CANARY", "PRIVATE_TARGET_CANARY", "PRIVATE_SOURCE_CANARY",
     "PRIVATE_DISPLAY_CANARY", "PRIVATE_FILENAME_CANARY"
   ]) assert.equal(serialized.includes(canary), false, `profile setup projection leaked ${canary}`);
+});
+
+test("profile setup projection rejects target and credential shaped labels", () => {
+  const rows = [
+    "Project (api.example.com)",
+    "Project example.com, next",
+    "Target 10.0.0.1",
+    "Bearer abcdefghijklmnop"
+  ].map((displayName, index) => ({
+    id: `program_${String(index + 1).repeat(16)}`,
+    displayName,
+    stage: "ready",
+    readiness: "ready",
+    progress: { answered: 66, total: 66 },
+    blockerCount: 0,
+    nextSection: null,
+    recommendationMode: null,
+    updatedAt: "2026-10-16T08:00:00.000Z",
+    freshness: "fresh"
+  }));
+
+  const status = sanitizeStatusPayload({ profileSetups: rows });
+  assert.deepEqual(status.profileSetups, []);
 });
 
 test("profile setup browser projection preserves unavailable scan truth and rejects contradictory readiness", () => {
@@ -1583,4 +1628,29 @@ test("case projection preserves schema-valid trailing spaces as trimmed display 
       assert.equal(projected.cases[0].status, status);
     }
   }
+});
+
+test("case projection replaces target and credential shaped labels without dropping rows", () => {
+  const unsafeNames = ["Bearer abcdefghijklmnop", "api.example.com", "Target 10.0.0.1"];
+  const status = sanitizeStatusPayload({
+    cases: unsafeNames.map((displayName, index) => ({
+      id: `case_${String(index + 1).repeat(16)}`,
+      displayName,
+      status: "ready",
+      binding: {
+        program: { id: `program_${String(index + 4).repeat(16)}`, current: true },
+        project: null
+      },
+      isolation: {
+        stateNamespace: "isolated-directory",
+        processBoundary: "shared-user",
+        networkBoundary: "adapter-dependent"
+      }
+    }))
+  });
+
+  assert.equal(status.cases.length, unsafeNames.length);
+  assert.deepEqual(status.cases.map((item) => item.displayName), unsafeNames.map(() => "Untitled case"));
+  const serialized = JSON.stringify(status);
+  for (const unsafeName of unsafeNames) assert.equal(serialized.includes(unsafeName), false);
 });

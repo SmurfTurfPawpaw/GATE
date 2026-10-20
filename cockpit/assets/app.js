@@ -36,7 +36,7 @@ const elements = {
   modeBanner: byId("mode-banner"), decisionPanel: byId("decision-panel"), messageComposer: byId("message-composer"),
   messageInput: byId("message-input"), messageSend: byId("message-send"), messageCount: byId("message-count"),
   messageStatus: byId("message-status"),
-  pilotPanel: byId("pilot-panel"), pilotHeartbeat: byId("pilot-heartbeat"), pilotAlert: byId("pilot-alert"),
+  pilotPanel: byId("pilot-panel"), pilotTitle: byId("pilot-title"), pilotHeartbeat: byId("pilot-heartbeat"), pilotAlert: byId("pilot-alert"),
   pilotCaseAlias: byId("pilot-case-alias"), pilotCaseSelect: byId("pilot-case-select"),
   pilotSolvingVerdict: byId("pilot-solving-verdict"), pilotSolvingDetail: byId("pilot-solving-detail"),
   pilotLearningVerdict: byId("pilot-learning-verdict"), pilotLearningVerdictDetail: byId("pilot-learning-verdict-detail"),
@@ -207,7 +207,7 @@ function mirrorCost(cost) {
 function setMirrorUnavailable(reason = "source-unavailable", campaigns = []) {
   const reasonLabels = {
     disabled: "Mirror disabled for this source.",
-    "not-applicable": "No supervised execution applies to this project.",
+    "not-applicable": "No supervised execution applies to this work item.",
     "no-attempts": "No execution attempts have started yet.",
     "source-unavailable": "Execution mirror source unavailable."
   };
@@ -235,7 +235,7 @@ function setMirrorUnavailable(reason = "source-unavailable", campaigns = []) {
   renderedMirrorHistoryKey = null;
   elements.mirrorLiveState.className = "mirror-live-state unavailable";
   elements.mirrorLiveState.textContent = mirrorMode === "preview" ? "Synthetic preview" : "Source unavailable";
-  if (campaigns.length === 0) elements.mirrorCaption.textContent = "No project mirror is available in this view.";
+  if (campaigns.length === 0) elements.mirrorCaption.textContent = "No work-item mirror is available in this view.";
 }
 
 function mirrorEntryLine(entry) {
@@ -272,7 +272,7 @@ function renderOperationalMirror(campaigns, mode, sourceFreshness = "unavailable
   }
   clear(elements.mirrorCampaignSelect);
   if (candidates.length === 0) {
-    const unavailable = node("option", "", "Project unavailable");
+    const unavailable = node("option", "", "Work item unavailable");
     unavailable.value = "";
     elements.mirrorCampaignSelect.append(unavailable);
     elements.mirrorCampaignSelect.disabled = true;
@@ -281,7 +281,7 @@ function renderOperationalMirror(campaigns, mode, sourceFreshness = "unavailable
     return;
   }
   for (const campaign of candidates) {
-    const option = node("option", "", campaign.alias);
+    const option = node("option", "", fleetCampaignDisplayName(campaign));
     option.value = campaign.alias;
     elements.mirrorCampaignSelect.append(option);
   }
@@ -289,8 +289,8 @@ function renderOperationalMirror(campaigns, mode, sourceFreshness = "unavailable
   elements.mirrorCampaignSelect.value = selectedMirrorCampaignAlias || "";
   const campaign = candidates.find((item) => item.alias === selectedMirrorCampaignAlias) || null;
   elements.mirrorCaption.textContent = campaign
-    ? `${campaign.alias} · current in-progress state above; retained attempt history below`
-    : "Select a project and attempt.";
+    ? `${fleetCampaignDisplayName(campaign)} · current in-progress state above; retained attempt history below`
+    : "Select a work item and attempt.";
   if (!campaign || campaign.mirror.availability !== "available") {
     setMirrorUnavailable(campaign?.mirror?.reason || "source-unavailable", candidates);
     return;
@@ -419,13 +419,16 @@ function renderPilot(fleet) {
   placeholder.value = "";
   elements.pilotCaseSelect.append(placeholder);
   for (const alias of pilot.aliases) {
-    const option = node("option", "", alias);
+    const campaign = fleet?.campaigns?.find((item) => item.alias === alias);
+    const option = node("option", "", campaign ? fleetCampaignDisplayName(campaign) : alias);
     option.value = alias;
     elements.pilotCaseSelect.append(option);
   }
   elements.pilotCaseSelect.disabled = pilot.aliases.length === 0;
   elements.pilotCaseSelect.value = pilot.alias || "";
-  elements.pilotCaseAlias.textContent = pilot.alias || "No case selected";
+  const selectedCampaign = fleet?.campaigns?.find((item) => item.alias === pilot.alias);
+  elements.pilotTitle.textContent = selectedCampaign ? fleetCampaignTitle(selectedCampaign) : "Pilot status";
+  elements.pilotCaseAlias.textContent = pilot.alias ? `${pilot.alias} · Case` : "No case selected";
   elements.pilotHeartbeat.className = `pilot-heartbeat ${pilot.heartbeat === "current" ? "current" : pilot.heartbeat === "delayed" ? "delayed" : "unavailable"}`;
   elements.pilotHeartbeat.textContent = pilot.state === "feed-unavailable"
     ? "Feed unavailable"
@@ -1182,31 +1185,143 @@ function fleetStageLabel(value) {
   return labels[value] || "Stage unavailable";
 }
 
-function fleetWorkSummary(campaign) {
+function fleetCampaignTitle(campaign) {
+  return campaign.context?.label || (campaign.kind === "profile" ? "Untitled profile" : "Untitled case");
+}
+
+function fleetCampaignDisplayName(campaign) {
+  const label = campaign.context?.label;
+  return label ? `${label} · ${campaign.alias}` : campaign.alias;
+}
+
+function fleetSectionLabel(value) {
+  const labels = {
+    "identity-objectives": "Identity, objectives, and completion",
+    "authority-sources": "Authority and source ledger",
+    "actions-techniques": "Actions and techniques",
+    "limits-schedule": "Limits, schedule, and budgets",
+    "scope-assets": "Exact assets and scope boundaries",
+    "accounts-identities": "Accounts, identities, and secret references",
+    "architecture-data-flows": "Architecture, trust boundaries, and data flows",
+    "workflow-coverage": "Workflow and coverage",
+    "data-evidence": "Data and evidence handling",
+    "stops-escalation-cleanup": "Stops, escalation, and cleanup",
+    "reporting-disclosure": "Reporting, disclosure, and retest",
+    "ambiguities-attestation": "Ambiguities and operator attestation",
+    "conditional-modules": "Conditional modules"
+  };
+  return labels[value] || "the next profile section";
+}
+
+function fleetCampaignGuidance(campaign) {
   if (campaign.kind === "profile") {
-    const blockers = fleetMetricText(campaign.work.setupBlockers);
-    return `${campaign.progress.completed} / ${campaign.progress.total} answers · ${blockers} blockers`;
+    if (campaign.stage === "profile-questionnaire") {
+      const remaining = Math.max(0, campaign.progress.total - campaign.progress.completed);
+      return {
+        reason: `${remaining} question${remaining === 1 ? "" : "s"} remaining`,
+        next: `Next: answer ${fleetSectionLabel(campaign.context.nextSection)}`
+      };
+    }
+    if (campaign.stage === "profile-operator-review") {
+      const issues = campaign.work.setupBlockers;
+      const issueCount = fleetMetricText(issues);
+      return {
+        reason: issues.precision === "unavailable"
+          ? "Review status unavailable"
+          : `${issueCount} review issue${issues.precision === "exact" && issues.value === 1 ? "" : "s"}`,
+        next: "Next: review unresolved profile requirements"
+      };
+    }
+    if (campaign.stage === "profile-ready") {
+      return { reason: "Profile setup complete", next: "Next: create or select a case" };
+    }
+    return { reason: "Replaced by a newer profile", next: "Next: open the current profile" };
   }
-  if (campaign.pilot?.availability === "available") {
-    const tokens = campaign.tokens.availability === "unavailable"
-      ? "tokens unavailable"
-      : `${compactNumber(campaign.tokens.total)} ${campaign.tokens.availability} tokens`;
-    return `Solving ${readablePilotValue(campaign.pilot.solving.verdict)} · Learning ${readablePilotValue(campaign.pilot.learning.verdict)} · Cockpit ${readablePilotValue(campaign.pilot.cockpit.verdict)} · ${tokens}`;
+
+  if (campaign.attention === "response-needed" && !new Set(["blocked", "failed"]).has(campaign.state)) {
+    return { reason: "Your response is needed", next: "Next: answer the pending request" };
   }
-  const workflows = fleetMetricText(campaign.work.activeWorkflows);
-  const executions = fleetMetricText(campaign.work.runningExecutions);
-  const analyses = fleetMetricText(campaign.work.runningAnalyses);
-  const tokens = campaign.tokens.availability === "unavailable"
-    ? "Awaiting attribution"
-    : `${compactNumber(campaign.tokens.total)} ${campaign.tokens.availability} · canonical case tokens`;
-  return `${workflows} workflows · ${executions} runs · ${analyses} analyses · ${tokens}`;
+  const guidance = {
+    queued: ["Queued for the runner", "Next: wait for the runner"],
+    running: ["Work is in progress", "Next: monitor the active attempt"],
+    waiting: ["Waiting for a dependency", "Next: check the required dependency"],
+    blocked: ["Blocked by an unresolved issue", "Next: review the blocking issue"],
+    succeeded: ["Latest work completed", "Next: review the result"],
+    failed: ["Latest work failed", "Next: review the failed attempt"],
+    cancelled: ["Work was cancelled", "Next: decide whether to restart"],
+    idle: ["No work is active", "Next: start or resume work"],
+    unknown: ["Current state unavailable", "Next: refresh campaign status"]
+  };
+  const [reason, next] = guidance[campaign.state] || guidance.unknown;
+  return { reason, next };
+}
+
+function fleetStateLabel(campaign) {
+  const labels = {
+    queued: "Queued", running: "Running", waiting: "Waiting", blocked: "Blocked",
+    succeeded: "Complete", failed: "Failed", cancelled: "Cancelled", idle: "Idle", unknown: "Unknown"
+  };
+  return labels[campaign.state] || "Unknown";
+}
+
+function fleetAttentionLabel(value) {
+  return value === "response-needed" ? "Response needed" : value === "watch" ? "Watch" : "Steady";
+}
+
+function fleetCampaignDetails(campaign, guidance) {
+  const details = [
+    ["Context", campaign.kind === "profile" ? "Profile setup" : "Case"],
+    ["Status", fleetStateLabel(campaign)],
+    ["Why", guidance.reason],
+    ["Attention", fleetAttentionLabel(campaign.attention)]
+  ];
+  if (campaign.kind === "profile") {
+    details.push(["Progress", `${campaign.progress.completed} of ${campaign.progress.total} answered`]);
+    if (campaign.stage === "profile-questionnaire") {
+      details.push(["Next section", fleetSectionLabel(campaign.context.nextSection)]);
+    } else if (campaign.stage === "profile-operator-review") {
+      const issues = campaign.work.setupBlockers;
+      details.push(["Review issues", issues.precision === "unavailable" ? "Unavailable" : fleetMetricText(issues)]);
+    }
+    return details;
+  }
+  details.push([
+    "Work",
+    `${fleetMetricText(campaign.work.activeWorkflows)} workflows · ${fleetMetricText(campaign.work.runningExecutions)} runs · ${fleetMetricText(campaign.work.runningAnalyses)} analyses`
+  ]);
+  details.push([
+    "Tokens",
+    campaign.tokens.availability === "unavailable"
+      ? "Awaiting attribution"
+      : `${compactNumber(campaign.tokens.total)}${campaign.tokens.availability === "partial" ? "+" : ""} · ${campaign.tokens.availability}`
+  ]);
+  return details;
+}
+
+function fleetCampaignDisclosure(campaign, guidance) {
+  const disclosure = node("details", "campaign-details");
+  disclosure.append(node("summary", "", "Details"));
+  const list = node("dl", "campaign-detail-list");
+  for (const [label, value] of fleetCampaignDetails(campaign, guidance)) {
+    const row = node("div", "campaign-detail-row");
+    row.append(node("dt", "", label), node("dd", "", value));
+    list.append(row);
+  }
+  disclosure.append(list);
+  return disclosure;
 }
 
 function localFleetCampaignCard(campaign) {
   const article = node("article", `campaign-card attention-${campaign.attention}`);
   const header = node("header", "campaign-card-header");
   const identity = node("div", "campaign-identity");
-  identity.append(node("span", "campaign-glyph", campaign.alias.slice(-1)), node("h3", "", campaign.alias));
+  const title = fleetCampaignTitle(campaign);
+  const heading = node("div", "campaign-heading");
+  heading.append(
+    node("h3", "", title),
+    node("p", "campaign-alias", `${campaign.alias} · ${campaign.kind === "profile" ? "Profile setup" : "Case"}`)
+  );
+  identity.append(node("span", "campaign-glyph", campaign.alias.slice(-1)), heading);
   const freshness = campaign.freshness === "current" ? "Current" : campaign.freshness === "delayed" ? "Delayed" : "Unknown";
   header.append(identity, node("span", `freshness freshness-${campaign.freshness}`, freshness));
 
@@ -1226,7 +1341,7 @@ function localFleetCampaignCard(campaign) {
   stageRow.append(stage, node("strong", "progress-number", objectiveProgress || (progressPercent === null ? "Unavailable" : `${progressPercent}%`)));
   const track = node("div", `progress-track${progressPercent === null ? " unavailable" : ""}`);
   track.setAttribute("role", "progressbar");
-  track.setAttribute("aria-label", `${campaign.alias} progress`);
+  track.setAttribute("aria-label", `${title} (${campaign.alias}) progress`);
   const fill = node("span", "progress-fill");
   if (progressPercent === null) {
     track.setAttribute("aria-valuetext", campaign.kind === "case" ? "Objective progress unavailable" : "No percentage available");
@@ -1237,14 +1352,10 @@ function localFleetCampaignCard(campaign) {
     fill.style.setProperty("--progress", `${progressPercent}%`);
   }
   track.append(fill);
-  const footer = node("footer", "campaign-card-footer");
-  const attention = node("span", `attention attention-${campaign.attention}`);
-  attention.append(node("i", ""), node("span", "", campaign.attention === "response-needed" ? "Response needed" : campaign.attention === "watch" ? "Watch" : "Steady"));
-  const pilotUnavailable = campaign.kind === "case" && campaign.pilot?.availability !== "available";
-  const state = node("span", `codex-state codex-${pilotUnavailable ? "waiting" : campaign.state === "running" ? "working" : campaign.state === "waiting" ? "waiting" : "idle"}`);
-  state.append(node("i", ""), node("span", "", pilotUnavailable ? "Pilot unavailable" : campaign.state.replace("-", " ")));
-  footer.append(attention, state);
-  article.append(header, stageRow, track, node("p", "campaign-action", fleetWorkSummary(campaign)), footer);
+  const guidance = fleetCampaignGuidance(campaign);
+  const status = node("p", "campaign-status-line");
+  status.append(node("span", "campaign-reason", guidance.reason), node("span", "campaign-status-separator", "·"), node("strong", "campaign-next-action", guidance.next));
+  article.append(header, stageRow, track, status, fleetCampaignDisclosure(campaign, guidance));
   return article;
 }
 
@@ -1356,7 +1467,7 @@ function renderLiveMode() {
     elements.tokenSummary.textContent = "Telemetry unavailable";
   }
   elements.blockerCount.textContent = fleetMetricText(fleetSummary?.blockers);
-  elements.blockerSummary.textContent = fleetConnected ? "Blocked cases and profile setup" : "Status unavailable";
+  elements.blockerSummary.textContent = fleetConnected ? "Blocked cases and profile review issues" : "Status unavailable";
   const visiblePendingCount = state.pendingQuestions.reduce((total, pending) => total + pending.questions.length, 0);
   const hasWithheldRemoteQuestion = remoteMode && state.turn === "waiting" && visiblePendingCount === 0;
   const pendingCount = visiblePendingCount + (hasWithheldRemoteQuestion ? 1 : 0);
@@ -1380,7 +1491,7 @@ function renderLiveMode() {
   } else {
     const empty = node("div", "empty-state");
     empty.append(node("p", "", fleetConnected
-      ? fleet.coverage.state === "exact" ? "No active projects." : "No projects in the current partial view."
+      ? fleet.coverage.state === "exact" ? "No active work items." : "No work items in the current partial view."
       : "Fleet signal unavailable."));
     elements.campaignList.append(empty);
   }
@@ -1444,7 +1555,7 @@ function renderAvailable(model) {
   const activeCount = model.campaigns.filter((campaign) => !["Complete", "Paused"].includes(campaign.stage)).length;
   elements.runningMetricLabel.textContent = "RUNNING";
   elements.runningCount.textContent = String(runningCount);
-  elements.runningSummary.textContent = `${activeCount} active project${activeCount === 1 ? "" : "s"}`;
+  elements.runningSummary.textContent = `${activeCount} active work item${activeCount === 1 ? "" : "s"}`;
   elements.tokenMetricLabel.textContent = "TOKENS";
   if (model.aggregate.tokenStatus === "available") {
     elements.tokenUsage.textContent = `${compactNumber(model.aggregate.tokensUsed)} / ${compactNumber(model.aggregate.tokenBudget)}`;
@@ -1463,7 +1574,7 @@ function renderAvailable(model) {
   clear(elements.campaignList);
   if (model.campaigns.length === 0) {
     const empty = node("div", "empty-state");
-    empty.append(node("p", "", "No projects in this snapshot."));
+    empty.append(node("p", "", "No work items in this snapshot."));
     elements.campaignList.append(empty);
   } else {
     model.campaigns.forEach((campaign) => elements.campaignList.append(campaignCard(campaign)));

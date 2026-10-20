@@ -635,6 +635,16 @@ const LOCAL_FLEET_STAGES = new Set([
 const LOCAL_FLEET_STATES = new Set(["queued", "running", "waiting", "blocked", "succeeded", "failed", "cancelled", "unknown", "idle"]);
 const LOCAL_FLEET_ATTENTION = new Set(["steady", "watch", "response-needed"]);
 const LOCAL_FLEET_FRESHNESS = new Set(["current", "delayed", "unknown"]);
+const LOCAL_FLEET_PROFILE_SECTIONS = new Set([
+  "identity-objectives", "authority-sources", "actions-techniques", "limits-schedule", "scope-assets",
+  "accounts-identities", "architecture-data-flows", "workflow-coverage", "data-evidence",
+  "stops-escalation-cleanup", "reporting-disclosure", "ambiguities-attestation", "conditional-modules"
+]);
+const LOCAL_FLEET_CONTEXT_LABEL = /^[A-Za-z0-9][A-Za-z0-9 &().,'+_-]{0,79}$/u;
+const LOCAL_FLEET_CONTEXT_URL = /(?:\b(?:https?|file|ftp):\/\/|\bwww\.)/iu;
+const LOCAL_FLEET_CONTEXT_HOSTNAME = /\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\b/iu;
+const LOCAL_FLEET_CONTEXT_IPV4 = /\b(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}\b/u;
+const LOCAL_FLEET_CONTEXT_PATH = /(?:^|\s)(?:~?[\\/]|[A-Za-z]:[\\/]|\\\\)/u;
 const LOCAL_FLEET_EVENT_CATEGORIES = new Set(["campaign", "workflow", "execution", "test", "evidence", "learning", "analysis", "tool", "operator", "system", "other"]);
 const LOCAL_FLEET_EVENT_STATUSES = new Set(["queued", "running", "waiting", "blocked", "succeeded", "failed", "cancelled", "unknown"]);
 const LOCAL_FLEET_TOKEN_AVAILABILITY = new Set(["exact", "estimated", "partial", "unavailable"]);
@@ -878,6 +888,24 @@ function validateFleetMetric(value) {
   if (!exactKeys(value, ["value", "precision"]) || !LOCAL_FLEET_PRECISION.has(value.precision)) return null;
   if (value.precision === "unavailable") return value.value === null ? Object.freeze({ ...value }) : null;
   return boundedInteger(value.value, 0, 1_000_000_000) ? Object.freeze({ ...value }) : null;
+}
+
+function validateFleetContext(value, kind, stage) {
+  if (!exactKeys(value, ["label", "nextSection"])) return null;
+  let label = null;
+  if (value.label !== null) {
+    if (typeof value.label !== "string" || value.label !== value.label.normalize("NFC").trim()
+        || !LOCAL_FLEET_CONTEXT_LABEL.test(value.label) || LOCAL_FLEET_CONTEXT_URL.test(value.label)
+        || LOCAL_FLEET_CONTEXT_HOSTNAME.test(value.label) || LOCAL_FLEET_CONTEXT_IPV4.test(value.label)
+        || LOCAL_FLEET_CONTEXT_PATH.test(value.label) || containsLikelyRemoteCredential(value.label)) return null;
+    label = value.label;
+  }
+  const nextSection = value.nextSection === null ? null
+    : typeof value.nextSection === "string" && LOCAL_FLEET_PROFILE_SECTIONS.has(value.nextSection) ? value.nextSection : undefined;
+  if (nextSection === undefined || kind === "case" && nextSection !== null
+      || kind === "profile" && stage === "profile-questionnaire" && nextSection === null
+      || kind === "profile" && stage !== "profile-questionnaire" && nextSection !== null) return null;
+  return Object.freeze({ label, nextSection });
 }
 
 export function hasAvailableFleetMetric(value) {
@@ -1196,7 +1224,7 @@ export function pilotCockpitPresentation(fleet, selectedAlias = null) {
 export function validateLocalFleet(value, options = {}) {
   if (!exactKeys(value, [
     "apiVersion", "revision", "selectionEpoch", "observedAt", "receivedAt", "validUntil", "connection", "sourceFreshness", "coverage", "summary", "campaigns"
-  ]) || value.apiVersion !== "gate.local-fleet/v3" || !boundedInteger(value.revision, 1, 2_147_483_647)
+  ]) || value.apiVersion !== "gate.local-fleet/v4" || !boundedInteger(value.revision, 1, 2_147_483_647)
       || typeof value.selectionEpoch !== "string" || !/^[a-f0-9]{32}$/u.test(value.selectionEpoch)
       || !LOCAL_FLEET_CONNECTION.has(value.connection) || !LOCAL_FLEET_SOURCE_FRESHNESS.has(value.sourceFreshness)) return null;
   const receivedAt = timestamp(value.receivedAt);
@@ -1240,12 +1268,14 @@ export function validateLocalFleet(value, options = {}) {
   const aliases = new Set();
   const campaigns = [];
   for (const item of value.campaigns) {
-    const campaignKeys = ["alias", "kind", "stage", "state", "progress", "attention", "freshness", "work", "tokens", "pilot", "latestEvent", "mirror"];
+    const campaignKeys = ["alias", "context", "kind", "stage", "state", "progress", "attention", "freshness", "work", "tokens", "pilot", "latestEvent", "mirror"];
     if (!(exactKeys(item, campaignKeys) || exactKeys(item, campaignKeys.filter((key) => key !== "pilot")))
         || typeof item.alias !== "string" || !/^Campaign [1-9]\d{0,2}$/u.test(item.alias) || aliases.has(item.alias)
         || !LOCAL_FLEET_KINDS.has(item.kind) || !LOCAL_FLEET_STAGES.has(item.stage) || !LOCAL_FLEET_STATES.has(item.state)
         || !LOCAL_FLEET_ATTENTION.has(item.attention) || !LOCAL_FLEET_FRESHNESS.has(item.freshness)) return null;
     aliases.add(item.alias);
+    const context = validateFleetContext(item.context, item.kind, item.stage);
+    if (!context) return null;
     let progress = null;
     if (item.kind === "case") {
       if (item.progress !== null || item.stage.startsWith("profile-")) return null;
@@ -1279,8 +1309,20 @@ export function validateLocalFleet(value, options = {}) {
         ? Object.freeze({ ...item.latestEvent }) : null;
     if (!latestEvent || latestEvent.availability === "available" && observedAt !== null
         && timestamp(latestEvent.at) > observedAt) return null;
-    campaigns.push(Object.freeze({ ...item, progress, work: Object.freeze(work), tokens, pilot, latestEvent, mirror }));
+    campaigns.push(Object.freeze({ ...item, context, progress, work: Object.freeze(work), tokens, pilot, latestEvent, mirror }));
   }
+  const setupBlockerTotal = campaigns
+    .filter((item) => item.kind === "profile" && item.work.setupBlockers.precision !== "unavailable")
+    .reduce((total, item) => total + item.work.setupBlockers.value, 0);
+  if (campaigns.some((item) => item.kind === "case" && item.work.setupBlockers.precision !== "unavailable"
+      && item.work.setupBlockers.value !== 0)
+      || campaigns.some((item) => item.kind === "profile" && item.stage !== "profile-operator-review"
+        && item.work.setupBlockers.precision !== "unavailable" && item.work.setupBlockers.value !== 0)
+      || campaigns.some((item) => item.kind === "profile" && item.stage === "profile-operator-review"
+        && (item.work.setupBlockers.precision === "unavailable" || item.work.setupBlockers.value < 1))
+      || summary.setupBlockers.precision !== "unavailable" && summary.setupBlockers.value !== setupBlockerTotal
+      || summary.blockers.precision !== "unavailable" && summary.blockers.value !== setupBlockerTotal
+        + campaigns.filter((item) => item.kind === "case" && item.state === "blocked").length) return null;
   if (value.connection === "connected" && campaigns.some((item) => item.pilot.availability === "available"
       && (timestamp(item.pilot.observedAt) > observedAt || validUntil > timestamp(item.pilot.validUntil)))) return null;
   if (value.connection === "unavailable" && (value.coverage.state !== "unavailable" || campaigns.length !== 0
@@ -1294,13 +1336,13 @@ export function validateLocalFleet(value, options = {}) {
 }
 
 export function validateRemoteFleet(value, options = {}) {
-  if (!record(value) || value.apiVersion !== "gate.remote-fleet/v3") return null;
+  if (!record(value) || value.apiVersion !== "gate.remote-fleet/v4") return null;
   if (!exactKeys(value, [
     "apiVersion", "sessionRevision", "revision", "selectionEpoch", "observedAt", "receivedAt", "validUntil", "connection", "sourceFreshness", "coverage", "summary", "campaigns"
   ]) || !boundedInteger(value.sessionRevision, 1, 2_147_483_647)
       || options.sessionRevision !== undefined && value.sessionRevision !== options.sessionRevision) return null;
   const { sessionRevision, ...withoutSession } = value;
-  const local = validateLocalFleet({ ...withoutSession, apiVersion: "gate.local-fleet/v3" }, { ...options, remote: true });
+  const local = validateLocalFleet({ ...withoutSession, apiVersion: "gate.local-fleet/v4" }, { ...options, remote: true });
   return local && boundedProjection(value) ? Object.freeze({ ...local, apiVersion: value.apiVersion, sessionRevision }) : null;
 }
 

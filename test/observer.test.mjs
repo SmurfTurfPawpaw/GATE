@@ -1101,6 +1101,32 @@ test("observer publishes multiple isolated cases with opaque bindings and metada
   ]) assert.equal(serialized.includes(forbidden), false, `case observer projection leaked ${forbidden}`);
 });
 
+test("case labels with target or credential shapes retain an untitled aggregate row", () => {
+  const unsafeNames = ["Bearer abcdefghijklmnop", "api.example.com", "Target 10.0.0.1"];
+  const raw = statusFixture({
+    cases: unsafeNames.map((displayName, index) => caseFixture({
+      id: `unsafe-case-${index}`,
+      displayName,
+      programId: `unsafe-program-${index}`,
+      projectId: null
+    })),
+    caseScan: {
+      discovered: unsafeNames.length,
+      scanned: unsafeNames.length,
+      omitted: 0,
+      invalid: 0,
+      complete: true,
+      truncated: false
+    }
+  });
+
+  const status = projectSnapshot(raw, paths).status;
+  assert.equal(status.cases.length, unsafeNames.length);
+  assert.deepEqual(status.cases.map((item) => item.displayName), unsafeNames.map(() => "Untitled case"));
+  const serialized = JSON.stringify(status);
+  for (const unsafeName of unsafeNames) assert.equal(serialized.includes(unsafeName), false);
+});
+
 test("stale cases retain sanitized monitoring while invalid rows become blocked tombstones", () => {
   const privateRuntime = statusFixture({
     events: [canonicalEvent({
