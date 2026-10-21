@@ -167,16 +167,17 @@ reference must identify an observed `program-rules` or `platform-page` record
 with a captured content SHA-256. Profile verification checks this structural
 provenance, not the source contents or their legal effect; the operator must
 review the cited claims. Downstream campaigns separately bind their retained
-source snapshot. Verification emits `dedicated-lab-safe-harbor-unknown`; it does
-not infer a legal promise or convert the decision to allowed. All other unknown
-decisions and unresolved authority or scope ambiguities still block readiness.
+source snapshot. Verification emits `dedicated-lab-safe-harbor-unknown` without
+converting the decision to allowed. All other unknown decisions and unresolved
+authority or scope ambiguities still block readiness.
 If an ambiguity only records the absence of legal assurance, record its
 disposition explicitly while retaining the unknown legal decision. Do not mark
 the legal terms themselves as known.
 
 This narrow intake rule does not apply to owner, bounty, client, or contract
 profiles. It does not answer the operator confirmation or final attestations,
-create a case, or authorize a request. A lab still needs exact scope, a current
+create a case, or authorize a request. Profile readiness grants neither legal
+protection nor execution authority. A lab still needs exact scope, a current
 source snapshot, and the separate engagement and lab-campaign receipts described
 in [the dedicated-lab guide](lab-campaign-authority.md).
 
