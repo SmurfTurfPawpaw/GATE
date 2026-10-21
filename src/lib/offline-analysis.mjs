@@ -1671,7 +1671,9 @@ function openDirectory(directory, label) {
   const descriptor = fs.openSync(resolved, fs.constants.O_RDONLY | (fs.constants.O_DIRECTORY || 0) | (fs.constants.O_NOFOLLOW || 0));
   try {
     const opened = fs.fstatSync(descriptor, { bigint: true });
-    if (!opened.isDirectory() || !sameStat(before, opened)) {
+    if (!opened.isDirectory() ||
+      before.dev !== opened.dev || before.ino !== opened.ino ||
+      before.uid !== opened.uid || before.gid !== opened.gid || before.mode !== opened.mode) {
       throw new Error(`${label} changed while it was opened`);
     }
     return descriptor;

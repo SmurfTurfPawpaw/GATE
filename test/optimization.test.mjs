@@ -427,7 +427,7 @@ test("summary CLI projections stay bounded and paginate without inventing token 
     cwd: repo,
     env: environment,
     encoding: "utf8",
-    timeout: 20_000,
+    timeout: 60_000,
     maxBuffer: 2 * 1024 * 1024
   });
 

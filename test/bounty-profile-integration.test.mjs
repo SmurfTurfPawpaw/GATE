@@ -33,6 +33,9 @@ import {
   PROGRAM_PROFILE_STOP_CONDITIONS,
   programProfileQuestionnaireBinding
 } from "../src/lib/program-profile-contract.mjs";
+import { createCase } from "../src/lib/cases.mjs";
+import { campaignStatus, createCampaign, resumeCampaign, runNextCampaignJob } from "../src/lib/campaigns.mjs";
+import { importProgramSource } from "../src/lib/program-sources.mjs";
 import { runtimePaths } from "../src/lib/paths.mjs";
 import { startObserver } from "../src/observer/server.mjs";
 
@@ -286,6 +289,15 @@ function completeProfile(id, options = {}) {
     attestedRevision: 1
   };
   return value;
+}
+
+function dedicatedLabProfile(id) {
+  const profile = completeProfile(id);
+  profile.authorization.basis = "dedicated-lab";
+  profile.authorization.safeHarbor = sourceDecision("unknown", {
+    rationale: "The cited source permits this dedicated challenge, while legal safe harbor is unstated and remains unknown."
+  });
+  return profile;
 }
 
 function valueAt(value, dottedPath) {
@@ -1706,6 +1718,123 @@ test("an allowed and conditional module keep requested provider checks while blo
   assert.ok(preflight.providerBlockers.some(({ action, assistanceMode }) =>
     action === "scan" && assistanceMode === "plan"
   ));
+});
+
+test("reviewed dedicated-lab intake warns about unknown safe harbor and preserves it through compilation", (t) => {
+  const { home, paths } = fixture(t);
+  const id = "dedicated-lab-legal-unknown";
+  const profile = dedicatedLabProfile(id);
+  assert.equal(createReviewedProgramProfile(id, profile, { paths, now: fixedAt }).ready, true);
+
+  const verification = verifyProgramProfile(id, { paths, now: fixedAt });
+  assert.equal(verification.ready, true);
+  assert.ok(verification.warnings.some(({ code }) => code === "dedicated-lab-safe-harbor-unknown"));
+  assert.equal(verification.blockers.some(({ code }) => code === "safe-harbor-unresolved"), false);
+  const stored = showProgramProfile(id, { paths, format: "json" });
+  assert.deepEqual(stored.authorization.safeHarbor, profile.authorization.safeHarbor);
+
+  const compilation = compileProgramProfile(id, {}, { paths, now: fixedAt });
+  assert.equal(compilation.profileReady, true);
+  const directory = path.join(home, "programs", id, "compiled", compilation.compilationId);
+  const context = readJson(path.join(directory, "model-context.json"));
+  const proposal = readJson(path.join(directory, "engagement-proposal.json"));
+  assert.equal(context.authorization.basis, "dedicated-lab");
+  assert.deepEqual(context.authorization.safeHarbor, profile.authorization.safeHarbor);
+  assert.equal(proposal.executionAuthority, false);
+});
+
+test("dedicated-lab unknown safe harbor cannot replace manual authorization or final attestation", (t) => {
+  const { paths } = fixture(t);
+  const unconfirmedId = "dedicated-lab-unconfirmed";
+  const unconfirmed = dedicatedLabProfile(unconfirmedId);
+  unconfirmed.authorization.operatorConfirmed = false;
+  const created = createProgramProfile(unconfirmedId, unconfirmed, { paths, now: fixedAt });
+  assert.equal(created.ready, false);
+  const verification = verifyProgramProfile(unconfirmedId, { paths, now: fixedAt });
+  assert.ok(verification.blockers.some(({ code }) => code === "authorization-unconfirmed"));
+
+  const unattestedId = "dedicated-lab-unattested";
+  const unattested = dedicatedLabProfile(unattestedId);
+  unattested.attestation.sourceClaimsReviewed = false;
+  assert.equal(createReviewedProgramProfile(unattestedId, unattested, { paths, now: fixedAt }).ready, false);
+  const unattestedVerification = verifyProgramProfile(unattestedId, { paths, now: fixedAt });
+  assert.ok(unattestedVerification.blockers.some(({ code }) => code === "operator-attestation-incomplete"));
+});
+
+test("a real dedicated-lab profile supports a source-bound immutable case and zero-contact campaign", async (t) => {
+  const { root, home, paths } = fixture(t);
+  const id = "dedicated-lab-dry-provenance";
+  const sourceFile = path.join(root, "synthetic-lab-rules.txt");
+  fs.writeFileSync(sourceFile, "Synthetic permission: test only the dedicated example challenge. No legal safe-harbor promise.\n", { mode: 0o600 });
+  const importInput = {
+    paths,
+    programId: id,
+    source: {
+      id: "program-rules",
+      type: "program-rules",
+      title: "Synthetic dedicated challenge rules",
+      reference: "https://training.example.test/rules"
+    },
+    acquisition: { kind: "local-file", path: sourceFile, mediaType: "text/plain" },
+    projection: { scope: [], rules: [] },
+    now: fixedAt
+  };
+  const imported = await importProgramSource(importInput);
+  const profile = dedicatedLabProfile(id);
+  profile.sources = [imported.profileSource];
+  const reviewed = createReviewedProgramProfile(id, profile, { paths, now: fixedAt });
+  assert.equal(reviewed.ready, true);
+  const createdCase = createCase("dedicated-lab-case", {
+    displayName: "Synthetic lab pilot",
+    program: { id, profileSha256: reviewed.profileSha256 },
+    project: null
+  }, { paths, now: fixedAt });
+  assert.equal(createdCase.created, true);
+  assert.equal(createdCase.case.program.profileSha256, reviewed.profileSha256);
+
+  const scopedPaths = runtimePaths({ repo, home, caseId: "dedicated-lab-case" });
+  const options = { paths: scopedPaths, now: fixedAt };
+  const campaignId = "lab-dry-pilot";
+  const createdCampaign = createCampaign({
+    id: campaignId,
+    expiresAt: "2026-10-14T12:30:00.000Z",
+    source: {
+      id: imported.snapshot.metadata.sourceId,
+      contentSha256: imported.snapshot.metadata.contentSha256,
+      projectionSha256: imported.snapshot.metadata.projectionSha256,
+      snapshotSha256: imported.snapshot.metadata.snapshotSha256
+    },
+    engagementId: null,
+    operations: [],
+    selectors: [],
+    environment: "host",
+    ceilings: {
+      maxWallMinutes: 30,
+      maxRequests: 0,
+      maxRatePerSecond: 0,
+      maxConcurrency: 1,
+      maxInputTokens: 1000,
+      maxOutputTokens: 1000,
+      maxTotalTokens: 2000,
+      maxSpend: 0,
+      maxEvidenceBytes: 0
+    },
+    jobs: [{ id: "controller-check", type: "non-contact-dry-run", summary: "Check synthetic lab provenance without target contact." }]
+  }, options);
+  assert.equal(createdCampaign.grant.binding.program.profileSha256, reviewed.profileSha256);
+  assert.equal(createdCampaign.grant.binding.source.snapshotSha256, imported.snapshot.metadata.snapshotSha256);
+  assert.equal(campaignStatus(campaignId, options).bindingHealth.schedulingReady, true);
+  assert.equal(campaignStatus(campaignId, options).bindingHealth.executionAuthorityReady, false);
+  resumeCampaign(campaignId, options);
+  const result = runNextCampaignJob(campaignId, options);
+  assert.equal(result.contactAttempted, false);
+  assert.equal(result.state.queue.completed, 1);
+
+  fs.writeFileSync(sourceFile, "Synthetic permission revision changed after case and grant creation.\n", { mode: 0o600 });
+  await importProgramSource({ ...importInput, now: "2026-10-14T12:01:00.000Z" });
+  const stale = campaignStatus(campaignId, { ...options, now: "2026-10-14T12:01:00.000Z" });
+  assert.equal(stale.bindingHealth.sourceCurrent, false);
+  assert.equal(stale.bindingHealth.schedulingReady, false);
 });
 
 test("an open-ended reusable program profile requires a finite downstream engagement window", (t) => {

@@ -160,6 +160,27 @@ That scan rejects terminal controls and invisible direction-formatting character
 
 The review step surfaces missing provenance, conflicting selectors, expired terms, unanswered conditional rules, insufficient limits, and other ambiguities. Source observations, authorization verification, and attestation cannot be in the future. Authorization verification must not predate its cited sources; attestation must not predate authorization verification or any recorded source. Each architecture data flow must have a known classification, and the profile's release classification must cover its most sensitive flow. Resolve blockers at the source or leave them explicit. Verification reports `ready: true` only when the profile is internally consistent and complete enough for deterministic compilation; readiness is not a statement that every requested technique is permitted.
 
+For `authorization.basis: dedicated-lab` only, legal safe harbor may truthfully remain
+`unknown` with `claimState: unverified`. This requires a rationale and a shared
+source reference in both the authorization and safe-harbor decision. That
+reference must identify an observed `program-rules` or `platform-page` record
+with a captured content SHA-256. Profile verification checks this structural
+provenance, not the source contents or their legal effect; the operator must
+review the cited claims. Downstream campaigns separately bind their retained
+source snapshot. Verification emits `dedicated-lab-safe-harbor-unknown` without
+converting the decision to allowed. All other unknown decisions and unresolved
+authority or scope ambiguities still block readiness.
+If an ambiguity only records the absence of legal assurance, record its
+disposition explicitly while retaining the unknown legal decision. Do not mark
+the legal terms themselves as known.
+
+This narrow intake rule does not apply to owner, bounty, client, or contract
+profiles. It does not answer the operator confirmation or final attestations,
+create a case, or authorize a request. Profile readiness grants neither legal
+protection nor execution authority. A lab still needs exact scope, a current
+source snapshot, and the separate engagement and lab-campaign receipts described
+in [the dedicated-lab guide](lab-campaign-authority.md).
+
 `verify` exits with status 2 while review blockers remain. A structurally valid but blocked `compile` still writes the private review bundle and also exits with status 2; inspect its `blockers` and `nextSteps` instead of treating artifact creation as readiness.
 
 ## Compile and preflight

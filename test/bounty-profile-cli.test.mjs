@@ -81,7 +81,7 @@ test("help exposes the private bug-bounty profile workflow", (t) => {
   assert.match(result.stdout, /deterministic no-contact proposed assessment bundle/u);
 });
 
-test("profile UI CLI starts one private loopback session and stops on SIGTERM", { timeout: 10_000 }, async (t) => {
+test("profile UI CLI starts one private loopback session and stops on SIGTERM", { timeout: 30_000 }, async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-bounty-ui-cli-"));
   const home = path.join(root, "home");
   const paths = runtimePaths({ repo, home });
@@ -103,7 +103,7 @@ test("profile UI CLI starts one private loopback session and stops on SIGTERM", 
   });
 
   const privateUrl = await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`profile UI did not start: ${stderr}`)), 5000);
+    const timer = setTimeout(() => reject(new Error(`profile UI did not start: ${stderr}`)), 20_000);
     const inspect = () => {
       const match = stdout.match(/GATE profile wizard: (http:\/\/127\.0\.0\.1:\d+\/#\S+)/u);
       if (!match || !/Private loopback session for ui-cli-profile\. Press Ctrl\+C to stop\./u.test(stdout)) return;

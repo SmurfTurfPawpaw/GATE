@@ -6,6 +6,11 @@ single-request `httpx-url-fetch` jobs after one exact operator confirmation. It
 does not change the ordinary production engagement lane: every non-lab
 execution still requires its own exact `EXECUTE … UNMETERED` confirmation.
 
+## Lab intake and legal safe harbor
+
+For the dedicated-lab profile readiness rule and its legal boundary, see
+[Program Profile review and verification](bug-bounty-program-profile.md#complete-and-review-the-questionnaire).
+
 ## What the authority binds
 
 The private proposal and receipt bind all of the following before confirmation:

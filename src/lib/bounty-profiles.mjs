@@ -28,6 +28,7 @@ import {
   programProfileQuestionAnswerIsComplete,
   programProfileRecommendationRequiresObservedSource,
   programProfileQuestionnaireBinding,
+  supportsUnknownLabSafeHarbor,
   validateProgramProfile,
   validateProgramProfileAnswers,
   validateProgramProfileRecommendations
@@ -1269,6 +1270,13 @@ function semanticProfileChecks(profile, id, options = {}) {
   if (["public-bug-bounty-program", "client-written-authorization", "contract"].includes(profile.authorization?.basis) &&
       profile.authorization?.safeHarbor?.disposition === "unknown") {
     addBlocker("safe-harbor-unresolved", "safe-harbor terms remain unresolved", "authorization.safeHarbor");
+  }
+  if (supportsUnknownLabSafeHarbor(profile)) {
+    addWarning(
+      "dedicated-lab-safe-harbor-unknown",
+      "legal safe harbor remains unknown; cited dedicated-lab permission does not establish legal protection or grant execution authority",
+      "authorization.safeHarbor"
+    );
   }
 
   const included = (profile.scope?.assets || []).filter((asset) => asset.disposition === "allowed");
