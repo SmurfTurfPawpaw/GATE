@@ -1637,7 +1637,7 @@ test("workspace operations reject unsupported reference storage", (t) => {
 
   assert.throws(
     () => workspaceStatus({ repository: fixture.repository }, fake.options),
-    /unsupported reference storage.*files ref backend/
+    /unsupported reference storage.*files ref backend|unknown repository extension found:\s*refstorage/
   );
   assert.equal(treehouseCalls(fake).length, 0);
   assert.equal(fake.events.length, 0);

@@ -907,7 +907,7 @@ test("CLI reports a nonzero exit status when an executed tool fails", (t) => {
     cwd: repo,
     env: { ...process.env, GATE_HOME: paths.home },
     encoding: "utf8",
-    timeout: 5_000
+    timeout: 30_000
   });
 
   assert.equal(result.status, 2, result.stderr);

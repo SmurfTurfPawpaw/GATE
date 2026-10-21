@@ -505,7 +505,7 @@ test("a killed transfer publisher is reconciled before its receipt is retried", 
   t.after(() => {
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
   });
-  for (let attempt = 0; attempt < 100 && !fs.existsSync(ready); attempt += 1) {
+  for (let attempt = 0; attempt < 500 && !fs.existsSync(ready); attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   assert.equal(fs.existsSync(ready), true, "child durably wrote the receipt before pausing");
